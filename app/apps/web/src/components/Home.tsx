@@ -20,7 +20,7 @@ import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { AsideStatus, BackMark, BY, Category, CATEGORY, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, LENGTH, LengthCell, layoutFor, NAME, PILL, ROW, RowButtons, StatusCell, TableShape, Updated, useAside, withAside } from "./HomeTable";
-import { HomeSidebar, nameOf, placeOf, SECTIONS, type Section, type Where } from "./HomeSidebar";
+import { HomeSidebar, nameOf, OpenSidebar, placeOf, SECTIONS, useSidebarOpen, type Section, type Where } from "./HomeSidebar";
 import { Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
@@ -127,6 +127,7 @@ export function Home() {
   const mine = mineOnly && account?.person != null;
   const later = useLater();
   const [allDone, setAllDone] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useSidebarOpen();
   // An approved idea's "Write the script": New project opened with its title and links.
   const [start, setStart] = useState<NewProjectStart | null>(null);
   useEffect(() => {
@@ -387,9 +388,10 @@ export function Home() {
 
   return (
     <LaterContext.Provider value={later}>
-      <div className="flex h-full gap-2 bg-bg p-2">
-        <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} />
-        <main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.07] bg-panel">
+      <div className="flex h-full bg-bg p-2">
+        <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.07] bg-panel">
+          {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
           <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-white/[0.07] px-5">
             <h1 className="flex min-w-0 items-center gap-1.5 text-[13.5px] font-semibold tracking-[-0.01em] whitespace-nowrap">
               {title.parent !== null && (
@@ -415,7 +417,7 @@ export function Home() {
               )}
             </div>
           </header>
-          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3 pb-6">
+          <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3", sidebarOpen ? "pb-6" : "pb-14")}>
             <SetupCard />
             <div className="mb-2 flex items-center gap-2">
               <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 text-faint focus-within:border-white/[0.16]">

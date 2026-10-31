@@ -4,11 +4,42 @@
 // way more organised"), after the team's "having to scroll through a long,
 // tedious" list of ideas, scripts and edits together.
 
-import { Check, Clock, FileText, Film, Inbox, Lightbulb, type LucideIcon } from "lucide-react";
+import { Check, Clock, FileText, Film, Inbox, Lightbulb, PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
+import { motion } from "motion/react";
+import { useEffect, useState } from "react";
 
 import { AppMenu } from "./AppMenu";
-import { Logo } from "./Logo";
-import { cx } from "./ui";
+import { cx, IconButton } from "./ui";
+
+/** The sidebar's own width, and its shell's: the content plus the gap before the panel, so closed it takes nothing. */
+const WIDTH = 204;
+const SHELL = WIDTH + 8;
+
+/** The study portal's one spring for the sidebar's width: it clips, never squashes. */
+const SPRING = { type: "spring" as const, stiffness: 380, damping: 36, mass: 0.85 };
+
+/** Whether the sidebar is open, remembered on this browser (the study portal keeps it in a cookie). */
+const OPEN = "edit.home.sidebar";
+
+export function useSidebarOpen(): [boolean, (open: boolean) => void] {
+  const [open, setOpen] = useState(() => localStorage.getItem(OPEN) !== "closed");
+  return [
+    open,
+    (next: boolean) => {
+      localStorage.setItem(OPEN, next ? "open" : "closed");
+      setOpen(next);
+    },
+  ];
+}
+
+/** Closed: the way back, at the panel's bottom left (the portal's). */
+export function OpenSidebar({ onOpen }: { onOpen: () => void }) {
+  return (
+    <IconButton label="Show the sidebar" onClick={onOpen} className="absolute bottom-3 left-3 z-10 size-8">
+      <PanelLeftOpen size={17} />
+    </IconButton>
+  );
+}
 
 export type Section = "ideas" | "scripts" | "edits";
 
@@ -46,7 +77,13 @@ export function nameOf(where: Where): { parent: string | null; name: string } {
   return stage === null ? { parent: null, name: found.label } : { parent: found.label, name: found.stages.find((one) => one.key === stage)?.label ?? stage };
 }
 
-export function HomeSidebar({ sections, counts, where, onChoose }: { sections: Section[]; counts: (where: Where) => number; where: Where; onChoose: (where: Where) => void }) {
+export function HomeSidebar({ sections, counts, where, onChoose, open, onClose }: { sections: Section[]; counts: (where: Where) => number; where: Where; onChoose: (where: Where) => void; open: boolean; onClose: () => void }) {
+  // No spring on the first frame: a sidebar remembered closed doesn't open and close as Home appears.
+  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setMoving(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const item = (to: Where, label: string, Icon: LucideIcon | null, extra?: string) => {
     const count = counts(to);
     const on = where === to;
@@ -72,23 +109,34 @@ export function HomeSidebar({ sections, counts, where, onChoose }: { sections: S
     );
   };
   return (
-    <aside className="flex w-[204px] shrink-0 flex-col py-1.5 pr-1">
-      <AppMenu row />
-      <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pb-2">
-        {item("needs", "Needs you", Inbox)}
-        {SECTIONS.filter((section) => sections.includes(section.key)).map((section) => (
-          <div key={section.key} className="mt-2.5 flex flex-col gap-0.5">
-            {item(section.key, section.label, section.icon)}
-            {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
-          </div>
-        ))}
-        <div className="mx-2 my-2.5 border-t border-white/[0.08]" />
-        {item("later", "Later", Clock)}
-        {item("done", "Done", Check)}
-      </nav>
-      <div className="px-2.5 pt-2 opacity-60">
-        <Logo size={16} />
+    <motion.aside
+      initial={false}
+      animate={{ width: open ? SHELL : 0 }}
+      transition={moving ? SPRING : { duration: 0 }}
+      aria-hidden={!open}
+      inert={!open}
+      className="shrink-0 overflow-hidden"
+    >
+      <div className="flex h-full flex-col py-1.5 pr-1" style={{ width: WIDTH }}>
+        <AppMenu row />
+        <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pb-2">
+          {item("needs", "Needs you", Inbox)}
+          {SECTIONS.filter((section) => sections.includes(section.key)).map((section) => (
+            <div key={section.key} className="mt-2.5 flex flex-col gap-0.5">
+              {item(section.key, section.label, section.icon)}
+              {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
+            </div>
+          ))}
+          <div className="mx-2 my-2.5 border-t border-white/[0.08]" />
+          {item("later", "Later", Clock)}
+          {item("done", "Done", Check)}
+        </nav>
+        <div className="px-1.5 pt-2">
+          <IconButton label="Hide the sidebar" onClick={onClose} className="size-8">
+            <PanelLeftClose size={17} />
+          </IconButton>
+        </div>
       </div>
-    </aside>
+    </motion.aside>
   );
 }

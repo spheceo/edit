@@ -1191,6 +1191,58 @@ const MOST_VIDEO_TRACKS = 12;
 /** The smallest callout, tag or label in a courtroom video, px at 1080p (`small_text`). */
 const SMALLEST_TEXT = 60;
 
+/** A picture seen for less than this between two others reads as a glitch (frames at 30 fps: half a second). */
+const GLIMPSE_SECONDS = 0.5;
+
+/**
+ * Pictures glimpsed: a frame-filling shot that's on screen for under half a
+ * second between two others, however long the clip, because the rest of it
+ * is under something else (`glimpse`). The team, every time: "we have like
+ * half a second with this that just looks glitchy to the eye… these really,
+ * really small clips… are removed" (JJ, Oct 31, the 16-Year-Old at 15:16, a
+ * B-roll clip of 4 s showing 6 frames before a Pause and after it); "remove
+ * this clip here that only appears for around .2 sec" (Mom & Teen, Oct 28);
+ * "you have a small frame of something else in between, so it makes it look
+ * buggy" (N3on, Oct 26). `sliver` only saw clips that were short themselves.
+ * Flashes, dissolves and glitches are meant to be quick.
+ */
+export function glimpses(project: Project): Record<string, unknown>[] {
+  const { width: W, height: H } = project.settings;
+  const fps = fpsOf(project);
+  const total = durationOf(project);
+  const order = new Map(project.tracks.map((track, index) => [track.id, index]));
+  const fills = (clip: Clip): boolean => {
+    if (clip.type !== "video" || clip.opacity < 0.9 || trackOf(project, clip.track)?.hidden !== false) return false;
+    const media = mediaOf(project, clip.media);
+    if (media === undefined || (media.kind !== "video" && media.kind !== "image")) return false;
+    const fit = Math.min(W / Math.max(media.width, 1), H / Math.max(media.height, 1));
+    const [w, h] = [media.width * fit * clip.transform.scale, media.height * fit * clip.transform.scale];
+    const [cx, cy] = [W / 2 + clip.transform.x, H / 2 + clip.transform.y];
+    return cx - w / 2 <= W * 0.02 && cx + w / 2 >= W * 0.98 && cy - h / 2 <= H * 0.02 && cy + h / 2 >= H * 0.98;
+  };
+  // The frame-filling picture on top at each frame.
+  const top: (Clip | null)[] = new Array<Clip | null>(total).fill(null);
+  const layered = project.clips.filter(fills).sort((a, b) => (order.get(a.track) ?? 0) - (order.get(b.track) ?? 0));
+  for (const clip of layered) for (let frame = Math.max(clip.start, 0); frame < Math.min(clipEnd(clip), total); frame++) top[frame] = clip;
+  const runs: [number, number, Clip | null][] = [];
+  for (let frame = 0; frame < total; ) {
+    let end = frame;
+    while (end < total && top[end] === top[frame]) end++;
+    runs.push([frame, end, top[frame]!]);
+    frame = end;
+  }
+  const shortest = Math.round(GLIMPSE_SECONDS * fps);
+  const meant = /flash|dissolve|glitch|janitor|whip|shutter/iu;
+  const issues: Record<string, unknown>[] = [];
+  for (let index = 1; index + 1 < runs.length; index++) {
+    const [start, end, clip] = runs[index]!;
+    const [before, after] = [runs[index - 1]![2], runs[index + 1]![2]];
+    if (clip === null || before === null || after === null || end - start >= shortest || meant.test(clip.name ?? "")) continue;
+    issues.push({ kind: "glimpse", clip: clip.id, start, frames: end - start, fix: "a picture seen this briefly reads as a glitch: end the shot where the one over it starts (or start it where that ends), or hold the shot either side over it" });
+  }
+  return issues;
+}
+
 export function audit(project: Project): { issues: Json[]; frames: number; clips: number; [field: string]: unknown } {
   const fps = fpsOf(project);
   const issues: Record<string, unknown>[] = [];
@@ -1284,6 +1336,7 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       issues.push({ kind: "sliver", clip: clip.id, start: clip.start, frames: clip.duration });
     }
   }
+  issues.push(...glimpses(project));
   // The same moment of footage shown as B-roll in two places (more than a
   // couple of seconds apart: cuts of one moment butted together are one shot).
   const base = project.tracks.find((track) => track.kind === "video")?.id ?? null;

@@ -305,12 +305,19 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
     });
     let width = ((content_width + 2.0 * pad).ceil() as u32).clamp(1, MAX_TEXT_DIMENSION);
     let height = ((half_height * 2.0 + 2.0 * pad).ceil() as u32).clamp(1, MAX_TEXT_DIMENSION);
-    let top = pad + half_height - text_height / 2.0;
+    // The lines centred exactly in the whole-pixel image, which is drawn by
+    // its centre: left at `pad`, the rounding up put the text up to half a
+    // pixel off, by another amount every frame its size changed, so text under
+    // a moving camera shimmered against its window (a Notepad's lines "moving
+    // around", Oct 30–31).
+    let inset_x = (width as f32 - (content_width + 2.0 * pad)) / 2.0;
+    let inset_y = (height as f32 - (half_height * 2.0 + 2.0 * pad)) / 2.0;
+    let top = pad + inset_y + half_height - text_height / 2.0;
 
     let mut placed = Vec::new();
     let mut index = 0;
     for (row, (glyphs, line_width)) in lines.iter().enumerate() {
-        let left = pad + line_offset(spec.align, content_width, *line_width);
+        let left = pad + inset_x + line_offset(spec.align, content_width, *line_width);
         let baseline = top + line_metrics.ascent + line_advance * row as f32;
         for &(ch, x) in glyphs {
             placed.push(Placed {
@@ -359,9 +366,9 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
     }
     let tracking = spec.tracking;
     if let Some((label_spec, px, metrics, label_width, _, offset)) = &label {
-        let centre = pad + half_height - offset;
+        let centre = pad + inset_y + half_height - offset;
         let baseline = centre + (metrics.ascent + metrics.descent) / 2.0;
-        let mut pen = pad + (content_width - label_width) / 2.0;
+        let mut pen = pad + inset_x + (content_width - label_width) / 2.0;
         let mut previous: Option<char> = None;
         let [r, g, b, a] = label_spec.color.0;
         for ch in label_spec.text.chars() {
@@ -565,6 +572,46 @@ mod tests {
             pad: 8.0,
             max_width: None,
             label: None,
+        }
+    }
+
+    #[test]
+    fn text_stays_centred_on_its_place_as_it_scales() {
+        // A camera zooming over a Notepad changes its lines' size every frame;
+        // each line's ink must scale about the image's centre, not jump by the
+        // half pixel the image's rounding up left over.
+        let book = geist();
+        let mut cache = GlyphCache::default();
+        let still = TextAnimation {
+            preset: edit_core::TextPreset::None,
+            duration: 0.0,
+            stagger: 0.0,
+        };
+        let offset = |px: f32, cache: &mut GlyphCache| {
+            let mut given = spec("- Fight with her mother", &still, 0.0);
+            given.align = edit_core::TextAlign::Left;
+            given.px = px;
+            let image = rasterize(&book, cache, &given).unwrap();
+            let (mut sum, mut mass) = (0.0_f64, 0.0_f64);
+            for y in 0..image.height as usize {
+                for x in 0..image.width as usize {
+                    let alpha = f64::from(image.pixels[(y * image.width as usize + x) * 4 + 3]);
+                    sum += alpha * (x as f64 + 0.5);
+                    mass += alpha;
+                }
+            }
+            // The ink's centre from the image's centre, per pixel of font size.
+            (sum / mass - f64::from(image.width) / 2.0) / f64::from(px)
+        };
+        let sizes: Vec<f32> = (0..20).map(|step| 40.0 + step as f32 * 0.07).collect();
+        let offsets: Vec<f64> = sizes.iter().map(|&px| offset(px, &mut cache)).collect();
+        let mean = offsets.iter().sum::<f64>() / offsets.len() as f64;
+        for (px, offset) in sizes.iter().zip(&offsets) {
+            let drift = (offset - mean) * f64::from(*px);
+            assert!(
+                drift.abs() < 0.12,
+                "at {px} px the line sits {drift:.2} px off"
+            );
         }
     }
 

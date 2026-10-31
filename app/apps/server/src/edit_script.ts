@@ -28,6 +28,7 @@ import { native } from "./native/index.ts";
 import { join, parent } from "./paths.ts";
 import { clipEnd, mediaOf, trackOf } from "./project.ts";
 import { REFERENCE, type Op, type ScriptContext } from "./script_runtime.ts";
+import * as seams from "./seams.ts";
 import * as seats from "./seats.ts";
 import { stableStringify } from "./stable.ts";
 
@@ -357,6 +358,7 @@ async function describe(app: App, projectId: string, from: number, to: number, r
   const todo = ctx.shots.filter((s) => (refresh || s.facts === undefined) && s.to - s.from >= 0.15).slice(0, limit);
   if (todo.length === 0) return null;
   const frames = todo.map((s) => Math.floor(((s.from + s.to) / 2) * fps));
+  await seams.cloudMedia.restoreStills(app, p);
   const pictures = await native().renderFrames({ project: { json: JSON.stringify(p) }, frames, maxSide: 768, priority: "agent", encode: "agent" });
   const described: string[] = [];
   for (let i = 0; i < todo.length; i += 8) {

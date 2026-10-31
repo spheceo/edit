@@ -364,8 +364,8 @@ export function unsubtitledSpeech(project: Project, transcripts: Map<string, Tra
     }));
 }
 
-/** Every word heard on the timeline from the footage's own sound: its frame and stem. */
-function heardWords(project: Project, transcripts: Map<string, Transcript>): [number, string][] {
+/** Every word heard on the timeline from the footage's own sound: its frame (its middle's, or its start's) and stem. */
+function heardWords(project: Project, transcripts: Map<string, Transcript>, at: "middle" | "start" = "middle"): [number, string][] {
   const fps = fpsOf(project);
   const heard: [number, string][] = [];
   for (const clip of project.clips) {
@@ -377,10 +377,11 @@ function heardWords(project: Project, transcripts: Map<string, Transcript>): [nu
     for (const word of transcript.words) {
       const middle = (word.start + word.end) / 2.0;
       if (middle < clip.source_in || middle >= to) continue;
-      heard.push([clip.start + toI64(round(((middle - clip.source_in) / clip.speed) * fps)), stem(word.text)]);
+      const time = at === "middle" ? middle : Math.max(word.start, clip.source_in);
+      heard.push([clip.start + toI64(round(((time - clip.source_in) / clip.speed) * fps)), stem(word.text)]);
     }
   }
-  return heard;
+  return heard.sort((a, b) => a[0] - b[0]);
 }
 
 /**
@@ -393,6 +394,10 @@ function heardWords(project: Project, transcripts: Map<string, Transcript>): [nu
 export function textNotSaid(project: Project, transcripts: Map<string, Transcript>): unknown[] {
   const fps = fpsOf(project);
   const heard = heardWords(project, transcripts);
+  const begun = heardWords(project, transcripts, "start");
+  // A subtitle up this long after its first word is said reads as late.
+  const late = toI64(round(0.2 * fps));
+  const lead = toI64(Math.floor((seams.subtitles.LEAD_MS / 1000) * fps));
   const second = toI64(round(fps));
   const edge = toI64(round(0.15 * fps));
   const issues: unknown[] = [];
@@ -419,6 +424,22 @@ export function textNotSaid(project: Project, transcripts: Map<string, Transcrip
       .filter((word) => !word.includes("*"))
       .map(stem)
       .filter((word) => word !== "");
+    // Late: its first two words said, one after the other, before it came up
+    // (JJ, Oct 29–30: "the subtitles are slightly delayed at many places";
+    // "we need to sync the subtitles throughout the entire video"): a line
+    // left where it was when its footage moved, or timed by a transcript off.
+    if ((clip.name ?? "").startsWith("Subtitle") && shown.length >= 2) {
+      let said: number | null = null;
+      for (let index = 0; index + 1 < begun.length; index++) {
+        const [frame, word] = begun[index]!;
+        if (frame < clip.start - second) continue;
+        if (frame > clip.start + edge) break;
+        if (word === shown[0] && begun[index + 1]![1] === shown[1]) said = frame;
+      }
+      if (said !== null && clip.start - said > late) {
+        issues.push({ kind: "subtitle_late", clip: clip.id, start: clip.start, said_at: said, start_by: Math.max(0, said - lead), text: clip.text, fix: "bring it up at start_by (a few frames before its first word), and the lines after it with it when they're late too (they moved with the footage, or the transcript was off: add_subtitles again over the span)" });
+      }
+    }
     if (shown.length < 3) continue;
     const near = heard.filter(([frame]) => frame >= clip.start - second && frame < clipEnd(clip) + second).map(([, word]) => word);
     if (near.length === 0) continue;

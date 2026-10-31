@@ -901,6 +901,7 @@ async function framePng(context: Context): Promise<Response> {
   const live = liveOr404(app, params.id!);
   let images;
   try {
+    await seams.cloudMedia.restoreStills(app, live.project);
     images = await withProjectAsync(
       live.project.id,
       live.rev,
@@ -945,6 +946,7 @@ async function coverJpeg(context: Context): Promise<Response> {
   }
   let images;
   try {
+    await seams.cloudMedia.restoreStills(app, live.project);
     images = await withProjectAsync(
       live.project.id,
       live.rev,

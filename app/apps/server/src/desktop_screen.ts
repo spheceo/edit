@@ -236,7 +236,7 @@ function wrap(note: string, px: number, width: number): string {
   return lines.join("\n");
 }
 
-/** Where windows go when the agent doesn't say: spread over the desktop so the camera travels. */
+/** Where windows go when the agent doesn't say: spread over the desktop so the camera travels, the nth window always in the nth place. */
 const SLOTS: [number, number][] = [
   [0.3, 0.32],
   [0.72, 0.3],
@@ -252,8 +252,6 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
   const k = Math.min(W / 1920, H / 1080);
   const [DW, DH] = [W * DESKTOP, H * DESKTOP];
   const gap = GAP * W;
-  // A different turn through the slots per desktop, so they don't all look alike.
-  const turn = Math.abs(spec.start) % 4;
   const sized = spec.windows.map((window, index) => {
     const media = window.media === null ? undefined : mediaOf(project, window.media);
     const fallback = window.app === "notepad" ? 0.36 : window.app === "video_player" ? 0.4 : 0.24;
@@ -279,7 +277,8 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
     }
     const bottom = (window.app === "video_player" ? CONTROLS + INSET : INSET) * k;
     const h = Math.round(contentH + TOP * k + bottom);
-    const slot = SLOTS[(index + turn) % SLOTS.length]!;
+    // The same place for the same window on every screen (the user, Oct 31: "roughly the same position").
+    const slot = SLOTS[index % SLOTS.length]!;
     return { window, w, h, contentW, contentH, notes, cx: (window.x ?? slot[0]) * DW, cy: (window.y ?? slot[1]) * DH };
   });
   const keepInside = (one: (typeof sized)[number]) => {
@@ -528,17 +527,16 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     swap = best !== null ? { at: Math.round((best[0] + best[1]) / 2), fade: 0 } : { at: least[0], fade: Math.round(12 * s) };
   }
 
-  // A window's own motion: popping in (scale about its centre, opacity) and, for a picture or notes, a slow float.
+  // A window's own motion: popping in where it stays (scale about its centre, opacity), then still.
+  // No float of its own: the screen is locked and only the camera moves (JJ, Oct 30: "have the window
+  // screen locked the entire time, and then we can just move around on the screen with the camera";
+  // the user, Oct 31: "have the fileviewers be in the roughly same position").
   const pop = Math.round(POP * s);
   const fadeIn = Math.round(FADE * s);
-  const motion = (window: Laid, index: number, frame: number): { s: number; o: number; dy: number } => {
-    if (index === openIndex) return { s: 1, o: 1, dy: 0 };
+  const motion = (window: Laid, index: number, frame: number): { s: number; o: number } => {
+    if (index === openIndex) return { s: 1, o: 1 };
     const t = frame - rel(window.spec.at);
-    return {
-      s: 0.9 + 0.1 * easeOut(t / pop),
-      o: easeOut(t / fadeIn),
-      dy: window.spec.app === "video_player" ? 0 : 2 * k * Math.sin((2 * Math.PI * frame) / (6 * fps) + index * 1.7),
-    };
+    return { s: 0.9 + 0.1 * easeOut(t / pop), o: easeOut(t / fadeIn) };
   };
 
   const made: string[] = [];
@@ -566,7 +564,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       if (window === null) return { x: (px - pose.x) * pose.z, y: (py - pose.y) * pose.z, scale: base * pose.z, o: 1 };
       const own = motion(window, index!, frame);
       const wx = window.cx + (px - window.cx) * own.s;
-      const wy = window.cy + (py - window.cy) * own.s + own.dy;
+      const wy = window.cy + (py - window.cy) * own.s;
       return { x: (wx - pose.x) * pose.z, y: (wy - pose.y) * pose.z, scale: base * own.s * pose.z, o: own.o };
     };
     const opens = window === null || index === openIndex ? null : rel(window.spec.at);

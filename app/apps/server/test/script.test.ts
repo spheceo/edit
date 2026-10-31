@@ -32,6 +32,8 @@ import {
   safeName,
   spans,
   CUT_IN_SECONDS,
+  CUT_IN_PAD,
+  padsOf,
   WORD_PAD,
   timing as scriptTiming,
   useGoogleSignIn,
@@ -298,6 +300,13 @@ test("cuts_at_the_first_and_last_words", () => {
   expect(align(words, null, ["*Victim", "perhaps?"], 91.5, 97.0)[0]).toBeNull();
   // Words far from where the range is written don't count.
   expect(align(words, null, ["Okay.", "Yes."], 40, 50)).toEqual([null, null]);
+  // Beside a cut-in the footage breathes 0.4 s, never into a neighbouring word:
+  // "a" ends 0.2 s before "car" starts, so the tail stops at "car".
+  const [roomIn, roomOut] = align(words, null, ["A", "a"], 91.506, 93.5, [CUT_IN_PAD, CUT_IN_PAD]);
+  expect(Math.abs(roomIn! - (91.7 - CUT_IN_PAD))).toBeLessThan(1e-9);
+  expect(Math.abs(roomOut! - (93.05 + CUT_IN_PAD))).toBeLessThan(1e-9);
+  const [, toCar] = align([...words.slice(0, 4), word("a", 93.0, 93.05), word("car", 93.25, 93.5)], null, ["A", "a"], 91.506, 93.5, [CUT_IN_PAD, CUT_IN_PAD]);
+  expect(toCar!).toBeLessThanOrEqual(93.25 + 1e-9);
 });
 
 // ---------------------------------------------------------------------------
@@ -605,4 +614,13 @@ test("a_reused_finished_video_gets_no_subtitles_whatever_the_segments_say", () =
   };
   layOut(project);
   expect(subtitledSpans(project, 0, 2100)).toEqual([[0, 300]]);
+});
+
+test("a range beside a cut-in gets room at that side only", () => {
+  const footage = (label: string): ScriptBlock => ({ kind: "footage", label, file: "f", start: 0, end: 1 }) as ScriptBlock;
+  const narration: ScriptBlock = { kind: "narration", text: "Then she left." } as ScriptBlock;
+  const blocks = [footage("a"), narration, footage("b"), footage("c"), narration];
+  expect(padsOf(blocks, 0)).toEqual([WORD_PAD, CUT_IN_PAD]);
+  expect(padsOf(blocks, 2)).toEqual([CUT_IN_PAD, WORD_PAD]);
+  expect(padsOf(blocks, 3)).toEqual([WORD_PAD, CUT_IN_PAD]);
 });

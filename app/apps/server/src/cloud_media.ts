@@ -1378,6 +1378,36 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
   }
 }
 
+/**
+ * The cloud stills a render of `project` reads, fetched again where the cache
+ * dropped them: they're downloaded when a project opens, but the cleaner
+ * evicts `cloud/originals` past the budget, and every frame with one then
+ * failed ("ImageIO couldn't decode the image", Oct 31: the 16-Year-Old
+ * edit's Windows screens, which the agent could no longer look at). Only
+ * files in this cache's own cloud folder; a failed fetch leaves the render
+ * to say why.
+ */
+export async function restoreStills(app: App, project: Project): Promise<void> {
+  const own = join(app.store.cacheDir(), "cloud");
+  const gone = project.media.filter((media) => media.kind === "image" && media.cloud != null && media.path.startsWith(own) && !isFile(media.path));
+  if (gone.length === 0) return;
+  // Bounded: with the relay away a render says what's missing in seconds, not minutes (the fetch carries on).
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waited = new Promise<void>((resolve) => (timer = setTimeout(resolve, RESTORE_WAIT_MS)));
+  const fetched = Promise.all(
+    gone.map((media) => {
+      const key = media.cloud!.proxy ?? media.cloud!.original;
+      if (!cloud.validKey(key)) return Promise.resolve();
+      return diag.timeOnAsync("cloud", "cloud: fetch image again", key, () => fetchKey(key, media.path)).catch((error: unknown) => diag.warn("cloud", `${media.name}: ${failure(error)}`));
+    }),
+  );
+  await Promise.race([fetched, waited]);
+  clearTimeout(timer);
+}
+
+/** How long a render waits for `restoreStills`. */
+const RESTORE_WAIT_MS = 20_000;
+
 /** Prepares cloud playback locations and cached analysis; only still images are downloaded. */
 export function ensureLocal(app: App, id: string): Promise<void> {
   // One at a time per project: a second ask (another open, a pull) shares it.

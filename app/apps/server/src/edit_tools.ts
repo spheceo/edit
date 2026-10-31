@@ -151,7 +151,9 @@ function onLive<T>(found: Live, work: (input: ProjectInput) => T): T {
   return withProject(found.project.id, found.rev, () => JSON.stringify(found.project), work);
 }
 
-function onLiveAsync<T>(found: Live, work: (input: ProjectInput) => Promise<T>): Promise<T> {
+/** A render of the live project; the cloud stills it reads are fetched first if the cache dropped them. */
+async function onLiveAsync<T>(app: App, found: Live, work: (input: ProjectInput) => Promise<T>): Promise<T> {
+  await seams.cloudMedia.restoreStills(app, found.project);
   return withProjectAsync(found.project.id, found.rev, () => JSON.stringify(found.project), work);
 }
 
@@ -366,7 +368,7 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
     smoothing_started: smoothing,
   };
   const input: ProjectInput = dryRun ? { json: jsonForSerde(saved.project) } : { ref: { id: projectId, rev: saved.rev } };
-  return withReview(saved.project, input, frames, report);
+  return withReview(app, saved.project, input, frames, report);
 }
 
 async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]> {
@@ -378,7 +380,7 @@ async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]
     subtitle_coverage: hooks.subtitleCoverage(found.project, cachedTranscripts(app, found.project, true)),
     smoothing: hooks.smoothingPending(projectId),
   };
-  return withReview(found.project, { ref: { id: projectId, rev: found.rev } }, frames, report);
+  return withReview(app, found.project, { ref: { id: projectId, rev: found.rev } }, frames, report);
 }
 
 /**
@@ -880,7 +882,7 @@ async function renderFrame({ app, args, projectId }: ToolCall): Promise<Content[
   const time = num(args.time);
   const frame = given ?? (time !== null ? asInt(Math.floor(time * fps)) : 0);
   const max = uint(args.max_size) ?? 960;
-  const images = await onLiveAsync(found, (project) =>
+  const images = await onLiveAsync(app, found, (project) =>
     native().renderFrames({ project, frames: [frame], maxSide: max, priority: "agent", encode: "agent" }),
   );
   const rendered = images[0];
@@ -902,7 +904,7 @@ async function contactSheet({ app, args, projectId }: ToolCall): Promise<Content
     const t = count === 1 ? start : start + ((end - start) * index) / (count - 1);
     return asInt(Math.floor(t * fps));
   });
-  const sheet = await onLiveAsync(found, (project) =>
+  const sheet = await onLiveAsync(app, found, (project) =>
     native().renderFrames({
       project,
       frames,
@@ -944,7 +946,7 @@ async function checkShots({ app, args, projectId }: ToolCall): Promise<Content[]
     const out = clip.source_in + (clip.duration / fps) * clip.speed;
     for (const word of heard.words) if (word.end > clip.source_in && word.start < out) said.push([clip.start + ((word.start - clip.source_in) / clip.speed) * fps, trim(word.text)]);
   }
-  const sheet = await onLiveAsync(found, (project) => native().renderFrames({ project, frames: picked.map((one) => asInt(Math.floor((one.from + one.to) / 2))), maxSide: native().SHEET_CELL, priority: "agent", encode: "agent", sheetColumns: 4 }));
+  const sheet = await onLiveAsync(app, found, (project) => native().renderFrames({ project, frames: picked.map((one) => asInt(Math.floor((one.from + one.to) / 2))), maxSide: native().SHEET_CELL, priority: "agent", encode: "agent", sheetColumns: 4 }));
   const rendered = sheet[0]; if (rendered === undefined) throw new Error("nothing was rendered");
   const rows = picked.map((one, i) => {
     const c = p.clips.find((own) => own.id === one.id);
@@ -1074,10 +1076,11 @@ function reviewFrames(value: unknown): number[] {
 }
 
 /** The report as text, then (asked for) one sheet of the review frames; a render that fails says so in the report. */
-async function withReview(project: Project, input: ProjectInput, frames: number[], report: Args): Promise<Content[]> {
+async function withReview(app: App, project: Project, input: ProjectInput, frames: number[], report: Args): Promise<Content[]> {
   const content: Content[] = [];
   if (frames.length > 0) {
     try {
+      await seams.cloudMedia.restoreStills(app, project);
       if (frames.some((frame) => frame >= durationOf(project))) throw new Error("a review frame is past the timeline's end");
       const work = (on: ProjectInput) =>
         native().renderFrames({
@@ -1413,9 +1416,9 @@ const FIXABLE = [
   "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range", "commentary_text_heavy",
   "commentary_flash", "commentary_short_card", "commentary_source_overuse", "commentary_graphics_monotony",
   "commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture", "commentary_leak_overuse",
-  "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
+  "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "glimpse", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
-  "subtitle_unheard", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
+  "subtitle_unheard", "subtitle_late", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "script_order", "voiceover_in_footage", "footage_ahead", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
   "blur_off_shot", "sfx_long", "sfx_late_hit", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",

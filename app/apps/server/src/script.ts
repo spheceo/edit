@@ -1005,6 +1005,21 @@ const EXPECTED = "Expected words (verify against the recording): ";
 /** Room left before the first word and after the last, so cuts breathe. */
 export const WORD_PAD = 0.08;
 /**
+ * Room where a range meets a cut-in: the footage's own sound finishes before
+ * the narration starts, and comes back in its room tone after it (JJ, Oct 30,
+ * four times in the 16-Year-Old's notes: "the voiceover starts before the
+ * real sound audio is finished… the voiceover doesn't overlap at either end";
+ * the fix that held gave every cut-in 0.4 s either side). Transcript times run
+ * a little early on a word's tail, so 0.08 s cut voices off under the narration.
+ */
+export const CUT_IN_PAD = 0.4;
+
+/** The room a footage block gets before its first word and after its last: CUT_IN_PAD beside a cut-in, else WORD_PAD. */
+export function padsOf(blocks: ScriptBlock[], index: number): [number, number] {
+  const beside = (other: ScriptBlock | undefined) => other !== undefined && other.kind === "narration";
+  return [beside(blocks[index - 1]) ? CUT_IN_PAD : WORD_PAD, beside(blocks[index + 1]) ? CUT_IN_PAD : WORD_PAD];
+}
+/**
  * Speech closer than this to the cut runs straight on: no room is left (it
  * would catch the next word), and the cut goes in the quietest instant
  * within `SETTLE` of the word's edge (transcript times are a little loose).
@@ -1105,6 +1120,7 @@ export function align(
   cue: [string, string],
   start: number,
   end: number,
+  pads: [number, number] = [WORD_PAD, WORD_PAD],
 ): [number | null, number | null] {
   const nearest = (wanted: string | null, time: number, at: (word: Word) => number): number | null => {
     if (wanted === null) return null;
@@ -1134,7 +1150,7 @@ export function align(
           : quietest(peaks, Math.max(word.start - SETTLE, before), word.start + Math.min(SETTLE, word.end - word.start) / 2, word.start);
       cut = found ?? word.start;
     } else {
-      cut = Math.max(word.start - WORD_PAD, before ?? -Number.MAX_VALUE);
+      cut = Math.max(word.start - pads[0], before ?? -Number.MAX_VALUE);
     }
     // Never into the word (the quietest moment can fall after it starts),
     // give or take what transcript times are off by.
@@ -1152,7 +1168,7 @@ export function align(
           : quietest(peaks, word.end - Math.min(SETTLE, word.end - word.start) / 2, Math.min(word.end + SETTLE, after), word.end);
       cutOut = found ?? word.end;
     } else {
-      cutOut = Math.min(word.end + WORD_PAD, after ?? Number.MAX_VALUE);
+      cutOut = Math.min(word.end + pads[1], after ?? Number.MAX_VALUE);
     }
     // Never before the word is over (the team: "I'm with you" clipped; the
     // audit's cut_mid_word): a word squeezed to a few hundredths is heard
@@ -2178,13 +2194,14 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
   await app.store.update(id, "script", (project) => {
     const inserting = pendingCase(project);
     const previous = new Set(project.clips.map((clip) => clip.id));
-    for (const block of project.script?.blocks ?? []) {
+    const blocks = project.script?.blocks ?? [];
+    for (const [index, block] of blocks.entries()) {
       if (inserting && placed(project, block)) continue;
       if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.words)) continue;
       const media = isSome(block.media) ? heard.get(block.media) : undefined;
       if (media === undefined) continue;
       const offset = block.media_start ?? 0;
-      const [cutIn, cutOut] = align(media.words, media.peaks, block.words, block.start - offset, block.end - offset);
+      const [cutIn, cutOut] = align(media.words, media.peaks, block.words, block.start - offset, block.end - offset, padsOf(blocks, index));
       if (cutIn !== null || cutOut !== null) {
         block.cut = [cutIn === null ? block.start : cutIn + offset, cutOut === null ? block.end : cutOut + offset];
       } else {
@@ -2237,7 +2254,7 @@ export async function realign(app: App, id: string, span: [number, number] | nul
     const changed: unknown[] = [];
     if (!isSome(project.script)) return changed;
     const blocks = structuredClone(project.script.blocks);
-    for (const block of blocks) {
+    for (const [index, block] of blocks.entries()) {
       let cue = block.kind === "footage" ? cueOf(block) : null;
       if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.media) || !isSome(block.clip) || !within(block)) continue;
       const media = heard.get(block.media);
@@ -2246,7 +2263,7 @@ export async function realign(app: App, id: string, span: [number, number] | nul
       // Its cut only: the words stay the Doc's (none), so a Doc pulled again sees the range unchanged.
       if (cue === null && only !== null) cue = spokenCue(media.words, block.start - offset, block.end - offset);
       if (cue === null) continue;
-      const [cutIn, cutOut] = align(media.words, media.peaks, cue, block.start - offset, block.end - offset);
+      const [cutIn, cutOut] = align(media.words, media.peaks, cue, block.start - offset, block.end - offset, padsOf(blocks, index));
       // Never past the media's end: a range the Doc made longer than the footage downloaded plays to its end.
       const limit = mediaOf(project, block.media)?.duration;
       const found: [number, number] = [cutIn === null ? block.start : cutIn + offset, Math.min(cutOut === null ? block.end : cutOut + offset, limit === undefined ? Infinity : limit + offset)];

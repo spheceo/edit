@@ -127,6 +127,25 @@ test("the_same_broll_moment_twice_is_flagged", () => {
   expect(kinds(p, "repeated_broll").length).toBe(2);
 });
 
+test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {
+  const p = project("plan");
+  p.media.push(footage(), media({ id: "m2", name: "g", path: "/g.mp4", kind: "video", duration: 600, width: 1920, height: 1080 }));
+  apply(p, [
+    { op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 0, start: 0, duration: 300 } },
+    // A 4 s B-roll shot, under a pause but for its first 6 frames and its last 12.
+    { op: "add", clip: { type: "video", track: "v2", media: "m2", source_in: 0, start: 60, duration: 120 } },
+    { op: "add", clip: { type: "video", track: "v3", media: "m1", source_in: 20, start: 66, duration: 102 } },
+    // A shot held a whole second is no glimpse; a flash is meant to be quick.
+    { op: "add", clip: { type: "video", track: "v2", media: "m2", source_in: 9, start: 200, duration: 30 } },
+    { op: "add", clip: { type: "video", track: "v2", media: "m2", source_in: 9, start: 250, duration: 4, name: "Flash" } },
+  ]);
+  const found = kinds(p, "glimpse").map((issue) => [issue.start as number, issue.frames as number]).sort((a, b) => a[0]! - b[0]!);
+  expect(found).toEqual([
+    [60, 6],
+    [168, 12],
+  ]);
+});
+
 test("a_transition_without_a_sound_is_flagged", () => {
   const p = project("plan");
   p.media.push(media({ id: "s1", name: "whoosh", path: "/w.wav", kind: "audio", duration: 1 }));

@@ -188,6 +188,8 @@ export interface CloudMediaSeam {
   reviewOriginal(file: string, scratch: string, progress: (bytes: number, total: number | null, name: string) => void): Promise<[Original, string | null]>;
   /** `project` as an export of frames start..end reads it: cloud media pointing at their originals (presigned URLs). */
   forExport(project: Project, start: number, end: number, cache: string): Promise<[Project, Originals]>;
+  /** The cloud stills a render of `project` reads, fetched again where the cache dropped them. */
+  restoreStills(app: App, project: Project): Promise<void>;
   forWorker(project: Project, start: number, end: number): Promise<{ project: Project; assets: import("@edit/types/worker").WorkerAsset[] }>;
   /** Puts a file from this machine in the cloud (deduplicated by content) and returns the media to add; footage's uploads finish in the background. */
   importLocal(cache: string, path: string, probe: Probe, name: string): Promise<Made>;

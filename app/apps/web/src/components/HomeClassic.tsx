@@ -88,7 +88,8 @@ export function HomeClassic() {
     // /ideas is Home on its Ideas tab (the idea page's way back).
     if (window.location.pathname === "/ideas") return "ideas";
     const saved = localStorage.getItem(VIEW);
-    return saved === "all" || saved === "subtitled" || saved === "ideas" || saved === "done" ? saved : "mine";
+    // Subtitled is hidden for now (Sphe, Oct 31): a browser left on it opens on Your projects.
+    return saved === "all" || saved === "ideas" || saved === "done" ? saved : "mine";
   });
   // Ideas (Oct 31): the team's repackaging, a tab of Home's for those who work on them.
   const ideasAllowed = makesIdeas(account);
@@ -325,7 +326,7 @@ export function HomeClassic() {
                     // What needs someone first; the rest a tab away (the user, Oct 30: "you mainly see projects that need you").
                     ["mine", "Your projects", mineRows.length] as [View, string, number],
                     ["all", "All projects", projectRows.length] as [View, string, number],
-                    ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
+                    // Subtitled is hidden for now (Sphe, Oct 31: "let us hide the subtitled section for now").
                     // Marked done by hand (the user, Oct 31: "so we dont have to see them").
                     ...(doneRows.length > 0 || view === "done" ? [["done", "Done", doneRows.length] as [View, string, number]] : []),
                     ...(ideasAllowed ? [["ideas", "Ideas", ideasCount] as [View, string, number]] : []),

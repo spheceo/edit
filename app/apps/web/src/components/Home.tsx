@@ -390,18 +390,18 @@ export function Home() {
     <LaterContext.Provider value={later}>
       <div className="flex h-full bg-bg p-2">
         <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.07] bg-panel">
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
           {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
-          <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-white/[0.07] px-5">
-            <h1 className="flex min-w-0 items-center gap-1.5 text-[13.5px] font-semibold tracking-[-0.01em] whitespace-nowrap">
+          <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
+            <h1 className="flex min-w-0 items-center gap-1.5 text-[15px] font-semibold tracking-[-0.01em] whitespace-nowrap">
               {title.parent !== null && (
                 <>
                   <span className="font-medium text-muted">{title.parent}</span>
-                  <span className="font-normal text-faint/50">/</span>
+                  <span className="font-normal text-faint">/</span>
                 </>
               )}
               <span className="truncate">{title.name}</span>
-              {!loading && <span className="ml-1 font-medium text-faint tabular">{total}</span>}
+              {!loading && <span className="ml-1 text-[13px] font-normal text-faint tabular">{total}</span>}
             </h1>
             <div className="ml-auto flex items-center gap-1.5">
               <UpdateButton />
@@ -419,15 +419,16 @@ export function Home() {
           </header>
           <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3", sidebarOpen ? "pb-6" : "pb-14")}>
             <SetupCard />
-            <div className="mb-2 flex items-center gap-2">
-              <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 text-faint focus-within:border-white/[0.16]">
+            <div className="mb-3 flex items-center gap-2">
+              {/* The kit's field: inset on the page colour, its edge brighter in focus. */}
+              <label className="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-line-strong bg-bg px-2.5 text-muted focus-within:border-muted">
                 <Search size={14} className="shrink-0" />
                 <input
                   value={query}
                   placeholder="Search everything by name…"
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => event.key === "Escape" && setQuery("")}
-                  className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint/70"
+                  className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint"
                 />
                 {searching && (
                   <button onClick={() => setQuery("")} title="Clear" className="shrink-0 text-faint hover:text-fg">
@@ -436,16 +437,13 @@ export function Home() {
                 )}
               </label>
               {account?.person != null && (
-                <div className={cx("flex gap-1.5", searching && "pointer-events-none opacity-40")}>
+                // The kit's segmented control (.sp-seg).
+                <div className={cx("flex h-[34px] shrink-0 gap-0.5 rounded-[9px] border border-line bg-bg p-0.5", searching && "pointer-events-none opacity-45")}>
                   {([[true, "Mine"], [false, "Everyone"]] as const).map(([value, label]) => (
                     <button
                       key={label}
                       onClick={() => chooseMine(value)}
-                      className={cx(
-                        // The portal's pills: the chosen one filled.
-                        "h-[30px] rounded-full px-3 text-[12.5px] transition-colors",
-                        mineOnly === value ? "bg-fg/90 font-medium text-bg" : "border border-white/[0.09] bg-white/[0.02] text-muted hover:bg-white/[0.06] hover:text-fg",
-                      )}
+                      className={cx("rounded-md px-2.5 text-[13px] font-medium transition-colors", mineOnly === value ? "bg-active text-fg" : "text-muted hover:text-fg")}
                     >
                       {label}
                     </button>
@@ -454,7 +452,7 @@ export function Home() {
               )}
             </div>
             {cloud?.on && cloud.error && (
-              <p className="mb-2 px-3 text-[12px] text-warning/80" title={cloud.error}>
+              <p className="mb-2 px-3 text-[12px] text-warning" title={cloud.error}>
                 {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
               </p>
             )}
@@ -473,17 +471,17 @@ export function Home() {
               <>
                 <HomeList groups={groups} solo={solo} cross={cross} lengthLabel={inIdeas ? "Views" : "Length"} />
                 {!searching && shownWhere === "done" && !allDone && total > DONE_SHOWN && (
-                  <button onClick={() => setAllDone(true)} className="mt-3 self-start rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-muted transition-colors hover:border-white/[0.16] hover:text-fg">
+                  <Button variant="subtle" className="mt-3 self-start" onClick={() => setAllDone(true)}>
                     Show all {total}
-                  </button>
+                  </Button>
                 )}
               </>
             ) : inIdeas && (ideasHome?.ideas.length ?? 0) === 0 && (ideasHome?.changes.length ?? 0) === 0 ? (
               <NoIdeas onNew={() => setIdeaOpen(true)} />
             ) : (
               <div className="mt-16 text-center">
-                <div className="text-[13.5px] font-medium">{empty.title}</div>
-                <p className="mt-1.5 text-[12.5px] text-muted">{empty.text}</p>
+                <div className="text-[14px] font-medium">{empty.title}</div>
+                <p className="mt-1.5 text-[13px] text-muted">{empty.text}</p>
               </div>
             )}
           </div>
@@ -570,10 +568,10 @@ function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string;
         data-compact={layout.compact || undefined}
         data-slim={layout.slim || undefined}
         data-faces={layout.faces || undefined}
-        className="group/table grid gap-x-4 gap-y-px"
+        className="group/table grid gap-x-4"
         style={{ gridTemplateColumns: layout.columns }}
       >
-        <div role="row" className={cx(COLUMNS, "px-3 pt-1.5 pb-2 text-[11px] font-semibold text-faint/70")}>
+        <div role="row" className={cx(COLUMNS, "px-3 pb-2 text-[12px] font-medium text-muted")}>
           <span role="columnheader">Name</span>
           <span role="columnheader" className={CATEGORY}>
             Category
@@ -591,8 +589,9 @@ function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string;
         {groups.map((group) => (
           <Fragment key={group.key}>
             {group.label !== null && (
-              <div className="col-span-full flex items-center gap-1.5 px-3 pt-4 pb-1 text-[11.5px] font-semibold text-muted">
-                {group.label} <span className="font-medium text-faint/60 tabular">{group.items.length}</span>
+              // The kit's section label: sentence case, 13/500, muted.
+              <div className="col-span-full flex items-center gap-1.5 border-t border-line px-3 pt-5 pb-2 text-[13px] font-medium text-muted">
+                {group.label} <span className="font-normal text-faint tabular">{group.items.length}</span>
               </div>
             )}
             {group.items.map((item) => (
@@ -1455,7 +1454,7 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
         ) : importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (the step in its tooltip; its row opens the import).
           <span className={cx(CHIP, "w-32 text-info tabular")} title={importing.step}>
-            <span className="h-1 min-w-10 flex-1 overflow-hidden rounded-full bg-line">
+            <span className="h-1 min-w-10 flex-1 overflow-hidden rounded-full bg-line-strong">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
             {Math.floor(Math.max(0, Math.min(100, importing.percent)))}%

@@ -92,18 +92,19 @@ export function HomeSidebar({ sections, counts, where, onChoose, open, onClose }
         key={to}
         onClick={() => onChoose(to)}
         className={cx(
-          "flex w-full min-w-0 items-center gap-2 rounded-xl text-left transition-colors",
-          Icon ? "h-[31px] px-2 text-[13px] font-medium" : "h-7 pr-2 pl-[34px] text-[12.5px]",
-          on ? "bg-white/[0.06] text-fg" : Icon ? "text-secondary hover:bg-white/[0.04] hover:text-fg" : "text-muted hover:bg-white/[0.04] hover:text-fg",
+          "flex w-full min-w-0 items-center gap-2 text-left transition-colors",
+          // The kit's: 13 px, selected a grey step (active), hover the step below it.
+          Icon ? "h-8 rounded-lg px-2 text-[13px] font-medium" : "h-[30px] rounded-lg pr-2 pl-[34px] text-[13px]",
+          on ? "bg-active text-fg" : Icon ? "text-secondary hover:bg-hover hover:text-fg" : "text-muted hover:bg-hover hover:text-fg",
           extra,
         )}
       >
-        {Icon && <Icon size={15} className={cx("shrink-0", on ? "text-fg" : "text-faint")} />}
+        {Icon && <Icon size={15} className={cx("shrink-0", on ? "text-fg" : "text-muted")} />}
         <span className="min-w-0 flex-1 truncate">{label}</span>
         {to === "needs" && count > 0 ? (
-          <span className="rounded-full bg-danger/15 px-1.5 text-[11px] leading-[17px] font-semibold text-danger tabular">{count}</span>
+          <span className="rounded-full bg-danger-soft px-1.5 text-[12px] leading-[18px] font-medium text-danger tabular">{count}</span>
         ) : (
-          count > 0 && <span className={cx("text-[11px] tabular", on ? "text-muted" : "text-faint/60")}>{count}</span>
+          count > 0 && <span className={cx("text-[12px] tabular", on ? "text-secondary" : "text-faint")}>{count}</span>
         )}
       </button>
     );
@@ -127,7 +128,7 @@ export function HomeSidebar({ sections, counts, where, onChoose, open, onClose }
               {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
             </div>
           ))}
-          <div className="mx-2 my-2.5 border-t border-white/[0.08]" />
+          <div className="mx-2 my-2.5 border-t border-line" />
           {item("later", "Later", Clock)}
           {item("done", "Done", Check)}
         </nav>

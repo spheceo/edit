@@ -1,7 +1,9 @@
 // Home's table, shared by its rows (Home.tsx: edits and scripts; ideas/home.tsx:
-// ideas and board cards), in the study portal's look (the user, Oct 31: "take
-// a look at the ststudyportal ui and see if you can build it around that"):
-// faint column names, rounded rows with no lines between them, outlined
+// ideas and board cards): the study portal's layout (the user, Oct 31: "take a
+// look at the ststudyportal ui and see if you can build it around that"), in
+// Edit's own kit, as the rest of the app (then: "make the theming and colors
+// of home and font sizes match the rest of the app"): the kit's list rows (56
+// px, a hairline between them), 14 px names and 13 px details, its filled
 // status pills, the row's buttons on hover, a right click for its menu. And
 // Later: a clock on every row sets it aside (Tomorrow, Monday, a week, until
 // it's brought back), the Later list's rows bring it back sooner, and on its
@@ -21,18 +23,19 @@ import { cx } from "./ui";
 /** A row takes up the table's columns (subgrid), so they line up row to row. */
 export const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
 
-/** A row: rounded, the hover its only edge (the portal's rows); lit too while its menu is open. */
-export const ROW = "group min-h-11 cursor-pointer rounded-xl px-3 py-1.5 transition-colors hover:bg-white/[0.035] data-[menu-open]:bg-white/[0.035] has-[[data-menu-open]]:bg-white/[0.035]";
+/** A row: the kit's list row (56 px, a hairline above it, the hover a grey step); lit too while its menu is open. */
+export const ROW = "group min-h-14 cursor-pointer border-t border-line px-3 py-2 transition-colors hover:bg-hover data-[menu-open]:bg-hover has-[[data-menu-open]]:bg-hover";
 
 /** A row's hover button: shown on hover, and kept while its row's menu is open (the user, Oct 31: "when i click on thrree dots then a dropdown the three dots dissaper"). */
-const HOVER_BUTTON = "opacity-0 group-hover:opacity-100 group-data-[menu-open]:opacity-100 group-has-[[data-menu-open]]:opacity-100 data-[menu-open]:bg-hover data-[menu-open]:text-fg";
+const HOVER_BUTTON = "opacity-0 group-hover:opacity-100 group-data-[menu-open]:opacity-100 group-has-[[data-menu-open]]:opacity-100 data-[menu-open]:bg-active data-[menu-open]:text-fg";
 
-/** A row's name. */
-export const NAME = "truncate text-[13.5px] font-medium text-fg/90 group-hover:text-fg";
+/** A row's name: the body size. */
+export const NAME = "truncate text-[14px] text-fg";
 
-/** Every status looks alike: an outlined pill in the colour of how much it matters (the portal's). */
-export const PILL = "inline-flex h-[22px] min-w-0 shrink-0 items-center gap-1.5 rounded-full border border-current/25 px-2.5 text-[11.5px] leading-none whitespace-nowrap";
-export const CHIP = `${PILL} max-w-full overflow-hidden font-medium`;
+/** Every status looks alike: the kit's 22 px status pill, filled a grey step up, its words in the colour of how much it matters. */
+export const PILL = "inline-flex h-[22px] min-w-0 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12px] leading-none whitespace-nowrap";
+const CHIP_SHAPE = `${PILL} max-w-full overflow-hidden font-medium`;
+export const CHIP = `${CHIP_SHAPE} bg-active`;
 
 /** How the table is laid out now: `cross` (rows of every kind: each says what it is). */
 export const TableShape = createContext<{ cross: boolean }>({ cross: false });
@@ -67,7 +70,7 @@ export function StatusCell({ children }: { children: ReactNode }) {
 /** A row's length (an idea's views). */
 export function LengthCell({ children, title }: { children?: ReactNode; title?: string }) {
   return (
-    <span role="cell" className={cx("flex min-w-0 items-center gap-1.5 truncate text-[13px] text-muted tabular", LENGTH)} title={title}>
+    <span role="cell" className={cx("flex min-w-0 items-center gap-1.5 truncate text-[13px] text-secondary tabular", LENGTH)} title={title}>
       {children}
     </span>
   );
@@ -79,7 +82,7 @@ export function KindMark({ kind }: { kind: "edit" | "subtitles" | "script" | "id
   if (!cross) return null;
   const [Icon, label] = kind === "script" ? [FileText, "Script"] : kind === "idea" ? [Lightbulb, "Idea"] : kind === "subtitles" ? [Captions, "Subtitled video"] : [Film, "Edit"];
   return (
-    <span title={label} className="shrink-0 text-faint">
+    <span title={label} className="shrink-0 text-muted">
       <Icon size={14} />
     </span>
   );
@@ -90,7 +93,7 @@ export function Category({ style, compilation = false, text: given }: { style?: 
   const label = STYLES.find((option) => option.value === style)?.label ?? "";
   const text = given ?? (compilation ? `${label} Compilation`.trim() : label);
   return (
-    <span role="cell" className={cx("truncate text-[13px] text-muted", CATEGORY)} title={text || undefined}>
+    <span role="cell" className={cx("truncate text-[13px] text-secondary", CATEGORY)} title={text || undefined}>
       {text}
     </span>
   );
@@ -102,7 +105,7 @@ export function CreatorCell({ by, projectId }: { by: Creator | null | undefined;
   // An account named by its email shows the part before the @.
   const first = (name.includes("@") && !name.includes(" ") ? name.split("@")[0]! : name).split(/\s+/u)[0] ?? "";
   return (
-    <span role="cell" className={cx("flex min-w-0 items-center gap-2 text-[13px] text-muted", BY)}>
+    <span role="cell" className={cx("flex min-w-0 items-center gap-2 text-[13px] text-secondary", BY)}>
       <StartedBy by={by} projectId={projectId} size={20} placeholder />
       <span className={cx("truncate", BY_NAME)}>{first}</span>
     </span>
@@ -112,7 +115,7 @@ export function CreatorCell({ by, projectId }: { by: Creator | null | undefined;
 /** When it was last changed. */
 export function Updated({ at, title }: { at: number; title?: string }) {
   return (
-    <span role="cell" className="truncate text-[13px] text-muted tabular" title={title}>
+    <span role="cell" className="truncate text-[13px] text-secondary tabular" title={title}>
       {ago(at)}
     </span>
   );
@@ -136,7 +139,7 @@ export function BackMark({ entry }: { entry: LaterEntry }) {
   const midnight = new Date().setHours(0, 0, 0, 0);
   const since = entry.until! >= midnight ? "today" : entry.until! >= midnight - 86_400_000 ? "yesterday" : `since ${new Date(entry.until!).toLocaleDateString(undefined, { weekday: "short" })}`;
   return (
-    <span className={cx(CHIP, "border-info/40 bg-info-soft text-info")} title={`${who} set it aside on ${day(entry.at)}; it's been back since ${day(entry.until!)}. Opening it clears this.`}>
+    <span className={cx(CHIP_SHAPE, "bg-info-soft text-info")} title={`${who} set it aside on ${day(entry.at)}; it's been back since ${day(entry.until!)}. Opening it clears this.`}>
       <AlarmClock size={12} />
       Back {since}
     </span>
@@ -171,7 +174,7 @@ export function useAside(key: LaterKey | null, title: string) {
         event.stopPropagation();
         later.back(key, title);
       }}
-      className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-hover hover:text-fg", HOVER_BUTTON)}
+      className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-active hover:text-fg", HOVER_BUTTON)}
     >
       <Undo2 size={14} />
     </button>
@@ -183,7 +186,7 @@ export function useAside(key: LaterKey | null, title: string) {
         event.stopPropagation();
         toggleMenu(event.currentTarget, [{ heading: "Set aside until" }, ...choices()], { width: 230 });
       }}
-      className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-hover hover:text-fg", HOVER_BUTTON)}
+      className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-active hover:text-fg", HOVER_BUTTON)}
     >
       <Clock size={14} />
     </button>
@@ -221,7 +224,7 @@ export function RowButtons({ aside, items, width = 200 }: { aside: ReactNode; it
           event.stopPropagation();
           toggleMenu(event.currentTarget, items, { width });
         }}
-        className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-hover hover:text-fg", HOVER_BUTTON)}
+        className={cx("flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-[opacity,color] hover:bg-active hover:text-fg", HOVER_BUTTON)}
       >
         <Ellipsis size={15} />
       </button>

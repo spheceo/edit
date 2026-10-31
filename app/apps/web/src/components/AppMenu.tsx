@@ -40,7 +40,7 @@ export function AppMenu({ row = false }: { row?: boolean } = {}) {
   const open = (event: React.MouseEvent<HTMLElement>) => toggleMenu(event.currentTarget, items, { width: 260, ...(row ? { at: { x: event.currentTarget.getBoundingClientRect().left, y: event.currentTarget.getBoundingClientRect().bottom + 4 } } : {}) });
   if (row && person !== null) {
     return (
-      <button aria-label="Your account" onClick={open} className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[0.05]">
+      <button aria-label="Your account" onClick={open} className="flex w-full min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-hover">
         <StartedBy by={{ sub: "", name: person.name || person.email, ...(person.image ? { picture: person.image } : {}) }} size={24} title={null} />
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{(person.name || person.email).split(/\s+/u)[0]}</span>
         <ChevronDown size={14} className="shrink-0 text-faint" />

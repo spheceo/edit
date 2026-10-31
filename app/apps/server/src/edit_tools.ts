@@ -15,6 +15,7 @@ import * as cutin from "./cutin.ts";
 import * as commentaryAudit from "./commentary_audit.ts";
 import { FRAME_SCALE, frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
+import * as uploads from "./uploads.ts";
 import { footageLabel } from "./script.ts";
 import * as editPlan from "./edit_plan.ts";
 import * as footageLevels from "./footage_levels.ts";
@@ -1672,6 +1673,11 @@ export function editContext(app: App, found: Live, args: Args): Args {
     tracks,
     sections,
     media,
+    // What the user dropped in, newest first, and whether it's placed (Oct 31: "add the new images i've uploaded").
+    ...(() => {
+      const added = uploads.forContext(app, p);
+      return added.length === 0 ? {} : { uploads: added };
+    })(),
     ...(p.style === "commentary" ? { chapters: commentaryAudit.outline(p) } : {}),
     speaker_line_counts: speakers,
     subtitles_in_span: subtitles,

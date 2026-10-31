@@ -1474,6 +1474,24 @@
     "name": "case_articles"
   },
   {
+    "description": "A file the user uploaded that isn't media. A PDF, a Doc or a text file (get_edit_context's uploads lists them): with no name, the files; with a name, its text. Uploaded pictures, video and sound are media, in uploads with their media ids, placed like any other.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "description": "The file's name as uploaded (or part of it).",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "read_upload"
+  },
+  {
     "description": "A contact sheet of found images still waiting for the user's review, numbered, with their ids and pages, so you can weed out what's off-target before the user looks (reject_found).",
     "inputSchema": {
       "properties": {

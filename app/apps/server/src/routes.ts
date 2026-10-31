@@ -44,6 +44,7 @@ import * as covers from "./covers.ts";
 import * as kinds from "./kinds.ts";
 import * as reset from "./reset.ts";
 import * as firstPrompt from "./first_prompt.ts";
+import * as uploads from "./uploads.ts";
 import * as playbackRender from "./playback_render.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
@@ -112,6 +113,19 @@ export function buildRouter(): Router<App> {
     .post("/api/projects/{id}/import", importMedia)
     .post("/api/projects/{id}/import-drive", importDriveMedia)
     .post("/api/projects/{id}/upload", uploadMedia, { bodyLimit: null })
+    // The files uploaded that aren't media (the media panel's Files), and one of them.
+    .get("/api/projects/{id}/files", ({ app, params }) => {
+      liveOr404(app, params.id!);
+      const kept = uploads.list(app.store.uploadsDir(params.id!)).filter((entry) => entry.file !== null && fs.existsSync(entry.file));
+      return json({ files: kept.map((entry) => ({ name: entry.name, at: entry.at, size: fs.statSync(entry.file!).size })) });
+    })
+    .get("/api/projects/{id}/files/{name}", (context) => {
+      liveOr404(context.app, context.params.id!);
+      const wanted = decodeURIComponent(context.params.name ?? "");
+      const found = uploads.list(context.app.store.uploadsDir(context.params.id!)).reverse().find((entry) => entry.file !== null && entry.name === wanted && fs.existsSync(entry.file));
+      if (found === undefined) throw notFound(`no file ${wanted}`);
+      return serveFile(context.request, found.file!);
+    })
     .get("/api/projects/{id}/media-status", mediaStatus)
     .get("/api/projects/{id}/missing", missingFootage);
   mediaRoutes(router);
@@ -628,6 +642,13 @@ async function importMedia(context: Context): Promise<Response> {
   }
   const [rev, added, errors] = imported;
   const project = context.app.store.get(id)?.project ?? null;
+  // What the person added, for the agent's context (uploads.ts).
+  try {
+    const dir = context.app.store.uploadsDir(id);
+    for (const mediaId of added) uploads.remember(dir, { at: Date.now(), name: project?.media.find((one) => one.id === mediaId)?.name ?? mediaId, media: mediaId, file: null });
+  } catch (error) {
+    diag.warn("upload", `noting what was added: ${diag.messageOf(error)}`);
+  }
   return json({ rev, added, errors, project });
 }
 
@@ -647,6 +668,13 @@ async function importDriveMedia(context: Context): Promise<Response> {
   }
   const [rev, added, errors] = imported;
   const project = context.app.store.get(id)?.project ?? null;
+  // What the person added, for the agent's context (uploads.ts).
+  try {
+    const dir = context.app.store.uploadsDir(id);
+    for (const mediaId of added) uploads.remember(dir, { at: Date.now(), name: project?.media.find((one) => one.id === mediaId)?.name ?? mediaId, media: mediaId, file: null });
+  } catch (error) {
+    diag.warn("upload", `noting what was added: ${diag.messageOf(error)}`);
+  }
   return json({ rev, added, errors, project });
 }
 
@@ -680,7 +708,6 @@ async function uploadMedia(context: Context): Promise<Response> {
   liveOr404(app, id);
   const name = fileName(given)?.trim() ?? "";
   if (name === "" || name.startsWith(".")) throw bad("invalid file name");
-  if (!isMediaPath(name)) throw bad(`${name} is not a supported video or audio file`);
   let dir: string;
   try {
     dir = app.store.uploadsDir(id);
@@ -713,9 +740,22 @@ async function uploadMedia(context: Context): Promise<Response> {
       fs.rmSync(temporary, { force: true });
       throw bad(`upload of ${name} failed: ${error instanceof Error && "code" in error ? ioMessage(error) : diag.messageOf(error)}`);
     }
+    // Any file (Oct 31): media as it is or converted (a HEIC a PNG, a WMV an MP4), anything else kept as the project's file.
+    const how = await uploads.plan(target, join(dir, "converted"));
+    if ("file" in how) {
+      const files = join(dir, "files");
+      fs.mkdirSync(files, { recursive: true });
+      let kept = join(files, name);
+      for (let n = 2; fs.existsSync(kept); n++) kept = join(files, name.replace(/(\.[^.]+)?$/, (ext) => ` ${n}${ext}`));
+      fs.renameSync(target, kept);
+      keepTarget = true;
+      uploads.remember(dir, { at: Date.now(), name, media: null, file: kept });
+      const live = app.store.get(id);
+      return json({ rev: live?.rev ?? 0, added: [], project: live?.project ?? null, file: name });
+    }
     let imported;
     try {
-      imported = await importPaths(app, id, [target], false, origin === "" ? "upload" : origin);
+      imported = await importPaths(app, id, [how.media], false, origin === "" ? "upload" : origin);
     } catch (error) {
       throw bad(diag.messageOf(error));
     }
@@ -723,14 +763,16 @@ async function uploadMedia(context: Context): Promise<Response> {
     const first = errors[0];
     if (first !== undefined) throw bad(first);
     const project = app.store.get(id)?.project ?? null;
-    keepTarget = true;
+    // Converted: the media is the copy Edit reads; the dropped file isn't kept beside it.
+    keepTarget = how.from === undefined;
+    if (added[0] !== undefined) uploads.remember(dir, { at: Date.now(), name, media: added[0], file: null, ...(how.from === undefined ? {} : { from: how.from }) });
     // Cloud mode: footage that went up (edited from its proxy now) needs no
     // copy here. Sounds and pictures stay where they are (`cloud_media`).
     const media = added[0] === undefined ? undefined : project?.media.find((item) => item.id === added[0]);
-    if (media?.cloud !== undefined && media.cloud !== null && fs.existsSync(target) && media.path !== canonical(target)) {
+    if (media?.cloud !== undefined && media.cloud !== null && fs.existsSync(how.media) && media.path !== canonical(how.media)) {
       // Once it's gone up (the import answered before the upload finished);
       // kept while it hasn't, as the only copy of the original.
-      seams.cloudMedia.removeWhenUploaded(canonical(target));
+      seams.cloudMedia.removeWhenUploaded(canonical(how.media));
     }
     return json({ rev, added, project });
   } finally {

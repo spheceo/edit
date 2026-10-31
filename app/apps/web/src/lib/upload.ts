@@ -7,7 +7,8 @@ import { placeMedia } from "./edit";
 import { clientId, useEditor } from "./store";
 import type { Project } from "./types";
 
-const MEDIA_FILE = /\.(mp4|mov|m4v|mkv|webm|avi|mts|mxf|wav|mp3|m4a|aac|flac|aif|aiff|ogg|opus)$/i;
+/** Folders and hidden files aren't uploads; anything else is (Oct 31: "all file types"): Edit converts what it can into media and keeps the rest as the project's files. */
+const UPLOADABLE = (file: File) => file.name !== "" && !file.name.startsWith(".") && (file.size > 0 || file.type !== "");
 
 export interface Upload {
   id: number;
@@ -60,9 +61,9 @@ function forget(id: number, delay: number) {
 export function uploadFiles(files: File[], placement?: Placement) {
   const project = useEditor.getState().project;
   if (!project) return;
-  const accepted = files.filter((file) => MEDIA_FILE.test(file.name));
+  const accepted = files.filter(UPLOADABLE);
   const rejected = files.length - accepted.length;
-  if (rejected) useEditor.getState().toast(`Skipped ${rejected} file${rejected > 1 ? "s" : ""} that aren't video or audio.`, "error");
+  if (rejected) useEditor.getState().toast(`Skipped ${rejected} empty file${rejected > 1 ? "s" : ""} or folder${rejected > 1 ? "s" : ""}.`, "error");
   for (const [index, file] of accepted.entries()) {
     const upload: Upload = { id: ++nextId, name: file.name, size: file.size, loaded: 0, state: "queued" };
     useUploads.setState(({ uploads }) => ({ uploads: [...uploads, upload] }));
@@ -95,7 +96,18 @@ async function pump() {
   running = false;
 }
 
-function send(job: Job): Promise<{ rev: number; added: string[]; project: Project }> {
+/** What an upload became: media (`added`), or one of the project's files (`file`). */
+interface Landed {
+  rev: number;
+  added: string[];
+  project: Project | null;
+  file?: string;
+}
+
+/** Bumped when a file (not media) lands, so the media panel's Files list is read again. */
+export const useUploadedFiles = create<{ version: number }>(() => ({ version: 0 }));
+
+function send(job: Job): Promise<Landed> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const query = new URLSearchParams({ name: job.file.name, size: String(job.file.size), origin: `upload-${clientId}` });
@@ -148,9 +160,14 @@ function send(job: Job): Promise<{ rev: number; added: string[]; project: Projec
   });
 }
 
-function land(job: Job, result: { rev: number; added: string[]; project: Project }) {
+function land(job: Job, result: Landed) {
+  if (result.file !== undefined) {
+    useUploadedFiles.setState(({ version }) => ({ version: version + 1 }));
+    useEditor.getState().toast(`“${result.file}” is in the media panel’s Files: the agent can read it.`, "info");
+    return;
+  }
   const state = useEditor.getState();
-  if (!state.project || state.project.id !== job.projectId) return;
+  if (!state.project || state.project.id !== job.projectId || result.project === null) return;
   // The live event normally beats the HTTP response; catch up if it didn't.
   if (state.rev < result.rev) state.adopt(result.rev, result.project);
   const media = result.added[0];

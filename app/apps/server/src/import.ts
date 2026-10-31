@@ -15,6 +15,7 @@ import { fileName, join } from "./paths.ts";
 import { duration, fps, freshId, mediaOf } from "./project.ts";
 import { cloudEnabled } from "./relay.ts";
 import * as seams from "./seams.ts";
+import * as uploads from "./uploads.ts";
 
 export { expandHome } from "./paths.ts";
 export type { Made } from "./seams.ts";
@@ -69,6 +70,30 @@ export async function importPaths(
         errors.push(diag.messageOf(error));
         continue;
       }
+    } else if (file) {
+      // Any other file (Oct 31): a picture, video or sound converted beside the project's media;
+      // anything else kept as one of its files (the agent reads them with read_upload).
+      let dir: string;
+      try {
+        dir = app.store.uploadsDir(id);
+      } catch (error) {
+        errors.push(diag.messageOf(error));
+        continue;
+      }
+      const how = await uploads.plan(path, join(dir, "converted"));
+      if ("file" in how) {
+        const name = fileName(path) ?? "file";
+        const files = join(dir, "files");
+        fs.mkdirSync(files, { recursive: true });
+        let kept = join(files, name);
+        for (let n = 2; fs.existsSync(kept); n++) kept = join(files, name.replace(/(\.[^.]+)?$/, (ext) => ` ${n}${ext}`));
+        fs.copyFileSync(path, kept);
+        uploads.remember(dir, { at: Date.now(), name, media: null, file: kept });
+        continue;
+      }
+      // Named as it came (its media folder says what it became).
+      if (how.from !== undefined) names.set(how.media, fileName(path) ?? fileName(how.media) ?? "media");
+      path = how.media;
     } else {
       errors.push(`${path} is not a supported local media file`);
       continue;

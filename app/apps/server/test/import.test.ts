@@ -63,10 +63,9 @@ test.skipIf(ffmpeg === null || ffprobe === null)("importing probes, adds once, p
     const [rev, added, errors] = await importPaths(app, id, [footage, `${dir}/notes.txt`, `${dir}/gone.mp4`], true, "ui");
     expect(rev).toBe(2);
     expect(added).toEqual(["m6"]);
-    expect(errors).toEqual([
-      `${dir}/notes.txt is not a supported local media file`,
-      `${dir}/gone.mp4 is not a supported local media file`,
-    ]);
+    // A file that isn't media is kept as the project's file (Oct 31: any file goes in); one that isn't there is refused.
+    expect(errors).toEqual([`${dir}/gone.mp4 is not a supported local media file`]);
+    expect(fs.readFileSync(`${store.uploadsDir(id)}/files/notes.txt`, "utf8")).toBe("hi");
     const project = store.get(id)!.project;
     expect(project.media[0]).toMatchObject({ id: "m6", name: "clip.mp4", path: footage, kind: "video", has_audio: true, width: 320 });
     expect(project.clips.map((clip) => clip.type)).toEqual(["video", "audio"]);

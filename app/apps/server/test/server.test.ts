@@ -114,13 +114,19 @@ test.skipIf(ffmpeg === null)("an upload streams to the project's media folder an
     const path = answer.project.media[0]!.path;
     expect(path).toBe(`${fs.realpathSync(store.uploadsDir(id))}/tone.wav`);
     expect(fs.readFileSync(path).equals(bytes)).toBe(true);
-    expect(fs.readdirSync(store.uploadsDir(id))).toEqual(["tone.wav"]);
+    expect(fs.readdirSync(store.uploadsDir(id)).sort()).toEqual(["tone.wav", "uploads.json"]);
     // The announced size is what's read.
     const short = await upload(`name=tone.wav&size=${bytes.length + 10}`, bytes);
     expect(await short.json()).toEqual({ error: `upload of tone.wav failed: received ${bytes.length} of ${bytes.length + 10} bytes` });
-    expect(fs.readdirSync(store.uploadsDir(id))).toEqual(["tone.wav"]);
+    expect(fs.readdirSync(store.uploadsDir(id)).sort()).toEqual(["tone.wav", "uploads.json"]);
     expect(await (await upload("name=.hidden.wav", bytes)).json()).toEqual({ error: "invalid file name" });
-    expect(await (await upload("name=notes.txt", bytes)).json()).toEqual({ error: "notes.txt is not a supported video or audio file" });
+    // Any file goes in (Oct 31): one that isn't media is kept as the project's file, listed and served.
+    const notes = new TextEncoder().encode("Victim: Jane Doe\nDate: 3 March 2024\n");
+    const kept = (await (await upload(`name=notes.txt&size=${notes.length}`, notes)).json()) as { added: string[]; file: string };
+    expect([kept.added, kept.file]).toEqual([[], "notes.txt"]);
+    const files = (await (await send(`/api/projects/${id}/files`)).json()) as { files: { name: string; size: number }[] };
+    expect(files.files.map((one) => [one.name, one.size])).toEqual([["notes.txt", notes.length]]);
+    expect(await (await send(`/api/projects/${id}/files/notes.txt`)).text()).toBe("Victim: Jane Doe\nDate: 3 March 2024\n");
     const zero = await upload("name=a.wav&size=0", bytes);
     expect(zero.status).toBe(413);
     const missing = await send(`/api/projects/${id}/upload`, { method: "POST", body: bytes });

@@ -1,6 +1,6 @@
-import { AudioLines, Check, ChevronLeft, CircleAlert, Ellipsis, Folder, HardDrive, Trash2, Upload as UploadIcon, X } from "lucide-react";
+import { AudioLines, Check, ChevronLeft, CircleAlert, Ellipsis, FileText, Folder, HardDrive, Trash2, Upload as UploadIcon, X } from "lucide-react";
 import { motion } from "motion/react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { importProgress } from "../lib/import_progress";
 
@@ -12,7 +12,7 @@ import { playhead } from "../lib/playback";
 import { useEditor, type MediaTab } from "../lib/store";
 import { shortDuration } from "../lib/time";
 import type { Media, MediaStatus, Project } from "../lib/types";
-import { cancelUpload, uploadFiles, useUploads, type Upload } from "../lib/upload";
+import { cancelUpload, uploadFiles, useUploadedFiles, useUploads, type Upload } from "../lib/upload";
 import { ResearchTile } from "./Research";
 import { ScriptDownloads, ScriptPanel } from "./ScriptPanel";
 import { cx, IconButton, ProgressRing, spring, Tabs } from "./ui";
@@ -112,7 +112,6 @@ function AddButtons({ onImport }: { onImport: () => void }) {
         ref={input}
         type="file"
         multiple
-        accept="video/*,audio/*,.mkv,.mts,.mxf"
         className="hidden"
         onChange={(event) => {
           uploadFiles([...(event.target.files ?? [])]);
@@ -189,7 +188,7 @@ function MediaGrid({
       <div className="flex h-44 w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-line-strong text-center text-muted">
         <UploadIcon size={18} />
         <span className="px-6 text-[12px] leading-relaxed">
-          Drop footage here{isLocal ? "" : " from this device"},
+          Drop any files here{isLocal ? "" : " from this device"},
           <br />
           or{" "}
           <button onClick={onImport} className="text-fg underline decoration-white/30 underline-offset-2 hover:decoration-white">
@@ -228,12 +227,51 @@ function MediaGrid({
           </motion.div>
         )}
       </div>
+      {!folder && <UploadedFiles projectId={project.id} />}
       {nothing && project.media.length > 0 && (
         <div className="px-4 py-8 text-center text-[12px] text-muted">
           {show === "unused" ? "Everything here is in the edit." : show === "used" ? "Nothing here is in the edit yet." : "Empty."}
         </div>
       )}
     </>
+  );
+}
+
+/** The files uploaded that aren't media (a PDF, a Doc, notes): kept with the project, read by the agent (read_upload), opened here. */
+function UploadedFiles({ projectId }: { projectId: string }) {
+  const version = useUploadedFiles((state) => state.version);
+  const [files, setFiles] = useState<{ name: string; size: number }[]>([]);
+  useEffect(() => {
+    let alive = true;
+    void fetch(`/api/projects/${projectId}/files`)
+      .then((answer) => (answer.ok ? answer.json() : { files: [] }))
+      .then((body: { files?: { name: string; size: number }[] }) => alive && setFiles(body.files ?? []))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [projectId, version]);
+  if (files.length === 0) return null;
+  return (
+    <div className="mt-3">
+      <div className="px-0.5 pb-1 text-[11px] font-medium text-muted">Files</div>
+      <div className="flex flex-col">
+        {files.map((file) => (
+          <a
+            key={file.name}
+            href={`/api/projects/${projectId}/files/${encodeURIComponent(file.name)}`}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open ${file.name}`}
+            className="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-[12px] hover:bg-hover"
+          >
+            <FileText size={14} className="shrink-0 text-muted" />
+            <span className="min-w-0 flex-1 truncate">{file.name}</span>
+            <span className="shrink-0 text-faint">{file.size < 1024 * 1024 ? `${Math.max(1, Math.round(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`}</span>
+          </a>
+        ))}
+      </div>
+    </div>
   );
 }
 

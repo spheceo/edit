@@ -9,7 +9,7 @@ LOOP_DIR = os.path.expanduser(os.environ.get('LOOP', '~/edit-experiments/loop'))
 pid, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
 # Projects live in the cloud since Oct 30: read through the server.
-d = json.load(__import__('urllib.request').request.urlopen(f'http://127.0.0.1:7700/api/projects/{pid}', timeout=120))['project']
+d = json.load(__import__('urllib.request').request.urlopen(os.environ.get('EDIT_URL', 'http://127.0.0.1:7700') + f'/api/projects/{pid}', timeout=120))['project']
 fps = d['settings']['fps']
 clips = d['clips']; end = max(c['start'] + c['duration'] for c in clips)
 picks = []  # (frame, why)

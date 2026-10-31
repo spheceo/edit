@@ -15,7 +15,7 @@ def mcp(tool, args):
 
 pid = sys.argv[1]
 # Projects live in the cloud since Oct 30: read through the server.
-d = json.load(__import__('urllib.request').request.urlopen(f'http://127.0.0.1:7700/api/projects/{pid}', timeout=120))['project']
+d = json.load(__import__('urllib.request').request.urlopen(os.environ.get('EDIT_URL', 'http://127.0.0.1:7700') + f'/api/projects/{pid}', timeout=120))['project']
 fps = d['settings']['fps']; W, H = d['settings']['width'], d['settings']['height']
 ctx = mcp('get_edit_context', {'project_id': pid})
 audit = ctx['audit']; kinds = collections.Counter()

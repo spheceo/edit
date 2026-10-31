@@ -13,7 +13,8 @@ LOOP_DIR = os.path.expanduser(os.environ.get('LOOP', '~/edit-experiments/loop'))
 HOME = os.path.expanduser('~/.edit')
 LOOP = LOOP_DIR
 BASES = json.load(open(f'{LOOP}/base/bases.json'))  # {key: {"id":…, "name":…}}
-API = 'http://127.0.0.1:7700'
+# The Edit server trials run on: EDIT_URL (the trial server, app/scripts/trial-server.sh: http://127.0.0.1:7710), else the dev server.
+API = os.environ.get('EDIT_URL', 'http://127.0.0.1:7700')
 # EDIT_LOOP_MESSAGE steers a trial (e-code: "Start the editing workflow in e-code."); the house message by default.
 MSG = os.environ.get('EDIT_LOOP_MESSAGE', 'Start the editing workflow.')
 RESUME = 'Carry on with the editing workflow from where you stopped: get_edit_context shows what is already done; then finish it.'

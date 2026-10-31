@@ -22,7 +22,7 @@ What it's for: the next edit shouldn't get the same notes. The agent never sees 
 3. **Limits and credit** (loop 2 lost hours to these): the relay's daily transcription and map allowances (`app/apps/relay/wrangler.toml`, deploy with `npx wrangler deploy`), the AI Gateway's credit (a test call: `curl https://ai-gateway.vercel.sh/v1/chat/completions` with `AI_GATEWAY_API_KEY`), free disk. Without gateway credit: `EDIT_AI_PROVIDER=gemini` in `/tmp/run/serve.sh` (`app/apps/server/src/gemini.ts`, Gemini's free tier with xAI behind it for pictures).
 4. **Bases**: `scripts/base.sh <key> <style> <fps> "<name>" "<doc url>"` per video (and the holdout): a fresh import (footage, transcripts, voice-over), recorded in `$LOOP/base/bases.json`. Look at each once (clip count, voice-overs on their cut-ins, its first get_edit_context's size).
 
-`LOOP` is the working folder (default `~/edit-experiments/loop`; use a new one per loop). Scripts are in `scripts/` here; they need the dev server on :7700.
+`LOOP` is the working folder (default `~/edit-experiments/loop`; use a new one per loop). Scripts are in `scripts/` here. Run trials on the trial server (`just trial-server start`, :7710, its own data folder, no `bun --watch`: other sessions' saves can't restart it mid-trial) with `EDIT_URL=http://127.0.0.1:7710`; restart it between rounds to take new code. A base made on another server is opened there first (`POST /api/projects/<id>/cloud/open`). Without `EDIT_URL` they use the dev server on :7700.
 
 ## A round
 1. Teach and fix (below), commit, then rebuild and restart: `just serve-build-bin` in `app/`, `scripts/restart.sh`. Never restart while a trial runs.

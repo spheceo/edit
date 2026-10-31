@@ -122,6 +122,11 @@ release: web (native "release") (window "release")
 # Restart the server yourself. `just serve-build-bin` skips the UI rebuild.
 serve-build: web serve-build-bin
 
+# The trial server for the in-app agent's trials and the teaching loop (scripts/trial-server.sh):
+# :7710, data in ~/.edit-trials, no bun --watch. start|stop|restart|status|code|log
+trial-server *args:
+    scripts/trial-server.sh {{args}}
+
 serve-build-bin:
     #!/usr/bin/env bash
     set -euo pipefail

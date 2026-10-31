@@ -9,7 +9,7 @@ for V in "$@"; do
   echo "== $R $V start $(date)"
   python3 $S/round.py $V $R > $L/rounds/$R-$V.log 2>&1
   P=$(python3 -c "import json; print(json.load(open('$L/rounds/$R/$V/meta.json'))['project'])")
-  STYLE=$(curl -s -m 120 localhost:7700/api/projects/$P | python3 -c "import json,sys; print(json.load(sys.stdin)['project'].get('style','bodycam'))")
+  STYLE=$(curl -s -m 120 ${EDIT_URL:-http://127.0.0.1:7700}/api/projects/$P | python3 -c "import json,sys; print(json.load(sys.stdin)['project'].get('style','bodycam'))")
   if [ "$STYLE" = commentary ]; then
     python3 "$S/commentary_score.py" "$P" "$L/rounds/$R/$V" --frames > "$L/rounds/$R/$V/score.txt" 2>&1
   else

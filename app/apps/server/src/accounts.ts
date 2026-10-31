@@ -330,9 +330,12 @@ export async function start(app: App): Promise<void> {
   void checkAvailable();
   setInterval(() => void checkAvailable(), 10 * 60_000).unref?.();
   await renew(app.store.home);
-  // Signed-in team devices register automatically; saved disables stay off.
-  const remote = await import("./remote_support.ts");
-  remote.start(app);
+  // Signed-in team devices register automatically; saved disables stay off. A trial server
+  // (EDIT_TRIALS=1) is this Mac's second Edit, never a device of its own.
+  if (process.env.EDIT_TRIALS !== "1") {
+    const remote = await import("./remote_support.ts");
+    remote.start(app);
+  }
   if (state.person !== null) diag.info("accounts", `signed in as ${state.person.email.split("@")[0]}`);
   if (headless) void codesOnTerminal(app);
 }

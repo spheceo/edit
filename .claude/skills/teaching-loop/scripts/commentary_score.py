@@ -22,7 +22,7 @@ clips = p["clips"]; med = {m["id"]: m for m in p["media"]}
 end = lambda c: c["start"] + c["duration"]
 length = max((end(c) for c in clips), default=0)
 body = {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"review_edit","arguments":{"project_id":pid}}}
-reply = json.load(urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:7700/mcp?project=" + pid, data=json.dumps(body).encode(), headers={"Content-Type":"application/json"}), timeout=900))
+reply = json.load(urllib.request.urlopen(urllib.request.Request(os.environ.get("EDIT_URL", "http://127.0.0.1:7700") + "/mcp?project=" + pid, data=json.dumps(body).encode(), headers={"Content-Type":"application/json"}), timeout=900))
 if reply.get("result", {}).get("isError"): raise RuntimeError(reply)
 review = json.loads(reply["result"]["content"][0]["text"])
 (out / "review.json").write_text(json.dumps(review, indent=2))

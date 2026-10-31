@@ -193,7 +193,7 @@ test("Modal takes only footage that's in the cloud", () => {
   expect(seams.modalExports.unsuitable(project, house, whole)).toBe("Local.mov isn't in the cloud");
 });
 
-test("a free Mac keeps a short export or a subtitle video; a busy one or a long edit goes to Modal", () => {
+test("a free Mac keeps an export it can finish in 25 minutes; a busy one or a very long edit goes to Modal", () => {
   const project = (clips: unknown[]) => ({ settings: { width: 1920, height: 1080, fps: 24, ntsc: true }, media: [], clips, script: null }) as unknown as Parameters<typeof seams.modalExports.cloudBetter>[0];
   const plan = (end: number) => ({ start: 0, end, width: 1920, height: 1080, audio: true });
   const footage = { id: "v", type: "video", media: "m", start: 0, duration: 41_777, name: "Bodycam" };
@@ -201,9 +201,11 @@ test("a free Mac keeps a short export or a subtitle video; a busy one or a long 
   // Cop Father's subtitles: 3:29 here, 5:05 on Modal.
   expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), false, 0.3)).toBeNull();
   expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), true, 0.3)).toBe("this Mac is already exporting");
-  expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), false, 0.9)).toContain("busy");
-  // Corrupt Cop, an edit: 13 min here.
-  expect(seams.modalExports.cloudBetter(project([footage]), plan(34_987), false, 0.3)).toContain("13 min");
+  expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), false, 0.9)).toBeNull();
+  expect(seams.modalExports.cloudBetter(project([footage, subtitle]), plan(41_777), false, 1.5)).toContain("busy");
+  // Corrupt Cop, an edit: 13 min here, kept here (Oct 31: Modal only when the Mac really can't).
+  expect(seams.modalExports.cloudBetter(project([footage]), plan(34_987), false, 0.3)).toBeNull();
+  expect(seams.modalExports.cloudBetter(project([footage]), plan(90_000), false, 0.3)).toContain("33 min");
   expect(seams.modalExports.cloudBetter(project([footage]), plan(4_600), false, 0.3)).toBeNull();
 });
 

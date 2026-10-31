@@ -112,16 +112,21 @@ export function unsuitable(project: Project, options: ExportOptions, plan: Plan)
 // (planning, decoding every frame to check it, copying it back), so Cop
 // Father's subtitles took 5:05 there and 3:29 here (Oct 19).
 const MAC_FPS = { subtitles: 150, edit: 45 };
-// Longer than this here, the cloud is quicker (Killer Couple's 53 min of
-// subtitles took 8:36 here).
-const MAC_SECONDS = 6 * 60;
-// A load average per core above this leaves the Mac no room for an export.
-const MAC_LOAD = 0.75;
+// Longer than this here, the export goes to the cloud. It was six minutes
+// (the cloud is quicker past that), which sent nearly every edit to Modal at
+// about $1 an export, the same videos four to six times a day: $32 in Oct
+// 29–31 and the month's spend limit reached (the user, Oct 31: send them
+// "only when the Mac really can't"). A typical 25-minute edit takes ~15 min
+// here, for free.
+const MAC_SECONDS = 25 * 60;
+// A load average per core above this leaves the Mac no room for an export
+// (0.75 was passed by an import's preview encode alone).
+const MAC_LOAD = 1.25;
 
 /**
  * Why an export Modal can take should go there rather than this Mac, or
- * null to keep it here for free: the Mac isn't exporting, isn't loaded and
- * would finish within about six minutes.
+ * null to keep it here for free: the Mac isn't exporting, isn't overloaded and
+ * would finish within about 25 minutes.
  */
 export function cloudBetter(project: Project, plan: Plan, macExporting: boolean,
   load = os.loadavg()[0]! / os.availableParallelism()): string | null {

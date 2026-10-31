@@ -55,6 +55,22 @@ class CacheTests(unittest.TestCase):
             (root / "crates/edit-engine/src/render.rs").write_text("new compositor")
             self.assertNotEqual(engine, build.engine_id())
 
+    def test_code_that_never_draws_keeps_the_sections(self):
+        # Oct 31: a change to the window, the addon, tracking or a test redrew every section.
+        with tempfile.TemporaryDirectory() as temporary, patch.object(build, "ROOT", Path(temporary)):
+            root = Path(temporary)
+            for name, text in {"Cargo.lock": "locked", "crates/edit-render/src/lib.rs": "draw", "crates/edit-engine/src/render.rs": "render"}.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text(text)
+            engine = build.engine_id()
+            for name in ["crates/edit-window/src/app.rs", "crates/edit-native/src/lib.rs", "crates/edit-wasm/src/lib.rs",
+                         "crates/edit-engine/src/track.rs", "crates/edit-engine/src/faces.rs", "crates/edit-engine/tests/render.rs"]:
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("changed")
+            self.assertEqual(engine, build.engine_id())
+            (root / "crates/edit-render/src/lib.rs").write_text("draw differently")
+            self.assertNotEqual(engine, build.engine_id())
+
     def test_upload_retries_only_the_failed_idempotent_part_with_identical_bytes(self):
         attempts, bodies = {}, {}
 

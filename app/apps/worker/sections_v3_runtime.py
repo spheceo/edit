@@ -218,17 +218,46 @@ HOUSE = {"format": "h264", "audio": True, "hardware": True}
 
 def check_options(options, settings, total):
     """The house export (the project's own size and rate, H.264 with sound, the
-    whole edit, no chapters); any loudness and quality. Anything else is a
-    local export's."""
+    whole edit); any loudness, quality and chapters. Anything else is a local
+    export's. The chapters are taken out (`chapters_of`): they're added when the
+    file is joined, so they never change a section's or the sound's cache key."""
     if any(options.get(field) != value for field, value in HOUSE.items()):
         raise ValueError("Cloud sections export H.264 with sound only")
     if options.get("shape", "original") != "original" or options.get("fps") is not None or options.get("target_mb") is not None:
         raise ValueError("Cloud sections export the project's own shape and rate")
     if options.get("size") not in (None, min(settings["width"], settings["height"])):
         raise ValueError("Cloud sections export the project's own size")
-    if options.get("range") not in (None, [0, total]) or options.get("chapters"):
-        raise ValueError("Cloud sections export the whole edit without chapters")
+    if options.get("range") not in (None, [0, total]):
+        raise ValueError("Cloud sections export the whole edit")
     return {**options, "range": None, "chapters": []}
+
+
+def chapters_of(options, fps, total):
+    """The export's chapters as an FFMETADATA file's text, as the engine's
+    `chapters_file` writes them for a whole edit (milliseconds; of several on
+    one frame the last; each to the next or the end), or None without any
+    (Oct 31: a share with chapters went to the Mac, "chapters are added here")."""
+    marks = []
+    for chapter in options.get("chapters") or []:
+        start, title = int(chapter.get("start", 0)), " ".join(str(chapter.get("title", "")).split())
+        if start < total and title:
+            marks.append((max(0, start), title))
+    marks.sort(key=lambda mark: mark[0])
+    kept = []
+    for mark in marks:
+        if kept and kept[-1][0] == mark[0]:
+            kept[-1] = mark
+        else:
+            kept.append(mark)
+    if not kept:
+        return None
+    ms = lambda frame: round(float(frame / fps) * 1000)
+    escaped = lambda text: "".join("\\" + c if c in "=;#\\" else c for c in text)
+    text = ";FFMETADATA1\n"
+    for index, (start, title) in enumerate(kept):
+        end = kept[index + 1][0] if index + 1 < len(kept) else total
+        text += f"[CHAPTER]\nTIMEBASE=1/1000\nSTART={ms(start)}\nEND={ms(end)}\ntitle={escaped(title)}\n"
+    return text
 
 
 def coordinate(job, volume, section_function, verify_function, root, build, engine, gpu_pool, report=None,
@@ -281,6 +310,7 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
         fps = rate(settings)
         total = max(c["start"] + c["duration"] for c in project["clips"])
         options = check_options(job["options"], settings, total)
+        chapters = chapters_of(job["options"], fps, total)
         spans = ranges(0, total, job["sections"])
         with httpx.Client(follow_redirects=False) as client:
             paths, identities, input_cache = stage_cached(job["assets"], folder, cache, client, control)
@@ -330,8 +360,14 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
                 f"file '{cache / 'pictures' / (s['key'] + '.mp4')}'\nduration {float((s['range'][1]-s['range'][0]) / fps):.12f}\n"
                 for s in sections))
             output = folder / "output.mp4"
+            marks = []
+            if chapters is not None:
+                (folder / "chapters.txt").write_text(chapters)
+                marks = ["-f", "ffmetadata", "-i", str(folder / "chapters.txt")]
             command(["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
-                     "-i", str(sound), "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "-1", "-map_chapters", "-1",
+                     # The chapters file's metadata when there is one: "-1" drops their titles too.
+                     "-i", str(sound), *marks, "-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "2" if marks else "-1",
+                     "-map_chapters", "2" if marks else "-1",
                      "-c", "copy", "-movflags", "+faststart", str(output)], control, folder)
             assembled = time.time()
             progress("assembled")

@@ -14,7 +14,7 @@ from sections_runtime import LocalControl
 from runtime import transfer
 from fractions import Fraction
 from sections_runtime import rate
-from sections_v3_runtime import asset_identity, cached, check_options, check_packets, decode_frames, remember, stage_cached, upload_parts
+from sections_v3_runtime import asset_identity, cached, chapters_of, check_options, check_packets, decode_frames, remember, stage_cached, upload_parts
 
 
 class CacheTests(unittest.TestCase):
@@ -153,9 +153,20 @@ class OptionsTests(unittest.TestCase):
         self.assertIsNone(check_options(house, settings, 500)["range"])
         self.assertEqual(check_options({**house, "size": 1080, "loudness": None}, settings, 500)["loudness"], None)
         for change in [{"format": "hevc"}, {"shape": "vertical"}, {"size": 720}, {"fps": 60}, {"target_mb": 50},
-                       {"range": [0, 400]}, {"audio": False}, {"chapters": [{"start": 0, "title": "One"}]}]:
+                       {"range": [0, 400]}, {"audio": False}]:
             with self.assertRaises(ValueError):
                 check_options({**house, **change}, settings, 500)
+
+    def test_chapters_render_in_the_cloud_and_are_added_when_the_file_is_joined(self):
+        settings = {"width": 1920, "height": 1080, "fps": 30}
+        house = {"format": "h264", "audio": True, "hardware": True, "range": None,
+                 "chapters": [{"start": 0, "title": "Intro"}, {"start": 300, "title": "The = stop; #1"}, {"start": 300, "title": "The stop"}, {"start": 900, "title": "Past the end"}]}
+        self.assertEqual(check_options(house, settings, 600)["chapters"], [])
+        self.assertEqual(chapters_of(house, 30, 600),
+                         ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=10000\ntitle=Intro\n"
+                         "[CHAPTER]\nTIMEBASE=1/1000\nSTART=10000\nEND=20000\ntitle=The stop\n")
+        self.assertIn("title=The \\= stop\\; \\#1", chapters_of({"chapters": [{"start": 0, "title": "The = stop; #1"}]}, 30, 600))
+        self.assertIsNone(chapters_of({"chapters": []}, 30, 600))
 
     def test_ntsc_packets_lie_on_their_own_grid(self):
         class Result:

@@ -10,8 +10,8 @@
  * (the checkout's `app/`, whose worker it runs); Infisical's CLI gives the
  * driver R2's keys for that process only (`infisical run`, Platform's
  * `/edit-relay` folder), so nothing needs Repack's checkout or project; Modal is signed in on the Mac. The house export of a whole edit whose footage is all in the
- * cloud goes there when this Mac is busy or it's long (`cloudBetter`); anything else (another format, size or shape, a span,
- * chapters, footage only on this Mac) is exported here as before.
+ * cloud goes there, whatever this Mac is doing, its chapters added when the file is joined; anything else (another
+ * format, size or shape, a span, footage only on this Mac) is exported here as before.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -101,7 +101,6 @@ export function unsuitable(project: Project, options: ExportOptions, plan: Plan)
   if (options.shape !== "original" || options.fps != null || options.target_mb != null) return "only the project's own shape and rate render in the cloud";
   if (options.size != null && options.size !== Math.min(width, height)) return "only the project's own size renders in the cloud";
   if (plan.start !== 0 || plan.end < duration(project)) return "only a whole edit renders in the cloud";
-  if (options.chapters.length > 0) return "chapters are added here";
   const here = used(project).filter((media) => !media.cloud?.original);
   if (here.length > 0) return `${here.map((media) => media.name).join(", ")} isn't in the cloud`;
   return null;

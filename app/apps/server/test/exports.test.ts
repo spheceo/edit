@@ -100,6 +100,8 @@ test("three remote exports leave local work free and retain their timeline snaps
   const wait = new Promise<void>(resolve => { release = resolve; });
   const snapshots: string[] = [];
   const enabled = spyOn(seams.cloudExports, "enabled").mockReturnValue(true);
+  // The older cloud path: Modal off, as on CI (on a Mac with Modal's driver, these went to Modal and the test failed).
+  const modal = spyOn(seams.modalExports, "enabled").mockReturnValue(false);
   const render = spyOn(seams.cloudExports, "run").mockImplementation(async (project, _options, _plan, output) => {
     snapshots.push(project.name);
     await wait;
@@ -126,7 +128,7 @@ test("three remote exports leave local work free and retain their timeline snaps
     plan.mockRestore();
   } finally {
     release();
-    render.mockRestore(); enabled.mockRestore(); cleanup();
+    render.mockRestore(); enabled.mockRestore(); modal.mockRestore(); cleanup();
   }
 });
 
@@ -182,6 +184,8 @@ test("Modal takes only footage that's in the cloud", () => {
   const whole = { start: 0, end: 100, width: 1920, height: 1080, audio: true };
   expect(seams.modalExports.unsuitable(project, house, whole)).toBeNull();
   expect(seams.modalExports.unsuitable(project, { ...house, size: 1080 }, whole)).toBeNull();
+  // Chapters too: the worker adds them as it joins the file (a share with chapters went to the Mac, Oct 31).
+  expect(seams.modalExports.unsuitable(project, { ...house, chapters: [{ start: 0, title: "Intro" }, { start: 600, title: "Story" }] } as typeof house, whole)).toBeNull();
   // The worker makes a waveform's sound levels from the cloud original.
   project.clips.push({ id: "w1", type: "waveform", start: 0, duration: 100 } as never);
   expect(seams.modalExports.unsuitable(project, house, whole)).toBeNull();
@@ -284,5 +288,45 @@ test("an export that stops moving is started again by itself", async () => {
   } finally {
     Object.assign(stall, was);
     render.mockRestore(); archive.mockRestore(); plan.mockRestore(); cleanup();
+  }
+});
+
+test("five projects export on Modal at the same time, none queued, while this Mac stays free", async () => {
+  const registry = new ExportRegistry();
+  const { dir, store, app, native, cleanup } = fixtureHome("modal-five", { services: { exports: registry } });
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  let atOnce = 0;
+  let most = 0;
+  const enabled = spyOn(seams.modalExports, "enabled").mockReturnValue(true);
+  const render = spyOn(seams.modalExports, "run").mockImplementation(async (_home, _project, _options, output) => {
+    most = Math.max(most, ++atOnce);
+    await wait;
+    atOnce--;
+    fs.writeFileSync(output, "modal export");
+    return { bytes: 12, key: null };
+  });
+  const wanted = spyOn(seams.drive, "wanted").mockReturnValue(false);
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: true }, fps: 30 });
+  try {
+    const ids: string[] = [];
+    for (const name of ["one", "two", "three", "four", "five"]) {
+      const project = store.create(name, { width: 64, height: 36, fps: 30 }).project;
+      await store.update(project.id, "test", p => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+      ids.push(project.id);
+    }
+    const house = native.exportDefaults();
+    await Promise.all(ids.map(id => registry.start(store, app.library, store.get(id)!.project, house, `${dir}/${id}.mp4`)));
+    for (let tries = 0; most < 5 && tries < 100; tries++) await Bun.sleep(1);
+    expect(most).toBe(5);
+    expect(registry.localRunning()).toBe(false);
+    // Still one per project.
+    await expect(registry.start(store, app.library, store.get(ids[0]!)!.project, house, `${dir}/again.mp4`)).rejects.toThrow("already has an export running");
+    release();
+    for (let tries = 0; registry.running() && tries < 200; tries++) await Bun.sleep(1);
+    expect(ids.every(id => registry.exported(`${fs.realpathSync(dir)}/${id}.mp4`))).toBe(true);
+  } finally {
+    release();
+    plan.mockRestore(); render.mockRestore(); enabled.mockRestore(); wanted.mockRestore(); cleanup();
   }
 });

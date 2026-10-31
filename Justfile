@@ -16,6 +16,9 @@ check *args:
 dev *args:
     @just --justfile app/Justfile dev {{args}}
 
+copy-to-dev *args:
+    @just --justfile app/Justfile copy-to-dev {{args}}
+
 ffmpeg *args:
     @just --justfile app/Justfile ffmpeg {{args}}
 

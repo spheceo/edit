@@ -218,6 +218,8 @@ dev: wasm web-install (native "debug")
             fi
         done
     fi
+    # Dev's own data folder: ~/.edit is the installed Edit's (prod), and a cloud project cached there must never sync into dev.
+    export EDIT_HOME="${EDIT_HOME:-$HOME/.edit-dev}"
     # Dev talks to dev: its own relay (edit-relay-dev: Infisical dev's keys, Modal's dev environment, dev's Convex and R2). Installed builds use the live one.
     export EDIT_RELAY_URL="${EDIT_RELAY_URL:-https://edit-relay-dev.sphe-g-personal.workers.dev}"
     # Whole cloud edits export on Modal when this Mac is busy or it's long (modal_exports.ts).
@@ -233,6 +235,10 @@ dev: wasm web-install (native "debug")
     ENGINE=$!
     trap 'kill $SERVER $NATIVE $ENGINE 2>/dev/null || true' EXIT INT TERM
     bun run --cwd apps/web dev
+
+# Copy a prod cloud project into dev (scripts/copy_to_dev.py): `just copy-to-dev --list`, then `just copy-to-dev <id or name>`
+copy-to-dev *args:
+    @uv run -q --python 3.12 --with boto3==1.40.31 --with httpx python scripts/copy_to_dev.py {{args}}
 
 # Format, lint and test
 # oxlint with type-aware rules (.oxlintrc.json): the kinds of bug the

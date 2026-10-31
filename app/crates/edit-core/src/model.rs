@@ -65,6 +65,13 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub created_by: Option<Creator>,
+    /// Where it was made: "dev" for a project started on a dev build (`just
+    /// dev`, the dev server, the trial server), so Home can tell the many
+    /// test projects from real ones; None for real projects (and ones from
+    /// before). Promoting a dev project clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub origin: Option<String>,
 }
 
 /// The account that started a project (accounts.spheceo.com).
@@ -1750,6 +1757,7 @@ impl Project {
             markers: Vec::new(),
             people: Vec::new(),
             created_by: None,
+            origin: None,
         };
         for kind in [
             TrackKind::Video,

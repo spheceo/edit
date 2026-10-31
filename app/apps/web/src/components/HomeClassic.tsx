@@ -31,6 +31,7 @@ import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton, Modal, Spinner, spring } from "./ui";
+import { DevBadge, DevControl, promoteItem, useShowDev } from "./DevProjects";
 import { type CardProps, ImportDialog, type Importing, importShare, importStuck, type Listed, MoveToCloud, NewProject, type NewProjectStart, Notice, type NoticeProps, Place, type ScriptIssueRow, type Stage, stageName, stageOf, stageWords, useIssueDialogs, VIEW, type Writing } from "./Home";
 
 /** How long a project someone started stays in their Needs you before it goes to review. */
@@ -110,6 +111,8 @@ export function HomeClassic() {
     }
   }, []);
   const [style, setStyle] = useState<Style | null>(null);
+  // Projects made on a dev build: shown or hidden (DevProjects.tsx).
+  const [showDev, setShowDev] = useShowDev();
 
   // Imports, agents and shares under way are followed every few seconds (many projects at once).
   const busy = Object.values(statuses).some((one) => one.importing !== null || one.working || one.sharing !== null);
@@ -187,8 +190,8 @@ export function HomeClassic() {
   const words = query.trim().toLowerCase();
   const kept = (name: string, own: Style | undefined) => (words === "" || name.toLowerCase().includes(words)) && (style === null || own === style);
   const all = projects ?? [];
-  const edits = all.filter((project) => !project.subtitles && kept(project.name, project.style));
-  const subtitled = all.filter((project) => project.subtitles && kept(project.name, project.style));
+  const edits = all.filter((project) => !project.subtitles && (showDev || project.dev !== true) && kept(project.name, project.style));
+  const subtitled = all.filter((project) => project.subtitles && (showDev || project.dev !== true) && kept(project.name, project.style));
   const cloudKept = cloudOnly.filter((project) => kept(project.name, project.summary?.style as Style | undefined));
   const cloudSubtitled = cloudKept.filter((project) => project.summary?.subtitles === true);
   const cloudEdits = cloudKept.filter((project) => project.summary?.subtitles !== true);
@@ -334,6 +337,7 @@ export function HomeClassic() {
                   </button>
                 ))}
               </div>
+              <DevControl count={all.filter((project) => project.dev === true).length} show={showDev} onShow={setShowDev} onChanged={refresh} />
               {cloud?.on && cloud.error && (
                 <span className="text-[12px] text-warning/80" title={cloud.error}>
                   {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
@@ -478,6 +482,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
         ...(cloudOn && !status?.cloud && !project.problem
           ? [{ label: "Move to cloud…", icon: <CloudUpload size={14} />, onSelect: () => setMoving(true) }]
           : []),
+        ...promoteItem(project, onChanged),
         { separator: true },
         { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
       ],
@@ -831,6 +836,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
               {project.name}
             </span>
           )}
+          {project.dev === true && <DevBadge />}
         </div>
         <Category style={project.style} compilation={script?.compilation} />
         <Type kind={project.subtitles ? "subtitles" : "edit"} />

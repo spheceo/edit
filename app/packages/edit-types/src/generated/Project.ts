@@ -66,4 +66,11 @@ people?: Array<Person>,
  * Who started it: the signed-in account at creation, never changed after.
  * None for projects from before (and ones made signed out).
  */
-created_by?: Creator, };
+created_by?: Creator, 
+/**
+ * Where it was made: "dev" for a project started on a dev build (`just
+ * dev`, the dev server, the trial server), so Home can tell the many
+ * test projects from real ones; None for real projects (and ones from
+ * before). Promoting a dev project clears it.
+ */
+origin?: string, };

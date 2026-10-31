@@ -28,6 +28,7 @@ import { native, type Prepared } from "./native/index.ts";
 import { extension, fileStem, join } from "./paths.ts";
 import { clipEnd, duration, mediaOf, newProject } from "./project.ts";
 import { asSerdeRead, jsonForSerde } from "./rust.ts";
+import { RELEASE } from "./version.ts";
 
 export { nextFileId, nowMs, writeAtomic } from "./files.ts";
 
@@ -126,6 +127,14 @@ export class Store {
    * (the audit, Oct 23: revisions restarted at 1). Tests count from 1.
    */
   readonly firstRev = process.env.NODE_ENV === "test" ? 1 : 1 + 1000 * randomInt(1, 2_000_000);
+
+  /**
+   * Whether new projects are marked dev projects (`Project::origin` "dev"):
+   * on any build that isn't a release (`just dev`, the dev server, the trial
+   * server), so Home can hide and clear the test projects (Sphe, Oct 31: "the
+   * project list gets huge"). `EDIT_DEV_PROJECTS=0`/`1` overrides; off in tests.
+   */
+  marksDev = devBuild();
 
   private constructor(home: string, layout: mediaDrive.Layout) {
     this.home = home;
@@ -392,6 +401,7 @@ export class Store {
     const project = newProject(id, trimmed, settings, style);
     const by = creator();
     if (by !== null) project.created_by = by;
+    if (this.marksDev) project.origin = "dev";
     const live = this.write(id, this.firstRev, project);
     this.projects.set(id, live);
     this.cloudHook?.created(id);
@@ -685,6 +695,13 @@ export class Store {
   }
 }
 
+/** A dev build, as `Store.marksDev` says. */
+function devBuild(): boolean {
+  const given = process.env.EDIT_DEV_PROJECTS;
+  if (given === "1" || given === "0") return given === "1";
+  return process.env.NODE_ENV !== "test" && !RELEASE;
+}
+
 function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   const summary: ProjectSummary = {
     id: project.id,
@@ -701,6 +718,7 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   else if (shapeOf(project).footageOnly) summary.footage_only = true;
   if (project.drive !== undefined && project.drive !== null) summary.drive = project.drive as DriveFile;
   if (project.created_by !== undefined && project.created_by !== null) summary.created_by = project.created_by;
+  if (project.origin === "dev") summary.dev = true;
   const missing = missingMedia(project);
   const used = usedMedia(project).length;
   if (used > 0) summary.media_used = used;

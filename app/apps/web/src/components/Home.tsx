@@ -26,6 +26,7 @@ import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, Spinner, spring } from "./ui";
+import { DevBadge, DevControl, promoteItem, useShowDev } from "./DevProjects";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
@@ -128,6 +129,8 @@ export function Home() {
   const mine = mineOnly && account?.person != null;
   const later = useLater();
   const [allDone, setAllDone] = useState(false);
+  // Projects made on a dev build: shown or hidden (DevProjects.tsx).
+  const [showDev, setShowDev] = useShowDev();
   const [sidebarOpen, setSidebarOpen] = useSidebarOpen();
   // An approved idea's "Write the script": New project opened with its title and links.
   const [start, setStart] = useState<NewProjectStart | null>(null);
@@ -281,6 +284,7 @@ export function Home() {
       continue;
     }
     const stage = stageOf(row, statuses[id!]);
+    if (!showDev && row.local?.dev === true) continue;
     items.push({
       id: id!,
       key: laterKey("edit", id!),
@@ -456,6 +460,7 @@ export function Home() {
                   ))}
                 </div>
               )}
+              <DevControl count={all.filter((project) => project.dev === true).length} show={showDev} onShow={setShowDev} onChanged={refresh} />
             </div>
             {cloud?.on && cloud.error && (
               <p className="mb-2 px-3 text-[12px] text-warning" title={cloud.error}>
@@ -748,6 +753,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     ...(cloudOn && !status?.cloud && !project.problem
       ? [{ label: "Move to cloud…", icon: <CloudUpload size={14} />, onSelect: () => setMoving(true) }]
       : []),
+    ...promoteItem(project, onChanged),
     { separator: true },
     { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
   ];
@@ -1325,6 +1331,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
               {project.name}
             </span>
           )}
+          {project.dev === true && <DevBadge />}
         </div>
         <Category style={project.style} compilation={script?.compilation} />
         <StatusCell>

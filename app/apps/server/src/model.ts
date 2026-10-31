@@ -135,6 +135,8 @@ export interface ProjectSummary {
   cover_frame?: number | null;
   /** Who started it (`Project::created_by`); absent for projects from before. */
   created_by?: Creator;
+  /** Made on a dev build (`Project::origin` "dev"): Home marks it Dev and can hide or clear it. */
+  dev?: boolean;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

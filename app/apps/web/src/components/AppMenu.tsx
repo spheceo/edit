@@ -1,6 +1,6 @@
-// The account menu at the top right (your avatar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens.
+// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens.
 
-import { Bug, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
+import { Bug, ChevronDown, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
@@ -13,7 +13,8 @@ import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
 import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
 
-export function AppMenu() {
+/** `row`: as Home's sidebar has it (the study portal's): the photo, the name and a chevron across the sidebar's top. */
+export function AppMenu({ row = false }: { row?: boolean } = {}) {
   const account = useAccount((state) => state.account);
   useEffect(() => {
     void loadAccount();
@@ -36,7 +37,16 @@ export function AppMenu() {
       ? { label: "Sign out", icon: <LogOut size={14} />, onSelect: () => void signOut() }
       : { label: "Sign in…", icon: <LogIn size={14} />, disabled: account === null || !account.available, onSelect: () => void signIn() },
   ];
-  const open = (event: React.MouseEvent<HTMLElement>) => toggleMenu(event.currentTarget, items, { width: 260 });
+  const open = (event: React.MouseEvent<HTMLElement>) => toggleMenu(event.currentTarget, items, { width: 260, ...(row ? { at: { x: event.currentTarget.getBoundingClientRect().left, y: event.currentTarget.getBoundingClientRect().bottom + 4 } } : {}) });
+  if (row && person !== null) {
+    return (
+      <button aria-label="Your account" onClick={open} className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors hover:bg-white/[0.05]">
+        <StartedBy by={{ sub: "", name: person.name || person.email, ...(person.image ? { picture: person.image } : {}) }} size={24} title={null} />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{(person.name || person.email).split(/\s+/u)[0]}</span>
+        <ChevronDown size={14} className="shrink-0 text-faint" />
+      </button>
+    );
+  }
   if (person === null) {
     return (
       <IconButton label="More" onClick={open}>

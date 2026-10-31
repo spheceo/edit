@@ -58,6 +58,8 @@ export const EDIT_CALLS = new Map<string, string>([
   ["edit:listProjects", "query"], ["edit:getProject", "query"], ["edit:uploadUrl", "mutation"], ["edit:commitProject", "mutation"],
   ["edit:deleteProject", "mutation"], ["edit:acquireLock", "mutation"], ["edit:renewLock", "mutation"], ["edit:releaseLock", "mutation"],
   ["edit:clearRestore", "mutation"], ["edit:getMedia", "query"], ["edit:listMedia", "query"], ["edit:putMedia", "mutation"],
+  // Home's Later: what someone set aside, the team's (who set it aside comes from the token).
+  ["edit:listLater", "query"], ["edit:setLater", "mutation"], ["edit:clearLater", "mutation"],
 ]);
 
 /** Calls that change a project (refused outside the caller's kinds). */

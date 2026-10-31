@@ -48,6 +48,8 @@ export interface Toast {
   tone: "info" | "error" | "agent";
   /** An error's plain words (problems.ts): what went wrong and what to do. */
   problem?: Problem;
+  /** A button on it (Undo), which dismisses it. */
+  action?: { label: string; run: () => void };
 }
 
 export type Tool = "select" | "razor";
@@ -108,7 +110,7 @@ interface EditorState {
   setAgentWidth(width: number): void;
   /** Back to the default height (the divider's double-click). */
   resetTimelineHeight(): void;
-  toast(text: string, tone?: Toast["tone"]): void;
+  toast(text: string, tone?: Toast["tone"], action?: Toast["action"]): void;
   /** Says what went wrong in plain words; `doing` finishes "Couldn't …" when nothing better is known. */
   toastError(error: unknown, doing?: string): void;
   dismiss(id: number): void;
@@ -349,11 +351,13 @@ export const useEditor = create<EditorState>((set, get) => ({
     forgetSetting("edit.timelineHeight");
     set({ timelineHeight: defaultTimelineHeight() });
   },
-  toast: (text, tone = "info") => {
+  toast: (text, tone = "info", action) => {
     if (tone === "error") return get().toastError(text);
     const id = ++toastId;
-    set({ toasts: [...get().toasts.slice(-3), { id, text, tone }] });
-    setTimeout(() => get().dismiss(id), 3200);
+    set({ toasts: [...get().toasts.slice(-3), { id, text, tone, ...(action ? { action } : {}) }] });
+    // One with a button stays long enough to press it, and while the pointer is on it.
+    const later = () => (heldToast === id ? setTimeout(later, 2000) : get().dismiss(id));
+    setTimeout(later, action ? 6000 : 3200);
   },
   toastError: (error, doing) => {
     const problem = explain(error, doing);

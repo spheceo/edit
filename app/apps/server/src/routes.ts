@@ -49,6 +49,7 @@ import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
 import * as writer from "./writer/routes.ts";
 import * as ideas from "./ideas/routes.ts";
+import * as later from "./later.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
 import * as remoteSupport from "./remote_support.ts";
@@ -87,6 +88,7 @@ export function buildRouter(): Router<App> {
   writerHandoff.routes(router);
   writer.routes(router);
   ideas.routes(router);
+  later.routes(router);
   archive.routes(router);
   covers.routes(router);
   avatars.routes(router);

@@ -1,5 +1,5 @@
 // Ideas' HTTP API, under /api/ideas, for someone with an `ideas.*`
-// capability (or an admin): Home's Ideas tab, a new idea from links, the idea
+// capability (or an admin): Home's Ideas section, a new idea from links, the idea
 // page (its titles, guide, pictures, the chat with Claude), sending it to the
 // board and making the changes reviewers ask for there. Claude's tools are
 // served at /mcp/ideas/<token> (run.ts), for the runs on this Mac only.
@@ -69,7 +69,7 @@ async function sourceOf(link: string): Promise<IdeaSource> {
     const { description: _, ...video } = await sources.video(id);
     return video;
   }
-  if (/trello\.com\/c\//.test(link)) throw new Error("That's a Trello card: open cards waiting on changes from the Ideas tab.");
+  if (/trello\.com\/c\//.test(link)) throw new Error("That's a Trello card: open cards waiting on changes from Home's Needs you.");
   return (await sources.article(link)).source;
 }
 

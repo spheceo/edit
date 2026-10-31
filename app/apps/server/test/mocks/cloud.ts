@@ -312,6 +312,8 @@ export class ConvexMock {
   readonly locks = new Map<string, LockRow>();
   readonly media = new Map<string, MediaRow>();
   readonly files = new Map<string, { data: Uint8Array; contentType: string }>();
+  /** Home's Later (mamagi's editLater), by key. */
+  readonly later = new Map<string, { key: string; until?: number; at: number; by: { sub: string; name: string; picture?: string } }>();
   /** Convex's clock (leases), changeable by tests. */
   now: () => number = () => Date.now();
   private nextFile = 1;
@@ -395,6 +397,18 @@ export class ConvexMock {
     switch (name) {
       case "listProjects":
         return [...this.projects.values()].sort((a, b) => b.updatedAt - a.updatedAt).map((row) => this.card(row));
+      case "listLater":
+        return [...this.later.values()].map((row) => ({ key: row.key, until: row.until ?? null, at: row.at, by: { sub: row.by.sub, name: row.by.name, picture: row.by.picture ?? null } }));
+      case "setLater": {
+        const key = String(args.key ?? "");
+        const until = typeof args.until === "number" ? args.until : undefined;
+        if (!/^(edit|script|idea|card):[A-Za-z0-9_-]{1,120}$/.test(key)) throw new Fail("invalid", "key must be edit:, script:, idea: or card: and an id.");
+        const actor = (args.actor ?? { sub: "", name: "Edit" }) as { sub: string; name: string; picture?: string };
+        this.later.set(key, { key, ...(until !== undefined ? { until } : {}), at: this.now(), by: actor });
+        return { key, until: until ?? null };
+      }
+      case "clearLater":
+        return { cleared: this.later.delete(String(args.key ?? "")) };
       case "getProject": {
         const row = this.projects.get(projectId);
         if (row === undefined) return null;

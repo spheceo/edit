@@ -298,6 +298,18 @@ describe("relay cloud endpoints", () => {
     expect(sent()).toEqual({ actor: 1, token: "service-token" });
   });
 
+  it("Home's Later: who set something aside comes from the token, never the caller", async () => {
+    const upstream = vi.fn(async () => Response.json({ status: "success", value: { key: "edit:p1", until: null } })); vi.stubGlobal("fetch", upstream);
+    const sent = () => JSON.parse(String((upstream.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body));
+    await call("convex", { kind: "mutation", path: "edit:setLater", args: { key: "edit:p1", actor: { sub: "forged", name: "Someone Else" } } }, { token: NAMED });
+    expect(sent()).toEqual({ path: "edit:setLater", args: { key: "edit:p1", actor: { sub: "person-t", name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" }, token: "service-token" }, format: "json" });
+    await call("convex", { kind: "query", path: "edit:listLater" }, { token: NAMED });
+    expect(sent().path).toBe("edit:listLater");
+    await call("convex", { kind: "mutation", path: "edit:clearLater", args: { key: "edit:p1" } }, { token: NAMED });
+    expect(sent().args).toEqual({ key: "edit:p1", token: "service-token" });
+    expect((await call("convex", { kind: "query", path: "edit:setLater" }, { token: NAMED })).status).toBe(403);
+  });
+
   it("passes Convex's errors on", async () => {
     // A function's error (or no such function): Convex's own shape, as 200.
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:listMedia'.\n" })));

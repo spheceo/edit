@@ -1,29 +1,31 @@
-import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, Ellipsis, ExternalLink, Captions, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { editStyles, useAccount, writesScripts } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { hasImportLinks, importPaste } from "../lib/import-input";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
+import { laterKey, useLater, type LaterKey } from "../lib/later";
 import { navigate } from "../lib/route";
 import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
 import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
-import { AppMenu } from "./AppMenu";
-import { IdeasTab, NewIdea, useIdeasHome } from "../ideas/home";
+import { CardTableRow, IdeaTableRow, ideaNeeds, ideaStage, NewIdea, NoIdeas, useIdeasHome } from "../ideas/home";
 import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
-import { Logo, Tile } from "./Logo";
+import { AsideStatus, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, NAME, PILL, ROW, RowButtons, TableShape, tableColumns, Updated, useAside, withAside } from "./HomeTable";
+import { HomeSidebar, nameOf, placeOf, SECTIONS, type Section, type Where } from "./HomeSidebar";
+import { Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
-import { Button, cx, IconButton, Modal, Spinner, spring } from "./ui";
+import { Button, cx, Modal, Spinner, spring } from "./ui";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
@@ -33,6 +35,38 @@ const SHORTS_FORMAT = { width: 1080, height: 1920, fps: 30 };
 /** How long a project someone started stays in their Needs you before it goes to review. */
 const NEW_FOR_MS = 3 * 24 * 3600_000;
 
+/** Done shows its most recent this many until asked for all. */
+const DONE_SHOWN = 40;
+
+/**
+ * One thing on Home: an edit, a subtitled video, a script, a stopped import,
+ * an idea or a board card, where it is (its section and stage, "done" when
+ * approved), whether it needs someone, and its row.
+ */
+interface Item {
+  id: string;
+  /** Its name in Later (null: it can't be set aside). */
+  key: LaterKey | null;
+  section: Section;
+  stage: string;
+  at: number;
+  title: string;
+  /** Started by the signed-in person (a board card is everyone's). */
+  mine: boolean;
+  needs: boolean;
+  row: () => ReactNode;
+}
+
+/**
+ * Home (Oct 31 2026): a sidebar of what needs you, ideas, scripts and edits by
+ * stage, Later and Done, and one short list at a time beside it, the study
+ * portal's look (the user, Oct 31: "We have ideas, scripts, and edits ... complaints
+ * from the teams about having to scroll through a long, tedious" list, "and we
+ * also need to be able to have ways to put projects aside"; then, of this
+ * design, "i think this is way more organised"). Your own work by default
+ * (Mine), the team's a click away (Everyone); a search looks through
+ * everything.
+ */
 export function Home() {
   // What Home showed last, at once; the fresh answers take its place as they come.
   const [projects, setProjects] = useKept<ProjectSummary[] | null>("home.projects", null);
@@ -75,24 +109,24 @@ export function Home() {
   }, []);
   // Script mode's scripts as this Mac has them: what stopped (any Mac's), and who started each.
   const [localScripts, setLocalScripts] = useKept<ScriptIssueRow[]>("home.localScripts", []);
-  // A script import opened over Home (from the strip or its row).
+  // A script import opened over Home (from its row).
   const [watching, setWatching] = useState<string | null>(null);
   const issues = localScripts.filter((row) => (row.status === "needs_choice" || row.status === "error") && !row.dismissedAt);
   const [query, setQuery] = useState("");
-  // One stage at a time (or the subtitled videos), remembered on this browser.
-  const [view, setView] = useState<View>(() => {
-    // /ideas is Home on its Ideas tab (the idea page's way back).
-    if (window.location.pathname === "/ideas") return "ideas";
-    const saved = localStorage.getItem(VIEW);
-    return saved === "all" || saved === "subtitled" || saved === "ideas" ? saved : "needs";
-  });
-  // Ideas (Oct 31): the team's repackaging, a tab of Home's for those who work on them.
+  // Ideas (Oct 31): the team's repackaging, a section of Home's for those who work on them.
   const ideasAllowed = makesIdeas(account);
   const [ideasHome, refreshIdeas, ideasError] = useIdeasHome(ideasAllowed);
   const [ideaOpen, setIdeaOpen] = useState(false);
-  const ideasShown = ideasAllowed && view === "ideas";
-  // As the other tabs count their lists: every idea, and the cards waiting on changes.
-  const ideasCount = (ideasHome?.changes.length ?? 0) + (ideasHome?.ideas.length ?? 0);
+  // The sections this person works in: ideas with the permission, scripts when they write them, edits always.
+  const sections: Section[] = [...(ideasAllowed ? (["ideas"] as const) : []), ...(writesScripts(account) || scripts.length > 0 ? (["scripts"] as const) : []), "edits"];
+  // One place at a time, remembered on this browser; /ideas is Home on its Ideas (the idea page's way back).
+  const [where, setWhere] = useState<Where>(() => (window.location.pathname === "/ideas" ? "ideas" : savedWhere()));
+  const shownWhere: Where = placeOf(where).section !== null && !sections.includes(placeOf(where).section!) ? "needs" : where;
+  // Yours, or everyone's (remembered on this browser); nobody signed in has nothing of their own.
+  const [mineOnly, setMineOnly] = useState(() => localStorage.getItem(MINE) !== "0");
+  const mine = mineOnly && account?.person != null;
+  const later = useLater();
+  const [allDone, setAllDone] = useState(false);
   // An approved idea's "Write the script": New project opened with its title and links.
   const [start, setStart] = useState<NewProjectStart | null>(null);
   useEffect(() => {
@@ -106,7 +140,6 @@ export function Home() {
       // Not ours.
     }
   }, []);
-  const [style, setStyle] = useState<Style | null>(null);
 
   // Imports, agents and shares under way are followed every few seconds (many projects at once).
   const busy = Object.values(statuses).some((one) => one.importing !== null || one.working || one.sharing !== null);
@@ -178,56 +211,44 @@ export function Home() {
     else if (one.firstBuild) importingNow.set(one.id, { word: "Starting the workflow", stopped: false });
   }
   for (const one of writing) importingNow.set(one.id, { word: `Importing ${Math.floor(creeping(one.id, one.percent))}%`, stopped: false, percent: creeping(one.id, one.percent), step: one.detail || one.stage });
-  const count = (projects?.length ?? 0) + cloudOnly.length + scriptOnly.length;
 
-  // What the search and filters keep.
-  const words = query.trim().toLowerCase();
-  const kept = (name: string, own: Style | undefined) => (words === "" || name.toLowerCase().includes(words)) && (style === null || own === style);
   const all = projects ?? [];
-  const edits = all.filter((project) => !project.subtitles && kept(project.name, project.style));
-  const subtitled = all.filter((project) => project.subtitles && kept(project.name, project.style));
-  const cloudKept = cloudOnly.filter((project) => kept(project.name, project.summary?.style as Style | undefined));
-  const cloudSubtitled = cloudKept.filter((project) => project.summary?.subtitles === true);
-  const cloudEdits = cloudKept.filter((project) => project.summary?.subtitles !== true);
-  const showEdits = view !== "subtitled";
   // Newest change first, local and cloud-only projects and scripts together.
   const projectRows: Listed[] = [
-    ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
-    ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), here: localScripts.some((local) => local.id === one.id) })),
+    ...all.filter((project) => !project.subtitles).map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
+    ...cloudOnly.filter((project) => project.summary?.subtitles !== true).map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
+    ...scriptOnly.filter((one) => !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), here: localScripts.some((local) => local.id === one.id) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
-    ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
-    ...cloudSubtitled.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: null })),
+    ...all.filter((project) => project.subtitles).map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
+    ...cloudOnly.filter((project) => project.summary?.subtitles === true).map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: null })),
   ].sort((a, b) => b.at - a.at);
   // What needs someone: edits on a review link not approved yet, and edits
-  // whose import stopped; scripts whose import stopped are the box above the
-  // list, with their answers. Ordinary scripts and the edits being worked on
-  // wait in All projects (the user, Oct 30: "we shouldn't show just normal
-  // scripts in the main view").
+  // whose import stopped; scripts whose import stopped, with their answers.
+  // Ordinary scripts and the edits being worked on wait in their stages (the
+  // user, Oct 30: "we shouldn't show just normal scripts in the main view").
   // A project the signed-in person started in the last three days is in front
   // of them until it goes to review (the user, Oct 30: "it's confusing to add a
   // new project and not have it right in front of you"): importing, being
   // drafted, or the first draft waiting for a look.
   const me = account?.person?.name.trim().toLowerCase() ?? null;
+  const meSub = account?.person?.sub ?? "";
   const startedMs = (row: Listed): number => {
     const id = row.local?.id ?? row.cloud?.id ?? null;
     const at = id === null ? NaN : Number(/^p(\d{12,})-/u.exec(id)?.[1] ?? NaN);
     return Number.isFinite(at) ? at : (localScripts.find((one) => one.id === row.script?.id)?.createdAt ?? row.script?.updatedAt ?? 0);
   };
   const starter = (row: Listed) => (row.local !== null ? (remote.get(row.local.id)?.created_by ?? row.local.created_by) : row.cloud !== null ? row.cloud.created_by : row.script.createdBy);
-  const justStarted = (row: Listed) => me !== null && starter(row)?.name.trim().toLowerCase() === me && Date.now() - startedMs(row) < NEW_FOR_MS;
-  const needsYou = projectRows.filter((row) => {
+  // Whose it is: the same sign-in, else (older records) the same name.
+  const isMe = (by: { sub?: string; name: string } | null | undefined) => by != null && (meSub !== "" && by.sub ? by.sub === meSub : me !== null && by.name.trim().toLowerCase() === me);
+  const justStarted = (row: Listed) => isMe(starter(row)) && Date.now() - startedMs(row) < NEW_FOR_MS;
+  const needsYou = new Set(projectRows.filter((row) => {
     // A script whose Claude run failed (the user, Oct 30: "projects that have failed like this deserve a needs you").
     if (row.local === null && row.cloud === null) return (Boolean(row.script.runFailed) && !row.writing && !row.importing) || justStarted(row);
     const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
     const stage = stageOf(row, state);
     return stage === "review" || Boolean(state?.importing?.error) || (justStarted(row) && stage !== "done");
-  });
-  const stoppedScripts = issues.filter((issue) => !writing.some((one) => one.id === issue.id)).length;
-  // A search looks through every project; otherwise the tab's.
-  const searching = words !== "" && !ideasShown;
-  const rows = !showEdits ? subtitledRows : searching || view === "all" ? projectRows : needsYou;
+  }));
   const cardProps = (project: ProjectSummary) => ({
     project,
     onChanged: refresh,
@@ -236,155 +257,315 @@ export function Home() {
     remote: remote.get(project.id),
     state: statuses[project.id],
   });
-  const choose = (value: View) => {
-    localStorage.setItem(VIEW, value);
-    setView(value);
-    if (value === "ideas") navigate("/ideas", true);
+
+  // Everything Home lists, each where it is.
+  const items: Item[] = [];
+  for (const row of [...projectRows, ...subtitledRows]) {
+    const subtitled = row.local?.subtitles === true || row.cloud?.summary?.subtitles === true;
+    const id = row.local?.id ?? row.cloud?.id ?? null;
+    if (row.local === null && row.cloud === null) {
+      const script = row.script;
+      items.push({
+        id: `script-${script.id}`,
+        key: laterKey("script", script.id),
+        section: "scripts",
+        stage: stageOf(row, undefined),
+        at: row.at,
+        title: script.title,
+        mine: isMe(script.createdBy),
+        needs: needsYou.has(row),
+        row: () => <ScriptTableRow script={script} importing={row.importing} writing={row.writing === true} here={row.here === true} onChanged={refresh} onImport={row.importing ? () => setWatching(script.id) : undefined} />,
+      });
+      continue;
+    }
+    const stage = stageOf(row, statuses[id!]);
+    items.push({
+      id: id!,
+      key: laterKey("edit", id!),
+      section: "edits",
+      stage: stage === "done" ? "done" : subtitled ? "subtitled" : stage === "review" ? "review" : "editing",
+      at: row.at,
+      title: row.local?.name ?? row.cloud?.name ?? "",
+      mine: isMe(starter(row)),
+      needs: needsYou.has(row),
+      row: () => (row.local !== null ? <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} /> : <CloudTableRow project={row.cloud!} script={row.script} onChanged={refresh} />),
+    });
+  }
+  // Script imports that stopped: each waits on someone's answer (the user, Oct 30: "the needs you be at the top").
+  for (const issue of issues.filter((one) => !writing.some((going) => going.id === one.id))) {
+    items.push({ id: `issue-${issue.id}`, key: laterKey("script", issue.id), section: "scripts", stage: "importing", at: issue.createdAt ?? 0, title: issue.title, mine: isMe(issue.createdBy), needs: true, row: () => <ScriptIssue issue={issue} onOpen={setWatching} /> });
+  }
+  if (ideasAllowed && ideasHome !== null) {
+    for (const row of ideasHome.ideas) {
+      items.push({ id: `idea-${row.id}`, key: laterKey("idea", row.id), section: "ideas", stage: ideaStage(row), at: row.updatedAt, title: row.summary.title, mine: isMe(row.createdBy), needs: ideaNeeds(row), row: () => <IdeaTableRow row={row} /> });
+    }
+    // A card waiting on changes with no idea yet is the ideas team's, first in what needs them.
+    for (const card of ideasHome.changes) {
+      items.push({ id: `card-${card.id}`, key: laterKey("card", card.id), section: "ideas", stage: "board", at: Number.MAX_SAFE_INTEGER, title: card.name, mine: true, needs: true, row: () => <CardTableRow card={card} onOpened={refreshIdeas} /> });
+    }
+  }
+
+  const aside = (item: Item) => item.key !== null && later.entries.has(item.key);
+  const isIn = (item: Item, place: Where): boolean => {
+    if (place === "later") return aside(item);
+    if (aside(item)) return false;
+    if (place === "needs") return item.needs;
+    if (place === "done") return item.stage === "done";
+    const { section, stage } = placeOf(place);
+    return item.section === section && (stage === null ? item.stage !== "done" : item.stage === stage);
+  };
+  const ours = items.filter((item) => !mine || item.mine);
+  const countOf = (place: Where) => ours.filter((item) => isIn(item, place)).length;
+  // A search looks through everything, everyone's, wherever it is.
+  const words = query.trim().toLowerCase();
+  const searching = words !== "";
+  const newest = (a: Item, b: Item) => b.at - a.at;
+  let groups: { key: string; label: string | null; items: Item[] }[];
+  if (searching) {
+    const found = items.filter((item) => item.title.toLowerCase().includes(words)).sort(newest);
+    const placeName = (item: Item) => (aside(item) ? "later" : item.stage === "done" ? "done" : item.section);
+    groups = [...SECTIONS.map((section) => section.key), "later", "done"].map((key) => ({ key, label: key === "later" ? "Later" : key === "done" ? "Done" : SECTIONS.find((one) => one.key === key)!.label, items: found.filter((item) => placeName(item) === key) })).filter((group) => group.items.length > 0);
+  } else {
+    const here = ours.filter((item) => isIn(item, shownWhere));
+    const { section, stage } = placeOf(shownWhere);
+    if (section !== null && stage === null) {
+      const stages = SECTIONS.find((one) => one.key === section)!.stages;
+      groups = stages.map((one) => ({ key: one.key, label: one.label, items: here.filter((item) => item.stage === one.key).sort(newest) })).filter((group) => group.items.length > 0);
+    } else if (shownWhere === "later") {
+      const until = (item: Item) => later.entries.get(item.key!)?.until ?? Number.MAX_SAFE_INTEGER;
+      groups = [{ key: "later", label: null, items: here.sort((a, b) => until(a) - until(b)) }];
+    } else if (shownWhere === "done") {
+      const sorted = here.sort(newest);
+      groups = [{ key: "done", label: null, items: allDone ? sorted : sorted.slice(0, DONE_SHOWN) }];
+    } else {
+      groups = [{ key: shownWhere, label: null, items: here.sort(newest) }];
+    }
+  }
+  const listed = groups.reduce((total, group) => total + group.items.length, 0);
+  const total = searching ? listed : countOf(shownWhere);
+  const cross = searching || shownWhere === "needs" || shownWhere === "later" || shownWhere === "done";
+  const solo = mine && !searching;
+  const title = searching ? { parent: null, name: "Search" } : nameOf(shownWhere);
+  const inIdeas = !searching && placeOf(shownWhere).section === "ideas";
+  const nothingAtAll = projects !== null && items.length === 0 && !ideasAllowed;
+  const loading = projects === null;
+  const choose = (place: Where) => {
+    localStorage.setItem(VIEW, place);
+    setWhere(place);
+    setQuery("");
+    setAllDone(false);
+    if (placeOf(place).section === "ideas") navigate("/ideas", true);
     else if (window.location.pathname === "/ideas") navigate("/", true);
   };
+  const chooseMine = (value: boolean) => {
+    localStorage.setItem(MINE, value ? "1" : "0");
+    setMineOnly(value);
+  };
+  // Nothing in this list: why, and where to look.
+  const others = items.filter((item) => !item.mine && isIn(item, shownWhere)).length;
+  const empty = searching
+    ? { title: "Nothing matches", text: `Nothing anywhere is called “${query.trim()}”.` }
+    : shownWhere === "needs"
+      ? { title: "You’re all caught up", text: "Stopped imports, edits waiting on review and ideas waiting on changes show up here." }
+      : shownWhere === "later"
+        ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back." }
+        : mine && others > 0
+          ? { title: "Nothing of yours here", text: `Everyone shows the team’s ${others}.` }
+          : { title: "Nothing here", text: shownWhere === "done" ? "Approved edits move here by themselves." : "Nothing is at this stage now." };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-[1120px] px-8 pt-8 pb-16">
-        <header className="flex items-center gap-4">
-          <Logo size={22} />
-          {projects && (count > 0 || ideasShown) && (
-            <label className="ml-4 flex h-[34px] max-w-[420px] flex-1 items-center gap-2 rounded-lg border border-line-strong bg-bg px-2.5 text-muted focus-within:border-muted">
-              <Search size={14} />
-              <input
-                value={query}
-                placeholder={ideasShown ? "Search ideas" : "Search projects"}
-                onChange={(event) => setQuery(event.target.value)}
-                onKeyDown={(event) => event.key === "Escape" && setQuery("")}
-                className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint"
-              />
-            </label>
-          )}
-          <div className="ml-auto flex items-center gap-1.5">
-            <UpdateButton />
-            {/* One main action a screen, in white (the user, Oct 30): on an empty Home, the empty state's button is it. */}
-            {ideasShown ? (
-              <Button variant="light" onClick={() => setIdeaOpen(true)}>
-                <Plus size={15} strokeWidth={2.2} /> New idea
-              </Button>
-            ) : (
-              <Button variant={projects && count === 0 ? "subtle" : "light"} onClick={() => setCreating(true)}>
-                <Plus size={15} strokeWidth={2.2} /> New project
-              </Button>
-            )}
-            <AppMenu />
-          </div>
-        </header>
-
-        <SetupCard />
-
-        {projects && count === 0 && !ideasShown && (
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={spring}
-            className="mt-[18vh] flex flex-col items-center text-center"
-          >
-            <Tile size={64} />
-            <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.02em]">Make your first edit</h1>
-            <p className="mt-2 max-w-[360px] text-muted">
-              {cloud?.on
-                ? "Projects are kept in the team’s cloud, so anyone can pick one up where you left off. Import footage, cut it, and let an agent build the polish."
-                : "Projects live on this machine. Import footage, cut it, and let an agent build the polish."}
-            </p>
-            <div className="mt-6 flex gap-2">
-              <Button variant="light" onClick={() => setCreating(true)}>
-                <Plus size={15} strokeWidth={2.2} /> New project
-              </Button>
-              {ideasAllowed && (
-                <Button variant="subtle" onClick={() => choose("ideas")}>
-                  Ideas
+    <LaterContext.Provider value={later}>
+      <div className="flex h-full gap-2 bg-bg p-2">
+        <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} />
+        <main className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-white/[0.07] bg-panel">
+          <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-white/[0.07] px-5">
+            <h1 className="flex min-w-0 items-center gap-1.5 text-[13.5px] font-semibold tracking-[-0.01em] whitespace-nowrap">
+              {title.parent !== null && (
+                <>
+                  <span className="font-medium text-muted">{title.parent}</span>
+                  <span className="font-normal text-faint/50">/</span>
+                </>
+              )}
+              {title.name}
+              {!loading && <span className="ml-1 font-medium text-faint tabular">{total}</span>}
+            </h1>
+            <div className="ml-auto flex items-center gap-1.5">
+              <UpdateButton />
+              {/* One main action a screen, in white (the user, Oct 30). */}
+              {inIdeas ? (
+                <Button variant="light" onClick={() => setIdeaOpen(true)}>
+                  <Plus size={15} strokeWidth={2.2} /> New idea
+                </Button>
+              ) : (
+                <Button variant="light" onClick={() => setCreating(true)}>
+                  <Plus size={15} strokeWidth={2.2} /> New project
                 </Button>
               )}
             </div>
-          </motion.div>
-        )}
-
-        {projects && (count > 0 || ideasShown) && (
-          <>
-            <div className="mt-8 flex flex-wrap items-center gap-2">
-              {/* The kit's segmented control (.sp-seg). */}
-              <div className="flex h-[34px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5">
-                {(
-                  [
-                    // What needs someone first; the rest a tab away (the user, Oct 30: "you mainly see projects that need you").
-                    ["needs", "Needs you", needsYou.length + stoppedScripts] as [View, string, number],
-                    ["all", "All projects", projectRows.length] as [View, string, number],
-                    ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
-                    ...(ideasAllowed ? [["ideas", "Ideas", ideasCount] as [View, string, number]] : []),
-                  ] as [View, string, number][]
-                ).map(([value, label, total]) => (
-                  <button
-                    key={value}
-                    onClick={() => choose(value)}
-                    className={cx(
-                      "flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors",
-                      view === value && (!searching || value === "ideas") ? "bg-active text-fg" : "text-muted hover:text-fg",
-                    )}
-                  >
-                    {label} <span className="font-normal text-faint tabular">{total}</span>
+          </header>
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3 pb-6">
+            <SetupCard />
+            <div className="mb-2 flex items-center gap-2">
+              <label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 text-faint focus-within:border-white/[0.16]">
+                <Search size={14} className="shrink-0" />
+                <input
+                  value={query}
+                  placeholder="Search everything by name…"
+                  onChange={(event) => setQuery(event.target.value)}
+                  onKeyDown={(event) => event.key === "Escape" && setQuery("")}
+                  className="h-full min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-faint/70"
+                />
+                {searching && (
+                  <button onClick={() => setQuery("")} title="Clear" className="shrink-0 text-faint hover:text-fg">
+                    <X size={13} />
                   </button>
-                ))}
-              </div>
-              {cloud?.on && cloud.error && (
-                <span className="text-[12px] text-warning/80" title={cloud.error}>
-                  {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
-                </span>
+                )}
+              </label>
+              {account?.person != null && (
+                <div className={cx("flex gap-1.5", searching && "pointer-events-none opacity-40")}>
+                  {([[true, "Mine"], [false, "Everyone"]] as const).map(([value, label]) => (
+                    <button
+                      key={label}
+                      onClick={() => chooseMine(value)}
+                      className={cx(
+                        // The portal's pills: the chosen one filled.
+                        "h-[30px] rounded-full px-3 text-[12.5px] transition-colors",
+                        mineOnly === value ? "bg-fg/90 font-medium text-bg" : "border border-white/[0.09] bg-white/[0.02] text-muted hover:bg-white/[0.06] hover:text-fg",
+                      )}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               )}
-              <div className={cx("ml-auto flex gap-1.5", ideasShown && "hidden")}>
-                {STYLES.map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => setStyle(style === option.value ? null : option.value)}
-                    className={cx(
-                      // The kit's filter pill (.sp-pill, pressed fills with the surface).
-                      "flex h-6 items-center gap-1.5 rounded-full border px-[9px] text-[12px] transition-colors",
-                      style === option.value ? "border-line-strong bg-raised text-fg" : "border-line text-secondary hover:bg-hover",
-                    )}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
             </div>
-
-            {ideasShown ? (
-              <IdeasTab home={ideasHome} error={ideasError} query={query} onNew={() => setIdeaOpen(true)} />
-            ) : (
-            <>
-            <Imports writing={writing} issues={issues} onOpen={setWatching} />
-            <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
-            {rows.length > 0 ? (
-              // Edits grouped by stage, script to finished video.
-              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits} statuses={statuses} onImport={setWatching} />
-            ) : searching ? (
-              <p className="mt-16 text-center text-muted">Nothing matches “{query.trim()}”.</p>
-            ) : view === "needs" && stoppedScripts === 0 ? (
-              <div className="mt-6 rounded-xl border border-line px-4 py-10 text-center">
-                <div className="text-[14px] font-medium">Nothing needs you</div>
-                <p className="mt-1 text-[12px] text-muted">Stopped imports and edits waiting on review show up here.</p>
+            {cloud?.on && cloud.error && (
+              <p className="mb-2 px-3 text-[12px] text-warning/80" title={cloud.error}>
+                {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
+              </p>
+            )}
+            {inIdeas && (ideasHome?.boardError ?? ideasError) && (
+              <p className="mb-2 px-3 text-[12px] text-warning/80" title={ideasHome?.boardError ?? ideasError ?? ""}>
+                {ideasHome === null ? `The ideas didn’t load: ${ideasError}` : "The board couldn’t be read just now: where cards are may be out of date."}
+              </p>
+            )}
+            {loading || (inIdeas && ideasHome === null && ideasError === null) ? (
+              <div className="mt-20 flex justify-center">
+                <Spinner size={20} />
               </div>
-            ) : view === "needs" ? null : (
-              <p className="mt-16 text-center text-muted">Nothing here.</p>
+            ) : nothingAtAll ? (
+              <FirstEdit cloudOn={Boolean(cloud?.on)} onNew={() => setCreating(true)} />
+            ) : listed > 0 ? (
+              <>
+                <HomeList groups={groups} solo={solo} cross={cross} lengthLabel={inIdeas ? "Views" : "Length"} />
+                {!searching && shownWhere === "done" && !allDone && total > DONE_SHOWN && (
+                  <button onClick={() => setAllDone(true)} className="mt-3 self-start rounded-lg border border-white/[0.08] px-3 py-1.5 text-[12px] text-muted transition-colors hover:border-white/[0.16] hover:text-fg">
+                    Show all {total}
+                  </button>
+                )}
+              </>
+            ) : inIdeas && (ideasHome?.ideas.length ?? 0) === 0 && (ideasHome?.changes.length ?? 0) === 0 ? (
+              <NoIdeas onNew={() => setIdeaOpen(true)} />
+            ) : (
+              <div className="mt-16 text-center">
+                <div className="text-[13.5px] font-medium">{empty.title}</div>
+                <p className="mt-1.5 text-[12.5px] text-muted">{empty.text}</p>
+              </div>
             )}
-            </>
-            )}
-          </>
-        )}
+          </div>
+        </main>
       </div>
-      <NewProject open={creating} onClose={() => { setCreating(false); setStart(null); }} only={style} start={start} />
+      <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
+      <NewProject open={creating} onClose={() => { setCreating(false); setStart(null); }} only={null} start={start} />
       {ideasAllowed && <NewIdea open={ideaOpen} onClose={() => setIdeaOpen(false)} onMade={refreshIdeas} />}
-    </div>
+    </LaterContext.Provider>
   );
 }
 
-/** What Home lists: what needs someone, every project, the subtitled videos, or the ideas. */
-type View = "needs" | "all" | "subtitled" | "ideas";
+/** Which place Home shows (remembered on this browser), from before too ("subtitled" and "ideas" were tabs). */
+function savedWhere(): Where {
+  const saved = localStorage.getItem(VIEW) ?? "";
+  if (saved === "subtitled") return "edits:subtitled";
+  if (saved === "needs" || saved === "later" || saved === "done") return saved;
+  const { section, stage } = placeOf(saved as Where);
+  if (section === null) return "needs";
+  return stage === null || SECTIONS.find((one) => one.key === section)!.stages.some((one) => one.key === stage) ? (saved as Where) : section;
+}
+
+/** An empty Home: the way to the first edit. */
+function FirstEdit({ cloudOn, onNew }: { cloudOn: boolean; onNew: () => void }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="mt-[14vh] flex flex-col items-center text-center">
+      <Tile size={64} />
+      <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.02em]">Make your first edit</h1>
+      <p className="mt-2 max-w-[360px] text-muted">
+        {cloudOn
+          ? "Projects are kept in the team’s cloud, so anyone can pick one up where you left off. Import footage, cut it, and let an agent build the polish."
+          : "Projects live on this machine. Import footage, cut it, and let an agent build the polish."}
+      </p>
+      <Button className="mt-6" variant="light" onClick={onNew}>
+        <Plus size={15} strokeWidth={2.2} /> New project
+      </Button>
+    </motion.div>
+  );
+}
+
+/**
+ * Home's list: the column names, then each group (a stage, or a section in a
+ * search) under its name, newest first. What came in since it was last shown
+ * slides in, and a renamed row flashes once (state B laid over state A, not
+ * the list built again).
+ */
+function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string; label: string | null; items: Item[] }[]; solo: boolean; cross: boolean; lengthLabel: string }) {
+  const seen = useRef<Map<string, string> | null>(null);
+  const [lately, setLately] = useState<{ added: Set<string>; renamed: Set<string> }>({ added: new Set(), renamed: new Set() });
+  const rows = groups.flatMap((group) => group.items);
+  const signature = rows.map((item) => `${item.id}=${item.title}`).join("\n");
+  useEffect(() => {
+    const now = new Map(rows.map((item) => [item.id, item.title]));
+    const before = seen.current;
+    seen.current = now;
+    if (before === null) return;
+    const added = new Set([...now.keys()].filter((id) => !before.has(id)));
+    const renamed = new Set([...now.entries()].filter(([id, name]) => before.has(id) && before.get(id) !== name).map(([id]) => id));
+    if (added.size === 0 && renamed.size === 0) return;
+    setLately({ added, renamed });
+    const timer = setTimeout(() => setLately({ added: new Set(), renamed: new Set() }), 1800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature]);
+  return (
+    <TableShape.Provider value={{ solo, cross }}>
+      <div role="table" aria-label="Projects" className="grid gap-x-4 gap-y-px" style={{ gridTemplateColumns: tableColumns(solo) }}>
+        <div role="row" className={cx(COLUMNS, "px-3 pt-1.5 pb-2 text-[11px] font-semibold text-faint/70")}>
+          <span role="columnheader">Name</span>
+          <span role="columnheader">Category</span>
+          <span role="columnheader">Status</span>
+          {!solo && <span role="columnheader">By</span>}
+          <span role="columnheader">{lengthLabel}</span>
+          <span role="columnheader">Updated</span>
+          <span role="columnheader" className="sr-only">
+            Actions
+          </span>
+        </div>
+        {groups.map((group) => (
+          <Fragment key={group.key}>
+            {group.label !== null && (
+              <div className="col-span-full flex items-center gap-1.5 px-3 pt-4 pb-1 text-[11.5px] font-semibold text-muted">
+                {group.label} <span className="font-medium text-faint/60 tabular">{group.items.length}</span>
+              </div>
+            )}
+            {group.items.map((item) => (
+              <div key={item.id} className={cx(COLUMNS, lately.added.has(item.id) && "row-new", lately.renamed.has(item.id) && "row-changed")}>
+                {item.row()}
+              </div>
+            ))}
+          </Fragment>
+        ))}
+      </div>
+    </TableShape.Provider>
+  );
+}
 
 /** New project opened with a title, its links and a kind (an approved idea's Write the script). */
 type NewProjectStart = { title: string; text: string; style: Style };
@@ -406,17 +587,6 @@ type Importing = { word: string; stopped: boolean; percent?: number; step?: stri
  */
 type Stage = "toscript" | "scripting" | "ready" | "importing" | "editing" | "review" | "done";
 
-const STAGES: { value: Stage; label: string }[] = [
-  // The footage and its words in, the script not written yet (the user, Oct 30: "know which projects are ready to script").
-  { value: "importing", label: "Importing" },
-  { value: "toscript", label: "Ready to script" },
-  { value: "scripting", label: "Scripting" },
-  { value: "ready", label: "Ready to edit" },
-  { value: "editing", label: "Editing" },
-  { value: "review", label: "In review" },
-  { value: "done", label: "Done" },
-];
-
 function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
   if (row.local === null && row.cloud === null) return row.importing ? "importing" : row.script.built ? "ready" : row.writing ? "scripting" : "toscript";
   if (state === undefined) return "editing";
@@ -426,8 +596,10 @@ function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
   return "editing";
 }
 
-/** Which list Home shows (remembered on this browser). */
+/** Which place Home shows (remembered on this browser). */
 const VIEW = "edit.home.view";
+/** Mine or Everyone (remembered on this browser). */
+const MINE = "edit.home.mine";
 
 /** What each kind of video makes: the New project pills' tooltips. */
 const STYLE_NOTES: Record<Style, string> = {
@@ -437,10 +609,6 @@ const STYLE_NOTES: Record<Style, string> = {
   commentary: "16:9 · a narrated video essay with researched B-roll",
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
-
-/** Every status in Home's table looks alike: one pill, its icon, a word or two of about the same length (Write script, Not exported, 7 comments, Cloud only), its colour saying how much it matters; each as wide as the column (the widest of them) with its words centred, so they line up as one even column. */
-const PILL = "flex h-[22px] min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-2.5 text-[12px] leading-none whitespace-nowrap";
-const CHIP = `${PILL} bg-raised font-medium`;
 
 interface NoticeProps {
   tone: "warn" | "bad" | "info";
@@ -519,31 +687,25 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     if (project.problem) useEditor.getState().toastError(project.problem, `open “${project.name}”`);
     else navigate(`/p/${project.id}`);
   };
-  const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    toggleMenu(
-      event.currentTarget,
-      [
-        // Made from a script: that script, its other mode.
-        ...(script !== null ? [{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script}`) }] : []),
-        { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(true) },
-        // Shared from here, many projects at once (an export that would wait here goes to the cloud).
-        ...(project.problem ? [] : [{ label: "Share for review", icon: <Share2 size={14} />, onSelect: () => void share() }]),
-        ...(drive
-          ? [
-              { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
-              { label: "Open on Drive", icon: <ExternalLink size={14} />, onSelect: () => openDrive(drive.url) },
-            ]
-          : []),
-        ...(cloudOn && !status?.cloud && !project.problem
-          ? [{ label: "Move to cloud…", icon: <CloudUpload size={14} />, onSelect: () => setMoving(true) }]
-          : []),
-        { separator: true },
-        { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
-      ],
-      { width: 190 },
-    );
-  };
+  // Its ⋯ (and right click): Later's are added by the row.
+  const items: MenuItem[] = [
+    // Made from a script: that script, its other mode.
+    ...(script !== null ? [{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script}`) }] : []),
+    { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(true) },
+    // Shared from here, many projects at once (an export that would wait here goes to the cloud).
+    ...(project.problem ? [] : [{ label: "Share for review", icon: <Share2 size={14} />, onSelect: () => void share() }]),
+    ...(drive
+      ? [
+          { label: "Copy Drive link", icon: <Copy size={14} />, onSelect: () => void copyDriveLink(drive.url, toast) },
+          { label: "Open on Drive", icon: <ExternalLink size={14} />, onSelect: () => openDrive(drive.url) },
+        ]
+      : []),
+    ...(cloudOn && !status?.cloud && !project.problem
+      ? [{ label: "Move to cloud…", icon: <CloudUpload size={14} />, onSelect: () => setMoving(true) }]
+      : []),
+    { separator: true },
+    { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
+  ];
   const driveMenu = (event: React.MouseEvent<HTMLElement>) => {
     event.stopPropagation();
     if (!drive) return;
@@ -607,7 +769,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
             title: `${missing} of ${used} footage files the edit plays aren’t on this Mac (deleted, or on a drive that isn’t plugged in)`,
           }
         : null;
-  return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, menu, driveMenu, nameInput, dialogs };
+  return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, items, driveMenu, nameInput, dialogs };
 }
 
 interface CardProps {
@@ -731,12 +893,6 @@ function importShare(importing: NonNullable<ProjectStatus["importing"]>) {
   return { transcribing: "· hearing", placing: "· laying out", voicing: "· voicing" }[importing.state] ?? "";
 }
 
-/**
- * Every import under way, at the top of Home: the projects started together
- * come in side by side, each with how far it is (the user, Oct 30: "five
- * projects all importing at the same time and once they're all done we check
- * them out").
- */
 /** A script being written from its videos (Script mode's import): what it's on and how far. */
 /** `startedAt`: when the import began, as the server says. */
 type Writing = { id: string; title: string; stage: string; percent: number; detail: string; startedAt?: number };
@@ -925,28 +1081,38 @@ function IssueActions({ issue }: { issue: ScriptIssueRow }) {
  * title opens it over Home.
  */
 function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: string) => void }) {
-  const { items, dialogs } = useIssueDialogs(issue);
+  const { items: own, dialogs } = useIssueDialogs(issue);
+  const aside = useAside(laterKey("script", issue.id), issue.title);
+  const items = withAside(own, aside.items);
   return (
-    <div className={cx(COLUMNS, "min-h-14 border-t border-line px-4 py-2.5 text-[13px]")}>
-      <div className="flex min-w-0 items-center gap-2.5">
+    <div role="row" onClick={() => onOpen(issue.id)} onContextMenu={contextMenu(items, 220)} className={cx(COLUMNS, ROW)}>
+      <div role="cell" className="flex min-w-0 items-center gap-2.5">
+        <KindMark kind="script" />
         <TriangleAlert size={14} className="shrink-0 text-warning" />
-        <button onClick={() => onOpen(issue.id)} className="truncate text-left text-[14px] text-fg hover:underline hover:underline-offset-[3px]" title={issue.title}>
+        <span className={NAME} title={issue.title}>
           {issue.title}
-        </button>
-      </div>
-      <span />
-      <Type kind="script" />
-      <CreatorCell by={issue.createdBy} />
-      <div className="col-span-3 flex min-w-0 items-center gap-2">
-        {/* Where it stopped, so it's plain what's being fixed (the list already says it stopped). */}
-        <span title={`Stopped ${stageWords(issue.stage)}`} className={cx(CHIP, "text-warning")}>
-          {stageName(issue.stage)}
         </span>
       </div>
-      <IconButton label={`What to do about “${issue.title}”`} onClick={(event) => toggleMenu(event.currentTarget, items, { width: 220 })}>
-        <Ellipsis size={16} />
-      </IconButton>
-      {dialogs}
+      <span role="cell" />
+      <div role="cell" className="flex min-w-0 items-center gap-2">
+        {aside.entry ? (
+          <AsideStatus entry={aside.entry} />
+        ) : (
+          // Where it stopped, so it's plain what's being fixed.
+          <span title={`Stopped ${stageWords(issue.stage)}: ${issue.decision?.summary ?? issue.error ?? "it stopped without saying why"}`} className={cx(CHIP, "text-warning")}>
+            <TriangleAlert size={12} />
+            Stopped · {stageName(issue.stage)}
+          </span>
+        )}
+      </div>
+      <CreatorCell by={issue.createdBy} />
+      <span role="cell" />
+      <Updated at={issue.createdAt ?? 0} />
+      <RowButtons aside={aside.button} items={items} width={220} />
+      {/* Its dialogs open over Home; clicks inside them aren't the row's. */}
+      <div className="contents" onClick={(event) => event.stopPropagation()}>
+        {dialogs}
+      </div>
     </div>
   );
 }
@@ -1080,224 +1246,51 @@ function ImportDialog({ id, writing, issues, onClose }: { id: string | null; wri
   );
 }
 
-/**
- * Imports that stopped, at the top of Home: each one's answers in its ⋯ menu
- * (View error, Retry, Replace…, Dismiss…). Answered, it leaves for the table's
- * Importing, with its bar; nothing stopped, nothing shown. The user, Oct 30:
- * "the needs you be at the top and once you retry it moves to importing at
- * the bottom with the progress bar and percentage".
- */
-function Imports({ writing, issues, onOpen }: { writing: Writing[]; issues: ScriptIssueRow[]; onOpen: (id: string) => void }) {
-  // A script both stopped and running again (being answered) is running.
-  const open = issues.filter((issue) => !writing.some((one) => one.id === issue.id));
-  if (open.length === 0) return null;
-  return (
-    <div className={cx(TABLE, "mt-6 overflow-hidden rounded-xl border border-line")}>
-      <div className="col-span-full flex h-10 items-center bg-panel px-4 text-[12px] font-medium text-warning">{open.length} stopped</div>
-      {open.map((issue) => (
-        <ScriptIssue key={issue.id} issue={issue} onOpen={onOpen} />
-      ))}
-    </div>
-  );
-}
-
-/** When a project last changed, as Writer heads its list: today needs no heading. */
-function changedLabel(ms: number) {
-  const day = (time: number) => new Date(time).setHours(0, 0, 0, 0);
-  const days = Math.round((day(Date.now()) - day(ms)) / 86_400_000);
-  return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "This week" : days < 31 ? "This month" : "Older";
-}
-
-/** Name, status, length, when it last changed and its ⋯: the columns every row lines up on. */
-/**
- * Home's table: name, category, type, creator, status, length, updated, ⋯.
- * The name takes what's left; every other column is as wide as its widest
- * entry, with the same space between each (the user, Oct 30: no wide gap after
- * a short category). The table sets the columns and each row takes them up
- * (subgrid), so they line up row to row.
- */
-const TABLE = "grid grid-cols-[minmax(0,1fr)_repeat(7,auto)] gap-x-5";
-const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
-
-/** Home's projects as Writer lists scripts: one table, grouped by when they last changed. */
-function ProjectTable({
-  rows,
-  cardProps,
-  onChanged,
-  subtitled,
-  grouped,
-  statuses,
-  onImport,
-}: {
-  rows: Listed[];
-  cardProps: (project: ProjectSummary) => CardProps;
-  onChanged: () => void;
-  subtitled: boolean;
-  /** A search across stages: each stage's matches under its name. */
-  grouped: boolean;
-  statuses: Record<string, ProjectStatus>;
-  /** Opens a script's import over Home (a script still importing). */
-  onImport: (id: string) => void;
-}) {
-  const idOf = (row: Listed) => row.local?.id ?? row.cloud?.id ?? `script-${row.script!.id}`;
-  const nameOf = (row: Listed) => row.local?.name ?? row.cloud?.name ?? row.script?.title ?? "";
-  // What came in since the list was last shown: new rows slide in, renamed ones flash once (state B
-  // laid over state A, rather than the list built again).
-  const seen = useRef<Map<string, string> | null>(null);
-  const [lately, setLately] = useState<{ added: Set<string>; renamed: Set<string> }>({ added: new Set(), renamed: new Set() });
-  const signature = rows.map((row) => `${idOf(row)}=${nameOf(row)}`).join("\n");
-  useEffect(() => {
-    const now = new Map(rows.map((row) => [idOf(row), nameOf(row)]));
-    const before = seen.current;
-    seen.current = now;
-    if (before === null) return;
-    const added = new Set([...now.keys()].filter((id) => !before.has(id)));
-    const renamed = new Set([...now.entries()].filter(([id, name]) => before.has(id) && before.get(id) !== name).map(([id]) => id));
-    if (added.size === 0 && renamed.size === 0) return;
-    setLately({ added, renamed });
-    const timer = setTimeout(() => setLately({ added: new Set(), renamed: new Set() }), 1800);
-    return () => clearTimeout(timer);
-  }, [signature]);
-  const rowOf = (row: Listed) => <div className={cx(COLUMNS, lately.added.has(idOf(row)) && "row-new", lately.renamed.has(idOf(row)) && "row-changed")}>{rowBody(row)}</div>;
-  const rowBody = (row: Listed) =>
-    row.local !== null ? (
-      <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} />
-    ) : row.cloud !== null ? (
-      <CloudTableRow project={row.cloud} script={row.script} onChanged={onChanged} />
-    ) : (
-      <ScriptTableRow script={row.script} importing={row.importing} writing={row.writing === true} here={row.here === true} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
-    );
-  // One stage (or the subtitled videos): newest first, by when they changed.
-  const groups = !grouped
-    ? null
-    : STAGES.map((stage) => ({ ...stage, rows: rows.filter((row) => stageOf(row, statuses[row.local?.id ?? row.cloud?.id ?? ""]) === stage.value) })).filter((group) => group.rows.length > 0);
-  return (
-    <div role="table" aria-label="Projects" className={cx(TABLE, "mt-6 overflow-hidden rounded-xl border border-line")}>
-      <div role="row" className={cx(COLUMNS, "h-10 bg-panel px-4 text-[12px] font-medium text-muted")}>
-        <span role="columnheader">Name</span>
-        <span role="columnheader">Category</span>
-        <span role="columnheader">Type</span>
-        <span role="columnheader">Creator</span>
-        <span role="columnheader">Status</span>
-        <span role="columnheader">
-          Length
-        </span>
-        <span role="columnheader">
-          Updated
-        </span>
-        <span role="columnheader" className="sr-only">
-          Actions
-        </span>
-      </div>
-      {groups === null
-        ? rows.map((row, index) => {
-            const label = changedLabel(row.at);
-            const heading = label !== "Today" && (index === 0 || changedLabel(rows[index - 1]!.at) !== label);
-            return (
-              <Fragment key={idOf(row)}>
-                {heading && <div className="col-span-full border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">{label}</div>}
-                {rowOf(row)}
-              </Fragment>
-            );
-          })
-        : groups.map((group) => (
-            <Fragment key={group.value}>
-              <div className="col-span-full flex items-center gap-2 border-t border-line px-4 pt-3.5 pb-1.5 text-[11.5px] font-medium text-faint">
-                {group.label} <span className="tabular">{group.rows.length}</span>
-              </div>
-              {group.rows.map((row) => (
-                <Fragment key={idOf(row)}>{rowOf(row)}</Fragment>
-              ))}
-            </Fragment>
-          ))}
-    </div>
-  );
-}
-
 /** A project on this Mac: its name, what's worth a word about it, and its ⋯. */
 function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitled: boolean; script?: WriterScriptRow | null }) {
   const { project, onChanged, remote, state } = props;
   const card = useProject(project, onChanged, props.cloudOn, props.status, remote, script?.id ?? null);
+  const aside = useAside(laterKey("edit", project.id), project.name);
+  const items = withAside(card.items, aside.items);
   return (
     <>
-      <div role="row" onClick={card.open} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+      <div role="row" onClick={card.open} onContextMenu={contextMenu(items, 190)} className={cx(COLUMNS, ROW)}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
+          <KindMark kind={project.subtitles ? "subtitles" : "edit"} />
           {card.nameInput ?? (
-            <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.problem ?? project.name}>
+            <span className={NAME} title={project.problem ?? project.name}>
               {project.name}
             </span>
           )}
         </div>
         <Category style={project.style} compilation={script?.compilation} />
-        <Type kind={project.subtitles ? "subtitles" : "edit"} />
-        <CreatorCell by={remote?.created_by ?? project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
-          {/* Where its files are, in a slot of its own so the statuses line up, then its one status: what's wrong with it, else where it stands. */}
-          <Place sync={card.cloudNews ? card.status : undefined} />
-          {card.notice ? (
-            <Notice {...card.notice} />
+          {aside.entry ? (
+            <AsideStatus entry={aside.entry} />
           ) : (
-            <StateChips state={state} projectId={project.id} onChanged={onChanged} editor={card.editor} />
-          )}
-          {card.drive ? (
-            <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className={cx(CHIP, "text-success hover:bg-hover")}>
-              On Drive ↗
-            </button>
-          ) : (
-            subtitled && <span className="shrink-0 text-[12px] text-faint">Not uploaded</span>
+            <>
+              {/* Where its files are when that's news, then its one status: what's wrong with it, else where it stands. */}
+              <Place sync={card.cloudNews ? card.status : undefined} />
+              {card.notice ? <Notice {...card.notice} /> : <StateChips state={state} projectId={project.id} onChanged={onChanged} editor={card.editor} />}
+              {card.drive ? (
+                <button onClick={card.driveMenu} title={`On Drive: ${card.drive.name}`} className={cx(CHIP, "text-success hover:bg-hover")}>
+                  On Drive ↗
+                </button>
+              ) : (
+                subtitled && <span className="shrink-0 text-[12px] text-faint">Not uploaded</span>
+              )}
+            </>
           )}
         </div>
-        <span role="cell" className="text-[13px] text-secondary tabular">
+        <CreatorCell by={remote?.created_by ?? project.created_by} projectId={project.id} />
+        <span role="cell" className="text-[13px] text-muted tabular">
           {project.problem ? "" : shortDuration(project.duration_frames / project.fps)}
         </span>
-        <span role="cell" className="text-[13px] text-secondary">
-          {ago(project.modified_ms)}
-        </span>
-        <button
-          title="More"
-          onClick={card.menu}
-          className="flex size-7 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
-        >
-          <Ellipsis size={15} />
-        </button>
+        <Updated at={project.modified_ms} />
+        <RowButtons aside={aside.button} items={items} width={190} />
       </div>
       {card.dialogs}
     </>
-  );
-}
-
-/** A project's category: its kind of video, one label with "Compilation" when it's over several videos ("Bodycam Compilation"). */
-function Category({ style, compilation = false }: { style?: Style | null; compilation?: boolean }) {
-  const label = STYLES.find((option) => option.value === style)?.label ?? "";
-  const text = compilation ? `${label} Compilation`.trim() : label;
-  return (
-    <span role="cell" className="truncate text-[13px] text-secondary" title={text || undefined}>
-      {text}
-    </span>
-  );
-}
-
-/** Who started it: their picture and first name ("Siphesihle Mbuyisa" → Siphesihle); an empty circle when no one's recorded. */
-function CreatorCell({ by, projectId }: { by: Creator | null | undefined; projectId?: string }) {
-  const name = by?.name.trim() ?? "";
-  // An account named by its email shows the part before the @.
-  const first = (name.includes("@") && !name.includes(" ") ? name.split("@")[0]! : name).split(/\s+/u)[0] ?? "";
-  return (
-    <span role="cell" className="flex min-w-0 items-center gap-2 text-[13px] text-secondary">
-      <StartedBy by={by} projectId={projectId} size={20} placeholder />
-      <span className="truncate">{first}</span>
-    </span>
-  );
-}
-
-/** What a row is: a script, an edit, or a subtitled video. */
-function Type({ kind }: { kind: "script" | "edit" | "subtitles" }) {
-  const [Icon, label] = kind === "script" ? [FileText, "Script"] : kind === "edit" ? [Film, "Edit"] : [Captions, "Subtitles"];
-  return (
-    <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[13px] text-secondary">
-      <Icon size={13} className="shrink-0" />
-      {label}
-    </span>
   );
 }
 
@@ -1308,30 +1301,27 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
   const [deleting, setDeleting] = useState(false);
   const [why, setWhy] = useState(false);
   const failed = script.runFailed ?? null;
-  // Its ⋯, as an edit's: open it, and (when this Mac has it) rename or delete it.
-  const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    toggleMenu(
-      event.currentTarget,
-      [
-        { label: "Open script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) },
-        ...(failed !== null
-          ? ([
-              { label: "View error", icon: <TriangleAlert size={14} />, onSelect: () => setWhy(true) },
-              { label: "Run again", icon: <RotateCw size={14} />, onSelect: () => void write() },
-            ] satisfies MenuItem[])
-          : []),
-        ...(here
-          ? ([
-              { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(script.title) },
-              { separator: true },
-              { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
-            ] satisfies MenuItem[])
-          : []),
-      ],
-      { width: 180 },
-    );
-  };
+  // Its ⋯ (and right click), as an edit's: open it, and (when this Mac has it) rename or delete it; Later's too.
+  const aside = useAside(laterKey("script", script.id), script.title || "Untitled script");
+  const items = withAside(
+    [
+      { label: "Open script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) },
+      ...(failed !== null
+        ? ([
+            { label: "View error", icon: <TriangleAlert size={14} />, onSelect: () => setWhy(true) },
+            { label: "Run again", icon: <RotateCw size={14} />, onSelect: () => void write() },
+          ] satisfies MenuItem[])
+        : []),
+      ...(here
+        ? ([
+            { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(script.title) },
+            { separator: true },
+            { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
+          ] satisfies MenuItem[])
+        : []),
+    ],
+    aside.items,
+  );
   const rename = async () => {
     const title = renaming?.trim() ?? "";
     setRenaming(null);
@@ -1384,19 +1374,20 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
   };
   return (
     <>
-    <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+    <div role="row" onMouseEnter={() => !onImport && prefetchScript(script.id)} onClick={() => (onImport ? onImport() : navigate(`/scripts/${script.id}`))} onContextMenu={contextMenu(items, 180)} className={cx(COLUMNS, ROW)}>
       <div role="cell" className="flex min-w-0 items-center gap-2.5">
-        <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={script.title}>
+        <KindMark kind="script" />
+        <span className={NAME} title={script.title}>
           {script.title || "Untitled script"}
         </span>
       </div>
       <Category style={script.style} compilation={script.compilation} />
-      <Type kind="script" />
-      <CreatorCell by={script.createdBy ?? undefined} />
       <div role="cell" className="flex min-w-0 items-center gap-1.5">
-        {importing && !importing.stopped && importing.percent !== undefined ? (
+        {aside.entry ? (
+          <AsideStatus entry={aside.entry} />
+        ) : importing && !importing.stopped && importing.percent !== undefined ? (
           // Importing: how far (the step in its tooltip; its row opens the import).
-          <span className={cx(CHIP, "text-info tabular")} title={importing.step}>
+          <span className={cx(CHIP, "w-32 text-info tabular")} title={importing.step}>
             <span className="h-1 min-w-10 flex-1 overflow-hidden rounded-full bg-line">
               <span className="block h-full rounded-full bg-info transition-[width] duration-500" style={{ width: `${Math.round(Math.max(0, Math.min(100, importing.percent)))}%` }} />
             </span>
@@ -1420,25 +1411,18 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
           </button>
         ) : (
           // Its next step: the pill's shape, filled, so it reads as the button it is (the user, Oct 30: "these are ctas").
-          <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className={cx(PILL, "cursor-pointer bg-fg font-semibold text-bg transition-colors hover:bg-white disabled:opacity-60")}>
+          <button disabled={starting} onClick={(event) => void (script.built ? start(event) : write(event))} className={cx(PILL, "cursor-pointer border-transparent bg-fg font-semibold text-bg transition-colors hover:bg-white disabled:opacity-60")}>
             {script.built ? <Film size={12} /> : <PenLine size={12} />}
             {starting ? "Starting…" : script.built ? "Start edit" : "Write script"}
           </button>
         )}
       </div>
-      <span role="cell" className="text-[13px] text-secondary tabular">
+      <CreatorCell by={script.createdBy ?? undefined} />
+      <span role="cell" className="text-[13px] text-muted tabular">
         {script.durationMs > 0 ? shortDuration(script.durationMs / 1000) : ""}
       </span>
-      <span role="cell" className="text-[13px] text-secondary" title={script.updatedBy ? `by ${script.updatedBy}` : undefined}>
-        {ago(script.updatedAt)}
-      </span>
-      <button
-        title="More"
-        onClick={menu}
-        className="flex size-7 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
-      >
-        <Ellipsis size={15} />
-      </button>
+      <Updated at={script.updatedAt} title={script.updatedBy ? `by ${script.updatedBy}` : undefined} />
+      <RowButtons aside={aside.button} items={items} width={180} />
     </div>
       <Modal open={renaming !== null} onClose={() => setRenaming(null)} width={420}>
         <form
@@ -1513,19 +1497,29 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
     }
     onChanged();
   };
+  const aside = useAside(laterKey("edit", project.id), project.name);
+  const items = withAside(
+    [
+      ...(script !== null ? ([{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) }] satisfies MenuItem[]) : []),
+      { separator: true },
+      { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
+    ],
+    aside.items,
+  );
   return (
     <>
-      <div role="row" onClick={() => navigate(`/p/${project.id}`)} className={cx(COLUMNS, "group min-h-14 cursor-pointer border-t border-line px-4 py-2.5 transition-colors hover:bg-panel")}>
+      <div role="row" onClick={() => navigate(`/p/${project.id}`)} onContextMenu={contextMenu(items, 180)} className={cx(COLUMNS, ROW)}>
         <div role="cell" className="flex min-w-0 items-center gap-2.5">
-          <span className="truncate text-[14px] text-fg group-hover:underline group-hover:underline-offset-[3px]" title={project.name}>
+          <KindMark kind={summary.subtitles ? "subtitles" : "edit"} />
+          <span className={NAME} title={project.name}>
             {project.name}
           </span>
         </div>
         <Category style={summary.style} compilation={script?.compilation} />
-        <Type kind={summary.subtitles ? "subtitles" : "edit"} />
-        <CreatorCell by={project.created_by} projectId={project.id} />
         <div role="cell" className="flex min-w-0 items-center gap-1.5">
-          {project.holder ? (
+          {aside.entry ? (
+            <AsideStatus entry={aside.entry} />
+          ) : project.holder ? (
             <StateChips editor={project.holder} />
           ) : (
             <span title="Not on this Mac yet: opening it downloads it" className={cx(CHIP, "text-muted")}>
@@ -1534,29 +1528,12 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
             </span>
           )}
         </div>
-        <span role="cell" className="text-[13px] text-secondary tabular">
+        <CreatorCell by={project.created_by} projectId={project.id} />
+        <span role="cell" className="text-[13px] text-muted tabular">
           {seconds !== null ? shortDuration(seconds) : ""}
         </span>
-        <span role="cell" className="text-[13px] text-secondary" title={`by ${project.updated_by}`}>
-          {ago(project.updated_ms)}
-        </span>
-        <button
-          title="More"
-          onClick={(event) => {
-            event.stopPropagation();
-            toggleMenu(
-              event.currentTarget,
-              [
-                ...(script !== null ? ([{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) }, { separator: true }] satisfies MenuItem[]) : []),
-                { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
-              ],
-              { width: 180 },
-            );
-          }}
-          className="flex size-7 items-center justify-center rounded-md text-muted opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:bg-hover hover:text-fg"
-        >
-          <Ellipsis size={15} />
-        </button>
+        <Updated at={project.updated_ms} title={`by ${project.updated_by}`} />
+        <RowButtons aside={aside.button} items={items} width={180} />
       </div>
       <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
         <div className="p-6">

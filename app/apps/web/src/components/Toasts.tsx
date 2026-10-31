@@ -28,6 +28,18 @@ export function Toasts() {
             {toast.tone === "error" && <CircleAlert size={16} className="mt-px shrink-0 text-danger" />}
             {toast.tone === "agent" && <Bot size={15} className="mt-px shrink-0 text-agent" />}
             {toast.problem ? <ToastProblem problem={toast.problem} onDismiss={() => dismiss(toast.id)} /> : <span className="text-left">{toast.text}</span>}
+            {toast.action && (
+              <button
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toast.action!.run();
+                  dismiss(toast.id);
+                }}
+                className="-my-1 ml-1 shrink-0 rounded-md bg-white/[0.08] px-2 py-1 text-[12px] font-semibold text-fg transition-colors hover:bg-white/[0.14]"
+              >
+                {toast.action.label}
+              </button>
+            )}
           </motion.div>
         ))}
       </AnimatePresence>

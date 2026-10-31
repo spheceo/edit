@@ -12,7 +12,7 @@ workspaces later. The plan and the user's words: `docs/plans/2026-10-31-ideas.md
 
 `ideas.interrogation` in Edit's manifest (group "Ideas", preset "Repackager",
 in "Everything"): an admin grants it at accounts.spheceo.com. Without it the
-tab isn't there, the server answers 403 and the relay refuses `/v1/ideas/*` and
+section isn't there, the server answers 403 and the relay refuses `/v1/ideas/*` and
 `edit/ideas/` keys. An admin has it all.
 
 ## Where things are
@@ -23,7 +23,7 @@ tab isn't there, the server answers 403 and the relay refuses `/v1/ideas/*` and
 | Their pictures | R2 under `edit/ideas/<idea>/` (uploads); a video's thumbnail and the card's pictures by their URL |
 | Relay | `app/apps/relay/src/ideas.ts`: the Convex calls, YouTube's details, the board |
 | Server | `app/apps/server/src/ideas/` (`/api/ideas`, Claude's tools at `/mcp/ideas/<token>`) |
-| UI | Home's Ideas tab (`/ideas`, `apps/web/src/ideas/home.tsx`), the idea page (`/ideas/<id>`, `page.tsx`): Sphe Research's case on the left (its header and Titles / Thumbnail guide / Case form, word for word in look; no list of threads beside it), the editor's own chat on the right (`AgentPanel`'s `ChatTurns` and `ChatComposer`) |
+| UI | Home's Ideas section (`/ideas`: Drafts and On the board in Home's sidebar, the rows `apps/web/src/ideas/home.tsx`; one waiting on someone is in Needs you too), the idea page (`/ideas/<id>`, `page.tsx`): Sphe Research's case on the left (its header and Titles / Thumbnail guide / Case form, word for word in look; no list of threads beside it), the editor's own chat on the right (`AgentPanel`'s `ChatTurns` and `ChatComposer`) |
 | Craft | `agent/ideas/interrogation.md` and `interrogation-examples.md` |
 | Types | `@edit/types/ideas` |
 
@@ -82,8 +82,8 @@ Titles / Thumbnail Guide / Case / Footage as the board writes them, the
 pictures uploaded (the first is the cover) and written into the description.
 A send tried again finishes the card it began.
 
-**Changes**: a card in a lane labelled "Changes required" shows on the Ideas
-tab (its idea's, or the card alone; opening it makes an idea from it, its
+**Changes**: a card in a lane labelled "Changes required" shows in Home's
+Needs you and On the board (its idea's, or the card alone; opening it makes an idea from it, its
 titles, guide, links and pictures read from the description). The comments
 are the brief: **Make these changes**, then **Update the card**, which writes
 it back and adds "Changes Made" beside the card's labels.

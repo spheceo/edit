@@ -1,8 +1,8 @@
-// Ideas (Oct 31 2026): the server's /api/ideas, for Home's Ideas tab and the
+// Ideas (Oct 31 2026): the server's /api/ideas, for Home's Ideas section and the
 // idea page. An idea is the team's (mamagi, through the relay); this Mac's
 // server runs Claude on it and answers what it's doing as it goes.
 
-import type { Idea, IdeaPlace, IdeasHome } from "@edit/types/ideas";
+import type { Idea, IdeaPlace, IdeasHome, Niche } from "@edit/types/ideas";
 
 import type { Account } from "./account";
 
@@ -10,6 +10,14 @@ export type * from "@edit/types/ideas";
 
 /** Whether the person works on ideas: an `ideas.*` capability (an admin, or nobody signed in, has everything). */
 export const makesIdeas = (account: Account | null): boolean => account === null || account.person === null || account.admin || account.perms.some((perm) => perm.startsWith("ideas."));
+
+/** Each niche's name and dot (Sphe Research's). */
+export const NICHE: Record<Niche, { label: string; dot: string }> = {
+  murder: { label: "Murder", dot: "bg-red-400/80" },
+  "child-related": { label: "Child-related", dot: "bg-amber-300/80" },
+  karen: { label: "Karen", dot: "bg-fuchsia-300/80" },
+  other: { label: "Other", dot: "bg-white/30" },
+};
 
 export type LengthStyle = { typicalWords: [number, number]; maxWords: number; maxCharacters: number } | null;
 

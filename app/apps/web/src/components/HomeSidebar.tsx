@@ -1,0 +1,94 @@
+// Home's sidebar (Oct 31 2026): what needs you, then ideas, scripts and edits
+// each with their stages, then Later and Done; one short list at a time
+// beside it. The study portal's sidebar (the user, Oct 31: "i think this is
+// way more organised"), after the team's "having to scroll through a long,
+// tedious" list of ideas, scripts and edits together.
+
+import { Check, Clock, FileText, Film, Inbox, Lightbulb, type LucideIcon } from "lucide-react";
+
+import { AppMenu } from "./AppMenu";
+import { Logo } from "./Logo";
+import { cx } from "./ui";
+
+export type Section = "ideas" | "scripts" | "edits";
+
+/** Where Home is: what needs you, a section or one of its stages, Later or Done. */
+export type Where = "needs" | "later" | "done" | Section | `${Section}:${string}`;
+
+export const SECTIONS: { key: Section; label: string; icon: LucideIcon; stages: { key: string; label: string }[] }[] = [
+  { key: "ideas", label: "Ideas", icon: Lightbulb, stages: [{ key: "drafts", label: "Drafts" }, { key: "board", label: "On the board" }] },
+  {
+    key: "scripts",
+    label: "Scripts",
+    icon: FileText,
+    // The script's way to the edit (the user, Oct 30: "know which projects are ready to script").
+    stages: [
+      { key: "importing", label: "Importing" },
+      { key: "toscript", label: "Ready to script" },
+      { key: "scripting", label: "Scripting" },
+      { key: "ready", label: "Ready to edit" },
+    ],
+  },
+  { key: "edits", label: "Edits", icon: Film, stages: [{ key: "editing", label: "Editing" }, { key: "review", label: "In review" }, { key: "subtitled", label: "Subtitled" }] },
+];
+
+/** The section `where` is in (none for Needs you, Later and Done) and its stage. */
+export function placeOf(where: Where): { section: Section | null; stage: string | null } {
+  const [section, stage] = where.split(":") as [string, string | undefined];
+  return SECTIONS.some((one) => one.key === section) ? { section: section as Section, stage: stage ?? null } : { section: null, stage: null };
+}
+
+/** What `where` is called: "Needs you", "Edits", "Edits / In review". */
+export function nameOf(where: Where): { parent: string | null; name: string } {
+  const { section, stage } = placeOf(where);
+  if (section === null) return { parent: null, name: where === "needs" ? "Needs you" : where === "later" ? "Later" : "Done" };
+  const found = SECTIONS.find((one) => one.key === section)!;
+  return stage === null ? { parent: null, name: found.label } : { parent: found.label, name: found.stages.find((one) => one.key === stage)?.label ?? stage };
+}
+
+export function HomeSidebar({ sections, counts, where, onChoose }: { sections: Section[]; counts: (where: Where) => number; where: Where; onChoose: (where: Where) => void }) {
+  const item = (to: Where, label: string, Icon: LucideIcon | null, extra?: string) => {
+    const count = counts(to);
+    const on = where === to;
+    return (
+      <button
+        key={to}
+        onClick={() => onChoose(to)}
+        className={cx(
+          "flex w-full min-w-0 items-center gap-2 rounded-xl text-left transition-colors",
+          Icon ? "h-[31px] px-2 text-[13px] font-medium" : "h-7 pr-2 pl-[34px] text-[12.5px]",
+          on ? "bg-white/[0.06] text-fg" : Icon ? "text-secondary hover:bg-white/[0.04] hover:text-fg" : "text-muted hover:bg-white/[0.04] hover:text-fg",
+          extra,
+        )}
+      >
+        {Icon && <Icon size={15} className={cx("shrink-0", on ? "text-fg" : "text-faint")} />}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {to === "needs" && count > 0 ? (
+          <span className="rounded-full bg-danger/15 px-1.5 text-[11px] leading-[17px] font-semibold text-danger tabular">{count}</span>
+        ) : (
+          count > 0 && <span className={cx("text-[11px] tabular", on ? "text-muted" : "text-faint/60")}>{count}</span>
+        )}
+      </button>
+    );
+  };
+  return (
+    <aside className="flex w-[204px] shrink-0 flex-col py-1.5 pr-1">
+      <AppMenu row />
+      <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pb-2">
+        {item("needs", "Needs you", Inbox)}
+        {SECTIONS.filter((section) => sections.includes(section.key)).map((section) => (
+          <div key={section.key} className="mt-2.5 flex flex-col gap-0.5">
+            {item(section.key, section.label, section.icon)}
+            {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
+          </div>
+        ))}
+        <div className="mx-2 my-2.5 border-t border-white/[0.08]" />
+        {item("later", "Later", Clock)}
+        {item("done", "Done", Check)}
+      </nav>
+      <div className="px-2.5 pt-2 opacity-60">
+        <Logo size={16} />
+      </div>
+    </aside>
+  );
+}

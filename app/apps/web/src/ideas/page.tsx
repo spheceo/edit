@@ -16,11 +16,11 @@ import { StartedBy } from "../components/StartedBy";
 import { Button, cx, Modal, Spinner } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
 import { buildTurns } from "../lib/agentTurns";
-import { ideasApi, imageUrl, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page, type Niche } from "../lib/ideas";
+import { ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 
-/** Home, on its Ideas tab. */
+/** Home, on its Ideas section. */
 export function backToIdeas(): void {
   localStorage.setItem("edit.home.view", "ideas");
   navigate("/ideas");
@@ -31,13 +31,6 @@ const FIELD = "w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3
 const LABEL = "text-[13px] font-medium tracking-[-0.01em] text-white/45";
 const QUIET_BUTTON = "rounded-lg px-2 py-1 text-[12px] text-white/35 transition-colors hover:bg-white/[0.05] hover:text-white/80 disabled:opacity-40";
 const WHITE_BUTTON = "inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-[12px] font-medium text-black transition-colors hover:bg-white/85 disabled:opacity-40";
-
-const NICHE: Record<Niche, { label: string; dot: string }> = {
-  murder: { label: "Murder", dot: "bg-red-400/80" },
-  "child-related": { label: "Child-related", dot: "bg-amber-300/80" },
-  karen: { label: "Karen", dot: "bg-fuchsia-300/80" },
-  other: { label: "Other", dot: "bg-white/30" },
-};
 
 function saveOnEnter(event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>, save: () => void) {
   if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;

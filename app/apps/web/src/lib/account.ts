@@ -7,7 +7,8 @@ export interface Account {
   signed_in: boolean;
   /** The accounts site answers: signing in is offered. */
   available: boolean;
-  person: { email: string; name: string; image: string | null } | null;
+  /** `sub`: their stable id from the sign-in (what a project's `created_by.sub` names). */
+  person: { sub?: string; email: string; name: string; image: string | null } | null;
   perms: string[];
   admin: boolean;
   signing_in: boolean;

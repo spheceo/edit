@@ -17,7 +17,7 @@ export function App() {
   const projectId = path.match(/^\/p\/([\w-]+)/)?.[1];
   // Script mode: /scripts (the library) and /scripts/<id> (a script), one screen that keeps its state across them.
   const scripts = path === "/scripts" || path.startsWith("/scripts/");
-  // An idea's page: /ideas/<id> (Home's Ideas tab lists them).
+  // An idea's page: /ideas/<id> (Home's Ideas section lists them).
   const ideaId = path.match(/^\/ideas\/([\w-]+)/)?.[1];
   const screen = projectId ?? (scripts ? "scripts" : ideaId !== undefined ? `idea-${ideaId}` : "home");
   return (

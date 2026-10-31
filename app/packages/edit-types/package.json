@@ -9,7 +9,8 @@
     "./worker": "./src/worker.ts",
     "./problems": "./src/problems.ts",
     "./writer": "./src/writer.ts",
-    "./ideas": "./src/ideas.ts"
+    "./ideas": "./src/ideas.ts",
+    "./later": "./src/later.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

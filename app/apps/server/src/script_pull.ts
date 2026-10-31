@@ -8,8 +8,8 @@
 // reported for the agent to carry out.
 
 import type { App } from "./app.ts";
-import type { ScriptBlock } from "./model.ts";
-import { mediaOf } from "./project.ts";
+import type { Project, ScriptBlock } from "./model.ts";
+import { mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL } from "./project.ts";
 import * as script from "./script.ts";
 
 type Footage = Extract<ScriptBlock, { kind: "footage" }>;
@@ -65,8 +65,11 @@ export function pair(was: ScriptBlock[], now: ScriptBlock[]): [number, number][]
   return pairs;
 }
 
+/** A whole video (reused, or a case's footage whole) plays to its end, whatever its times in the Doc: only a range can change. */
+const whole = (block: Footage) => block.label === REUSE_LABEL || block.label === WHOLE_SOURCE_LABEL;
+
 const rangeChanged = (was: Footage, now: Footage): boolean =>
-  was.start !== now.start || was.end !== now.end || JSON.stringify(was.words ?? null) !== JSON.stringify(now.words ?? null);
+  !whole(was) && (was.start !== now.start || was.end !== now.end || JSON.stringify(was.words ?? null) !== JSON.stringify(now.words ?? null));
 
 const named = (block: ScriptBlock): string => (block.kind === "footage" ? `footage ${block.label}` : `"${block.text.slice(0, 80)}${block.text.length > 80 ? "…" : ""}"`);
 
@@ -96,6 +99,46 @@ export function compare(was: ScriptBlock[], now: ScriptBlock[], doc: string, bey
   return report;
 }
 
+/** The Doc's blocks as they are now. */
+async function readDoc(doc: string): Promise<ScriptBlock[]> {
+  const [html, title] = await script.fetchDoc(doc);
+  const parsed = script.parse(html);
+  await script.joinCases(parsed, async (other) => (await script.fetchDoc(other))[0], new Set([doc]));
+  if (!parsed.blocks.some((block) => block.kind === "footage")) throw new Error(`${title || "The Doc"} has no linked footage ranges now.`);
+  return parsed.blocks;
+}
+
+/** The script compared with the Doc, a footage range longer than its downloaded footage said so. */
+function compared(project: Project, now: ScriptBlock[]): PullReport {
+  const beyond = (block: Footage, start: number, end: number): string | null => {
+    const media = block.media === undefined || block.media === null ? undefined : mediaOf(project, block.media);
+    if (media === undefined) return null;
+    const from = block.media_start ?? 0;
+    const to = from + media.duration;
+    if (start >= from - 0.05 && end <= to + 0.05) return null;
+    return `the footage downloaded covers ${clock(from)}-${clock(to)} of the file: the rest needs downloading`;
+  };
+  return compare(project.script?.blocks ?? [], now, project.script?.source ?? "", beyond);
+}
+
+/** What the editor's bar shows, the Doc read at most every CHECK_MS per project; an edit not made from a Doc has nothing to pull. */
+const CHECK_MS = 60_000;
+const checked = new Map<string, { at: number; doc: string; blocks: ScriptBlock[] }>();
+
+export async function changes(app: App, id: string): Promise<PullReport> {
+  const live = app.store.get(id);
+  if (live === null) throw new Error("no such project");
+  const source = live.project.script?.source ?? "";
+  const doc = script.docId(source);
+  if (doc === null) return { doc: "", ranges: [], narration: [], added: [], removed: [] };
+  let kept = checked.get(id);
+  if (kept === undefined || kept.doc !== doc || Date.now() - kept.at > CHECK_MS) {
+    kept = { at: Date.now(), doc, blocks: await readDoc(doc) };
+    checked.set(id, kept);
+  }
+  return compared(live.project, kept.blocks);
+}
+
 /** Reads the project's script Doc again and compares it with the script; `apply` takes the changed ranges and cuts their clips again. */
 export async function pull(app: App, id: string, apply: boolean): Promise<PullReport> {
   const live = app.store.get(id);
@@ -103,26 +146,15 @@ export async function pull(app: App, id: string, apply: boolean): Promise<PullRe
   const source = live.project.script?.source ?? "";
   const doc = script.docId(source);
   if (doc === null) throw new Error("This edit wasn't made from a script Doc, so there's nothing to pull.");
-  const [html, title] = await script.fetchDoc(doc);
-  const parsed = script.parse(html);
-  await script.joinCases(parsed, async (other) => (await script.fetchDoc(other))[0], new Set([doc]));
-  const now = parsed.blocks;
-  if (!now.some((block) => block.kind === "footage")) throw new Error(`${title || "The Doc"} has no linked footage ranges now.`);
+  const now = await readDoc(doc);
+  checked.set(id, { at: Date.now(), doc, blocks: now });
+  // Only reading: the project isn't saved again.
+  if (!apply) return compared(live.project, now);
   let report: PullReport | null = null;
   const touched = new Set<string>();
   await app.store.update(id, "agent", (project) => {
     const was = project.script?.blocks ?? [];
-    // The footage downloaded for a range covers only so much of its file.
-    const beyond = (block: Footage, start: number, end: number): string | null => {
-      const media = block.media === undefined || block.media === null ? undefined : mediaOf(project, block.media);
-      if (media === undefined) return null;
-      const from = block.media_start ?? 0;
-      const to = from + media.duration;
-      if (start >= from - 0.05 && end <= to + 0.05) return null;
-      return `the footage downloaded covers ${clock(from)}-${clock(to)} of the file: the rest needs downloading`;
-    };
-    report = compare(was, now, source, beyond);
-    if (!apply) return;
+    report = compared(project, now);
     for (const [i, j] of pair(was, now)) {
       const [a, b] = [was[i]!, now[j]!];
       if (a.kind !== "footage" || b.kind !== "footage" || !rangeChanged(a, b)) continue;

@@ -59,6 +59,16 @@ export async function fetchRetrying(url: string, init?: RequestInit, patienceMs 
   }
 }
 
+/** The server's report of a script Doc pulled again (script_pull.ts). */
+export interface ScriptChanges {
+  doc: string;
+  ranges: { clip: string | null; was: string; now: string; words: [string, string] | null; beyond?: string }[];
+  narration: { clip: string | null; was: string; now: string }[];
+  added: { after: string | null; block: string }[];
+  removed: { clip: string | null; block: string }[];
+  recut?: unknown[];
+}
+
 export async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const response = await fetchRetrying(url, {
     method,
@@ -186,6 +196,10 @@ export const api = {
   reviewResearch: (id: string, item: string, status: FoundImage["status"], origin: string) =>
     request<{ item: FoundImage; rev: number; project: Project }>("POST", `/api/projects/${id}/research/${item}`, { status, origin }),
   mediaStatus: (id: string) => request<{ media: Record<string, MediaStatus> }>("GET", `/api/projects/${id}/media-status`),
+  /** What changed in the script Doc since the edit was made from it (read at most once a minute). */
+  scriptChanges: (id: string) => request<ScriptChanges>("GET", `/api/projects/${id}/script/pull`),
+  /** Takes the Doc's changed ranges and cuts their clips again; the rest is left for the agent. */
+  pullScript: (id: string) => request<ScriptChanges>("POST", `/api/projects/${id}/script/pull`, { apply: true }),
   /** The footage the timeline plays that isn't on this machine and can't be fetched. */
   missingFootage: (id: string) =>
     request<{ used: number; missing: { id: string; name: string; path: string }[] }>("GET", `/api/projects/${id}/missing`),

@@ -702,6 +702,15 @@ export function routes(router: Router<App>): void {
     return sortedJson({ job: app.scripts.get(id), unfinished: script.unfinished(live.project) });
   });
   router.post("/api/projects/{id}/script/job", scriptResume);
+  // What changed in the script Doc since the edit was made from it (the editor's bar asks).
+  router.get("/api/projects/{id}/script/pull", async ({ app, params }) => {
+    try {
+      return Response.json(await scriptPull.changes(app, params.id ?? ""));
+    } catch (error) {
+      if (isBug(error)) throw error;
+      throw new ApiError(400, diag.messageOf(error));
+    }
+  });
   // The script Doc read again: what changed, and with apply, its changed ranges taken.
   router.post("/api/projects/{id}/script/pull", async (context) => {
     const given = (await readJson(context)) as { apply?: unknown } | null;

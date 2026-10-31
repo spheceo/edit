@@ -2243,10 +2243,8 @@ export async function realign(app: App, id: string, span: [number, number] | nul
       const media = heard.get(block.media);
       if (media === undefined) continue;
       const offset = block.media_start ?? 0;
-      if (cue === null && only !== null) {
-        cue = spokenCue(media.words, block.start - offset, block.end - offset);
-        if (cue !== null) block.words = cue;
-      }
+      // Its cut only: the words stay the Doc's (none), so a Doc pulled again sees the range unchanged.
+      if (cue === null && only !== null) cue = spokenCue(media.words, block.start - offset, block.end - offset);
       if (cue === null) continue;
       const [cutIn, cutOut] = align(media.words, media.peaks, cue, block.start - offset, block.end - offset);
       // Never past the media's end: a range the Doc made longer than the footage downloaded plays to its end.

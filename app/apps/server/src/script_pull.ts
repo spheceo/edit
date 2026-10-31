@@ -5,12 +5,18 @@
 // range whose times or words changed takes the Doc's and its clip is cut to
 // them again (realign), every other clip staying as the editor left it. What
 // code can't decide alone (narration rewritten, ranges added or taken out) is
-// reported for the agent to carry out.
+// reported for the agent to carry out. A range the Doc made longer than the
+// footage downloaded for it gets a new excerpt of its original, cut from the
+// cloud as the import cut the first, and its clip plays from that.
 
 import type { App } from "./app.ts";
+import * as diag from "./diag.ts";
+import { importMade } from "./import.ts";
 import type { Project, ScriptBlock } from "./model.ts";
 import { mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL } from "./project.ts";
 import * as script from "./script.ts";
+import * as seams from "./seams.ts";
+import * as youtube from "./youtube.ts";
 
 type Footage = Extract<ScriptBlock, { kind: "footage" }>;
 type Narration = Extract<ScriptBlock, { kind: "narration" }>;
@@ -25,6 +31,8 @@ export interface PullReport {
   added: { after: string | null; block: string }[];
   /** Script blocks the Doc no longer has. */
   removed: { clip: string | null; block: string }[];
+  /** Ranges given a new excerpt of their original, the footage downloaded before ending short of them, when applied. */
+  footage?: { clip: string | null; range: string; media: string; covers: string }[];
   /** What realign moved, when applied. */
   recut?: unknown[];
 }
@@ -110,15 +118,45 @@ async function readDoc(doc: string): Promise<ScriptBlock[]> {
 
 /** The script compared with the Doc, a footage range longer than its downloaded footage said so. */
 function compared(project: Project, now: ScriptBlock[]): PullReport {
-  const beyond = (block: Footage, start: number, end: number): string | null => {
-    const media = block.media === undefined || block.media === null ? undefined : mediaOf(project, block.media);
-    if (media === undefined) return null;
-    const from = block.media_start ?? 0;
-    const to = from + media.duration;
-    if (start >= from - 0.05 && end <= to + 0.05) return null;
-    return `the footage downloaded covers ${clock(from)}-${clock(to)} of the file: the rest needs downloading`;
-  };
-  return compare(project.script?.blocks ?? [], now, project.script?.source ?? "", beyond);
+  return compare(project.script?.blocks ?? [], now, project.script?.source ?? "", (block, start, end) => beyond(project, block, start, end));
+}
+
+/** Why a range's footage can't play all of start–end (what was downloaded covers less), or null when it can. */
+function beyond(project: Project, block: Footage, start: number, end: number): string | null {
+  const media = block.media === undefined || block.media === null ? undefined : mediaOf(project, block.media);
+  if (media === undefined) return null;
+  const from = block.media_start ?? 0;
+  const to = from + media.duration;
+  if (start >= from - 0.05 && end <= to + 0.05) return null;
+  return `the footage downloaded covers ${clock(from)}-${clock(to)} of the file: the rest needs downloading`;
+}
+
+/** The Doc's ranges, by their placed clip, whose footage ends short of them (the Doc made them longer since the import). */
+function short(project: Project, now: ScriptBlock[]): Map<string, { file: string; start: number; end: number; label: string }> {
+  const was = project.script?.blocks ?? [];
+  const out = new Map<string, { file: string; start: number; end: number; label: string }>();
+  for (const [i, j] of pair(was, now)) {
+    const [a, b] = [was[i]!, now[j]!];
+    if (a.kind !== "footage" || b.kind !== "footage" || whole(a) || a.clip === undefined || a.clip === null) continue;
+    if (beyond(project, a, b.start, b.end) !== null) out.set(a.clip, { file: a.file, start: b.start, end: b.end, label: b.label });
+  }
+  return out;
+}
+
+/**
+ * A new excerpt of a YouTube original covering start–end, cut from the cloud
+ * as the import cut the first (the original's in the registry: only the
+ * excerpt is made), added to the project as media. Null for footage of
+ * another kind (a Drive file's range is still reported as short).
+ */
+async function widen(app: App, id: string, file: string, start: number, end: number): Promise<{ media: string; from: number; to: number } | null> {
+  if (youtube.idOf(file) === null) return null;
+  const cut = await seams.cloudMedia.youtubeExcerpts(app.store.home, app.store.cacheDir(), file, [[start, end]]);
+  const excerpt = cut.find((one) => one.from <= start + 0.05 && one.to >= end - 0.05);
+  if (excerpt === undefined || excerpt.cloud === null) return null;
+  const [, ids, errors] = await importMade(app, id, [excerpt.cloud], false, "agent");
+  if (errors.length > 0 || ids[0] === undefined) throw new Error(`the new footage for ${file} couldn't be added: ${errors.join("; ")}`);
+  return { media: ids[0], from: excerpt.from, to: excerpt.to };
 }
 
 /** What the editor's bar shows, the Doc read at most every CHECK_MS per project; an edit not made from a Doc has nothing to pull. */
@@ -150,10 +188,36 @@ export async function pull(app: App, id: string, apply: boolean): Promise<PullRe
   checked.set(id, { at: Date.now(), doc, blocks: now });
   // Only reading: the project isn't saved again.
   if (!apply) return compared(live.project, now);
+  // Footage for the ranges the Doc made longer than what was downloaded, before the one save that takes it all.
+  const widened = new Map<string, { media: string; from: number; to: number; label: string }>();
+  for (const [clip, range] of short(live.project, now)) {
+    try {
+      const got = await widen(app, id, range.file, range.start, range.end);
+      if (got !== null) widened.set(clip, { ...got, label: range.label });
+    } catch (error) {
+      diag.warn("script", `${id}: ${range.label} needs more footage than was downloaded, and fetching it failed: ${diag.messageOf(error)}`);
+    }
+  }
   let report: PullReport | null = null;
   const touched = new Set<string>();
   await app.store.update(id, "agent", (project) => {
     const was = project.script?.blocks ?? [];
+    // The range and its clips (picture and linked sound) play from the new excerpt: the same moments, another file.
+    for (const block of was) {
+      const found = block.kind === "footage" && block.clip !== undefined && block.clip !== null ? widened.get(block.clip) : undefined;
+      if (found === undefined || block.kind !== "footage" || block.clip === undefined || block.clip === null) continue;
+      const [old, offset] = [block.media, block.media_start ?? 0];
+      const clip = project.clips.find((one) => one.id === block.clip);
+      for (const one of project.clips) {
+        if (one.type !== "video" && one.type !== "audio") continue;
+        if (one.media !== old || !(one.id === block.clip || (clip?.link !== undefined && clip.link !== null && one.link === clip.link))) continue;
+        one.source_in += offset - found.from;
+        one.media = found.media;
+      }
+      block.media = found.media;
+      block.media_start = found.from;
+      touched.add(block.clip);
+    }
     report = compared(project, now);
     for (const [i, j] of pair(was, now)) {
       const [a, b] = [was[i]!, now[j]!];
@@ -169,6 +233,7 @@ export async function pull(app: App, id: string, apply: boolean): Promise<PullRe
   });
   if (report === null) throw new Error("no such project");
   const done = report as PullReport;
+  if (widened.size > 0) done.footage = [...widened].map(([clip, got]) => ({ clip, range: got.label, media: got.media, covers: `${clock(got.from)}-${clock(got.to)}` }));
   if (apply && touched.size > 0) done.recut = await script.realign(app, id, null, touched);
   return done;
 }

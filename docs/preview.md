@@ -1,5 +1,25 @@
 # Preview decoding
 
+## Smooth playback
+
+The viewer plays and scrubs a render of the edit when one shows what's on screen
+(the team, Oct 31: "currently super laggy! we have too many loading frame issues").
+`apps/server/src/playback_render.ts` exports the open project in the background at its
+own size, smallest quality, on the video engine, through the export's chunks under the
+project's id plus `.playback` (so a real export's chunks are never touched): a re-render
+after an edit copies the chunks that didn't change. The page asks for it
+(`POST /api/projects/{id}/playback`) once its edits have settled for 2.5 s; one render at
+a time, never beside a local export (it stops and carries on after). The file is
+`<cache>/playback/<project>.mp4` (about 2.9 Mbit/s, kept for the three projects rendered
+last) with a `.json` saying which picture it shows. `lib/playback.ts` shows it in a
+`<video>` over the canvas while its revision is the one on screen and nothing waits to
+save: play follows the video's clock, a seek sets its time, and nothing is decoded live.
+An edit drops back to the live preview below until the next render lands (a smooth play
+that goes stale pauses there). Measured Oct 31: the 48 s Vanilla Extract short (cloud
+footage) rendered in 68 s and played 515 frames with none dropped; the first render of a
+long cloud edit reads all its footage once from R2 (about 13 frames/s from South Africa).
+
+
 `apps/web/src/lib/playback.ts` owns the playhead, Web Audio clock and complete-scene
 presentation. The WASM engine still evaluates and draws through the same renderer
 as native export. No project model or exported media is changed by preview decoding.

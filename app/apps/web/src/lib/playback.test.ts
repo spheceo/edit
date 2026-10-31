@@ -348,6 +348,42 @@ describe("preview seeks and lifetime", () => {
     expect(gain.linearRampToValueAtTime.mock.calls.slice(0, 3).map((call) => call[0])).toEqual([1 / 3, 2 / 3, 1].map((value) => expect.closeTo(value)));
   });
 
+  it("plays and scrubs the rendered edit while it shows what's on screen, and draws live once it doesn't", async () => {
+    // The team, Oct 31: "currently super laggy! we have too many loading frame issues".
+    const listeners = new Map<string, () => void>();
+    const video = {
+      src: "", currentTime: 0, paused: true, ended: false, muted: true,
+      getAttribute(name: string) { return name === "src" ? this.src || null : null; },
+      play: vi.fn(function (this: { paused: boolean }) { this.paused = false; return Promise.resolve(); }),
+      pause: vi.fn(function (this: { paused: boolean }) { this.paused = true; }),
+      addEventListener: (name: string, listener: () => void) => listeners.set(name, listener),
+      removeEventListener: (name: string) => listeners.delete(name),
+    };
+    preview.attachVideo(video as unknown as HTMLVideoElement);
+    preview.setProject(fixture(), {}); draw();
+    engine.render.mockClear();
+    preview.setSmooth("/api/projects/p1/playback.mp4?v=a");
+    expect(video.src).toBe("/api/projects/p1/playback.mp4?v=a");
+    expect(preview.smoothShown).toBe(true);
+    // A seek moves the video, a hair into its frame, and nothing is decoded or drawn live.
+    decoding.requestVideo.mockClear();
+    preview.seek(30); draw();
+    expect(video.currentTime).toBeCloseTo(30.25 / 30, 6);
+    expect(engine.render).not.toHaveBeenCalled();
+    expect(decoding.requestVideo).not.toHaveBeenCalled();
+    // Play runs the video; its clock moves the playhead.
+    preview.play();
+    expect(video.play).toHaveBeenCalled();
+    video.currentTime = 2.0; draw();
+    expect(playhead.frame).toBeCloseTo(59.75, 6);
+    // An edit since: the video stops where it was and the canvas draws live.
+    preview.setSmooth(null); draw();
+    expect(video.pause).toHaveBeenCalled();
+    expect(playhead.playing).toBe(false);
+    expect(preview.smoothShown).toBe(false);
+    expect(decoding.requestVideo).toHaveBeenCalled();
+  });
+
   it("keeps scrubbing responsive after playback reaches the end", () => {
     const p = fixture(); p.clips = []; // wall-clock graphics, with a short edit
     p.clips.push({ id: "solid", type: "solid", track: "v1", start: 0, duration: 2, color: "blue", fill: [1, 0, 0, 1], opacity: 1, fade_in: 0, fade_out: 0 });

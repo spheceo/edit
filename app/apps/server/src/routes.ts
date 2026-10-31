@@ -44,6 +44,7 @@ import * as covers from "./covers.ts";
 import * as kinds from "./kinds.ts";
 import * as reset from "./reset.ts";
 import * as firstPrompt from "./first_prompt.ts";
+import * as playbackRender from "./playback_render.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
@@ -80,6 +81,7 @@ export function buildRouter(): Router<App> {
   seams.cloudProjects.routes(router);
   // Before /api/projects/{id}: /api/projects/status is its own.
   reviews.routes(router);
+  playbackRender.routes(router);
   firstPrompt.routes(router);
   reset.routes(router);
   accounts.routes(router);

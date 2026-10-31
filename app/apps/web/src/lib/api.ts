@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { note, recordTiming, routeOf } from "./diagnostics";
 import type { ExportOptions } from "./exporting";
 import type { Patch } from "./patch";
+import type { PlaybackStatus } from "./store";
 import type { Creator, DriveFile, MediaStatus, Project, ProjectSummary, ScriptJob, Style, Transcript } from "./types";
 
 export class ApiError extends Error {
@@ -230,6 +231,9 @@ export const api = {
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),
   transcript: (id: string, media: string) => request<Transcript>("GET", `/api/projects/${id}/media/${media}/transcript`),
   cancelExport: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/export/cancel`),
+  /** Smooth playback (playback_render.ts): what's rendered, and asking for the edit as it is now. */
+  playback: (id: string) => request<PlaybackStatus>("GET", `/api/projects/${id}/playback`),
+  renderPlayback: (id: string) => request<PlaybackStatus>("POST", `/api/projects/${id}/playback`),
   /** Sets who a voice is (its role decides its colour); returns the updated transcript. */
   setSpeaker: (id: string, media: string, voice: string, role: string) =>
     request<Transcript>("POST", `/api/projects/${id}/media/${media}/speakers`, { voice, role }),

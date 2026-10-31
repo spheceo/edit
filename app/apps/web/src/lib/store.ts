@@ -52,6 +52,17 @@ export interface Toast {
   action?: { label: string; run: () => void };
 }
 
+/** The open edit rendered small for smooth playback (apps/server/src/playback_render.ts). */
+export interface PlaybackStatus {
+  state: "none" | "waiting" | "rendering" | "ready" | "failed";
+  /** The revision the ready file shows, or the one being rendered. */
+  rev: number | null;
+  progress: number;
+  /** The rendered file, when one is ready (it may show an older revision). */
+  url: string | null;
+  error: string | null;
+}
+
 export type Tool = "select" | "razor";
 export type SideTab = "info" | "presets" | "transcript";
 /** The left panel: the media bin, the script beside it, and its downloads while they run. */
@@ -89,6 +100,8 @@ interface EditorState {
   resetAsked: boolean;
   /** The open project's cloud state (apps/server/src/cloud_projects.ts); null for none. */
   cloud: CloudStatus | null;
+  /** Its smooth playback render; null until it's asked. */
+  playback: PlaybackStatus | null;
 
   load(rev: number, project: Project): void;
   close(): void;
@@ -230,20 +243,21 @@ export const useEditor = create<EditorState>((set, get) => ({
   agentActive: 0,
   resetAsked: false,
   cloud: null,
+  playback: null,
 
   load: (rev, project) => {
     editorSession++;
     clearTimeout(saveTimer);
     server = { rev, project };
     synced = project;
-    set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null, resetAsked: false });
+    set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null, resetAsked: false, playback: null });
   },
   close: () => {
     editorSession++;
     clearTimeout(saveTimer);
     server = null;
     synced = null;
-    set({ project: null, rev: 0, past: [], future: [], gestureBase: null, dirty: false, saving: false, selection: [], media: {}, cloud: null });
+    set({ project: null, rev: 0, past: [], future: [], gestureBase: null, dirty: false, saving: false, selection: [], media: {}, cloud: null, playback: null });
   },
 
   edit: (recipe) => {
@@ -607,6 +621,8 @@ export function connectEvents() {
       }
     } else if (event.type === "export" && project && event.id === project.id) {
       useEditor.setState({ exportState: event });
+    } else if (event.type === "playback" && project && event.id === project.id) {
+      useEditor.setState({ playback: event.status });
     } else if (event.type === "drive" && project && event.id === project.id) {
       useEditor.setState({ driveState: event });
     } else if (event.type === "script" && project && event.id === project.id) {

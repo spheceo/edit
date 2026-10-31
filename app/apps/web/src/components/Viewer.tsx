@@ -1,6 +1,7 @@
 import { Maximize, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { api } from "../lib/api";
 import { openReport } from "../lib/diagnostics";
 import { paramAt, projectDuration, setParam } from "../lib/edit";
 import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
@@ -37,11 +38,19 @@ export function toggleFullscreen() {
   else void viewer?.requestFullscreen().catch(() => {});
 }
 
+/** Edits settle this long before smooth playback is rendered again (the agent changes things many times a turn). */
+const SMOOTH_SETTLE_MS = 2500;
+
 export function Viewer() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const project = useEditor((state) => state.project);
   const media = useEditor((state) => state.media);
+  const rev = useEditor((state) => state.rev);
+  const dirty = useEditor((state) => state.dirty);
+  const playback = useEditor((state) => state.playback);
+  const [smoothShown, setSmoothShown] = useState(preview.smoothShown);
   const [error, setError] = useState<string | null>(null);
   const [buffering, setBuffering] = useState(false);
   const [stuck, setStuck] = useState(false);
@@ -72,13 +81,37 @@ export function Viewer() {
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); });
+    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); setSmoothShown(preview.smoothShown); });
     void preview.attach(canvas);
+    preview.attachVideo(videoRef.current);
     return () => {
       off();
+      preview.attachVideo(null);
       preview.detach();
     };
   }, []);
+
+  // Smooth playback: the rendered edit plays when it shows what's on screen (its
+  // revision, nothing waiting to save); else the canvas draws live.
+  const projectId = project?.id ?? null;
+  const smooth = playback?.url && playback.rev === rev && !dirty ? playback.url : null;
+  useEffect(() => { preview.setSmooth(smooth); }, [smooth]);
+  useEffect(() => {
+    if (projectId === null) return;
+    let live = true;
+    api.playback(projectId).then((status) => { if (live && useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
+    return () => { live = false; };
+  }, [projectId]);
+  // Asked for once the edits settle, unless it's rendering (or failed on) this revision.
+  const hasClips = (project?.clips.length ?? 0) > 0;
+  useEffect(() => {
+    if (projectId === null || dirty || !hasClips) return;
+    if (playback !== null && playback.rev === rev && playback.state !== "none") return;
+    const timer = setTimeout(() => {
+      api.renderPlayback(projectId).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
+    }, SMOOTH_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [projectId, rev, dirty, hasClips, playback]);
 
   useEffect(() => {
     if (project) preview.setProject(project, versions);
@@ -120,6 +153,13 @@ export function Viewer() {
           onPointerDown={(event) => { if (fullscreen) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
           onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
         />
+        {/* Smooth playback over the canvas; clicks go through to it. */}
+        <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
+        {!error && project && playback !== null && (playback.state === "rendering" || playback.state === "waiting") && !smoothShown && (
+          <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted tabular">
+            {playback.state === "waiting" ? "Smooth playback after the export" : `Smooth playback ${Math.round(playback.progress * 100)}%`}
+          </div>
+        )}
         {error && (
           <div className="absolute inset-0 flex items-center justify-center p-8">
             <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />

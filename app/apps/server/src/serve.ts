@@ -27,6 +27,7 @@ import { initNative } from "./native/index.ts";
 import * as archive from "./archive.ts";
 import * as firstPrompt from "./first_prompt.ts";
 import * as researchCloud from "./research_cloud.ts";
+import * as playbackRender from "./playback_render.ts";
 import * as reviews from "./reviews.ts";
 import { buildRouter } from "./routes.ts";
 import * as seams from "./seams.ts";
@@ -222,6 +223,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   optional("cloud", () => seams.cloudProjects.start(app));
   // Repack reviews of exports: their notes followed, and fixed by the agent once they settle.
   optional("review", () => reviews.start(app));
+  // Smooth playback: the open edit rendered small in the background, out of the way of exports.
+  optional("playback", () => playbackRender.start(app));
   // Projects archived on Repack: their big files freed here, and restores asked for done.
   optional("archive", () => archive.start(app));
   // Script mode: Writer's scripts on this Mac brought in once, and its background work.

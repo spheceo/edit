@@ -113,6 +113,16 @@ class Preview {
   private runningClock = false;
   private playbackStats = { videoMisses: 0, audioUnderruns: 0 };
   private loop = 0;
+  /**
+   * Smooth playback: the edit rendered small (apps/server/src/playback_render.ts),
+   * played and scrubbed as a video instead of drawing it live, when it shows
+   * what's on screen (the team, Oct 31: "currently super laggy! we have too
+   * many loading frame issues"). Null draws live.
+   */
+  private smooth: string | null = null;
+  private video: HTMLVideoElement | null = null;
+  /** The rendered video is what the viewer shows (playing, or paused on its frame). */
+  smoothShown = false;
   private listeners = new Set<Listener>();
   private decoder = new Decoder(() => this.invalidate(), (error, key) => {
     const media = key === undefined ? undefined : [...this.sources, ...this.sounds].find(([, url]) => url === key)?.[0];
@@ -147,6 +157,61 @@ class Preview {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
+
+  /** The viewer's video element, which shows smooth playback over the canvas. */
+  attachVideo(video: HTMLVideoElement | null) {
+    this.video?.removeEventListener("waiting", this.onVideoWaiting);
+    this.video?.removeEventListener("playing", this.onVideoPlaying);
+    this.video?.removeEventListener("seeked", this.onVideoPlaying);
+    this.video = video;
+    video?.addEventListener("waiting", this.onVideoWaiting);
+    video?.addEventListener("playing", this.onVideoPlaying);
+    video?.addEventListener("seeked", this.onVideoPlaying);
+    if (video && this.smooth) this.useSmooth(this.smooth);
+  }
+
+  private onVideoWaiting = () => { if (this.smoothShown) this.setBuffering(true); };
+  private onVideoPlaying = () => { if (this.smoothShown) { this.setBuffering(false); if (!this.framed) { this.framed = true; this.notify(); } } };
+
+  /**
+   * The rendered file for what's on screen, or null when there's none (an
+   * edit since): with one, play and scrub show it; without, the canvas draws
+   * live (a smooth playback that goes stale while playing pauses there).
+   */
+  setSmooth(url: string | null) {
+    if (url === this.smooth) return;
+    this.smooth = url;
+    if (url !== null) { this.useSmooth(url); return; }
+    if (!this.smoothShown) return;
+    const playing = playhead.playing;
+    if (playing) this.pause();
+    this.video?.pause();
+    this.smoothShown = false;
+    this.renderedFrame = null;
+    this.notify();
+    this.invalidate();
+  }
+
+  private useSmooth(url: string) {
+    const video = this.video;
+    if (!video || !this.project) return;
+    if (video.getAttribute("src") !== url) video.src = url;
+    if (playhead.playing && !this.smoothShown) return; // live playback carries on; the next play is smooth
+    this.showSmooth(playhead.frame);
+  }
+
+  /** Puts the rendered video at `frame` (a hair into it, so it never lands on the frame before). */
+  private showSmooth(frame: number) {
+    const video = this.video;
+    if (!video || !this.project) return;
+    const time = (Math.floor(frame) + 0.25) / rate(this.project.settings);
+    if (Math.abs(video.currentTime - time) > 0.5 / rate(this.project.settings)) video.currentTime = time;
+    if (!this.smoothShown) {
+      this.smoothShown = true;
+      this.stopSounds();
+      this.notify();
+    }
+  }
 
   async attach(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -333,6 +398,7 @@ class Preview {
     if (changedSource) {
       this.remember();
       this.pause();
+      this.setSmooth(null);
       this.decoder.dispose();
       this.sources.clear();
       this.sounds.clear();
@@ -468,6 +534,7 @@ class Preview {
     clearTimeout(this.settleTimer);
     this.settleTimer = setTimeout(() => { this.settled = true; this.invalidate(); }, SETTLE_MS);
     this.resetClock();
+    if (this.smooth) this.showSmooth(playhead.frame);
     playhead.emit();
     this.invalidate();
   }
@@ -478,6 +545,7 @@ class Preview {
   play() {
     if (!this.project || playhead.playing || this.duration <= 0 || this.error) return;
     if (playhead.frame >= this.duration - 1) playhead.frame = 0;
+    if (this.smooth && this.video) { this.playSmooth(this.video); return; }
     playhead.playing = true;
     this.pendingScenes.clear();
     this.direction = 1;
@@ -500,6 +568,43 @@ class Preview {
     this.loop = requestAnimationFrame(tick);
   }
 
+  /** Plays the rendered video from the playhead; the video's clock moves the playhead. */
+  private playSmooth(video: HTMLVideoElement) {
+    const project = this.project!;
+    const fps = rate(project.settings);
+    playhead.playing = true;
+    this.playedFrom = playhead.frame;
+    this.resetClock();
+    this.showSmooth(playhead.frame);
+    video.muted = false;
+    void video.play().catch((error: unknown) => {
+      // Refused (no user gesture, a file that won't play): drawn live instead.
+      note("warn", "preview", `smooth playback didn't start: ${error}`);
+      if (!playhead.playing) return;
+      this.pause();
+      this.smooth = null;
+      this.smoothShown = false;
+      this.notify();
+      this.play();
+    });
+    playhead.emit();
+    cancelAnimationFrame(this.queued);
+    this.queued = 0;
+    const tick = () => {
+      this.loop = 0;
+      if (!playhead.playing || !this.smoothShown) return;
+      const frame = video.currentTime * fps - 0.25;
+      const out = project.mark_out ?? null;
+      if (out !== null && this.playedFrom < out && frame >= out && out < this.duration) { playhead.frame = out; this.pause(); return; }
+      if (video.ended || frame >= this.duration - 1) { playhead.frame = Math.max(0, this.duration - 1); this.pause(); return; }
+      playhead.frame = Math.max(0, frame);
+      if (performance.now() - this.persistedAt >= 1000) this.remember();
+      playhead.emit();
+      this.loop = requestAnimationFrame(tick);
+    };
+    this.loop = requestAnimationFrame(tick);
+  }
+
   pause() {
     this.remember();
     const playing = playhead.playing;
@@ -507,6 +612,10 @@ class Preview {
     cancelAnimationFrame(this.loop);
     this.loop = 0;
     this.resetClock();
+    if (this.smoothShown && this.video && !this.video.paused) {
+      this.video.pause();
+      if (this.project) playhead.frame = Math.max(0, this.video.currentTime * rate(this.project.settings) - 0.25);
+    }
     if (!playing) return;
     playhead.frame = Math.round(playhead.frame);
     playhead.emit();
@@ -778,6 +887,8 @@ class Preview {
   /** `scene`: the sources a playback tick already looked up (and warmed) for its frame. */
   private draw(scene?: { frame: number; sources: PictureSource[] }) {
     if (!this.engine || !this.project || this.error) return;
+    // The rendered video shows this frame: nothing to decode or draw live.
+    if (this.smoothShown) { this.syncEngine(); return; }
     if (this.use((engine) => engine.isLost())) { this.recover(); return; }
     this.syncEngine();
     const wanted = Math.floor(playhead.frame);

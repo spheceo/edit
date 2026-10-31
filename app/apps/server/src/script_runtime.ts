@@ -57,6 +57,8 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
   const fps = ctx.project.fps;
   const f = (t: Time) => Math.round(seconds(t) * fps);
   const byId = new Map(ctx.clips.map((c) => [c.id, c]));
+  /** Where each clip this script adds starts (frames): keys() places its keyframes from there. */
+  const madeAt = new Map<string, number>();
   let n = 0;
   const fresh = () => `x${run}${(n++).toString(36)}`;
   const span = (o: { from?: Time; to?: Time }, what: string): [number, number] => {
@@ -78,6 +80,7 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
     }
     const made = typeof id === "string" ? id : fresh();
     ops.push({ op: "add", clip: { id: made, ...fields } });
+    if (typeof fields.start === "number") madeAt.set(made, fields.start);
     void kind;
     return made;
   };
@@ -255,6 +258,21 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
         ...(at !== undefined ? { at: f(at) } : {}), ...(duration !== undefined ? { duration: f(duration) } : {}),
       });
     },
+    /** An adjustment (a look) over from–to: grade {exposure, contrast, saturation, temperature, vignette, grain, blur…}; its id. */
+    adjust(o: Op & { id?: string; from: Time; to: Time; grade?: Op; name?: string; track?: string }) {
+      const [start, end] = span(o, "adjust");
+      const { id, from: _f, to: _t, ...rest } = o;
+      return place("adjust", { type: "adjustment", ...rest, start, duration: end - start }, id);
+    },
+    /**
+     * Keyframes on a clip (one this script made too) at timeline seconds: keys(id, "scale", [[12.5, 1.2], [15, 1.35, "in_out"]]).
+     * An empty list clears that parameter's keys.
+     */
+    keys(id: string, param: string, points: [Time, number, string?][]) {
+      const start = madeAt.get(id) ?? (byId.has(id) ? Math.round(byId.get(id)!.from * fps) : null);
+      if (start === null) throw new Error(`keys: no clip ${id} in this span or made by this script`);
+      ops.push({ op: "keyframes", select: { ids: [id] }, param, keyframes: points.map(([at, value, ease]) => ({ frame: f(at) - start, value, ease: ease ?? "linear" })) });
+    },
     /** Any of Edit's tools (add_subtitles, cover_cut_in, add_from_library, map_view, track_region…), with its own arguments; runs after the plan saves, in order. */
     tool(name: string, args: Op = {}) { ops.push({ op: "@tool", tool: name, args }); },
   };
@@ -281,6 +299,8 @@ export const REFERENCE = `// e-code: the timeline as TypeScript. Times are timel
 // Any of those given ids: [...] (a composition's layers as read_edit lists them) rebuilds it.
 // punch(id, {at: [times], on: [x, y] | "centre", scales?}); leak(at, brandLightLeakMedia); dissolve(at, frames?); flash(at)
 // op(raw)  any apply_edit_plan operation (frames), e.g. op({op: "blur_marks", clips: [id], leave: ["RIP N3ON"]}) to keep a mark that's the point unblurred. Library functions saved with save_graphic are in scope by name.
+// shot(), text(), adjust() return the new clip's id: pass it on in the same script (const map = shot("m258", {from: 70, to: 75}); make("place_label", {map, text: "Bremerton Police Department", from: 71, to: 75}); keys(map, "scale", [[70, 1], [75, 1.15]])). An apply_edit_plan "as" name isn't one.
+// adjust({from, to, grade: {vignette, contrast, exposure, saturation, grain…}, name?})  a look over a stretch; keys(id, param, [[time, value, ease?], …])  keyframes at timeline seconds (ease linear, in, out, in_out, hold)
 // Bodycam, interrogation, courtroom:
 // desktop({from, to, windows: [{app: "notepad", lines: ["Fight with her mother", …]}, {app: "photo_viewer", media, label?}, {app: "video_player", media, source_in?}], ids?})  the Windows screen, windows in the order they're named; Edit times each window and line a beat before its words; no at, line_at, x or y. read_edit lists a screen as one desktop(…) with its ids: run it changed to replace it
 // make(op, {from?, to?, at?, duration?, ...})  any apply_edit_plan operation in seconds: make("file_viewer", {media, name, from, to}), make("date_title", {text, from, to, position: "bottom", place}), make("red_quote", {…}), make("transition", {kind: "burn", at}), make("cover_cut_in", …) as apply_edit_plan has them otherwise

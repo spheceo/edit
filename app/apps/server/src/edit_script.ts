@@ -336,7 +336,11 @@ registerTool("run_edit", async ({ app, args, projectId }) => {
       try { applied = JSON.parse(firstText(answer)) as Args; } catch { applied = { result: firstText(answer).slice(0, 4000) }; }
     } catch (error) {
       const message = diag.messageOf(error).replace(/operation (\d+)/u, (all, n: string) => { const line = planLines[Number(n) - 1]; return line ? `line ${line} (${all})` : all; });
-      return text(stableStringify({ saved: false, error: message, notes: result.notes, hint: "nothing was saved; fix the script and run it again" }));
+      // E1, Oct 31: told place_label needs the map's clip id, the agent dropped the label rather than find one.
+      const hint = /clip id|no clip|unknown clip/iu.test(message)
+        ? "nothing was saved; a clip this script makes is named by the id its call returns (const map = shot(\"m…\", {from, to}); make(\"place_label\", {map, …})), a clip already there by its id in read_edit"
+        : "nothing was saved; fix the script and run it again";
+      return text(stableStringify({ saved: false, error: message, notes: result.notes, hint }));
     }
   }
   const after: Args[] = [];

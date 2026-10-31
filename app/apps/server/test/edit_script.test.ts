@@ -86,3 +86,17 @@ test("desktop, make and tool: a screen replaced whole, any plan operation in sec
   expect(out.ops[3]).toMatchObject({ op: "transition", kind: "burn", at: 480 });
   expect(out.ops[4]).toEqual({ op: "@tool", tool: "add_subtitles", args: { start: 0, end: 20 } });
 });
+
+test("a clip a script makes is named by the id its call returns: a label on a new map, keys at timeline seconds, a look over a stretch", async () => {
+  const out = await evalScript({
+    code: `const map = shot("m1", { from: 10, to: 15 });\nmake("place_label", { map, text: "Bremerton Police Department", from: 11, to: 15 });\nkeys(map, "scale", [[10, 1], [15, 1.15, "in_out"]]);\nconst look = adjust({ from: 0, to: 20, grade: { vignette: 0.7 }, name: "Opening look" });\nkeys("c1", "x", [[3, 0], [5, 40]]);\nnote(look);`,
+    library: [], context: ctx(), run: "t",
+  });
+  expect(out.error).toBeUndefined();
+  expect(out.ops[1]).toMatchObject({ op: "place_label", map: "xt0", start: 330, end: 450 });
+  // Its keys from the new clip's own start (frame 300), the existing one's from 2 s.
+  expect(out.ops[2]).toMatchObject({ op: "keyframes", select: { ids: ["xt0"] }, param: "scale", keyframes: [{ frame: 0, value: 1, ease: "linear" }, { frame: 150, value: 1.15, ease: "in_out" }] });
+  expect(out.ops[3]).toMatchObject({ op: "add", clip: { id: "xt1", type: "adjustment", start: 0, duration: 600, grade: { vignette: 0.7 }, name: "Opening look" } });
+  expect(out.ops[4]).toMatchObject({ op: "keyframes", select: { ids: ["c1"] }, keyframes: [{ frame: 30 }, { frame: 90, value: 40 }] });
+  expect(out.notes).toEqual(["xt1"]);
+});

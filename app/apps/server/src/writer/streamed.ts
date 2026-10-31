@@ -21,6 +21,7 @@ import * as youtube from "../youtube.ts";
 import { title as titleOf } from "./youtube.ts";
 import type { Recording } from "./drive.ts";
 import { keepShared, originalKey, segment } from "./handoff.ts";
+import { readable } from "./media.ts";
 
 /** Whether imports stream their footage to the cloud (`EDIT_STREAM_IMPORTS=0`: downloaded here, as before). */
 export function on(): boolean {
@@ -65,10 +66,19 @@ export async function fromYoutube(app: App, dir: string, url: string, onBytes: (
   const source = `${youtube.PREFIX}${id}`;
   const record = (await cloud.query("edit:getMedia", { source })) as { originalReady?: boolean; originalKey?: string; name?: string; size?: number } | null;
   if (record?.originalReady === true && typeof record.originalKey === "string") {
-    keepShared(dir, null, source, record.originalKey);
-    const size = Math.max(Math.trunc(record.size ?? 0), 0);
-    onBytes(size);
-    return { source, key: record.originalKey, name: record.name ?? `${id}.mp4`, size, url: await cloud.presign(record.originalKey, "GET", READ_SECONDS) };
+    const url = await cloud.presign(record.originalKey, "GET", READ_SECONDS);
+    // An original the stream put up (Oct 30–31) is a fragmented MP4: whole,
+    // but FFmpeg reads all of it over the network to find its length, past the
+    // check's minute, and the import dropped it as "Couldn't be read as video"
+    // (Oct 31, Kroger, after the download was fixed). One that doesn't read is
+    // downloaded again over it, which takes seconds.
+    if (await readable(url)) {
+      keepShared(dir, null, source, record.originalKey);
+      const size = Math.max(Math.trunc(record.size ?? 0), 0);
+      onBytes(size);
+      return { source, key: record.originalKey, name: record.name ?? `${id}.mp4`, size, url };
+    }
+    diag.warn("writer", `YouTube ${id}: its original in the cloud doesn't read as video, so it's downloaded again over it`);
   }
   const title = await titleOf(app, url).catch(() => id);
   const name = segment(`${title} [${id}].mp4`);
@@ -81,7 +91,8 @@ export async function fromYoutube(app: App, dir: string, url: string, onBytes: (
     size = got.size;
     await cloud.uploadFile(got.path, key, (sent) => onBytes(sent));
   } catch (error) {
-    // Half a video is never left as the original.
+    // Half a video is never left as the original: none is ready until this one is.
+    await cloud.mutation("edit:putMedia", { source, originalReady: false }).catch(() => {});
     await cloud.remove([key]).catch(() => {});
     throw error;
   } finally {

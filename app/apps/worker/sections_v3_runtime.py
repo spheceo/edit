@@ -337,8 +337,16 @@ def coordinate(job, volume, section_function, verify_function, root, build, engi
             sound = cache / "sounds" / (plan["sound"] + ".m4a")
             sound_cached = cached(sound, plan["sound"]) is not None
             if not sound_cached:
-                command(["edit-worker", "--audio-only", "project.json", "options.json", "sound.m4a", str(folder / "audio-cache")],
-                        control, folder)
+                try:
+                    command(["edit-worker", "--audio-only", "project.json", "options.json", "sound.m4a", str(folder / "audio-cache")],
+                            control, folder)
+                except RuntimeError as error:
+                    # An edit with nothing to hear (pictures only) gets silence, so it
+                    # exports here as any other (Oct 31: it fell back to the Mac).
+                    if "no sound to export" not in str(error):
+                        raise
+                    command(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                             "-t", f"{float(total / fps):.6f}", "-c:a", "aac", "-b:a", "128k", "sound.m4a"], control, folder)
                 remember(folder / "sound.m4a", sound, plan["sound"], move=True)
             audio_finished = time.time()
             progress("audio_finished")

@@ -17,7 +17,8 @@ small change renders only what it touched.
 Prints one JSON object a line: `{"phase", "progress"}` as it goes, then
 `{"done": true, ...}` or `{"error": "..."}`. Stops (cancelling its Modal
 work) on SIGTERM, the cancel file or when the server is gone. Needs R2_* in its environment
-(Repack's process-only injection) and Modal signed in on this machine.
+(Repack's process-only injection) and Modal's token (Infisical's
+MODAL_TOKEN_ID / MODAL_TOKEN_SECRET, else this machine's ~/.modal.toml).
 """
 import fcntl
 import hashlib
@@ -286,8 +287,12 @@ def deploy(build, check, progress):
             except BlockingIOError:
                 check()
                 time.sleep(1)
+        # The deployed build is per Modal account: a token for another
+        # workspace (Infisical's MODAL_TOKEN_ID) finds nothing deployed there.
+        account = os.environ.get("MODAL_TOKEN_ID") or os.environ.get("MODAL_PROFILE") or ""
         try:
-            if json.loads(record.read_text())["build"] == build:
+            deployed = json.loads(record.read_text())
+            if deployed["build"] == build and deployed.get("account", "") == account:
                 return
         except (OSError, ValueError, KeyError):
             pass
@@ -310,7 +315,7 @@ def deploy(build, check, progress):
                     raise
                 if process.returncode:
                     raise RuntimeError(f"Deploying the cloud exporter failed (see {log}): " + log.read_text()[-1500:])
-        record.write_text(json.dumps({"build": build, "deployed_ms": int(time.time() * 1000)}))
+        record.write_text(json.dumps({"build": build, "account": account, "deployed_ms": int(time.time() * 1000)}))
 
 
 if __name__ == "__main__":

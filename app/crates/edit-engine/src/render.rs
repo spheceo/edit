@@ -1580,7 +1580,12 @@ fn join_chunks(
     // the chapters' titles, so every chapter came out unnamed (Oct 31). The
     // file holds no tags of its own, so the export still carries none.
     if chapters.is_some() {
-        command.args(["-map_chapters", &inputs.to_string(), "-map_metadata", &inputs.to_string()]);
+        command.args([
+            "-map_chapters",
+            &inputs.to_string(),
+            "-map_metadata",
+            &inputs.to_string(),
+        ]);
     } else {
         command.args(["-map_chapters", "-1", "-map_metadata", "-1"]);
     }

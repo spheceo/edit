@@ -14,7 +14,8 @@ HOME = os.path.expanduser('~/.edit')
 LOOP = LOOP_DIR
 BASES = json.load(open(f'{LOOP}/base/bases.json'))  # {key: {"id":…, "name":…}}
 API = 'http://127.0.0.1:7700'
-MSG = 'Start the editing workflow.'
+# EDIT_LOOP_MESSAGE steers a trial (e-code: "Start the editing workflow in e-code."); the house message by default.
+MSG = os.environ.get('EDIT_LOOP_MESSAGE', 'Start the editing workflow.')
 RESUME = 'Carry on with the editing workflow from where you stopped: get_edit_context shows what is already done; then finish it.'
 
 def req(method, path, body=None, timeout=60):
@@ -77,7 +78,7 @@ def main():
     key, label = sys.argv[1], sys.argv[2]
     out = f'{LOOP}/rounds/{label}/{key}'; os.makedirs(out, exist_ok=True)
     p = copy(key, label); log('project', p)
-    meta = {'project': p, 'video': key, 'round': label, 'started': time.time(), 'resumes': []}
+    meta = {'project': p, 'video': key, 'round': label, 'started': time.time(), 'resumes': [], 'message': MSG}
     json.dump(meta, open(f'{out}/meta.json', 'w'), indent=1)
     send(p, MSG)
     deadline = time.time() + 9 * 3600; resumed_stall = False; agent_s = 0.0

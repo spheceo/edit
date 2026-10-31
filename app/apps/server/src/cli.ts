@@ -134,7 +134,7 @@ export async function main(args: string[]): Promise<void> {
       return;
     }
     case "script-eval":
-      // One Edit Script, run apart from the server (run_edit starts it).
+      // One e-code script (formerly Edit Script), run apart from the server (run_edit starts it).
       void scriptEval().then(() => process.exit(0), (error: unknown) => { console.error(error); process.exit(1); });
       return;
     case "media": {

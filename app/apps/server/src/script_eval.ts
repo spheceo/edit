@@ -1,4 +1,4 @@
-// `edit script-eval`: runs one Edit Script in its own process (the server's
+// `edit script-eval`: runs one e-code script in its own process (the server's
 // stays safe from a loop that never ends: it's killed after its time). Reads
 // {code, library, context, run} on stdin, writes {ops, notes, error?} on
 // stdout. The script and the library are real .ts files imported by Bun, so

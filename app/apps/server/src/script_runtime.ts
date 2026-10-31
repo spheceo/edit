@@ -1,4 +1,4 @@
-// Edit Script's runtime: the functions an agent's TypeScript calls. Each call
+// e-code's runtime (Edit Script until Oct 31): the functions an agent's TypeScript calls. Each call
 // queues one apply_edit_plan operation (frames, the model's units); nothing
 // is saved here. `run_edit` runs the script in its own process (`edit
 // script-eval`), then applies the operations as one atomic plan, so a script
@@ -230,12 +230,39 @@ export function runtime(ctx: ScriptContext, run: string, lineOf: () => number | 
     flash: (at: Time) => { ops.push({ op: "transition", kind: "flash", at: f(at) }); },
     /** Any apply_edit_plan operation as written there (frames). */
     op: (raw: Op) => { ops.push(raw); },
+    /**
+     * A Windows screen over from–to: windows [{app: "notepad", lines}, {app: "photo_viewer", media, label?}, {app: "video_player", media, source_in?}],
+     * in the order the narration names them; Edit opens each and types each line a beat before it's said, each window in its place, only the camera moving.
+     * With ids (as read_edit lists a screen) it replaces that screen.
+     */
+    desktop(o: Op & { from: Time; to: Time; windows: Op[]; ids?: unknown }) {
+      const [start, end] = span(o, "desktop");
+      rebuild(o);
+      const { from: _f, to: _t, ids: _i, windows, ...rest } = o;
+      ops.push({ op: "desktop", ...rest, start, end, windows: windows.map((w) => (typeof w.media === "string" ? { ...w, media: mediaOf(w.media).id } : w)) });
+    },
+    /**
+     * Any apply_edit_plan operation in seconds: from/to become its start/end, and at and duration are
+     * seconds too (make("file_viewer", {media, name, from, to}), make("date_title", {text, from, to}), make("red_quote", {…})).
+     * Other fields as apply_edit_plan has them. With ids it replaces those clips.
+     */
+    make(name: string, o: Op & { from?: Time; to?: Time; at?: Time; duration?: Time; ids?: unknown } = {}) {
+      rebuild(o);
+      const { from, to, at, duration, ids: _i, ...rest } = o;
+      ops.push({
+        op: name, ...rest,
+        ...(from !== undefined ? { start: f(from) } : {}), ...(to !== undefined ? { end: f(to) } : {}),
+        ...(at !== undefined ? { at: f(at) } : {}), ...(duration !== undefined ? { duration: f(duration) } : {}),
+      });
+    },
+    /** Any of Edit's tools (add_subtitles, cover_cut_in, add_from_library, map_view, track_region…), with its own arguments; runs after the plan saves, in order. */
+    tool(name: string, args: Op = {}) { ops.push({ op: "@tool", tool: name, args }); },
   };
   return { api, ops, notes, lines };
 }
 
 /** The reference an agent writes against (the language's declarations). */
-export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are timeline seconds (12.5) or "m:ss.s".
+export const REFERENCE = `// e-code: the timeline as TypeScript. Times are timeline seconds (12.5) or "m:ss.s".
 // Reading: project {title, fps, width, height, rev, span:[from,to], duration}; clips (every clip in the span: id, type, name, track, from, to, media, source_in, speed, text); media's cuts are the source seconds its scene changes (where known);
 // shots (what's on screen cut to cut: id, from, to, facts? {sees, text, people, empty, fits, why} from describe_shots); words (the narration: {text, at}); media ({id, name, kind, duration, width, height}).
 // said(word | "two words", after?) → seconds the narration says it. sec("1:02.5") → 62.5. note(msg) shows in the result.
@@ -254,4 +281,8 @@ export const REFERENCE = `// Edit Script: the timeline as TypeScript. Times are 
 // Any of those given ids: [...] (a composition's layers as read_edit lists them) rebuilds it.
 // punch(id, {at: [times], on: [x, y] | "centre", scales?}); leak(at, brandLightLeakMedia); dissolve(at, frames?); flash(at)
 // op(raw)  any apply_edit_plan operation (frames), e.g. op({op: "blur_marks", clips: [id], leave: ["RIP N3ON"]}) to keep a mark that's the point unblurred. Library functions saved with save_graphic are in scope by name.
+// Bodycam, interrogation, courtroom:
+// desktop({from, to, windows: [{app: "notepad", lines: ["Fight with her mother", …]}, {app: "photo_viewer", media, label?}, {app: "video_player", media, source_in?}], ids?})  the Windows screen, windows in the order they're named; Edit times each window and line a beat before its words; no at, line_at, x or y. read_edit lists a screen as one desktop(…) with its ids: run it changed to replace it
+// make(op, {from?, to?, at?, duration?, ...})  any apply_edit_plan operation in seconds: make("file_viewer", {media, name, from, to}), make("date_title", {text, from, to, position: "bottom", place}), make("red_quote", {…}), make("transition", {kind: "burn", at}), make("cover_cut_in", …) as apply_edit_plan has them otherwise
+// tool(name, args)  any of Edit's tools, run in order after the plan saves: tool("add_subtitles", {start, end}), tool("add_from_library", {id, times, under_speech}), tool("map_view", {…}), tool("track_region", {…})
 // Plain TypeScript otherwise: loops, helpers, const. No imports, no I/O.`;

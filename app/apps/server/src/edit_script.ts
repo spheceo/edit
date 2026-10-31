@@ -1,4 +1,4 @@
-// Edit Script: the timeline read and written as TypeScript, checked like a
+// e-code (Edit Script until Oct 31; the name the user and agents use): the timeline read and written as TypeScript, checked like a
 // program (the user, Oct 26: "a sort of 'compiler' that will tell the agents,
 // 'Okay, this doesn't really make sense. You've used this graphic over this
 // sort of text'").
@@ -172,6 +172,30 @@ export function listing(ctx: ScriptContext, library: string[]): string {
     const seen = facts.get(anchor.id) ?? (pic ? facts.get(pic.id) : undefined);
     rows.push([anchor.from, `${kind}(${q(Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== "")))})${pic?.media ? ` // ${mediaName.get(pic.media) ?? ""}` : ""}${seen ? ` · sees: ${seen.sees}${seen.fits === "no" ? ` · DOESN'T FIT: ${seen.why}` : ""}` : ""}`]);
   }
+  // Windows screens: the wallpaper and every layer of its screen (frames, pictures, footage, notes, labels) as one desktop(…),
+  // which run again with its ids replaces the screen whole (its camera is made from all of them at once).
+  for (const wall of ctx.clips.filter((c) => c.name.endsWith("Desktop · wallpaper"))) {
+    if (used.has(wall.id)) continue;
+    const prefix = wall.name.slice(0, -"wallpaper".length);
+    const layers = ctx.clips.filter((c) => c.name.startsWith(prefix) && c.from < wall.to && c.to > wall.from && !used.has(c.id));
+    for (const c of layers) used.add(c.id);
+    const APPS: Record<string, string> = { Notepad: "notepad", "Photo Viewer": "photo_viewer", "Video Player": "video_player", "File Viewer": "photo_viewer" };
+    const frames = layers.filter((c) => APPS[c.name.slice(prefix.length)] !== undefined).sort((a, b) => a.from - b.from);
+    const windows = frames.map((frame) => {
+      const kind = frame.name.slice(prefix.length);
+      const app = APPS[kind]!;
+      if (app === "notepad") {
+        const notes = layers.filter((c) => c.type === "text" && c.name.startsWith(`${prefix}Notepad note`))
+          .sort((a, b) => Number(/note (\d+)/u.exec(a.name)?.[1] ?? 0) - Number(/note (\d+)/u.exec(b.name)?.[1] ?? 0));
+        return { app, lines: notes.map((c) => (c.text ?? "").replace(/\s*\n\s*/gu, " ").replace(/^[-•]\s*/u, "").trim()) };
+      }
+      const picture = layers.filter((c) => c.type === "video" && c.name.startsWith(`${frame.name} · `) && c.from >= frame.from - 0.05).sort((a, b) => a.from - b.from)[0];
+      const label = layers.find((c) => c.type === "text" && c.name === `${frame.name} label`);
+      return { app, media: picture?.media, ...(app === "video_player" && picture?.source_in ? { source_in: Number(picture.source_in.toFixed(2)) } : {}), ...(label?.text ? { label: label.text } : {}) };
+    });
+    const names = windows.map((w) => ("media" in w && w.media ? mediaName.get(w.media) ?? w.media : w.app)).join(", ");
+    rows.push([wall.from, `desktop(${q({ ids: layers.map((c) => c.id), from: wall.from, to: wall.to, windows })}) // Windows screen: ${names}`]);
+  }
   for (const c of ctx.clips) {
     if (used.has(c.id)) continue;
     const seen = facts.get(c.id);
@@ -289,7 +313,7 @@ registerTool("read_edit", ({ app, args, projectId }) => {
 });
 
 registerTool("run_edit", async ({ app, args, projectId }) => {
-  if (typeof args.code !== "string" || args.code.trim() === "") throw new Error("code is the Edit Script (TypeScript)");
+  if (typeof args.code !== "string" || args.code.trim() === "") throw new Error("code is the e-code script (TypeScript)");
   const { project: p, rev } = liveProject(app, projectId);
   const [from, to] = spanOf(p, args);
   const ctx = context(app, projectId, from, to);
@@ -401,7 +425,7 @@ async function describe(app: App, projectId: string, from: number, to: number, r
 
 registerTool("save_graphic", ({ app, args }) => {
   if (typeof args.name !== "string" || !/^[a-z][A-Za-z0-9]{1,40}$/u.test(args.name)) throw new Error("name is a function name, camelCase (youtubeCard)");
-  if (typeof args.code !== "string" || !new RegExp(`export function ${args.name}\\(`, "u").test(args.code)) throw new Error(`code must contain export function ${args.name}(…), written with the Edit Script calls`);
+  if (typeof args.code !== "string" || !new RegExp(`export function ${args.name}\\(`, "u").test(args.code)) throw new Error(`code must contain export function ${args.name}(…), written with the e-code calls`);
   const dir = libraryDir(app); fs.mkdirSync(dir, { recursive: true });
   writeAtomic(join(dir, `${args.name}.ts`), args.code);
   return text(`saved ${args.name} to the graphics library: every run_edit script (any project) can call it`);

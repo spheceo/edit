@@ -1,8 +1,8 @@
 ---
-description: Read and edit the timeline as code (Edit Script): read_edit, run_edit, describe_shots, save_graphic.
+description: e-code, the timeline as TypeScript: see a stretch whole and build or fix it in one program (read_edit, describe_shots, run_edit, save_graphic).
 ---
 
-Edit Script is the timeline as TypeScript. It's the fastest way to see a stretch whole and change many things in one go. edit_script_reference has every call.
+e-code is the timeline as TypeScript. It's the fastest way to see a stretch whole and change many things in one go. edit_script_reference has every call.
 
 1. **read_edit {start, end}** (at most 180 s) prints the stretch as calls. Each clip is a line: `shot("m590", {id: "c594", from: 11.83, to: 16.6, source_in: 0, speed: 0.8}) // name · source · sees: …`. Compositions are one line with their layers' ids: `youtube({ids: [...], from, to, title, …})`. The narration sits between them as `// says @12.0: …`. Run that line back with a change and it updates the clip. Without an id it adds a new one. With ids, a composition is rebuilt.
 2. **describe_shots** over the stretch before judging it. It turns each shot's rendered frame into facts: what's on screen, its text, who (from the source's title and your notes, never from faces), whether it's empty, and whether it fits the words said over it. Facts stay until the shot changes. Re-describe what you change.
@@ -22,3 +22,5 @@ Edit Script is the timeline as TypeScript. It's the fastest way to see a stretch
 4. **save_graphic** keeps a function you wrote (a composition you'll reuse: a stat reveal, a two-post comparison) for every script in every project. read_edit lists the library.
 
 Work a chapter at a time: read_edit, describe_shots, one run_edit that fixes what you found, then read_edit and describe_shots again on what changed, until the lints are clean.
+
+BUILDING A STAGE IN E-CODE (when the user asks for e-code): each stage of the editing workflow is one program per stretch of at most 180 s, not a call per change. Load the stage's skill as always (its rules hold); then read_edit the stretch (a cut-in, a bridge, the intro), describe_shots where there are pictures, and write one run_edit that does the whole stage there: the timeline calls, make(…) for the house's graphics in seconds (the stage's skill names them as plan ops: file_viewer, date_title, red_quote, transition, cover_cut_in…), desktop({from, to, windows}) for a Windows screen, and tool(…) for what places itself (add_subtitles, add_from_library, map_view, track_region). Helpers and loops for what repeats ("every bridge opens with a burn and a whoosh"); said("…") for when words land. Read its answer (results, issues_here, lints), fix what it names in the next run, and go on to the next stretch. A screen, card or graphic read_edit lists as one call with ids is changed by running that call changed.

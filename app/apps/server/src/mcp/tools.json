@@ -2805,7 +2805,7 @@
   },
   {
     "name": "read_edit",
-    "description": "A stretch of the timeline as Edit Script code. Every clip is a call with its id (shot, text, youtube, card, tweet\u2026), what describe_shots saw in it, and the narration between them as // says comments. Edit a line and run it with run_edit to change that clip; at most 180 s at a time (default 120 from start).",
+    "description": "A stretch of the timeline as e-code (TypeScript). Every clip is a call with its id (shot, text, desktop for a whole Windows screen, youtube, card, tweet\u2026), what describe_shots saw in it, and the narration between them as // says comments. Edit a line and run it with run_edit to change that clip; at most 180 s at a time (default 120 from start).",
     "inputSchema": {
       "properties": {
         "project_id": {
@@ -2827,7 +2827,7 @@
   },
   {
     "name": "run_edit",
-    "description": "Run an Edit Script. TypeScript over the stretch start\u2013end: read project, clips, shots (with facts), words and media; write with shot, trim, remove, update, text, card, youtube, youtubeList, tweet, label, bumper, chapter, punch, leak, dissolve, flash, op and the saved library (edit_script_reference has the declarations). Everything it queues saves as one plan, or nothing when it throws (the error gives its line) or doesn't validate. Returns the plan's results, the audit's issues in that stretch and the lints: shots describe_shots found don't fit their words or show nothing. dry_run to check without saving. After a saving run the shots it changed are described (describe: false skips that), so a misfit comes back as a lint at once; a script that changes nothing still returns the stretch's issues.",
+    "description": "Run an e-code script. TypeScript over the stretch start\u2013end: read project, clips, shots (with facts), words and media; write with shot, trim, remove, update, desktop (a Windows screen), make (any plan operation in seconds), tool (any of Edit's tools, after the plan), text, card, youtube, tweet, label, punch, dissolve, flash, op and the saved library (edit_script_reference has the declarations). Everything it queues saves as one plan, or nothing when it throws (the error gives its line) or doesn't validate. Returns the plan's results, the audit's issues in that stretch and the lints: shots describe_shots found don't fit their words or show nothing. dry_run to check without saving. After a saving run the shots it changed are described (describe: false skips that), so a misfit comes back as a lint at once; a script that changes nothing still returns the stretch's issues.",
     "inputSchema": {
       "properties": {
         "project_id": {
@@ -2886,7 +2886,7 @@
   },
   {
     "name": "save_graphic",
-    "description": "Keep a graphic you wrote as a function in the shared library. export function name(o) { \u2026 } built from Edit Script calls; every run_edit script in any project can call it by name, and read_edit lists the library.",
+    "description": "Keep a graphic you wrote as a function in the shared library. export function name(o) { \u2026 } built from e-code calls; every run_edit script in any project can call it by name, and read_edit lists the library.",
     "inputSchema": {
       "properties": {
         "project_id": {
@@ -2911,7 +2911,7 @@
   },
   {
     "name": "edit_script_reference",
-    "description": "Edit Script's declarations. Every call a run_edit script can make, its arguments and what it reads.",
+    "description": "e-code's declarations. Every call a run_edit script can make, its arguments and what it reads.",
     "inputSchema": {
       "properties": {
         "project_id": {

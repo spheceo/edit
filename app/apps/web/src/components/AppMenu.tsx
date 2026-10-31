@@ -1,9 +1,10 @@
-// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens.
+// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens. Settings: who's signed in, YouTube, updates and the betas.
 
 import { Bug, ChevronDown, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
+import { loadBeta, setBeta, useBeta } from "../lib/beta";
 import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
@@ -11,7 +12,7 @@ import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { api, type YoutubeSignIn } from "../lib/api";
 import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
-import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
+import { Button, cx, IconButton, Modal, Select, Switch, Tabs } from "./ui";
 
 /** `row`: as Home's sidebar has it (the study portal's): the photo, the name and a chevron across the sidebar's top. */
 export function AppMenu({ row = false }: { row?: boolean } = {}) {
@@ -341,7 +342,7 @@ function YoutubeGroup() {
   );
 }
 
-/** Edit's settings, laid out as Writer's: who's signed in, then updates; the build and Done at the foot. */
+/** Edit's settings, laid out as Writer's: who's signed in, then YouTube, updates and the betas; the build and Done at the foot. */
 function SettingsDialog() {
   const person = useAccount((state) => (state.account?.signed_in ? state.account.person : null));
   const status = useUpdate((state) => state.status);
@@ -378,6 +379,7 @@ function SettingsDialog() {
             />
           </Row>
         </Group>
+        <BetaGroup />
       </div>
       <div className="flex items-center gap-3 px-6 pt-5 pb-6">
         <span className="text-[13px] text-faint" title={status?.enabled ? "Built by the release workflow" : "A dev build: it never updates itself"}>
@@ -388,6 +390,26 @@ function SettingsDialog() {
         </Button>
       </div>
     </>
+  );
+}
+
+/** What's being tried before everyone has it, on or off for this Mac (lib/beta.ts). */
+function BetaGroup() {
+  const home = useBeta((beta) => beta.home);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void loadBeta().catch(() => {});
+  }, []);
+  const turn = (on: boolean) => {
+    setError(null);
+    setBeta("home", on).catch((reason: Error) => setError(reason.message));
+  };
+  return (
+    <Group title="Beta">
+      <Row name="New Home" detail="A sidebar of ideas, scripts and edits by stage, one list at a time, with Later and Done. Off: the Home everyone has. For this Mac." bad={error ?? undefined}>
+        <Switch checked={home} onChange={turn} />
+      </Row>
+    </Group>
   );
 }
 

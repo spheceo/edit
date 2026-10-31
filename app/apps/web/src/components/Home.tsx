@@ -58,14 +58,15 @@ interface Item {
 }
 
 /**
- * Home (Oct 31 2026): a sidebar of what needs you, ideas, scripts and edits by
- * stage, Later and Done, and one short list at a time beside it, the study
- * portal's look (the user, Oct 31: "We have ideas, scripts, and edits ... complaints
- * from the teams about having to scroll through a long, tedious" list, "and we
- * also need to be able to have ways to put projects aside"; then, of this
- * design, "i think this is way more organised"). Your own work by default
- * (Mine), the team's a click away (Everyone); a search looks through
- * everything.
+ * The sidebar Home (Oct 31 2026, a beta in Settings → Beta: App.tsx shows
+ * HomeClassic.tsx when it's off): a sidebar of what needs you, ideas,
+ * scripts and edits by stage, Later and Done, and one short list at a time
+ * beside it, the study portal's look (the user, Oct 31: "We have ideas,
+ * scripts, and edits ... complaints from the teams about having to scroll
+ * through a long, tedious" list, "and we also need to be able to have ways to
+ * put projects aside"; then, of this design, "i think this is way more
+ * organised"). Your own work by default (Mine), the team's a click away
+ * (Everyone); a search looks through everything.
  */
 export function Home() {
   // What Home showed last, at once; the fresh answers take its place as they come.
@@ -612,16 +613,16 @@ function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string;
 }
 
 /** New project opened with a title, its links and a kind (an approved idea's Write the script). */
-type NewProjectStart = { title: string; text: string; style: Style };
+export type NewProjectStart = { title: string; text: string; style: Style };
 
 /** A row of Home's table: a project on this Mac, one only in the cloud, or a script with no edit yet; `script`: the script it's made from. */
-type Listed =
+export type Listed =
   | { at: number; local: ProjectSummary; cloud: null; script: WriterScriptRow | null }
   | { at: number; local: null; cloud: CloudProject; script: WriterScriptRow | null }
   | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing; writing?: boolean; here?: boolean };
 
 /** A script's import while it isn't done: its word for it ("Importing 40%", "Stopped"). */
-type Importing = { word: string; stopped: boolean; percent?: number; step?: string };
+export type Importing = { word: string; stopped: boolean; percent?: number; step?: string };
 
 /**
  * Where a project is on its way, script to finished video: Home lists them by
@@ -629,9 +630,9 @@ type Importing = { word: string; stopped: boolean; percent?: number; step?: stri
  * editing, these projects are done editing … a natural progression of our
  * projects here instead of dumping the whole list").
  */
-type Stage = "toscript" | "scripting" | "ready" | "importing" | "editing" | "review" | "done";
+export type Stage = "toscript" | "scripting" | "ready" | "importing" | "editing" | "review" | "done";
 
-function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
+export function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
   if (row.local === null && row.cloud === null) return row.importing ? "importing" : row.script.built ? "ready" : row.writing ? "scripting" : "toscript";
   if (state === undefined) return "editing";
   if (state.importing !== null) return "importing";
@@ -641,7 +642,7 @@ function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
 }
 
 /** Which place Home shows (remembered on this browser). */
-const VIEW = "edit.home.view";
+export const VIEW = "edit.home.view";
 /** Mine or Everyone (remembered on this browser). */
 const MINE = "edit.home.mine";
 
@@ -654,14 +655,14 @@ const STYLE_NOTES: Record<Style, string> = {
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 
-interface NoticeProps {
+export interface NoticeProps {
   tone: "warn" | "bad" | "info";
   text: string;
   title: string;
 }
 
 /** A small chip on a card saying what’s off: footage missing, footage still in the cloud. */
-function Notice({ tone, text, title }: NoticeProps) {
+export function Notice({ tone, text, title }: NoticeProps) {
   const Icon = tone === "info" ? CloudDownload : TriangleAlert;
   return (
     <span
@@ -816,7 +817,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
   return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, items, driveMenu, nameInput, dialogs };
 }
 
-interface CardProps {
+export interface CardProps {
   project: ProjectSummary;
   onChanged: () => void;
   /** Cloud is on here. */
@@ -929,23 +930,23 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
 }
 
 /** An import waiting on the person (a file it couldn't get) or failed. */
-const importStuck = (importing: NonNullable<ProjectStatus["importing"]>) => importing.state === "waiting" || importing.state === "failed";
+export const importStuck = (importing: NonNullable<ProjectStatus["importing"]>) => importing.state === "waiting" || importing.state === "failed";
 
 /** How far an import is: its bytes while it downloads, then the step it's on. */
-function importShare(importing: NonNullable<ProjectStatus["importing"]>) {
+export function importShare(importing: NonNullable<ProjectStatus["importing"]>) {
   if (importing.state === "downloading") return importing.share !== null ? `${Math.round(importing.share * 100)}%` : `${importing.ready}/${importing.files}`;
   return { transcribing: "· hearing", placing: "· laying out", voicing: "· voicing" }[importing.state] ?? "";
 }
 
 /** A script being written from its videos (Script mode's import): what it's on and how far. */
 /** `startedAt`: when the import began, as the server says. */
-type Writing = { id: string; title: string; stage: string; percent: number; detail: string; startedAt?: number };
+export type Writing = { id: string; title: string; stage: string; percent: number; detail: string; startedAt?: number };
 
 /** When each import and each of its steps was first seen here, by script: kept while Home is open, so reopening its dialog doesn't start the clock again. */
 const SEEN = new Map<string, Record<string, number>>();
 
 /** A script import that stopped: what it asks (a decision) or why it failed. */
-type ScriptIssueRow = {
+export type ScriptIssueRow = {
   id: string;
   title: string;
   status: string;
@@ -984,7 +985,7 @@ async function answerIssue(issue: ScriptIssueRow, choice: Record<string, unknown
  * fix it, and unblock it"; and the answers in a ⋯ menu, "the exact error ...
  * in a dialog box", Replace a dialog, and Dismiss confirmed.
  */
-function useIssueDialogs(issue: ScriptIssueRow) {
+export function useIssueDialogs(issue: ScriptIssueRow) {
   const [open, setOpen] = useState<"error" | "replace" | "dismiss" | null>(null);
   const [url, setUrl] = useState("");
   const failed = issue.decision?.failed ?? [];
@@ -1171,7 +1172,7 @@ function ScriptIssue({ issue, onOpen }: { issue: ScriptIssueRow; onOpen: (id: st
 }
 
 /** An import's stage as a chip's word ("Transcribing"). */
-function stageName(stage: string): string {
+export function stageName(stage: string): string {
   const names: Record<string, string> = {
     reading: "Reading",
     downloading: "Downloading",
@@ -1186,7 +1187,7 @@ function stageName(stage: string): string {
 }
 
 /** An import's stage in words ("while downloading"). */
-function stageWords(stage: string): string {
+export function stageWords(stage: string): string {
   const words: Record<string, string> = {
     reading: "while reading the footage",
     downloading: "while downloading",
@@ -1206,7 +1207,7 @@ function stageWords(stage: string): string {
  * "should pop up on the home page and shouldn't redirect you to the script
  * page"). Once it's in, it says so and opens the script.
  */
-function ImportDialog({ id, writing, issues, onClose }: { id: string | null; writing: Writing[]; issues: ScriptIssueRow[]; onClose: () => void }) {
+export function ImportDialog({ id, writing, issues, onClose }: { id: string | null; writing: Writing[]; issues: ScriptIssueRow[]; onClose: () => void }) {
   const live = writing.find((one) => one.id === id) ?? null;
   // Stopped (and not running again): where it got to, why, and what can be done, here on Home.
   const stopped = live === null ? (issues.find((one) => one.id === id) ?? null) : null;
@@ -1630,7 +1631,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
 }
 
 /** A project out of step with the cloud, said in its status: a conflict, or changes not synced yet; nothing when it's in sync (most projects, so no mark). */
-function Place({ sync }: { sync?: CloudStatus }) {
+export function Place({ sync }: { sync?: CloudStatus }) {
   const trouble = sync?.sync === "conflict" ? ([CloudAlert, "Conflict", sync.message ?? "A conflict: this Mac’s changes were kept as a copy."] as const) : sync?.dirty || sync?.sync === "offline" ? ([CloudOff, "Not synced", "Changes saved on this Mac haven’t reached the cloud yet."] as const) : null;
   if (trouble === null) return null;
   const [Icon, text, title] = trouble;
@@ -1643,7 +1644,7 @@ function Place({ sync }: { sync?: CloudStatus }) {
 }
 
 /** "Move to cloud": a project from before cloud, uploaded so teammates can open it. Its footage isn’t moved. */
-function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSummary; open: boolean; onClose: () => void; onMoved: () => void }) {
+export function MoveToCloud({ project, open, onClose, onMoved }: { project: ProjectSummary; open: boolean; onClose: () => void; onMoved: () => void }) {
   const [localMedia, setLocalMedia] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const toast = useEditor((state) => state.toast);
@@ -1713,7 +1714,7 @@ type Source = { url: string; title: string; durationMs: number | null; reuse: bo
  * through a script). The import runs on Home, then the script workflow or the
  * edit workflow starts by itself (the user, Oct 30).
  */
-function NewProject({ open, onClose, only = null, start = null }: { open: boolean; onClose: () => void; only?: Style | null; start?: NewProjectStart | null }) {
+export function NewProject({ open, onClose, only = null, start = null }: { open: boolean; onClose: () => void; only?: Style | null; start?: NewProjectStart | null }) {
   const account = useAccount((state) => state.account);
   const allowed = editStyles(account);
   const writes = writesScripts(account);

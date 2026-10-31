@@ -6,7 +6,9 @@
 // sidebar's items, the header and the toolbar; a row's menus and Set aside's
 // submenu inside the window and beside each other. A few things are set aside
 // first (one coming back after 15 s, so a Back mark is measured too) and one
-// marked done, all brought back at the end. Screenshots go to OUT.
+// marked done, all brought back at the end. The sidebar Home is a beta
+// (Settings → Beta): switched on for the run, as it was after. Screenshots go
+// to OUT.
 //
 //   bun scripts/home-audit.ts            (HOME_UI=https://localhost:5173 HOME_API=http://localhost:7700 OUT=/tmp/home-audit)
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -38,6 +40,9 @@ const js = async (expression: string) => {
 };
 const size = async (width: number) => { await send("Emulation.setDeviceMetricsOverride", { width, height: 900, deviceScaleFactor: 1, mobile: false }); await sleep(400); };
 const shot = async (name: string) => { await sleep(300); const { result } = await send("Page.captureScreenshot", { format: "png" }); await Bun.write(`${OUT}/${name}.png`, Buffer.from(result.data, "base64")); };
+const beta = (body?: unknown) => fetch(`${API}/api/beta`, { method: body === undefined ? "GET" : "PUT", headers: { host: "localhost:7700", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }).then((r) => r.json() as Promise<{ home: boolean }>);
+const betaBefore = await beta();
+await beta({ home: true });
 const post = (body: unknown) => fetch(`${API}/api/later`, { method: "POST", headers: { host: "localhost:7700", "content-type": "application/json" }, body: JSON.stringify(body) });
 
 // Something in Later of each kind, and one Back.
@@ -164,6 +169,7 @@ try {
   console.log("FAIL", (error as Error).message);
 } finally {
   for (const key of [...keys, backKey, doneKey]) await post({ key, back: true });
+  await beta({ home: betaBefore.home });
   console.log("left in Later:", JSON.stringify(((await (await fetch(`${API}/api/later`, { headers: { host: "localhost:7700" } })).json()) as { entries: { key: string }[] }).entries.map((e) => e.key)));
   if (pageErrors.length) console.log("page errors:\n" + pageErrors.join("\n"));
   chrome.kill();

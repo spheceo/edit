@@ -201,6 +201,21 @@ test("a_script_range_played_before_the_one_the_script_has_before_it_is_flagged",
   expect((scriptOrder(p) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.range])).toEqual([["script_order", "first"]]);
 });
 
+test("narration_coming_in_on_the_footages_last_word_is_flagged", () => {
+  // The clips meet cleanly but the voice runs into the narration (Bookkeeper v5: "the voiceover starts before the real sound audio is finished").
+  const p = footageProject();
+  (p.clips.find((clip) => clip.id === "c25") as { duration: number }).duration = 79;
+  const a2 = addTrack(p, "audio");
+  p.media.push({ id: "vo", name: "Cut-in 1", path: "/vo.mp3", kind: "audio", duration: 10, width: 0, height: 0, fps: 0, has_audio: true });
+  // "baby." ends at frame 78; the narration at 80 leaves 2 frames.
+  p.clips.push(sound("n1", a2, "vo", 80, 60, { name: "Voice-over" }));
+  const heard = new Map([["m7", TEASER]]);
+  expect((narrationInFootage(p, heard) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.at, issue.speech_until])).toEqual([["voiceover_in_footage", 80, 78]]);
+  // A quarter of a second after it: room enough.
+  (p.clips.at(-1) as { start: number }).start = 86;
+  expect(narrationInFootage(p, heard)).toEqual([]);
+});
+
 test("narration_over_the_footages_own_sound_is_flagged_either_way", () => {
   const p = footageProject();
   const a2 = addTrack(p, "audio");

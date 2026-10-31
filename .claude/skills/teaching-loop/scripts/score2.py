@@ -14,7 +14,8 @@ def mcp(tool, args):
     return json.loads(r['result']['content'][0]['text'])
 
 pid = sys.argv[1]
-d = json.load(open(os.path.expanduser(f'~/.edit/projects/{pid}.json')))
+# Projects live in the cloud since Oct 30: read through the server.
+d = json.load(__import__('urllib.request').request.urlopen(f'http://127.0.0.1:7700/api/projects/{pid}', timeout=120))['project']
 fps = d['settings']['fps']; W, H = d['settings']['width'], d['settings']['height']
 ctx = mcp('get_edit_context', {'project_id': pid})
 audit = ctx['audit']; kinds = collections.Counter()

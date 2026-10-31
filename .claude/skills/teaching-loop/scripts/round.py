@@ -32,8 +32,9 @@ def log(*a):
     print(time.strftime('%H:%M:%S'), *a, flush=True)
 
 def copy(key, label):
-    base = BASES[key]; src = f'{HOME}/projects/{base["id"]}.json'
-    d = json.load(open(src)); old = d['id']
+    base = BASES[key]
+    # Projects live in the cloud since Oct 30: the base as the server has it.
+    d = req('GET', f'/api/projects/{base["id"]}', timeout=120)['project']; old = d['id']
     made = req('POST', '/api/projects', {'name': f'{label}: {base["name"]}', 'style': d.get('style', 'bodycam'), **d['settings']}, timeout=120)
     new = made['project']['id']; rev = made['rev']
     d['id'] = new; d['name'] = f'{label}: {base["name"]}'
@@ -101,7 +102,7 @@ def main():
     c = chat(p); meta['entries'] = len(c['entries']); meta['tool_calls'] = sum(1 for x in c['entries'] if x['kind'] == 'tool')
     asst = [x for x in c['entries'] if x['kind'] == 'assistant']; meta['summary'] = asst[-1]['text'] if asst else ''
     json.dump(meta, open(f'{out}/meta.json', 'w'), indent=1)
-    shutil.copy(f'{HOME}/projects/{p}.json', f'{out}/project.json')
+    json.dump(req('GET', f'/api/projects/{p}', timeout=120)['project'], open(f'{out}/project.json', 'w'))
     json.dump(c, open(f'{out}/chat.json', 'w'))
     log('saved', out, meta['ended'], meta['agent_minutes'], 'min', meta['tool_calls'], 'tools')
 

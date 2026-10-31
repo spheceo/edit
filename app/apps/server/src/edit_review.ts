@@ -576,6 +576,9 @@ export function scriptOrder(project: Project): unknown[] {
   return issues;
 }
 
+/** Room between the footage's voice and the narration at a cut-in's either end (seconds; Edit leaves 0.4: script.CUT_IN_PAD). */
+const ROOM_SECONDS = 0.25;
+
 /**
  * Narration over the footage's own sound (`voiceover_in_footage`): a
  * voice-over that starts while the footage still plays with its sound, or the
@@ -586,7 +589,7 @@ export function scriptOrder(project: Project): unknown[] {
  * anywhere in the video". A fade over the cut (the sounds dissolving) and a
  * few frames either side are fine.
  */
-export function narrationInFootage(project: Project): unknown[] {
+export function narrationInFootage(project: Project, transcripts: Map<string, Transcript> = new Map()): unknown[] {
   if (project.style === "commentary" || project.style === "shorts") return [];
   const fps = fpsOf(project);
   const near = Math.round(fps / 5);
@@ -594,6 +597,36 @@ export function narrationInFootage(project: Project): unknown[] {
   const narrations = project.clips.filter((clip) => audible(clip) && seams.voiceover.isVoiceover(project, clip));
   const footage = project.clips.filter((clip) => audible(clip) && "media" in clip && project.media.find((media) => media.id === clip.media)?.kind === "video");
   const issues: unknown[] = [];
+  // The words the footage says, on the timeline ([start, end] frames): the
+  // clips can meet cleanly while a voice still runs into the narration
+  // (Bookkeeper, its fixed v5: six cut-ins started under 0.3 s after a word,
+  // two inside it; JJ: "the voiceover starts before the real sound audio is
+  // finished… doesn't overlap at either end").
+  const room = Math.round(ROOM_SECONDS * fps);
+  const spoken: [number, number][] = [];
+  for (const sound of footage) {
+    if (sound.type !== "audio") continue;
+    const words = transcripts.get(sound.media)?.words ?? [];
+    const to = sound.source_in + (sound.duration / fps) * sound.speed;
+    for (const word of words) {
+      if (word.end <= sound.source_in || word.start >= to) continue;
+      spoken.push([Math.round(sound.start + ((Math.max(word.start, sound.source_in) - sound.source_in) / sound.speed) * fps), Math.round(sound.start + ((Math.min(word.end, to) - sound.source_in) / sound.speed) * fps)]);
+    }
+  }
+  for (const said of narrations) {
+    const last = Math.max(-Infinity, ...spoken.filter(([, until]) => until <= said.start + fps && until > said.start - 3 * fps).map(([, until]) => until));
+    const next = Math.min(Infinity, ...spoken.filter(([from]) => from >= clipEnd(said) - fps && from < clipEnd(said) + 3 * fps).map(([from]) => from));
+    const seconds = (frames: number) => round((Math.abs(frames) / fps) * 100) / 100;
+    if (said.start - last < room) {
+      const when = said.start < last ? `${seconds(last - said.start)} s before the footage's last word ends` : `only ${seconds(said.start - last)} s after the footage's last word`;
+      issues.push({ kind: "voiceover_in_footage", at: said.start, clip: said.id, speech_until: last, fix: `the narration starts ${when}: leave ${ROOM_SECONDS} s or more (the footage plays a little longer into its room tone, or the narration comes in later)` });
+      continue;
+    }
+    if (next - clipEnd(said) < room) {
+      const when = next < clipEnd(said) ? `${seconds(clipEnd(said) - next)} s before the narration ends` : `only ${seconds(next - clipEnd(said))} s after the narration ends`;
+      issues.push({ kind: "voiceover_in_footage", at: clipEnd(said), clip: said.id, speech_from: next, fix: `the footage's voice comes back ${when}: leave ${ROOM_SECONDS} s or more (the footage comes back earlier in its room tone, or the narration ends sooner)` });
+    }
+  }
   for (const said of narrations) {
     for (const sound of footage) {
       if (sound.start < said.start - near && clipEnd(sound) - sound.fade_out > said.start + near) {

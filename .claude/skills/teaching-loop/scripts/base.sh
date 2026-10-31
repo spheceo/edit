@@ -6,7 +6,7 @@ mkdir -p "$L/base" "$L/rounds" "$L/keys"
 "$S/fresh.sh" "Base: $NAME" "$STYLE" "$FPS" "$URL" > "$L/base/$K.log" 2>&1
 P=$(tail -1 "$L/base/$K.log")
 case "$P" in p[0-9]*) ;; *) echo "import failed: see $L/base/$K.log"; exit 1;; esac
-cp ~/.edit/projects/$P.json "$L/base/$K.base.json"
+curl -s -m 120 localhost:7700/api/projects/$P | python3 -c "import json,sys; json.dump(json.load(sys.stdin)['project'], sys.stdout)" > "$L/base/$K.base.json"
 python3 - "$L/base/bases.json" "$K" "$P" "$NAME" "$STYLE" <<'PY'
 import json, os, sys
 f, k, p, name, style = sys.argv[1:]

@@ -82,7 +82,7 @@ export const hooks = {
   deadAir: (project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): Json[] =>
     seams.editReview.deadAir(project, transcripts, spans),
   offScript: (project: Project, transcripts: Map<string, Transcript>): Json[] => [...seams.editReview.offScript(project, transcripts), ...seams.editReview.scriptOrder(project)],
-  narrationInFootage: (project: Project): Json[] => seams.editReview.narrationInFootage(project),
+  narrationInFootage: (project: Project, transcripts?: Map<string, Transcript>): Json[] => seams.editReview.narrationInFootage(project, transcripts),
   footageAhead: (project: Project, introEnd: number): Json[] => seams.editReview.footageAhead(project, introEnd),
   textNotSaid: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.textNotSaid(project, transcripts),
   textLate: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.textLate(project, transcripts) as Json[],
@@ -1361,7 +1361,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   ] : [
     ...hooks.calloutTiming(project, heard),
     ...hooks.offScript(project, heard),
-    ...hooks.narrationInFootage(project),
+    ...hooks.narrationInFootage(project, heard),
     ...hooks.footageAhead(project, Math.max(0, ...parts.filter((part) => part.kind === "intro").map((part) => part.end))),
     ...hooks.textNotSaid(project, heard),
     ...hooks.textLate(project, heard),

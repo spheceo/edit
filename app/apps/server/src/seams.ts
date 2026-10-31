@@ -703,7 +703,7 @@ export interface EditReviewSeam {
   lineFrames(lines: string[], heard: [number, string][], from: number, to: number): (number | null)[];
   offScript(project: Project, transcripts: Map<string, Transcript>): Json[];
   scriptOrder(project: Project): Json[];
-  narrationInFootage(project: Project): Json[];
+  narrationInFootage(project: Project, transcripts?: Map<string, Transcript>): Json[];
   footageAhead(project: Project, introEnd: number): Json[];
   textNotSaid(project: Project, transcripts: Map<string, Transcript>): Json[];
   unsubtitledSpeech(project: Project, transcripts: Map<string, Transcript>): Json[];

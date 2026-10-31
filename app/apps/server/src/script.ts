@@ -2220,29 +2220,38 @@ export function outOfOrder(project: Project): boolean {
  * stays butted; effects ending on its cut (a shake into a cut-in) keep ending
  * on it. Returns what changed.
  */
-export async function realign(app: App, id: string, span: [number, number] | null = null): Promise<unknown[]> {
+export async function realign(app: App, id: string, span: [number, number] | null = null, only: ReadonlySet<string> | null = null): Promise<unknown[]> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
-  // Only the ranges placed in `span` (timeline frames), when given: the rest of the edit stays as it is.
+  // Only the ranges placed in `span` (timeline frames), or whose clips are `only`, when given: the rest of the edit stays as it is.
   const within = (block: ScriptBlock): boolean => {
+    if (only !== null && !(isSome(block.clip) && only.has(block.clip))) return false;
     if (span === null) return true;
     const clip = isSome(block.clip) ? clipOf(live.project, block.clip) : undefined;
     return clip !== undefined && clip.start >= span[0] && clip.start < span[1];
   };
-  const heard = await transcripts(app, live.project, within);
+  // Ranges named by clip (a Doc pulled again) that have no words get them from what's said in them, as an export notes them.
+  const heard = await transcripts(app, live.project, within, only !== null);
   const [, changed] = await app.store.update(id, "agent", (project) => {
     const fps = fpsOf(project);
     const changed: unknown[] = [];
     if (!isSome(project.script)) return changed;
     const blocks = structuredClone(project.script.blocks);
     for (const block of blocks) {
-      const cue = block.kind === "footage" ? cueOf(block) : null;
-      if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.media) || cue === null || !isSome(block.clip) || !within(block)) continue;
+      let cue = block.kind === "footage" ? cueOf(block) : null;
+      if (block.kind !== "footage" || reusedScriptBlock(block) || !isSome(block.media) || !isSome(block.clip) || !within(block)) continue;
       const media = heard.get(block.media);
       if (media === undefined) continue;
       const offset = block.media_start ?? 0;
+      if (cue === null && only !== null) {
+        cue = spokenCue(media.words, block.start - offset, block.end - offset);
+        if (cue !== null) block.words = cue;
+      }
+      if (cue === null) continue;
       const [cutIn, cutOut] = align(media.words, media.peaks, cue, block.start - offset, block.end - offset);
-      const found: [number, number] = [cutIn === null ? block.start : cutIn + offset, cutOut === null ? block.end : cutOut + offset];
+      // Never past the media's end: a range the Doc made longer than the footage downloaded plays to its end.
+      const limit = mediaOf(project, block.media)?.duration;
+      const found: [number, number] = [cutIn === null ? block.start : cutIn + offset, Math.min(cutOut === null ? block.end : cutOut + offset, limit === undefined ? Infinity : limit + offset)];
       if (cutIn !== null || cutOut !== null) block.cut = found;
       else delete block.cut;
       const original = clipOf(project, block.clip);
@@ -2291,6 +2300,13 @@ export async function realign(app: App, id: string, span: [number, number] | nul
   return changed;
 }
 
+/** The first and last words said in a stretch of a media (any word it touches, as an export notes a range), bare and lowercased. */
+function spokenCue(words: Word[], from: number, to: number): [string, string] | null {
+  const inside = words.filter((word) => word.start < to && word.end > from);
+  const bare = (word: Word) => word.text.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "") || word.text;
+  return inside.length === 0 ? null : [bare(inside[0]!), bare(inside.at(-1)!)];
+}
+
 /** A footage range's cue words: the Doc's, else its Writer quote's (scripts handed over before quotes became cues). */
 function cueOf(block: ScriptBlock): [string, string] | null {
   if (block.kind !== "footage" || reusedScriptBlock(block)) return null;
@@ -2310,12 +2326,12 @@ interface Heard {
  * the words. Media without sound, or whose transcription fails, are left out:
  * their ranges keep the times the Doc wrote.
  */
-async function transcripts(app: App, project: Project, within: (block: ScriptBlock) => boolean = () => true): Promise<Map<string, Heard>> {
+async function transcripts(app: App, project: Project, within: (block: ScriptBlock) => boolean = () => true, wordless = false): Promise<Map<string, Heard>> {
   const used = new Set<string>();
   for (const block of project.script?.blocks ?? []) {
     if (pendingCase(project) && placed(project, block)) continue;
     if (!within(block)) continue;
-    if (block.kind === "footage" && isSome(block.media) && cueOf(block) !== null) used.add(block.media);
+    if (block.kind === "footage" && isSome(block.media) && (wordless || cueOf(block) !== null)) used.add(block.media);
   }
   const media = project.media.filter((item) => used.has(item.id) && item.has_audio);
   // Listening for the case's names (names.ts: the script's narration and any research).

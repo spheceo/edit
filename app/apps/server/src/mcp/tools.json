@@ -1642,6 +1642,24 @@
     "name": "realign_script"
   },
   {
+    "description": "Reads the project's script Doc again and compares it with the script the edit was made from. apply=false (the default) says what changed: footage ranges whose times or start and end words changed, narration rewritten, ranges or paragraphs added or taken out. apply=true takes the changed ranges and cuts their clips to them again (a range with no words is cut on the first and last words said in it), shifting what follows; every other clip stays as it is. Narration rewritten (revoice_cut_in after updating its text), blocks added (add_cut_in, insert_compilation_case or the footage it needs) and blocks taken out are yours to carry out, as reported. Use when the user says the Doc changed or asks to pull it again.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "apply": {
+          "description": "Take the changed ranges and cut their clips again (default false: only report).",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "pull_script"
+  },
+  {
     "description": "Lay voice-over recordings on the script's cut-ins. The recordings read the cut-ins' text: each is transcribed, the words that read each cut-in are found, and that stretch of audio is placed where the cut-in is (on a voice-over track). The cut-in (card and words) takes the voice-over's length and everything after moves with it, so the timeline stays butted. Placing again replaces what it placed; with media_ids, only on the cut-ins those recordings read (the others keep their voice-overs: a new take of one line touches only that line). A take whose transcript comes back garbled (a few stray words for a long take) is transcribed once more. Takes a while the first time (transcription). Reports what was placed and any cut-in whose words weren't found.",
     "inputSchema": {
       "properties": {

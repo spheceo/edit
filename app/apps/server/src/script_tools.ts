@@ -27,6 +27,7 @@ import * as researchCloud from "./research_cloud.ts";
 import * as review from "./review.ts";
 import { display, fixed, round, toI64, trim } from "./rust.ts";
 import * as script from "./script.ts";
+import * as scriptPull from "./script_pull.ts";
 import { readCompilation, sourceKind } from "./compilation_input.ts";
 import { reviewCode } from "./finished.ts";
 import { hasCase, pendingCase, queueCase } from "./case_insertion.ts";
@@ -235,6 +236,8 @@ registerTool("realign_script", async ({ app, args, projectId }) => {
   const changed = await script.realign(app, projectId, span);
   return text(changed.length === 0 ? "every range already starts and ends on its words" : stableStringify(changed, 2));
 });
+
+registerTool("pull_script", async ({ app, args, projectId }) => text(stableStringify(await scriptPull.pull(app, projectId, args.apply === true), 2)));
 
 registerTool("place_voiceovers", async ({ app, args, projectId }) => {
   const given = args.media_ids;
@@ -699,6 +702,16 @@ export function routes(router: Router<App>): void {
     return sortedJson({ job: app.scripts.get(id), unfinished: script.unfinished(live.project) });
   });
   router.post("/api/projects/{id}/script/job", scriptResume);
+  // The script Doc read again: what changed, and with apply, its changed ranges taken.
+  router.post("/api/projects/{id}/script/pull", async (context) => {
+    const given = (await readJson(context)) as { apply?: unknown } | null;
+    try {
+      return Response.json(await scriptPull.pull(context.app, context.params.id ?? "", given?.apply === true));
+    } catch (error) {
+      if (isBug(error)) throw error;
+      throw new ApiError(400, diag.messageOf(error));
+    }
+  });
   // The team's voice-over recording, added after the import: placed on the cut-ins it reads (over the stand-in voice).
   router.post("/api/projects/{id}/voiceover/place", async (context) => {
     const { app } = context;

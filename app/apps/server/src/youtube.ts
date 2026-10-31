@@ -238,6 +238,22 @@ function noVideo(stderr: string): boolean {
   return /requested format is not available|only images are available|did not produce a video|javascript runtime|stood still/i.test(errorLine(stderr));
 }
 
+/**
+ * Whether a stream stopped part-way for a reason another try may not meet (a
+ * connection dropped, a fragment refused mid-video), not because the video is
+ * gone: tried again on the next route. Oct 31, a teammate's Kroger import
+ * stopped at its first try with "yt-dlp stopped part-way (exit 1)", the proxy
+ * and the sign-in never tried.
+ */
+function partWay(stderr: string): boolean {
+  return /stopped part-way|nothing came down|copy into an MP4 failed/i.test(stderr) && !gone(stderr);
+}
+
+/** Whether the video itself can't be had (taken down, private, blocked): no route helps. */
+function gone(stderr: string): boolean {
+  return /Video unavailable|has been removed|no longer available|copyright|Private video|This video is private|does not exist|terminated/i.test(stderr);
+}
+
 /** yt-dlp's error line, without anything credential-like. */
 function errorLine(stderr: string): string {
   const lines = stderr.split("\n").filter((line) => line.trim() !== "");
@@ -363,6 +379,7 @@ export async function streamWith(
     const route = routes[attempt]!;
     const signIn = route.signIn ? cookieArgs() : [];
     let stderr = "ERROR: no YouTube sign-in in Chrome on this Mac";
+    let why = "";
     if (!route.signIn || signIn.length > 0) {
       const runtime = runtimeArgs();
       const proxy = route.proxy;
@@ -400,10 +417,13 @@ export async function streamWith(
         return answer;
       } catch (error) {
         child.kill();
-        stderr = `${await heard}\nERROR: ${diag.messageOf(error)}`;
+        const theirs = await heard;
+        stderr = `${theirs}\nERROR: ${diag.messageOf(error)}`;
+        // Why yt-dlp stopped, when it said: "stopped part-way (exit 1)" alone told no one anything (Oct 31, Kroger).
+        if (/ERROR/i.test(theirs)) why = errorLine(theirs);
       }
     }
-    failure = errorLine(stderr);
+    failure = why === "" ? errorLine(stderr) : `${errorLine(stderr)}: ${why}`;
     if (!updated && outdated(stderr) && binary === join(home, "bin", "yt-dlp")) {
       updated = true;
       try {
@@ -490,7 +510,7 @@ function nextRoute(routes: Route[], attempt: number, stderr: string): number | n
     const at = routes.findIndex((route, index) => index > attempt && route.signIn);
     return at < 0 ? null : at;
   }
-  return attempt + 1 < routes.length && (refused(stderr) || noVideo(stderr)) ? attempt + 1 : null;
+  return attempt + 1 < routes.length && (refused(stderr) || noVideo(stderr) || partWay(stderr)) ? attempt + 1 : null;
 }
 
 async function runYtdlp(

@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 
 import type { ScriptBlock } from "../src/model.ts";
 import { parse, REUSE } from "../src/script.ts";
-import { download, downloadRange, fileOf, idOf, startOf, timing, videoId } from "../src/youtube.ts";
+import { download, downloadRange, fileOf, idOf, startOf, streamWith, timing, videoId } from "../src/youtube.ts";
 import { scratch } from "./helpers/home.ts";
 import { Database } from "bun:sqlite";
 import { status as signInStatus, where as signInWhere } from "../src/youtube_signin.ts";
@@ -358,6 +358,55 @@ test("without a sign-in, an age-restricted video fails at once, saying why", asy
     expect(failed).toContain("Sign in to confirm your age");
     expect(fs.readFileSync(calls, "utf8").trim()).toBe("1");
   } finally {
+    cleanup();
+  }
+});
+
+/** A yt-dlp stand-in streaming to stdout: call n+1 writes part of a video and stops with `failures[n]`, a call past them streams it whole. */
+function fakeStream(dir: string, failures: string[]): string {
+  const count = `${dir}/calls`;
+  const arms = failures.map((stderr, index) => `  ${index + 1}) printf 'part'; printf '%s\\n' '${stderr}' >&2; exit 1;;`).join("\n");
+  fs.writeFileSync(`${dir}/yt-dlp`, `#!/bin/sh
+n=$(cat "${count}" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${count}"
+case $n in
+${arms}
+esac
+printf 'whole video'
+`, { mode: 0o755 });
+  return count;
+}
+
+/** What streamed.ts does with the stream: all of it, and a run yt-dlp ended badly refused. */
+const consume = async (stdout: ReadableStream<Uint8Array>, exited: Promise<number>) => {
+  const got = await new Response(stdout).text();
+  const code = await exited;
+  if (code !== 0) throw new Error(`yt-dlp stopped part-way (exit ${code})`);
+  return got.length;
+};
+
+// Oct 31, a teammate's Kroger import: one stream stopped part-way ("yt-dlp
+// stopped part-way (exit 1)", yt-dlp's reason unsaid) and the import stopped,
+// the other routes never tried.
+test("a stream that stops part-way is tried again on the next route, and a gone video fails at once saying why", async () => {
+  const { dir, cleanup } = scratch("youtube-stream");
+  const proxy = process.env.PROXY_URL;
+  delete process.env.PROXY_URL;
+  try {
+    const calls = fakeStream(dir, ["ERROR: unable to download video data: <urlopen error [Errno 54] Connection reset by peer>"]);
+    process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    expect(await streamWith(dir, "abcdefghijk", consume)).toBe("whole video".length);
+    expect(fs.readFileSync(calls, "utf8").trim()).toBe("2");
+
+    const gone = `${dir}/gone`;
+    fs.mkdirSync(gone);
+    const goneCalls = fakeStream(gone, ["ERROR: [youtube] abcdefghijk: Video unavailable. This video has been removed by the uploader", "ERROR: [youtube] abcdefghijk: Video unavailable"]);
+    process.env.EDIT_YTDLP = `${gone}/yt-dlp`;
+    const failed = await streamWith(gone, "abcdefghijk", consume).catch((error: Error) => error.message);
+    expect(failed).toContain("stopped part-way");
+    expect(failed).toContain("Video unavailable");
+    expect(fs.readFileSync(goneCalls, "utf8").trim()).toBe("1");
+  } finally {
+    if (proxy !== undefined) process.env.PROXY_URL = proxy;
     cleanup();
   }
 });

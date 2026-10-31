@@ -167,7 +167,8 @@ export interface ExportActivity {
 }
 
 export const api = {
-  projects: () => request<{ projects: ProjectSummary[] }>("GET", "/api/projects"),
+  /** `dev_build`: a dev build, where test projects show (DevProjects.tsx). */
+  projects: () => request<{ projects: ProjectSummary[]; dev_build?: boolean }>("GET", "/api/projects"),
   createProject: (body: { name: string; style: Style; width: number; height: number; fps: number }) =>
     request<Live>("POST", "/api/projects", body),
   project: (id: string) => request<Live>("GET", `/api/projects/${id}`),

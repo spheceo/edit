@@ -5,11 +5,20 @@
 
 import { BadgeCheck, ChevronDown, Eye, EyeOff, FlaskConical, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { create } from "zustand";
 
 import { useEditor } from "../lib/store";
 import type { ProjectSummary } from "../lib/types";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { Button, cx, Modal } from "./ui";
+
+/**
+ * Whether this is a dev build, where test projects and their controls show: the
+ * server says so with Home's list (`dev_build`). Off until it does, and always
+ * off on a released build: test projects are the dev team's, never the team's
+ * (Sphe, Oct 31: "it's only something for us internally").
+ */
+export const useDevTools = create<{ on: boolean }>(() => ({ on: false }));
 
 /** Whether Home shows dev projects (remembered on this browser). */
 const SHOW_DEV = "edit.home.dev";
@@ -17,8 +26,9 @@ const SHOW_DEV = "edit.home.dev";
 export function useShowDev(): [boolean, (show: boolean) => void] {
   // Hidden unless shown (Sphe, Oct 31: test projects aren't to be seen beside real ones).
   const [show, setShow] = useState(() => localStorage.getItem(SHOW_DEV) === "1");
+  const tools = useDevTools((state) => state.on);
   return [
-    show,
+    tools && show,
     (value: boolean) => {
       localStorage.setItem(SHOW_DEV, value ? "1" : "0");
       setShow(value);
@@ -28,6 +38,8 @@ export function useShowDev(): [boolean, (show: boolean) => void] {
 
 /** The small mark beside a dev project's name. */
 export function DevBadge() {
+  const tools = useDevTools((state) => state.on);
+  if (!tools) return null;
   return (
     <span title="A test project (made on a dev build, or marked by hand). Promote it from its ⋯ if it’s real work." className="inline-flex h-[18px] shrink-0 items-center rounded-[5px] border border-warning/40 bg-warning-soft px-1.5 text-[11px] leading-none font-semibold tracking-[0.02em] text-warning">
       Test
@@ -44,7 +56,7 @@ async function post(path: string, body: unknown): Promise<Record<string, unknown
 
 /** A dev project's ⋯ item: promoted to an ordinary project, its mark gone. */
 export function promoteItem(project: ProjectSummary, onChanged: () => void): MenuItem[] {
-  if (project.dev !== true) return [];
+  if (project.dev !== true || !useDevTools.getState().on) return [];
   const promote = async () => {
     try {
       await post(`/api/projects/${project.id}/promote`, {});
@@ -59,7 +71,7 @@ export function promoteItem(project: ProjectSummary, onChanged: () => void): Men
 
 /** A real-looking project's ⋯ item: marked a test project (a throwaway made before the mark), hidden with the rest. */
 export function testItem(project: ProjectSummary, onChanged: () => void): MenuItem[] {
-  if (project.dev === true || project.problem) return [];
+  if (project.dev === true || project.problem || !useDevTools.getState().on) return [];
   const mark = async () => {
     try {
       await post(`/api/projects/${project.id}/test`, {});
@@ -79,9 +91,10 @@ export function testItem(project: ProjectSummary, onChanged: () => void): MenuIt
 export function DevControl({ count, cloudOnly = 0, show, onShow, onChanged }: { count: number; cloudOnly?: number; show: boolean; onShow: (show: boolean) => void; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const tools = useDevTools((state) => state.on);
   // Shown and hidden count every test project; deleting takes this Mac's (the cloud-only ones are another Mac's to delete).
   const shown = count + cloudOnly;
-  if (shown === 0) return null;
+  if (!tools || shown === 0) return null;
   const items: MenuItem[] = [
     show ? { label: "Hide test projects", icon: <EyeOff size={14} />, onSelect: () => onShow(false) } : { label: "Show test projects", icon: <Eye size={14} />, onSelect: () => onShow(true) },
     ...(count > 0 ? ([{ separator: true }, { label: `Delete all test projects (${count})…`, icon: <Trash2 size={14} />, danger: true, onSelect: () => setConfirming(true) }] satisfies MenuItem[]) : []),

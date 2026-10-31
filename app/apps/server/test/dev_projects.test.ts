@@ -47,6 +47,17 @@ test("a dev project promoted is an ordinary project", async () => {
   }
 });
 
+test("Home's list says whether this is a dev build: only then are test projects and their controls shown", async () => {
+  const { app, store, cleanup } = fixtureHome("dev-build");
+  try {
+    expect((await ask(app, "/api/projects")).body.dev_build).toBe(false);
+    store.marksDev = true;
+    expect((await ask(app, "/api/projects")).body.dev_build).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
 test("an older throwaway marked a test project by hand is listed, and deleted, with the rest", async () => {
   const { app, store, cleanup } = fixtureHome("dev-test");
   try {

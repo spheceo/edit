@@ -480,7 +480,8 @@ export async function installUpdate(app: App, remote = false) {
 // Projects
 
 function listProjects({ app }: Context): Response {
-  return json({ projects: app.store.visible() });
+  // A dev build (`Store.marksDev`): Home shows test projects and their controls only then; a released build never does.
+  return json({ projects: app.store.visible(), dev_build: app.store.marksDev });
 }
 
 const STYLES: Style[] = ["bodycam", "interrogation", "courtroom", "commentary", "shorts"];

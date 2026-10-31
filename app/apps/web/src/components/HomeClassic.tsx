@@ -31,7 +31,7 @@ import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton, Modal, Spinner, spring } from "./ui";
-import { DevBadge, DevControl, promoteItem, testItem, useShowDev } from "./DevProjects";
+import { DevBadge, DevControl, promoteItem, useDevTools, testItem, useShowDev } from "./DevProjects";
 import { DoneContext, doneAt, rowKey, useDoneItems } from "./HomeDone";
 import { laterKey, useLater } from "../lib/later";
 import { type CardProps, ImportDialog, type Importing, importShare, importStuck, type Listed, MoveToCloud, NewProject, type NewProjectStart, Notice, type NoticeProps, Place, type ScriptIssueRow, type Stage, stageName, stageOf, stageWords, useIssueDialogs, VIEW, type Writing } from "./Home";
@@ -146,7 +146,11 @@ export function HomeClassic() {
       .catch(() => {});
     return api
       .projects()
-      .then(({ projects }) => setProjects(projects))
+      .then(({ projects, dev_build }) => {
+        // Test projects and their controls are a dev build's only (DevProjects.tsx).
+        useDevTools.setState({ on: dev_build === true });
+        setProjects(projects);
+      })
       .catch((error) => useEditor.getState().toastError(error, "reach Edit"));
   };
 

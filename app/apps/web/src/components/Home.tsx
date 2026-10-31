@@ -26,7 +26,7 @@ import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, Spinner, spring } from "./ui";
-import { DevBadge, DevControl, promoteItem, useShowDev } from "./DevProjects";
+import { DevBadge, DevControl, promoteItem, useDevTools, useShowDev } from "./DevProjects";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
@@ -174,7 +174,11 @@ export function Home() {
       .catch(() => {});
     return api
       .projects()
-      .then(({ projects }) => setProjects(projects))
+      .then(({ projects, dev_build }) => {
+        // Test projects and their controls are a dev build's only (DevProjects.tsx).
+        useDevTools.setState({ on: dev_build === true });
+        setProjects(projects);
+      })
       .catch((error) => useEditor.getState().toastError(error, "reach Edit"));
   };
 

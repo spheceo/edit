@@ -312,8 +312,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::error::No CLOUDFLARE_API_TOKEN secret: the live relay wasn't deployed with $TAG"
-            exit 1
+            echo "::warning::No CLOUDFLARE_API_TOKEN repo secret yet: the live relay was NOT deployed with $TAG (deploy it from this tag by hand, or add the secret)"
+            exit 0
           fi
           bun install --frozen-lockfile
           cd apps/relay && npx wrangler deploy

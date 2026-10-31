@@ -6,6 +6,9 @@
 // Projects from before stay unmarked.
 //
 //   POST /api/projects/{id}/promote   {ok}: the dev mark cleared
+//   POST /api/projects/{id}/test      {ok}: marked a test project by hand (one
+//     made before the mark, a throwaway trial: Sphe, Oct 31: "remove
+//     experimental projects which arent real prod projects")
 //   POST /api/dev-projects/delete     {count} → {deleted, failed}: every dev
 //     project on this Mac deleted (as Home's Delete does, the cloud's copy
 //     too), only when `count` is how many there are; never one without the mark
@@ -29,6 +32,14 @@ export async function promote(app: App, id: string): Promise<void> {
   if (app.store.get(id) === null) throw new ApiError(404, "no such project");
   await app.store.update(id, "promote", (project) => {
     delete project.origin;
+  });
+}
+
+/** Marks `id` a test project by hand: badged, hidden with the rest, deleted with them. */
+export async function markTest(app: App, id: string): Promise<void> {
+  if (app.store.get(id) === null) throw new ApiError(404, "no such project");
+  await app.store.update(id, "test", (project) => {
+    project.origin = "dev";
   });
 }
 
@@ -65,6 +76,15 @@ export function routes(router: Router<App>): void {
     .post("/api/projects/{id}/promote", async ({ app, params }: RouteContext<App>) => {
       try {
         await promote(app, params.id!);
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+        throw new ApiError(409, diag.messageOf(error));
+      }
+      return json({ ok: true });
+    })
+    .post("/api/projects/{id}/test", async ({ app, params }: RouteContext<App>) => {
+      try {
+        await markTest(app, params.id!);
       } catch (error) {
         if (error instanceof ApiError) throw error;
         throw new ApiError(409, diag.messageOf(error));

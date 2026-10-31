@@ -830,6 +830,8 @@ export function summary(project: Project): Record<string, unknown> {
     // A subtitled video starting (kinds.ts): open to subtitlers too.
     footageOnly: shapeOf(project).footageOnly,
     width: project.settings.width,
+    // A test project (dev_projects.ts): hidden on Home with the rest, on Macs that only have it in the cloud too.
+    ...(project.origin === "dev" ? { dev: true } : {}),
   };
 }
 

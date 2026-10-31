@@ -51,6 +51,8 @@ export interface CloudProject {
     width?: number;
     height?: number;
     subtitles?: boolean;
+    /** A test project (made on a dev build, or marked by hand). */
+    dev?: boolean;
   } | null;
   /** Who started it (the relay records them from their sign-in); null for projects from before. */
   created_by?: Creator | null;

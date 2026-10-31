@@ -31,7 +31,9 @@ import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton, Modal, Spinner, spring } from "./ui";
-import { DevBadge, DevControl, promoteItem, useShowDev } from "./DevProjects";
+import { DevBadge, DevControl, promoteItem, testItem, useShowDev } from "./DevProjects";
+import { DoneContext, doneAt, rowKey, useDoneItems } from "./HomeDone";
+import { laterKey, useLater } from "../lib/later";
 import { type CardProps, ImportDialog, type Importing, importShare, importStuck, type Listed, MoveToCloud, NewProject, type NewProjectStart, Notice, type NoticeProps, Place, type ScriptIssueRow, type Stage, stageName, stageOf, stageWords, useIssueDialogs, VIEW, type Writing } from "./Home";
 
 /** How long a project someone started stays in their Needs you before it goes to review. */
@@ -88,7 +90,7 @@ export function HomeClassic() {
     // /ideas is Home on its Ideas tab (the idea page's way back).
     if (window.location.pathname === "/ideas") return "ideas";
     const saved = localStorage.getItem(VIEW);
-    return saved === "all" || saved === "subtitled" || saved === "ideas" ? saved : "needs";
+    return saved === "all" || saved === "subtitled" || saved === "ideas" || saved === "done" ? saved : "needs";
   });
   // Ideas (Oct 31): the team's repackaging, a tab of Home's for those who work on them.
   const ideasAllowed = makesIdeas(account);
@@ -113,6 +115,8 @@ export function HomeClassic() {
   const [style, setStyle] = useState<Style | null>(null);
   // Projects made on a dev build: shown or hidden (DevProjects.tsx).
   const [showDev, setShowDev] = useShowDev();
+  // Marked done (HomeDone.tsx): out of the lists, in the Done tab.
+  const later = useLater();
 
   // Imports, agents and shares under way are followed every few seconds (many projects at once).
   const busy = Object.values(statuses).some((one) => one.importing !== null || one.working || one.sharing !== null);
@@ -192,20 +196,25 @@ export function HomeClassic() {
   const all = projects ?? [];
   const edits = all.filter((project) => !project.subtitles && (showDev || project.dev !== true) && kept(project.name, project.style));
   const subtitled = all.filter((project) => project.subtitles && (showDev || project.dev !== true) && kept(project.name, project.style));
-  const cloudKept = cloudOnly.filter((project) => kept(project.name, project.summary?.style as Style | undefined));
+  const cloudKept = cloudOnly.filter((project) => (showDev || project.summary?.dev !== true) && kept(project.name, project.summary?.style as Style | undefined));
   const cloudSubtitled = cloudKept.filter((project) => project.summary?.subtitles === true);
   const cloudEdits = cloudKept.filter((project) => project.summary?.subtitles !== true);
   const showEdits = view !== "subtitled";
   // Newest change first, local and cloud-only projects and scripts together.
-  const projectRows: Listed[] = [
+  const everyProjectRow: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
     ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), here: localScripts.some((local) => local.id === one.id) })),
   ].sort((a, b) => b.at - a.at);
-  const subtitledRows: Listed[] = [
+  const everySubtitledRow: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
     ...cloudSubtitled.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: null })),
   ].sort((a, b) => b.at - a.at);
+  const isDone = (row: Listed) => doneAt(later, rowKey(row)) !== null;
+  const projectRows = everyProjectRow.filter((row) => !isDone(row));
+  const subtitledRows = everySubtitledRow.filter((row) => !isDone(row));
+  // The latest marked done first.
+  const doneRows = [...everyProjectRow, ...everySubtitledRow].filter(isDone).sort((a, b) => (doneAt(later, rowKey(b)) ?? 0) - (doneAt(later, rowKey(a)) ?? 0));
   // What needs someone: edits on a review link not approved yet, and edits
   // whose import stopped; scripts whose import stopped are the box above the
   // list, with their answers. Ordinary scripts and the edits being worked on
@@ -233,7 +242,7 @@ export function HomeClassic() {
   const stoppedScripts = issues.filter((issue) => !writing.some((one) => one.id === issue.id)).length;
   // A search looks through every project; otherwise the tab's.
   const searching = words !== "" && !ideasShown;
-  const rows = !showEdits ? subtitledRows : searching || view === "all" ? projectRows : needsYou;
+  const rows = view === "done" && !searching ? doneRows : !showEdits ? subtitledRows : searching || view === "all" ? projectRows : needsYou;
   const cardProps = (project: ProjectSummary) => ({
     project,
     onChanged: refresh,
@@ -322,6 +331,8 @@ export function HomeClassic() {
                     ["needs", "Needs you", needsYou.length + stoppedScripts] as [View, string, number],
                     ["all", "All projects", projectRows.length] as [View, string, number],
                     ["subtitled", "Subtitled", subtitledRows.length] as [View, string, number],
+                    // Marked done by hand (the user, Oct 31: "so we dont have to see them").
+                    ...(doneRows.length > 0 || view === "done" ? [["done", "Done", doneRows.length] as [View, string, number]] : []),
                     ...(ideasAllowed ? [["ideas", "Ideas", ideasCount] as [View, string, number]] : []),
                   ] as [View, string, number][]
                 ).map(([value, label, total]) => (
@@ -337,7 +348,7 @@ export function HomeClassic() {
                   </button>
                 ))}
               </div>
-              <DevControl count={all.filter((project) => project.dev === true).length} show={showDev} onShow={setShowDev} onChanged={refresh} />
+              <DevControl count={all.filter((project) => project.dev === true).length} cloudOnly={cloudOnly.filter((project) => project.summary?.dev === true).length} show={showDev} onShow={setShowDev} onChanged={refresh} />
               {cloud?.on && cloud.error && (
                 <span className="text-[12px] text-warning/80" title={cloud.error}>
                   {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
@@ -364,11 +375,13 @@ export function HomeClassic() {
               <IdeasTab home={ideasHome} error={ideasError} query={query} onNew={() => setIdeaOpen(true)} />
             ) : (
             <>
-            <Imports writing={writing} issues={issues} onOpen={setWatching} />
+            {view !== "done" && <Imports writing={writing} issues={issues} onOpen={setWatching} />}
             <ImportDialog id={watching} writing={writing} issues={issues} onClose={() => setWatching(null)} />
             {rows.length > 0 ? (
               // Edits grouped by stage, script to finished video.
-              <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits} statuses={statuses} onImport={setWatching} />
+              <DoneContext.Provider value={later}>
+                <ProjectTable rows={rows} cardProps={cardProps} onChanged={refresh} subtitled={!showEdits} grouped={showEdits && view !== "done"} statuses={statuses} onImport={setWatching} />
+              </DoneContext.Provider>
             ) : searching ? (
               <p className="mt-16 text-center text-muted">Nothing matches “{query.trim()}”.</p>
             ) : view === "needs" && stoppedScripts === 0 ? (
@@ -376,7 +389,9 @@ export function HomeClassic() {
                 <div className="text-[14px] font-medium">Nothing needs you</div>
                 <p className="mt-1 text-[12px] text-muted">Stopped imports and edits waiting on review show up here.</p>
               </div>
-            ) : view === "needs" ? null : (
+            ) : view === "needs" ? null : view === "done" ? (
+              <p className="mt-16 text-center text-muted">Nothing marked done. A project’s ⋯ has Mark as done.</p>
+            ) : (
               <p className="mt-16 text-center text-muted">Nothing here.</p>
             )}
             </>
@@ -391,7 +406,7 @@ export function HomeClassic() {
 }
 
 /** What Home lists: what needs someone, every project, the subtitled videos, or the ideas. */
-type View = "needs" | "all" | "subtitled" | "ideas";
+type View = "needs" | "all" | "subtitled" | "ideas" | "done";
 
 const STAGES: { value: Stage; label: string }[] = [
   // The footage and its words in, the script not written yet (the user, Oct 30: "know which projects are ready to script").
@@ -463,6 +478,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     if (project.problem) useEditor.getState().toastError(project.problem, `open “${project.name}”`);
     else navigate(`/p/${project.id}`);
   };
+  const doneItems = useDoneItems(laterKey("edit", project.id), project.name);
   const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     toggleMenu(
@@ -482,7 +498,9 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
         ...(cloudOn && !status?.cloud && !project.problem
           ? [{ label: "Move to cloud…", icon: <CloudUpload size={14} />, onSelect: () => setMoving(true) }]
           : []),
+        ...doneItems,
         ...promoteItem(project, onChanged),
+        ...testItem(project, onChanged),
         { separator: true },
         { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
       ],
@@ -918,6 +936,7 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
   const [deleting, setDeleting] = useState(false);
   const [why, setWhy] = useState(false);
   const failed = script.runFailed ?? null;
+  const doneItems = useDoneItems(laterKey("script", script.id), script.title || "Untitled script");
   // Its ⋯, as an edit's: open it, and (when this Mac has it) rename or delete it.
   const menu = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -925,6 +944,7 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
       event.currentTarget,
       [
         { label: "Open script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) },
+        ...doneItems,
         ...(failed !== null
           ? ([
               { label: "View error", icon: <TriangleAlert size={14} />, onSelect: () => setWhy(true) },
@@ -1114,6 +1134,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
   const [deleting, setDeleting] = useState(false);
   const summary = project.summary ?? {};
   const seconds = summary.durationFrames && summary.fps ? summary.durationFrames / summary.fps : null;
+  const doneItems = useDoneItems(laterKey("edit", project.id), project.name);
   const remove = async () => {
     setDeleting(false);
     try {
@@ -1157,7 +1178,9 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
             toggleMenu(
               event.currentTarget,
               [
-                ...(script !== null ? ([{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) }, { separator: true }] satisfies MenuItem[]) : []),
+                ...(script !== null ? ([{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) }] satisfies MenuItem[]) : []),
+                ...doneItems,
+                { separator: true },
                 { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
               ],
               { width: 180 },

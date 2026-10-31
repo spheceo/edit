@@ -15,7 +15,8 @@ import { Button, cx, Modal } from "./ui";
 const SHOW_DEV = "edit.home.dev";
 
 export function useShowDev(): [boolean, (show: boolean) => void] {
-  const [show, setShow] = useState(() => localStorage.getItem(SHOW_DEV) !== "0");
+  // Hidden unless shown (Sphe, Oct 31: test projects aren't to be seen beside real ones).
+  const [show, setShow] = useState(() => localStorage.getItem(SHOW_DEV) === "1");
   return [
     show,
     (value: boolean) => {
@@ -28,8 +29,8 @@ export function useShowDev(): [boolean, (show: boolean) => void] {
 /** The small mark beside a dev project's name. */
 export function DevBadge() {
   return (
-    <span title="Made on a dev build. Promote it from its ⋯ if it’s real work." className="inline-flex h-[18px] shrink-0 items-center rounded-[5px] border border-warning/40 bg-warning-soft px-1.5 text-[11px] leading-none font-semibold tracking-[0.02em] text-warning">
-      Dev
+    <span title="A test project (made on a dev build, or marked by hand). Promote it from its ⋯ if it’s real work." className="inline-flex h-[18px] shrink-0 items-center rounded-[5px] border border-warning/40 bg-warning-soft px-1.5 text-[11px] leading-none font-semibold tracking-[0.02em] text-warning">
+      Test
     </span>
   );
 }
@@ -56,15 +57,34 @@ export function promoteItem(project: ProjectSummary, onChanged: () => void): Men
   return [{ label: "Promote to real project", icon: <BadgeCheck size={14} />, onSelect: () => void promote() }];
 }
 
+/** A real-looking project's ⋯ item: marked a test project (a throwaway made before the mark), hidden with the rest. */
+export function testItem(project: ProjectSummary, onChanged: () => void): MenuItem[] {
+  if (project.dev === true || project.problem) return [];
+  const mark = async () => {
+    try {
+      await post(`/api/projects/${project.id}/test`, {});
+      useEditor.getState().toast(`“${project.name}” is a test project now: hidden with the others`, "info", {
+        label: "Undo",
+        run: () => void post(`/api/projects/${project.id}/promote`, {}).then(onChanged, (error: unknown) => useEditor.getState().toastError(error, `bring “${project.name}” back`)),
+      });
+    } catch (error) {
+      useEditor.getState().toastError(error, `mark “${project.name}” a test project`);
+    }
+    onChanged();
+  };
+  return [{ label: "Mark as test project", icon: <FlaskConical size={14} />, onSelect: () => void mark() }];
+}
+
 /** Home's Dev control: show or hide dev projects, and delete them all (confirmed with the count). */
-export function DevControl({ count, show, onShow, onChanged }: { count: number; show: boolean; onShow: (show: boolean) => void; onChanged: () => void }) {
+export function DevControl({ count, cloudOnly = 0, show, onShow, onChanged }: { count: number; cloudOnly?: number; show: boolean; onShow: (show: boolean) => void; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
-  if (count === 0) return null;
+  // Shown and hidden count every test project; deleting takes this Mac's (the cloud-only ones are another Mac's to delete).
+  const shown = count + cloudOnly;
+  if (shown === 0) return null;
   const items: MenuItem[] = [
-    show ? { label: "Hide dev projects", icon: <EyeOff size={14} />, onSelect: () => onShow(false) } : { label: "Show dev projects", icon: <Eye size={14} />, onSelect: () => onShow(true) },
-    { separator: true },
-    { label: `Delete all dev projects (${count})…`, icon: <Trash2 size={14} />, danger: true, onSelect: () => setConfirming(true) },
+    show ? { label: "Hide test projects", icon: <EyeOff size={14} />, onSelect: () => onShow(false) } : { label: "Show test projects", icon: <Eye size={14} />, onSelect: () => onShow(true) },
+    ...(count > 0 ? ([{ separator: true }, { label: `Delete all test projects (${count})…`, icon: <Trash2 size={14} />, danger: true, onSelect: () => setConfirming(true) }] satisfies MenuItem[]) : []),
   ];
   const removeAll = async () => {
     setBusy(true);
@@ -72,11 +92,11 @@ export function DevControl({ count, show, onShow, onChanged }: { count: number; 
       const done = await post("/api/dev-projects/delete", { count });
       const deleted = Array.isArray(done.deleted) ? done.deleted.length : 0;
       const failed = Array.isArray(done.failed) ? (done.failed as { error: string }[]) : [];
-      if (failed.length > 0) useEditor.getState().toastError(`${failed.length} weren’t deleted: ${failed[0]!.error}`, "delete every dev project");
-      else useEditor.getState().toast(`Deleted ${deleted} dev ${deleted === 1 ? "project" : "projects"}`, "info");
+      if (failed.length > 0) useEditor.getState().toastError(`${failed.length} weren’t deleted: ${failed[0]!.error}`, "delete every test project");
+      else useEditor.getState().toast(`Deleted ${deleted} test ${deleted === 1 ? "project" : "projects"}`, "info");
       setConfirming(false);
     } catch (error) {
-      useEditor.getState().toastError(error, "delete the dev projects");
+      useEditor.getState().toastError(error, "delete the test projects");
     } finally {
       setBusy(false);
       onChanged();
@@ -86,27 +106,27 @@ export function DevControl({ count, show, onShow, onChanged }: { count: number; 
     <>
       <button
         onClick={(event) => toggleMenu(event.currentTarget, items, { width: 230 })}
-        title={show ? `${count} dev projects shown` : `${count} dev projects hidden`}
+        title={show ? `${shown} test projects shown` : `${shown} test projects hidden`}
         className={cx("flex h-[34px] shrink-0 items-center gap-1.5 rounded-[9px] border border-line bg-bg px-2.5 text-[13px] font-medium transition-colors hover:text-fg", show ? "text-muted" : "text-faint")}
       >
         <FlaskConical size={14} />
-        Dev <span className="tabular text-faint">{show ? count : `${count} hidden`}</span>
+        Test <span className="tabular text-faint">{show ? shown : `${shown} hidden`}</span>
         <ChevronDown size={13} className="text-faint" />
       </button>
       <Modal open={confirming} onClose={() => !busy && setConfirming(false)} width={400}>
         <div className="p-6">
           <h2 className="text-[18px] font-semibold tracking-[-0.3px]">
-            Delete {count} dev {count === 1 ? "project" : "projects"}?
+            Delete {count} test {count === 1 ? "project" : "projects"}?
           </h2>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            Every project marked Dev on this Mac goes, from the cloud too where it’s there. Projects without the mark aren’t touched. A copy of each is kept in Edit’s data folder; footage files stay where they are.
+            Every project marked Test on this Mac goes, from the cloud too where it’s there. Projects without the mark aren’t touched. A copy of each is kept in Edit’s data folder; footage files stay where they are.
           </p>
           <div className="mt-[22px] flex justify-end gap-2">
             <Button variant="subtle" disabled={busy} onClick={() => setConfirming(false)}>
               Cancel
             </Button>
             <Button variant="destructive" disabled={busy} onClick={() => void removeAll()}>
-              {busy ? "Deleting…" : `Delete ${count} dev ${count === 1 ? "project" : "projects"}`}
+              {busy ? "Deleting…" : `Delete ${count} test ${count === 1 ? "project" : "projects"}`}
             </Button>
           </div>
         </div>

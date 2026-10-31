@@ -47,6 +47,22 @@ test("a dev project promoted is an ordinary project", async () => {
   }
 });
 
+test("an older throwaway marked a test project by hand is listed, and deleted, with the rest", async () => {
+  const { app, store, cleanup } = fixtureHome("dev-test");
+  try {
+    const real = store.createAs("Real case", "bodycam", settings);
+    const trial = store.createAs("R1: 16-Year-Old Kills Her Best Friend", "interrogation", settings);
+    expect((await ask(app, `/api/projects/${trial.project.id}/test`, {})).status).toBe(200);
+    expect(store.list().find((summary) => summary.id === trial.project.id)?.dev).toBe(true);
+    expect(store.list().find((summary) => summary.id === real.project.id)?.dev).toBeUndefined();
+    expect((await ask(app, "/api/projects/p1-nope/test", {})).status).toBe(404);
+    expect((await ask(app, "/api/dev-projects/delete", { count: 1 })).body.deleted).toEqual([trial.project.id]);
+    expect(store.list().map((summary) => summary.id)).toEqual([real.project.id]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("delete all dev projects deletes only those, and only when the count is what the confirm showed", async () => {
   const { app, store, home, cleanup } = fixtureHome("dev-delete");
   try {

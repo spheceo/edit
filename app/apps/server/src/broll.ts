@@ -1098,18 +1098,28 @@ export async function waitForMaps(app: App, projectId: string, limitMs: number):
  * Map Chromes an Edit that crashed mid-render left running: orphans (their
  * parent gone, so launchd's) with a map profile. One sat for two hours after
  * Bun crashed at 09:38 on Oct 21, a gigabyte the next renders needed on an
- * 8 GB Mac. Stopped when the server starts; another Edit's renders, still
- * parented, are left alone.
+ * 8 GB Mac. Also this very process's own: under `bun --watch` (`just dev`) a
+ * save reloads the server inside the same process, so a render cut short by
+ * the reload keeps its parent and was never stopped (Oct 31: two sat 90 min
+ * on the dev server, 700 MB while the Mac swapped 7 GB). Called when the
+ * server starts, before it renders any map; another Edit's renders, parented
+ * to it, are left alone.
  */
+export function leftoverMaps(listing: string, self: number): number[] {
+  const found: number[] = [];
+  for (const line of listing.split("\n")) {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    if (match === null || !match[3]!.includes("--user-data-dir=") || !match[3]!.includes("edit-map-")) continue;
+    const parent = Number(match[2]);
+    if (parent === 1 || parent === self) found.push(Number(match[1]));
+  }
+  return found;
+}
+
 export function stopLeftoverMaps(): number {
   if (process.platform === "win32") return 0;
   const listed = Bun.spawnSync(["ps", "-Ao", "pid=,ppid=,command="], { stdout: "pipe", stderr: "ignore" });
-  const orphans: number[] = [];
-  for (const line of listed.stdout.toString().split("\n")) {
-    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-    if (match === null || match[2] !== "1" || !match[3]!.includes("--user-data-dir=") || !match[3]!.includes("edit-map-")) continue;
-    orphans.push(Number(match[1]));
-  }
+  const orphans = leftoverMaps(listed.stdout.toString(), process.pid);
   for (const pid of orphans) {
     try {
       process.kill(pid);

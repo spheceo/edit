@@ -445,3 +445,14 @@ test("a cut found at two frames a second is found again to the frame", async () 
   expect(Math.abs((await broll.exactCut(file, 1.5)) - 1.3667)).toBeLessThan(0.04);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("leftover map Chromes: orphans and this process's own, never another Edit's", () => {
+  const listing = [
+    "  101     1 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --user-data-dir=/tmp/edit-map-aa http://127.0.0.1:7700/api/maps/aa",
+    "  102   500 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --user-data-dir=/tmp/edit-map-bb http://127.0.0.1:7700/api/maps/bb",
+    "  103   777 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --user-data-dir=/tmp/edit-map-cc http://127.0.0.1:7710/api/maps/cc",
+    "  104   500 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --headless=new --user-data-dir=/tmp/other http://example.com",
+    "  105     1 /usr/bin/caffeinate -i",
+  ].join("\n");
+  expect(broll.leftoverMaps(listing, 500)).toEqual([101, 102]);
+});

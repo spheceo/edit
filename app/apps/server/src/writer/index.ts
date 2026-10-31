@@ -24,10 +24,22 @@ export const WRITER_FOLDER = (): string => process.env.EDIT_WRITER_FOLDER ?? joi
 /** Background work Script mode's parts start with the server (the cloud, review polling…). */
 export const starters: ((app: App) => void)[] = [];
 
-export function start(app: App): void {
+export function start(app: App, options: { trials?: boolean } = {}): void {
   const data = store.dataDir(app.store.home);
   drive.hooks.accessToken = () => app.library.accessToken();
   build.usePort(app.port);
+  // A trial server (EDIT_TRIALS=1) writes and builds scripts as any Edit does, but takes
+  // none of the team's work: no Writer folder adopted, no review notes fixed, no archives
+  // acted on (Oct 31: with Script mode off there, a script's builds called the tools on :7700
+  // and its Drive reads had no token).
+  if (options.trials === true) {
+    store.markInterrupted(data);
+    for (const id of store.ids(data)) jobs.markInterrupted(data, id);
+    cloud.start(data);
+    storage.start(data);
+    scriptSync.start(app);
+    return;
+  }
   // Writer's folder is another app's data: macOS warns the person each time
   // Edit reads it ("Data Access Blocked", Oct 30), so it's read once per Mac.
   const once = join(data, "writer-folder-read");

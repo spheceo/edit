@@ -226,7 +226,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   // it would both fix the same review notes and Writer jobs (Oct 31, the user: a server for training
   // agents and trials that other sessions' saves never restart).
   const trials = process.env.EDIT_TRIALS === "1";
-  if (trials) diag.info("edit", "a trial server: no review fixes, Writer jobs, idea runs, first prompts, archive or remote support here");
+  if (trials) diag.info("edit", "a trial server: no review fixes, Writer folder or archives, idea runs or remote support here");
   // Repack reviews of exports: their notes followed, and fixed by the agent once they settle.
   if (!trials) optional("review", () => reviews.start(app));
   // Smooth playback: the open edit rendered small in the background, out of the way of exports.
@@ -234,11 +234,12 @@ export function start(home: string, host: string | null, port: number): { app: A
   // Projects archived on Repack: their big files freed here, and restores asked for done.
   if (!trials) optional("archive", () => archive.start(app));
   // Script mode: Writer's scripts on this Mac brought in once, and its background work.
-  if (!trials) optional("writer", () => writer.start(app));
+  optional("writer", () => writer.start(app, { trials }));
   // Ideas: runs this Mac had going when it stopped, marked stopped in the cloud.
   if (!trials) optional("ideas", () => ideas.start(app));
   // A new project's first message, sent to its agent once its import is done.
-  if (!trials) optional("first prompt", () => firstPrompt.start(app));
+  // Kept on a trial server too: its prompts are its own projects' (first-prompts.json in its home).
+  optional("first prompt", () => firstPrompt.start(app));
   // Research goes to the cloud, so the project opened on another Mac has it.
   optional("research cloud", () => researchCloud.start(app));
   let quitting = false;

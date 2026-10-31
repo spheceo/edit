@@ -49,6 +49,9 @@ serve-build *args:
 serve-build-bin *args:
     @just --justfile app/Justfile serve-build-bin {{args}}
 
+trial-server *args:
+    @just --justfile app/Justfile trial-server {{args}}
+
 types *args:
     @just --justfile app/Justfile types {{args}}
 

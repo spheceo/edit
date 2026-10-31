@@ -50,6 +50,16 @@ function builtIn(body: Uint8Array): boolean {
   }
 }
 
+/** Whether a script body is an import that never finished here (still processing, or failed before any recording came in): nothing of this Mac's to keep. */
+function unfinished(body: Uint8Array): boolean {
+  try {
+    const script = JSON.parse(new TextDecoder().decode(body)) as { status?: string; clips?: unknown[] };
+    return script.status === "processing" || (script.status === "error" && (script.clips ?? []).length === 0);
+  } catch {
+    return false;
+  }
+}
+
 /** The library row's shape: 1 added `kind`, 2 `runFailed` (Oct 30). A script whose cloud row is older is pushed again. */
 const SUMMARY_VERSION = 2;
 
@@ -104,6 +114,9 @@ class Problem extends Error {
   }
 }
 
+/** A file a revision names that isn't in the cloud (deleted by a push that lost, before each push had its own keys). */
+class Gone extends Problem {}
+
 // ---- What this Mac knows of each script in the cloud ----
 
 interface Kept {
@@ -121,7 +134,8 @@ interface Known {
   summary?: number;
 }
 
-type Ledger = { scripts: Record<string, Known> };
+/** `copied`: the rev a script's conflicted copy was kept for, until that rev has come down, so a pull tried again doesn't keep another. */
+type Ledger = { scripts: Record<string, Known>; copied?: Record<string, number> };
 
 const ledgerPath = (data: string) => join(data, "cloud", "ledger.json");
 const deletingPath = (data: string) => join(data, "cloud", "deleted.json");
@@ -312,6 +326,7 @@ async function download(script: string, name: string, key: string, size: number,
   const answer = await fetch(await presign(key, "GET")).catch((error: unknown) => {
     throw transferProblem(error, name);
   });
+  if (answer.status === 404) throw new Gone(`${name} isn't in the cloud.`);
   if (!answer.ok || answer.body === null) throw new Problem(`The cloud refused ${name} (${answer.status}).`);
   fs.mkdirSync(parent(path) ?? ".", { recursive: true });
   const partial = `${path}.partial`;
@@ -617,6 +632,9 @@ async function tick(data: string, pull: boolean): Promise<number> {
   return waiting;
 }
 
+/** One round with a pull, for tests. */
+export const syncOnceForTests = (data: string): Promise<number> => tick(data, true);
+
 /** Merges the kept lessons both ways: this Mac's and the cloud's, each lesson by its id, and one forgotten anywhere gone everywhere. */
 async function syncLessons(data: string): Promise<void> {
   const remote = await fetchBytes(LESSONS_KEY);
@@ -701,7 +719,18 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
       syncSoon();
       return;
     }
-    keepCopy(data, dir, "conflicted copy");
+    // An import that never finished here (or Writer's copy of one, brought in
+    // by Edit) has nothing to keep: theirs replaces it (Oct 31, M's Mac: four
+    // stale imports became conflicted copies that showed as stopped imports).
+    // A copy is kept once per rev: a pull that failed after keeping one and
+    // was tried again kept another every minute (Oct 31, Predator Tutor: 294
+    // copies from Mathias's Mac, rev 7 naming a file no longer in the cloud).
+    if (unfinished(fs.readFileSync(bodyPath))) diag.warn("writer", `${jobs.named(id, title)}: this Mac's copy is an import that never finished, so rev ${rev} replaces it`);
+    else if (ledger.copied?.[id] !== rev) {
+      keepCopy(data, dir, "conflicted copy");
+      ledger.copied = { ...ledger.copied, [id]: rev };
+      writeJson(ledgerPath(data), ledger);
+    }
   }
   fs.mkdirSync(dir, { recursive: true });
   const files: Record<string, Kept> = {};
@@ -722,7 +751,16 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
       continue;
     }
     if (row.archived != null && storage.isFootage(name)) continue;
-    if (!present) await download(id, name, key, size, path);
+    if (!present) {
+      try {
+        await download(id, name, key, size, path);
+      } catch (error) {
+        if (!(error instanceof Gone)) throw error;
+        // Left out rather than asked for for ever: a copy here goes up again with the next push, healing the cloud's.
+        diag.warn("writer", `${jobs.named(id, title)}: rev ${rev}'s ${name} isn't in the cloud, so it's left out${isFile(path) ? " and this Mac's goes up again" : ""}`);
+        continue;
+      }
+    }
     files[name] = { key, size, mtime: mtime(path) };
   }
   leftInCloud(data, id, left);
@@ -740,6 +778,7 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   // and round, while the team's Macs were on mixed versions (Oct 30).
   const summary = row.summary as { kind?: unknown } | undefined;
   ledger.scripts[id] = { rev, body: hash(given), files, summary: typeof summary?.kind === "string" ? SUMMARY_VERSION : 0 };
+  if (ledger.copied !== undefined) delete ledger.copied[id];
   store.libraryChanged();
 }
 

@@ -1763,7 +1763,40 @@ export async function cut(source: string, start: number, to: number, out: string
     diag.warn("script", `cutting an excerpt: ${diag.scrub(trim(output.stderr))}`);
     throw new Error("Couldn't cut an excerpt from the footage.");
   }
+  const problem = await excerptProblem(source, start, to, out);
+  if (problem !== null) {
+    fs.rmSync(out, { force: true });
+    diag.warn("script", `cutting an excerpt: ${problem}`);
+    throw new Error(`The excerpt cut from the footage came out wrong (${problem}).`);
+  }
 }
+
+/**
+ * Why a fresh excerpt isn't the stretch it was cut from, or null: it reads
+ * back as long as was asked (or up to the footage's end). Nov 1: a 911 call's
+ * 0–55 s excerpt was AAC in a .wav, read back as 27.6 s and undecodable, and
+ * was used as footage until its import stopped on it; any cut that can't hold
+ * what was cut now stops here, saying so, before it's used or uploaded.
+ */
+export async function excerptProblem(source: string, start: number, to: number, out: string): Promise<string | null> {
+  const asked = to - start;
+  const got = await secondsOf(out);
+  if (got === null) return "it can't be read back";
+  const leeway = Math.max(0.5, asked * 0.02);
+  if (got > asked + leeway) return `it runs ${got.toFixed(1)} s, not ${asked.toFixed(1)} s`;
+  if (got >= asked - leeway) return null;
+  // Shorter than asked is right only when the footage itself ends sooner.
+  const whole = await secondsOf(source);
+  if (whole !== null && whole - start <= got + leeway) return null;
+  return `it runs ${got.toFixed(1)} s, not ${asked.toFixed(1)} s`;
+}
+
+/** `durationOf`, null when it can't be read (or reads as nothing). */
+const secondsOf = (path: string): Promise<number | null> =>
+  durationOf(path).then(
+    (seconds) => (Number.isFinite(seconds) && seconds > 0 ? seconds : null),
+    () => null,
+  );
 
 /** `1h02m03s`: a time in an excerpt's name. */
 export function clock(seconds: number): string {

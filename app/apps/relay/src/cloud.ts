@@ -70,7 +70,12 @@ const REVIEW_CALLS = new Map<string, string>([
   ["reviews:compress", "mutation"],
   // Fixing on the one computer chosen on accounts' Fixing page (accounts/docs/fixing.md).
   ["reviews:checkIn", "mutation"], ["reviews:takeFix", "mutation"], ["reviews:fixProgress", "mutation"], ["reviews:check", "mutation"],
+  // Deleting a review link for good: only who may share reviews, or an admin (Sphe, Nov 1).
+  ["reviews:remove", "mutation"],
 ]);
+/** The reviews calls that need `review.share` (or an admin) beyond `use`. */
+const REVIEW_SHARE_CALLS = new Set(["reviews:remove"]);
+const mayShareReviews = (found: Caller) => isAdmin(found) || (found.kind === "person" && found.perms.includes("review.share"));
 const callable = (path: string, kind: string) =>
   EDIT_CALLS.get(path) === kind || (REVIEWS_PATH.test(path) && REVIEW_CALLS.get(path) === kind) || (WRITER_READS.has(path) && kind === "query");
 
@@ -484,6 +489,7 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
       return json(403, { error: "Only who started this project, or an admin, can delete it." });
     }
   }
+  if (REVIEW_SHARE_CALLS.has(body.path) && !mayShareReviews(found)) return json(403, { error: "Your account can't delete review links: it needs “Share for review”. Ask an admin at accounts.spheceo.com." });
   // A review is always Edit's from here, whatever the caller says.
   if (REVIEWS_PATH.test(body.path)) body.args = { ...(body.args as object | undefined), app: "edit" };
   // Who started a project comes from the token, never the caller.

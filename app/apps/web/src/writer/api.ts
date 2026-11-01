@@ -298,6 +298,9 @@ export const previewSrc = (id: string, v: number | string) =>
 /** The script as it is now made its review's only version, v1, on the same link. */
 export const compressReview = (id: string) =>
   http<Script>(`/api/writer/scripts/${id}/review/compress`, json({}));
+/** Deletes the script's review link for good: the page, every version and every note go. */
+export const deleteReviewLink = (id: string) =>
+  http<Script>(`/api/writer/scripts/${id}/review`, { method: "DELETE" });
 export const shareScript = (id: string) =>
   http<Script>(`/api/writer/scripts/${id}/share`, json({}));
 

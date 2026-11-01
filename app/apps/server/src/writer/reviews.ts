@@ -398,6 +398,7 @@ export const shareWork = { run: (app: App, data: string, id: string): Promise<Sc
 /** Starts sharing a script; refused at once when it's already being shared or Claude is on it. Settles when the share does. */
 export function startShare(app: App, data: string, id: string): Promise<Script> {
   if (sharing.has(id)) return Promise.reject(new Error("This script is already being shared: it carries on if you close this."));
+  if (removing.has(id)) return Promise.reject(new Error("This script's review link is being deleted: share it again once that's done."));
   if (jobs.running(id)) return Promise.reject(new Error("Claude is still working on this script. Share it when that's done."));
   sharing.set(id, { startedAt: Date.now() });
   shareFailed.delete(id);
@@ -502,6 +503,66 @@ export async function compress(app: App, data: string, id: string): Promise<Scri
   change(data, (known) => void delete known.approved[id]);
   pollSoon();
   return now;
+}
+
+/** Scripts whose review link is being deleted now: no share starts meanwhile. */
+const removing = new Set<string>();
+
+/**
+ * Deletes the script's review link for good (Sphe, Nov 1: "we need to be
+ * able to delete a review link"): Repack's review, every version, note and
+ * reply (`reviews:remove`; the link opens nothing after), its files under
+ * `writer/reviews/<id>/`, and what this Mac kept of it. The script keeps its
+ * words and its own version history; sharing again makes a new link, v1.
+ * Refused while it's being shared or Claude is on it.
+ */
+export async function removeLink(data: string, id: string): Promise<Script> {
+  if (sharing.has(id)) throw new Error("This script is being shared now: delete the link once that's done.");
+  if (removing.has(id)) throw new Error("This script's review link is already being deleted.");
+  if (jobs.running(id)) throw new Error("Claude is still working on this script. Delete the link when that's done.");
+  const dir = store.scriptDir(data, id);
+  const link = store.read(dir).review;
+  if (!link) throw new Error("This script has no review link to delete.");
+  removing.add(id);
+  try {
+    let answer: Record<string, unknown>;
+    try {
+      answer = await call("mutation", "reviews:remove", { sourceId: id });
+    } catch (error) {
+      throw new Error(diag.messageOf(error).includes("Could not find public function") ? "Deleting a review link needs the cloud's latest update." : diag.messageOf(error));
+    }
+    const keys = (Array.isArray(answer.keys) ? answer.keys : []).filter((key): key is string => typeof key === "string");
+    const deleted = await cloud.removeUnder(`writer/reviews/${id}/`, keys).catch((error: unknown) => {
+      diag.warn("writer", `${id}: the deleted review's files: ${diag.messageOf(error)}; Repack's cleanup deletes them`);
+      return 0;
+    });
+    const now = store.read(dir);
+    delete now.review;
+    store.write(dir, now);
+    fs.rmSync(join(dir, SHARED_TEXT), { force: true });
+    forget(data, id, link.reviewId);
+    shareFailed.delete(id);
+    const notes = typeof answer.notes === "number" ? answer.notes : 0;
+    diag.info("writer", `${jobs.named(id, now.title)}: review link deleted (${link.url}, ${answer.removed === true ? `${link.version > 1 ? `v1 to v${link.version}` : "v1"}, ${notes} notes and replies` : "already gone from Repack"}; ${deleted} files deleted)`);
+    store.libraryChanged();
+    return now;
+  } finally {
+    removing.delete(id);
+  }
+}
+
+/** What this Mac kept of a script's deleted review: its notes, their tries, its link and its approval. */
+function forget(data: string, scriptId: string, reviewId: string): void {
+  change(data, (known) => {
+    for (const [noteId, kept] of Object.entries(known.notes)) {
+      if (kept.reviewId !== reviewId && (kept.scriptId ?? known.links[kept.reviewId]) !== scriptId) continue;
+      delete known.notes[noteId];
+      delete known.tried[noteId];
+      delete known.attempts[noteId];
+    }
+    delete known.links[reviewId];
+    delete known.approved[scriptId];
+  });
 }
 
 /**
@@ -661,7 +722,8 @@ export function start(app: App, data: string): void {
 /** One round of changes; says whether anything changed. */
 export async function poll(data: string): Promise<boolean> {
   // Approvals, made here or on Repack's page: only reviews:open carries them.
-  const rows = await call("query", "reviews:open", {}).then((value) => (Array.isArray(value) ? value : []) as Record<string, unknown>[], () => [] as Record<string, unknown>[]);
+  const listed = await call("query", "reviews:open", {}).then((value) => (Array.isArray(value) ? (value as Record<string, unknown>[]) : null), () => null);
+  const rows = listed ?? [];
   const approved: Record<string, Approval> = {};
   for (const row of rows) {
     const found = approvalOf(row.approved);
@@ -671,6 +733,16 @@ export async function poll(data: string): Promise<boolean> {
   change(data, (known) => {
     moved = JSON.stringify(known.approved) !== JSON.stringify(approved);
     known.approved = approved;
+    // A review link deleted (here, on another Mac or on Repack's page): its notes go from the badges too. Only from a whole list (it's capped at 1000).
+    if (listed === null || listed.length >= 1000) return;
+    const alive = new Set(listed.flatMap((row) => (typeof row.reviewId === "string" ? [row.reviewId] : [])));
+    for (const [noteId, kept] of Object.entries(known.notes)) {
+      if (alive.has(kept.reviewId)) continue;
+      delete known.notes[noteId];
+      delete known.tried[noteId];
+      delete known.attempts[noteId];
+      moved = true;
+    }
   });
   const cursor = load(data).cursor;
   const [notes, next] = await changes(cursor);

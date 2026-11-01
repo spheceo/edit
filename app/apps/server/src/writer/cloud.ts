@@ -181,6 +181,8 @@ export function forgetPurged(data: string, id: string, name: string): void {
   writeJson(storagePath(data), map);
 }
 const deleting = (data: string): string[] => readJson<string[]>(deletingPath(data), []);
+/** Scripts deleted on this Mac whose delete hasn't reached the cloud yet: lists of the cloud's scripts leave them out (Home showed one until the next sync). */
+export const beingDeleted = (data: string): Set<string> => new Set(deleting(data));
 
 /** A script deleted on this Mac: deleted from the cloud, and so from every other Mac, by the next round. */
 export function deleted(data: string, id: string): void {
@@ -270,6 +272,35 @@ export async function presign(key: string, method: "GET" | "PUT" | "HEAD"): Prom
 
 async function remove(keys: string[]): Promise<void> {
   for (let at = 0; at < keys.length; at += 40) await call("r2/delete", { keys: keys.slice(at, at + 40) }).catch(() => undefined);
+}
+
+/**
+ * Deletes `keys` (Script mode's own, under `writer/`) and everything under
+ * `prefix`: the files a deleted review link named, and any it left beside
+ * them. Says how many it deleted; one the relay refused (deleting needs
+ * script work) is left to Repack's cleanup, which the review's delete queued.
+ */
+export async function removeUnder(prefix: string, keys: string[]): Promise<number> {
+  if (!prefix.startsWith("writer/") || !prefix.endsWith("/")) throw new Error(`not a prefix Script mode deletes under: ${prefix}`);
+  const found = new Set(keys.filter((key) => key.startsWith("writer/")));
+  let cursor: string | undefined;
+  for (let page = 0; page < 50; page++) {
+    const answer = await call("r2/list", cursor === undefined ? { prefix } : { prefix, cursor });
+    for (const object of Array.isArray(answer.objects) ? (answer.objects as { key?: unknown }[]) : []) if (typeof object.key === "string" && object.key.startsWith(prefix)) found.add(object.key);
+    cursor = typeof answer.cursor === "string" && answer.cursor !== "" ? answer.cursor : undefined;
+    if (cursor === undefined) break;
+  }
+  let deleted = 0;
+  const all = [...found];
+  for (let at = 0; at < all.length; at += 40) {
+    const batch = all.slice(at, at + 40);
+    const answer = await call("r2/delete", { keys: batch }).catch((error: unknown) => {
+      diag.info("writer", `deleting ${batch.length} review files under ${prefix}: ${diag.messageOf(error)}; Repack's cleanup deletes them`);
+      return null;
+    });
+    if (answer !== null) deleted += batch.length;
+  }
+  return deleted;
 }
 
 const transferProblem = (error: unknown, name: string): Problem => new Problem(`${name} didn't get through (${diag.messageOf(error)}).`, true);

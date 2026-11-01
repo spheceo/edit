@@ -299,6 +299,8 @@ export const api = {
   resetAsked: (id: string) => request<{ pending: { asked_ms: number } | null }>("GET", `/api/projects/${id}/reset`),
   answerReset: (id: string, accept: boolean) => request<{ answered: boolean }>("POST", `/api/projects/${id}/reset`, { accept }),
   approveReview: (id: string) => request<{ version: number; deleted: string[] }>("POST", `/api/projects/${id}/review/approve`),
+  /** Deletes the project's review link for good: the page, every version and every note go (the exports here stay). */
+  deleteReview: (id: string) => request<{ removed: boolean; versions: number; notes: number; files: number }>("DELETE", `/api/projects/${id}/review`),
   /** Brings an archived project's footage back from Drive and YouTube. */
   restoreProject: (id: string) => request<{ started: boolean }>("POST", `/api/projects/${id}/restore`),
   /** Writer's scripts in the cloud, newest first, each with the project made from it here. */

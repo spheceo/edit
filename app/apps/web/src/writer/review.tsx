@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { CommentsPanel, hoverNote } from "./comments";
-import { approveReview, compressReview, fixNotes, getScript, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
+import { approveReview, compressReview, deleteReviewLink, fixNotes, getScript, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
 import type { BuildStatus, Cite, Paragraph, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, Script } from "./types";
 import { CAN, useGrants } from "./can";
 import { Dialog, Icon } from "./ui";
@@ -301,6 +301,23 @@ export function ReviewDialog({
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
+  // Deleting the link is asked first: it can't be undone (reviewers lose the page and their notes).
+  const [deleting, setDeleting] = useState<"ask" | "running" | null>(null);
+  useEffect(() => {
+    if (!open) setDeleting(null);
+  }, [open]);
+  const removeLink = async () => {
+    setDeleting("running");
+    setProblem(null);
+    try {
+      onChange(await deleteReviewLink(script.id));
+      onRefresh();
+    } catch (cause) {
+      setProblem(message(cause));
+    } finally {
+      setDeleting(null);
+    }
+  };
   const [approving, setApproving] = useState(false);
   const approve = async (yes: boolean) => {
     if (!link) return;
@@ -389,6 +406,25 @@ export function ReviewDialog({
           <button type="button" className="sm" onClick={() => void copy()}>
             <Icon name={copied ? "check" : "copy"} size={14} />
             {copied ? "Copied" : "Copy"}
+          </button>
+          {mayShare && deleting === null && (
+            <button type="button" className="sm ghost" disabled={sharing || sharingNow || busy} title={sharing || sharingNow ? "It's being shared: delete the link once that's done" : busy ? "Claude is working on this script: delete the link once that's done" : "Delete this review link for good"} onClick={() => setDeleting("ask")}>
+              <Icon name="trash" size={14} />
+              Delete link
+            </button>
+          )}
+        </div>
+      )}
+      {link && deleting !== null && (
+        <div className="review-delete" role="alertdialog" aria-label="Delete the review link">
+          <span>
+            <b>Delete this link?</b> It can't be undone: reviewers lose the page and every note on it{link.version > 1 ? `, v1 to v${link.version}` : ""}. The script and its own version history stay; sharing again makes a new link.
+          </span>
+          <button type="button" className="sm ghost" disabled={deleting === "running"} onClick={() => setDeleting(null)}>
+            Cancel
+          </button>
+          <button type="button" className="sm danger-fill" disabled={deleting === "running" || sharingNow || busy} onClick={() => void removeLink()}>
+            {deleting === "running" ? "Deleting…" : "Delete link"}
           </button>
         </div>
       )}

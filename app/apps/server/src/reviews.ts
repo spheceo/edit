@@ -193,6 +193,7 @@ export async function share(app: App, projectId: string, path: string | null, re
   const chosen = shareable(listExports(home, projectId), path);
   if (chosen === undefined) throw new Error(path === null ? "export the whole edit first: a review shares an export" : "that isn't one of this project's whole exports or an export of its opening");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
+  if (removing.has(projectId)) throw new Error("this project's review link is being deleted: share it again once that's done");
   // `replace`: the latest version's files are overwritten with this export
   // (same keys, so its link, number and notes stay) instead of a new version:
   // a small fix after sharing (Judge EXPLODES' stingers turned down) stays V2.
@@ -333,6 +334,7 @@ export async function share(app: App, projectId: string, path: string | null, re
 export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>, replace = false): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
+  if (removing.has(projectId)) throw new Error("this project's review link is being deleted: share it again once that's done");
   // Remembered for the share after a Ready for changes: the house settings, not this span or its chapters.
   const { range: _range, chapters: _chapters, ...settings } = options;
   update(app.store.home, (state) => {
@@ -994,6 +996,60 @@ export async function approve(app: App, projectId: string): Promise<{ version: n
   return { version, deleted: clearOthers(app, projectId, version) };
 }
 
+/** Projects whose review link is being deleted now: no share starts meanwhile. */
+const removing = new Set<string>();
+
+/**
+ * Deletes the project's review link for good (Sphe, Nov 1: "we need to be
+ * able to delete a review link"): Repack's review, every version, note and
+ * reply (`reviews:remove`; the link opens nothing after), its files under
+ * `edit/reviews/<project>/` (now when the account may delete from Edit's
+ * cloud, an admin's; else by Repack's cleanup, which the delete queued), and
+ * what this Mac kept of it. The exports here stay; sharing again makes a new
+ * link, v1. Refused while it's being shared or a Ready for changes is being
+ * fixed here.
+ */
+export async function removeLink(app: App, projectId: string): Promise<{ removed: boolean; versions: number; notes: number; files: number }> {
+  const home = app.store.home;
+  if (sharing.has(projectId)) throw new Error("this project is being shared now: delete the link once that's done");
+  if (removing.has(projectId)) throw new Error("this project's review link is already being deleted");
+  if (readying.has(projectId)) throw new Error("its notes are being fixed for a Ready for changes: delete the link once that's done");
+  const shared = read(home).shared[projectId];
+  if (shared === undefined) throw new Error("this project has no review link to delete");
+  removing.add(projectId);
+  try {
+    const answer = (await cloud.mutation("reviews:remove", { sourceId: projectId })) as { removed?: boolean; versions?: number; notes?: number; keys?: unknown[] };
+    const prefix = `edit/reviews/${projectId}/`;
+    const keys = new Set((Array.isArray(answer.keys) ? answer.keys : []).filter((key): key is string => typeof key === "string" && key.startsWith(prefix)));
+    let files = 0;
+    try {
+      for (const object of await cloud.list(prefix)) keys.add(object.key);
+      await cloud.remove([...keys]);
+      files = keys.size;
+    } catch (error) {
+      diag.info("review", `${projectId}: the deleted review's ${keys.size} files: ${diag.messageOf(error)}; Repack's cleanup deletes them`);
+    }
+    forget(home, projectId);
+    noteFix(home, projectId, null);
+    fs.rmSync(join(home, "cache", "reviews", projectId), { recursive: true, force: true });
+    const name = app.store.get(projectId)?.project.name ?? projectId;
+    diag.info("review", `${name}: review link deleted (${shared.url}, ${answer.removed === true ? `${answer.versions ?? 0} versions, ${answer.notes ?? 0} notes and replies` : "already gone from Repack"}; ${files} files deleted)`);
+    app.store.emit({ type: "reviews", projects: [projectId] });
+    return { removed: answer.removed === true, versions: answer.versions ?? 0, notes: answer.notes ?? 0, files };
+  } finally {
+    removing.delete(projectId);
+  }
+}
+
+/** What this Mac kept of a project's deleted review: the link, its versions, its notes. */
+function forget(home: string, projectId: string): void {
+  update(home, (state) => {
+    delete state.shared[projectId];
+    for (const [id, note] of Object.entries(state.notes)) if (note.project === projectId) delete state.notes[id];
+    if (state.unshared !== undefined) delete state.unshared[projectId];
+  });
+}
+
 /** Deletes the exports shared as versions other than `kept` (never the one it is), and the review copies here. */
 /** Where a version's full-quality file goes: beside its review copy, the export's own extension. */
 export function fullKeyOf(prefix: string, exportPath: string): string {
@@ -1164,7 +1220,22 @@ export async function poll(app: App): Promise<void> {
   }
   if (fresh.size > 0) app.store.emit({ type: "reviews", projects: [...fresh] });
   // Approvals (on Repack's page or another Mac): the other versions' exports here go too.
-  const rows = (await cloud.query("reviews:open", {})) as { sourceId?: string; approved?: Shared["approved"] }[];
+  const before = read(home).shared;
+  const rows = (await cloud.query("reviews:open", {})) as { sourceId?: string; reviewId?: string; approved?: Shared["approved"] }[];
+  // A link deleted on another Mac or Repack's page: forgotten here too. Only
+  // what was shared before the list was asked for (a share finishing meanwhile
+  // isn't on it yet), and only from a whole list (it's capped at 1000).
+  if (Array.isArray(rows) && rows.length < 1000) {
+    const alive = new Set(rows.flatMap((row) => (typeof row.reviewId === "string" ? [row.reviewId] : [])));
+    const gone: string[] = [];
+    for (const [projectId, was] of Object.entries(before)) {
+      if (alive.has(was.reviewId) || sharing.has(projectId) || readying.has(projectId) || read(home).shared[projectId]?.reviewId !== was.reviewId) continue;
+      forget(home, projectId);
+      diag.info("review", `${projectId}: its review link was deleted elsewhere (${was.url}); forgotten here`);
+      gone.push(projectId);
+    }
+    if (gone.length > 0) app.store.emit({ type: "reviews", projects: gone });
+  }
   for (const row of Array.isArray(rows) ? rows : []) {
     if (typeof row.sourceId !== "string") continue;
     const was = read(home).shared[row.sourceId];
@@ -1789,6 +1860,16 @@ export function routes(router: Router<App>): void {
     if (!Number.isInteger(n)) throw new ApiError(400, "version (a number) is required");
     try {
       return sorted(await uploadFull(context.app, context.params.id ?? "", n, (done, total) => sharing.set(context.params.id ?? "", `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`)).finally(() => sharing.delete(context.params.id ?? "")));
+    } catch (error) {
+      throw new ApiError(400, diag.messageOf(error));
+    }
+  });
+  // Deletes the review link for good: reviewers lose the page and their notes (asked first in the Share dialog).
+  router.delete("/api/projects/{id}/review", async ({ app, params }) => {
+    const id = params.id ?? "";
+    if (app.store.get(id) === null) throw new ApiError(404, "no such project");
+    try {
+      return sorted(await removeLink(app, id));
     } catch (error) {
       throw new ApiError(400, diag.messageOf(error));
     }

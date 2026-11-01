@@ -1267,6 +1267,9 @@
 .writer-root .review-link { display: flex; gap: 6px; }
 .writer-root .review-link input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; }
 .writer-root .review-meta { margin: 6px 0 0; font-size: 12px; }
+.writer-root .review-delete { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--danger-solid) 45%, transparent); border-radius: 8px; background: var(--danger-soft); font-size: 12px; line-height: 1.45; }
+.writer-root .review-delete span { flex: 1; min-width: 0; }
+.writer-root .review-delete button { flex: none; }
 .writer-root .review-auto { margin: 12px 0 4px; align-items: flex-start; line-height: 1.4; }
 .writer-root .review-notes { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow: auto; }
 .writer-root .review-note { display: flex; flex-direction: column; gap: 4px; padding-left: 10px; border-left: 2px solid var(--accent); }

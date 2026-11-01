@@ -80,7 +80,7 @@ test("on the fixing computer it takes the request, follows the agent's turn and,
     const calls = convex({
       "reviews:checkIn": () => ({ chosen: true, requests: [{ reviewId: "r1", sourceId: id, title: "Judge", version: 1, by: "Marc", requestedAt: 1 }] }),
       "reviews:changes": () => ({ notes: [note], cursor: 1, more: false }),
-      "reviews:open": () => [],
+      "reviews:open": () => [{ sourceId: id, reviewId: "r1", approved: null }],
       "reviews:takeFix": () => ({ ok: true, sourceId: id, title: "Judge", version: 1, noteIds: ["n1"] }),
       "reviews:claim": (args) => ({ claimed: args.noteIds }),
       "reviews:fixProgress": () => ({ ok: true }),

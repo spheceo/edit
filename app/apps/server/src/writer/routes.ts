@@ -297,6 +297,14 @@ export function routes(router: Router<App>): void {
         return detail(dataOf(context.app), await reviews.compress(context.app, dataOf(context.app), id(context)));
       }),
     )
+    // Deletes the script's review link for good: reviewers lose the page and their notes (asked first in the Review dialog).
+    .delete("/api/writer/scripts/{id}/review", (context) =>
+      answer(async () => {
+        can.require(can.SHARE);
+        readFor(dataOf(context.app), id(context));
+        return detail(dataOf(context.app), await reviews.removeLink(dataOf(context.app), id(context)));
+      }),
+    )
     .post("/api/writer/scripts/{id}/review/replace", (context) =>
       answer(async () => {
         can.require(can.SHARE);

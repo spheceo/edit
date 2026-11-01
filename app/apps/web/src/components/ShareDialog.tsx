@@ -1,4 +1,4 @@
-import { Check, Copy, ExternalLink, Link2 } from "lucide-react";
+import { Check, Copy, ExternalLink, Link2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api, type Review } from "../lib/api";
@@ -7,6 +7,7 @@ import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "..
 import { preview } from "../lib/playback";
 import { flushSave, useEditor } from "../lib/store";
 import { rate } from "../lib/types";
+import { CAN, useGrants } from "../writer/can";
 import { ProblemView } from "./ProblemView";
 import { Button, Modal } from "./ui";
 
@@ -29,6 +30,9 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [approving, setApproving] = useState(false);
   // Put this revision over the latest version (same number, same link) instead of adding one.
   const [replace, setReplace] = useState(false);
+  // Deleting the link is asked first (it can't be undone), and needs “Share for review”.
+  const [deleting, setDeleting] = useState<"ask" | "running" | null>(null);
+  const mayDelete = useGrants().has(CAN.share);
   const sections = preview.sections;
   const chapters = useMemo(() => (project ? scriptChapters(project, sections) : []), [project, sections]);
   const id = project?.id ?? "";
@@ -110,6 +114,22 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
+  const removeLink = async () => {
+    setDeleting("running");
+    setProblem(null);
+    try {
+      await api.deleteReview(project.id);
+      toast("Review link deleted", "info");
+      setSaid(null);
+      setReplace(false);
+      setReview(await api.review(project.id));
+    } catch (error) {
+      setProblem((error as Error).message);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   const progress = exportState?.state === "queued" ? "Export queued · you can keep editing" : exportState?.state === "running" ? `Exporting… ${Math.round(exportState.progress * 100)}%` : sharing ? `${sharing[0]!.toUpperCase()}${sharing.slice(1)}…` : null;
 
   return (
@@ -143,7 +163,12 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
                 {latest !== null ? `${link.versions.length} ${link.versions.length === 1 ? "version" : "versions"}, latest v${latest}` : "No versions yet"}
                 {link.approved && <span className="text-success"> · v{link.approved.version} approved by {link.approved.by}</span>}
               </span>
-              {!link.approved && latest !== null && (
+              {mayDelete && deleting === null && (
+                <Button size="sm" variant="ghost" disabled={busy} title={busy ? "It's being shared: delete the link once that's done" : "Delete this review link for good"} onClick={() => setDeleting("ask")}>
+                  <Trash2 size={13} /> Delete link
+                </Button>
+              )}
+              {!link.approved && latest !== null && deleting === null && (
                 <Button
                   size="sm"
                   variant={approving ? "danger" : "ghost"}
@@ -154,6 +179,17 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
                 </Button>
               )}
             </div>
+            {deleting !== null && (
+              <div className="flex items-center gap-2 border-t border-line px-3 py-2.5 text-[12px]">
+                <span className="min-w-0 flex-1 text-fg">Delete this link? It can't be undone: reviewers lose the page and every note on it. The exports here stay.</span>
+                <Button size="sm" variant="ghost" disabled={deleting === "running"} onClick={() => setDeleting(null)}>
+                  Cancel
+                </Button>
+                <Button size="sm" variant="danger" disabled={deleting === "running" || busy} onClick={() => void removeLink()}>
+                  {deleting === "running" ? "Deleting…" : "Delete link"}
+                </Button>
+              </div>
+            )}
           </div>
         )}
 

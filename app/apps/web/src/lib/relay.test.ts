@@ -148,6 +148,17 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "query", path: "reviews:get", args: {} })).status).toBe(200);
     const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).args.app).toBe("edit");
+    // Deleting a review link for good (Sphe, Nov 1): only who may share reviews, or an admin; always Edit's review.
+    const remove = (token: string) => call("convex", { kind: "mutation", path: "reviews:remove", args: { app: "writer", sourceId: "p1" } }, { token });
+    const before = upstream.mock.calls.length;
+    for (const token of [PERSON, EDITOR, USE_ONLY]) expect((await remove(token)).status).toBe(403);
+    expect(upstream.mock.calls.length).toBe(before);
+    expect((await call("convex", { kind: "query", path: "reviews:remove", args: {} }, { token: ADMIN })).status).toBe(403);
+    for (const token of [WRITER, ADMIN]) {
+      expect((await remove(token)).status).toBe(200);
+      const [, sent] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
+      expect(JSON.parse(String(sent.body))).toMatchObject({ path: "reviews:remove", args: { app: "edit", sourceId: "p1" } });
+    }
   });
 
   it("Script mode's cloud keeps Writer's rules: reads for anyone, writes for script work of the script's kind, reviews as Writer", async () => {
@@ -183,6 +194,12 @@ describe("relay cloud endpoints", () => {
     expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit" } }, WRITER)).status).toBe(200);
     const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).args.app).toBe("writer");
+    // A script's review link is deleted by who may share reviews, as Writer's.
+    expect((await writer("convex", { kind: "mutation", path: "reviews:remove", args: { app: "edit", sourceId: "s1" } }, EDITOR)).status).toBe(403);
+    expect((await writer("convex", { kind: "mutation", path: "reviews:remove", args: { app: "edit", sourceId: "s1" } }, USE_ONLY)).status).toBe(403);
+    expect((await writer("convex", { kind: "mutation", path: "reviews:remove", args: { app: "edit", sourceId: "s1" } }, WRITER)).status).toBe(200);
+    const [, removed] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(removed.body))).toMatchObject({ path: "reviews:remove", args: { app: "writer", sourceId: "s1" } });
     // Nothing else is reachable, and keys stay under writer/ (or Edit's shared footage, never deleted from here).
     expect((await writer("convex", { kind: "mutation", path: "edit:deleteProject", args: {} }, ADMIN)).status).toBe(403);
     expect((await writer("r2/url", { key: "edit/projects/p/project.json" }, WRITER)).status).toBe(400);

@@ -54,6 +54,7 @@ export const WRITER_FUNCTIONS: Record<string, string> = {
   "reviews:check": "review.share",
   "reviews:setMeta": "review.share",
   "reviews:compress": "review.share",
+  "reviews:remove": "review.share",
   "edit:getMedia": "read",
   "edit:putMedia": "any",
 };
@@ -267,7 +268,7 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
   const args = { ...((body.args as Record<string, unknown> | undefined) ?? {}) };
   if (needs === "any" && !anyWork(grants)) return refuse("write scripts");
   if (needs === "admin" && !grants.admin) return refuse("do that: it's for admins");
-  if (needs.includes(".") && !has(grants, needs)) return refuse(needs === "review.share" ? "share or fix reviews" : "do that");
+  if (needs.includes(".") && !has(grants, needs)) return refuse(needs !== "review.share" ? "do that" : body.path === "reviews:remove" ? "delete review links" : "share or fix reviews");
   if (needs === "script" && !grants.admin) {
     // A commit says what it is; a delete is checked against what the script is in the cloud.
     let summary: unknown = args.summary;

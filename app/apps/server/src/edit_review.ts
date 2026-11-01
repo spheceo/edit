@@ -535,10 +535,14 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
     let missing = 0;
     const covered = (from: number, to: number) => played.reduce((sum, [a, b]) => sum + Math.max(Math.min(b, to) - Math.max(a, from), 0), 0);
     if (words.length === 0) {
+      // Only inside the range: the clips that carry it on past its end don't
+      // count their gaps (R3V, Nov 1: a one-second range in silence read as
+      // 38.8 s not played, the pieces after it picking up in the silence).
       let at = cutIn;
       for (const [from, to] of played) {
-        missing += Math.max(from - at, 0);
-        at = Math.max(at, to);
+        if (to <= cutIn || from >= cutOut) continue;
+        missing += Math.max(Math.min(from, cutOut) - at, 0);
+        at = Math.max(at, Math.min(to, cutOut));
       }
       missing += Math.max(cutOut - at, 0);
     } else {

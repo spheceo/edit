@@ -175,6 +175,18 @@ test("footage_that_stops_short_of_its_script_range_is_flagged", () => {
   expect(offScript(p, new Map([["m7", TEASER]]))).toEqual([]);
 });
 
+test("a_short_range_in_silence_played_whole_is_not_flagged_for_the_clips_that_carry_on_after_it", () => {
+  // R3V, Nov 1: "uh-huh… uh-huh" at 23:49–23:50 (nothing the transcriber heard) read as 38.8 s not played.
+  const p = footageProject();
+  const template = p.clips[0] as Clip;
+  p.clips.push({ ...template, id: "r1", start: 600, duration: 30, source_in: 279 } as Clip, { ...template, id: "r2", start: 630, duration: 60, source_in: 285 } as Clip);
+  p.script = {
+    source: "doc",
+    blocks: [{ kind: "footage", url: "u", file: "f", start: 279, end: 280, label: "4:39-4:40", notes: [], media: "m7", words: ["uh-huh", "uh-huh"], clip: "r1" }],
+  } as unknown as Project["script"];
+  expect(offScript(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
 test("a_script_range_whose_clip_is_gone_is_flagged_unless_its_footage_plays_elsewhere", () => {
   const p = footageProject();
   p.script = {

@@ -784,3 +784,14 @@ test("a plan never plays a clip past the end of its media (the export failed rea
   // Inside the file: fine.
   apply(p, [{ op: "update", select: { ids: ["late"] }, patch: { source_in: 0.2 } }]);
 });
+
+test("two pop-ups opening together are flagged; a second apart they aren't", () => {
+  // The team: "not animate together in".
+  const p = project("pops");
+  p.media.push(media({ id: "f", name: "frame", path: "/f.png", kind: "image", duration: 30, width: 800, height: 600 }));
+  p.clips.push(clip({ id: "a", track: "v2", start: 100, duration: 90, type: "video", media: "f", name: "File Viewer" }));
+  p.clips.push(clip({ id: "b", track: "v3", start: 108, duration: 90, type: "video", media: "f", name: "File Viewer" }));
+  p.clips.push(clip({ id: "c", track: "v2", start: 300, duration: 90, type: "video", media: "f", name: "File Viewer" }));
+  const together = (audit(p).issues as { kind: string; clips?: string[] }[]).filter((issue) => issue.kind === "popups_together");
+  expect(together.map((issue) => issue.clips)).toEqual([["a", "b"]]);
+});

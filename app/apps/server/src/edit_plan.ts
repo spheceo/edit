@@ -1400,6 +1400,15 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     const sounded = heard.some(([start, stop]) => stop - start <= short && start >= clip.start - before && start <= clip.start + after);
     if (!sounded) issues.push({ kind: "silent_popup", clip: clip.id, at: clip.start, fix: "a soft click on it (add_from_library, ~8 LU under the speech)" });
   }
+  // Pop-ups opening together (the team: "not animate together in"; JJ: "dangerous to have two things appear at the
+  // same time when they are across the screen"): two File Viewers or photo insets starting under half a second apart.
+  const pops = project.clips
+    .filter((clip) => clip.name === "File Viewer" || clip.name === "Photo inset")
+    .sort((a, b) => a.start - b.start);
+  for (let index = 1; index < pops.length; index++) {
+    const [a, b] = [pops[index - 1]!, pops[index]!];
+    if (b.start - a.start < asInt(round(0.5 * fps))) issues.push({ kind: "popups_together", clips: [a.id, b.id], at: b.start, fix: "open them at least a second apart, each on its own words" });
+  }
   // A subtitle runs past the cut it's said before: into a cut-in's
   // voice-over, or over the cut into another moment of footage.
   const voiceovers = project.clips.filter((clip) => clip.name === "Voice-over").map((clip): [number, number] => [clip.start, clipEnd(clip)]);

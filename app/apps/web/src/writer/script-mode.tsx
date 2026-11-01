@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ConfirmHost } from "./confirm";
 
 import { Loader } from "../components/Logo";
 import { claudeStatus, getProgress, getScript, listScripts, message, onLibrary } from "./api";
@@ -263,6 +264,7 @@ export function ScriptMode() {
   }, [!!importing, importing?.stage, route, ready]);
   return (
     <div className="writer-root">
+      <ConfirmHost />
       {opened?.commentary ? (
         <CommentaryEditor key={opened.id} script={opened} onChange={setOpen} onBack={home} />
       ) : opened ? (

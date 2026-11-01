@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { askConfirm } from "./confirm";
 import { CommentsPanel, hoverNote } from "./comments";
 import { approveReview, compressReview, deleteReviewLink, fixNotes, getScript, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
 import type { BuildStatus, Cite, Paragraph, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, Script } from "./types";
@@ -284,7 +285,7 @@ export function ReviewDialog({
   // The script as it is now as the link's only version, v1: the earlier versions go, their notes move onto v1.
   const makeFirst = async () => {
     if (!link) return;
-    if (!window.confirm(`Make the script as it is now v1 on this link? v1 to v${link.version} are removed from the link and every note is kept on v1. the script's own version history is untouched.`)) return;
+    if (!(await askConfirm(`v1 to v${link.version} are removed from the link and every note is kept on v1. The script's own version history is untouched.`, { title: "Make the script as it is now v1?", ok: "Make this v1" }))) return;
     setSharing(true);
     setProblem(null);
     try {
@@ -321,10 +322,10 @@ export function ReviewDialog({
   const [approving, setApproving] = useState(false);
   const approve = async (yes: boolean) => {
     if (!link) return;
-    const ask = yes
-      ? `Approve v${link.version}? The review link stops taking notes and the other versions' files are deleted. Every note from every round is kept, and the script's own version history is untouched.`
-      : `Take back the approval of v${approved?.version}? The link takes notes again; files already deleted stay deleted.`;
-    if (!window.confirm(ask)) return;
+    const asked = yes
+      ? askConfirm("The review link stops taking notes and the other versions' files are deleted. Every note from every round is kept, and the script's own version history is untouched.", { title: `Approve v${link.version}?`, ok: `Approve v${link.version}` })
+      : askConfirm("The link takes notes again; files already deleted stay deleted.", { title: `Take back the approval of v${approved?.version}?`, ok: "Take back" });
+    if (!(await asked)) return;
     setApproving(true);
     setProblem(null);
     try {

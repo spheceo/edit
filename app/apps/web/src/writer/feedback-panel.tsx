@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react";
+import { askConfirm } from "./confirm";
 import { forgetLesson, getLessons, keepLesson, message, pullFeedback, setFeedbackItem, setLesson } from "./api";
 import type { Feedback, FeedbackItem, Grade, LearnStep, Lesson, LessonRound, ReviewNote, ScriptChange } from "./types";
 import { Icon } from "./ui";
@@ -206,7 +207,7 @@ export function FeedbackPanel({
   useEffect(() => setItemsOpen(rounds.length === 0), [feedback?.pulledAt, rounds.length]);
 
   const pull = async () => {
-    if (rounds.length > 0 && !window.confirm("Read the review's notes again? This starts over: the answer key, the lesson and the rounds go.")) return;
+    if (rounds.length > 0 && !(await askConfirm("This starts over: the answer key, the lesson and the rounds go.", { title: "Read the review's notes again?", ok: "Start over", danger: true }))) return;
     setPulling(true);
     try {
       onFeedback(await pullFeedback(id));
@@ -362,9 +363,7 @@ export function FeedbackPanel({
               busy={busy}
               onToggle={() => setOpen(open === round.number ? null : round.number)}
               onFinish={() => {
-                if (window.confirm(`Make round ${round.number}'s script the script? What it didn't fix is applied directly. The current script is replaced.`)) {
-                  onStep({ step: "finish", round: round.number });
-                }
+                void askConfirm("What it didn't fix is applied directly. The current script is replaced.", { title: `Make round ${round.number}'s script the script?`, ok: "Use this round" }).then((yes) => yes && onStep({ step: "finish", round: round.number }));
               }}
             />
           ))}

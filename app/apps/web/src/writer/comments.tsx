@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { askConfirm } from "./confirm";
 import { addReviewNote, checkReviewNote, deleteReviewNote, message, type NoteDetails, replyReviewNote, reviewFix, type ReviewFix } from "./api";
 import mark from "./assets/writer-mark.svg";
 import type { ReviewNote } from "./types";
@@ -313,7 +314,7 @@ export function CommentsPanel({
               onRefresh();
             }}
             onDelete={async () => {
-              if (!window.confirm(note.intent === "suggestion" ? "Delete this suggestion?" : "Delete this note?")) return;
+              if (!(await askConfirm("It goes from the review page too.", { title: note.intent === "suggestion" ? "Delete this suggestion?" : "Delete this note?", ok: "Delete", danger: true }))) return;
               try {
                 await deleteReviewNote(scriptId, note.id);
                 onRefresh();

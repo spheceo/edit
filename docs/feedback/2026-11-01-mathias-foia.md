@@ -24,7 +24,7 @@ Sphe: "investigate why it took over 20 minutes for a script that my mathias was 
 
 ## Again, Nov 1 afternoon: two imports stopped at Transcribing
 
-Sphe: "imports are stopping again, look" (Home, Importing: three of Mathias's scripts stopped). Read from prod's script index (his Mac has remote support off, and isn't in prod's device list any more):
+Sphe: "imports are stopping again, look" (Home, Importing: three of Mathias's scripts stopped). Read from prod's script index (his report couldn't be pulled: `edit remote` was asking the dev server on :7700, so dev's device list, where his Mac isn't; prod's had it, as found that evening):
 
 - **Predator Cop Realizes His Life Is Over…** (6 h 20 min, 15:31) and **8-Year-Old Points Officers To Dad's Hidden Torture Room** (7 h 43 min, 15:27): stopped at Transcribing, 60%, "could not reach the transcription relay: The socket connection was closed unexpectedly".
 - **Mom Secretly Has a Baby With Her Daughter's Boyfriend**: stopped downloading at 13:01, "The import stopped when Edit closed". Builds from nightly-41 carry such an import on 15 s after Edit starts again; it didn't, so his Edit was likely on an older build, or hadn't started again since.
@@ -33,7 +33,7 @@ Sphe: "imports are stopping again, look" (Home, Importing: three of Mathias's sc
 - **Fix:** a whole hearing that fails for a temporary reason once its retries are spent (a dropped connection, a timeout, the gateway, a busy relay) costs the voices, never the import: its words stand from the pieces, who speaks is left for the watch, as for a file too long to send whole. A refusal or an allowance used up still stops it (the pieces meet it too). `test/transcribe.test.ts`: a whole hearing failing every time keeps the words, no voices, nothing kept for the whole.
 - **For Mathias:** update to the next nightly and press Retry on both: the pieces heard are kept, so only what's left is asked.
 
-Open: why the whole hearing's connection drops (the relay waits on Scribe synchronously; a multi-hour file may take Scribe longer than a connection lasts). ElevenLabs' asynchronous mode (a webhook to the relay) would hold no connection open. And his Mac's remote support: prod's `editSupportDevices` has only kenobi, so no team Mac can be reached until they enable it again.
+Open: why the whole hearing's connection drops (the relay waits on Scribe synchronously; a multi-hour file may take Scribe longer than a connection lasts). ElevenLabs' asynchronous mode (a webhook to the relay) would hold no connection open. (His Mac's remote support was fine all along: see docs/remote-support.md on which server `edit remote` asks.)
 
 ## Heard by link: the whole hearing as a job (Nov 1, evening)
 

@@ -16,7 +16,11 @@
 
 import * as fs from "node:fs";
 
+import { Effect, Fiber, Option, Schema, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+
 import * as diag from "./diag.ts";
+import { inArea, runPromise } from "./effect/runtime.ts";
 import * as relay from "./relay.ts";
 import * as tools from "./tools.ts";
 import { compiled } from "./update.ts";
@@ -221,6 +225,40 @@ const FORMAT = "bv*[vcodec^=avc1][height<=1080][protocol=https]+ba[ext=m4a][prot
 /** Through the paid proxy ($1/GB): at most 720p, about half the bytes of 1080p (the audit, Oct 23). */
 const PROXY_FORMAT = "bv*[vcodec^=avc1][height<=720][protocol=https]+ba[ext=m4a][protocol=https]/b[vcodec^=avc1][ext=mp4][height<=720]/bv*[height<=720]+ba/b[height<=720][vcodec!=none]";
 
+// ── Why a try failed (in Effect since Nov 1: docs/plans/2026-11-01-effect.md, part 4) ──
+//
+// The routes were fixed seven times in eight days (cac57fd0, 94e49c77,
+// db3f473d, 3b3cb78d, 88b0d2ce, 8c25e077, 597f55ae), each one for a way
+// yt-dlp failed that the list of retryable words didn't know yet, which
+// stopped the whole download at its first try (Oct 31, Kroger: "yt-dlp
+// stopped part-way (exit 1)", the proxy and the sign-in never tried). Now a
+// try's output is read once into the reason it failed (`reasonOf`), and what
+// each reason does is one table (`afterFailure`): only a video that's gone,
+// or one only a signed-in YouTube can have, stops the routes. Anything else,
+// a wording nobody has seen yet included, goes on to the next route.
+
+/** The video itself can't be had (taken down, private, blocked): no route helps. */
+export class VideoGone extends Schema.TaggedError<VideoGone>()("VideoGone", { line: Schema.String }) {}
+/** Only a signed-in YouTube can have it (age, members, private): the sign-in route, or nothing. */
+export class NeedsSignIn extends Schema.TaggedError<NeedsSignIn>()("NeedsSignIn", { line: Schema.String }) {}
+/** YouTube changed and this yt-dlp doesn't know yet: the newest one, and the same route again. */
+export class YtdlpOutdated extends Schema.TaggedError<YtdlpOutdated>()("YtdlpOutdated", { line: Schema.String }) {}
+/** YouTube refused this route (a bot check, 403s, 429s): the next one. */
+export class RouteRefused extends Schema.TaggedError<RouteRefused>()("RouteRefused", { line: Schema.String }) {}
+/** The route gave no video (formats withheld, only storyboards, no JavaScript runtime): the next one. */
+export class NoVideoHere extends Schema.TaggedError<NoVideoHere>()("NoVideoHere", { line: Schema.String }) {}
+/** The download stopped part-way (a dropped connection, a refused fragment): the next route, carrying on from the bytes here. */
+export class StoppedPartWay extends Schema.TaggedError<StoppedPartWay>()("StoppedPartWay", { line: Schema.String }) {}
+/** yt-dlp said nothing for too long and was stopped: the next route. */
+export class StoodStill extends Schema.TaggedError<StoodStill>()("StoodStill", { line: Schema.String }) {}
+/** A failure none of the above knows: the next route, never the last word. */
+export class Unrecognised extends Schema.TaggedError<Unrecognised>()("Unrecognised", { line: Schema.String }) {}
+
+export type TryFailure = VideoGone | NeedsSignIn | YtdlpOutdated | RouteRefused | NoVideoHere | StoppedPartWay | StoodStill | Unrecognised;
+
+/** Every route was tried, or none could help: the reason the last one failed. */
+export class DownloadFailed extends Schema.TaggedError<DownloadFailed>()("DownloadFailed", { reason: Schema.String, message: Schema.String }) {}
+
 /** Whether yt-dlp's words say YouTube refused this Mac (worth the proxy). */
 function refused(stderr: string): boolean {
   return /not a bot|HTTP Error 403|HTTP Error 429|Sign in to confirm|page needs to be reloaded/i.test(stderr);
@@ -228,31 +266,27 @@ function refused(stderr: string): boolean {
 
 /**
  * Whether this route gave no video (formats withheld, only storyboard images
- * offered, or no JavaScript runtime to answer YouTube's challenge): another
- * route — a fresh proxy exit, this Mac again — may still get one, so it is
- * retried like a refusal, never the final word on its own. Read on the ERROR
- * line, not the whole output: a WARNING naming the missing runtime beside a
- * real error (a private video) must not make that error retryable.
+ * offered, or no JavaScript runtime to answer YouTube's challenge). Read on
+ * the ERROR line, not the whole output: a WARNING naming the missing runtime
+ * beside a real error (a private video) must not make that error retryable.
  */
 function noVideo(stderr: string): boolean {
-  return /requested format is not available|only images are available|did not produce a video|javascript runtime|stood still/i.test(errorLine(stderr));
+  return /requested format is not available|only images are available|did not produce a video|javascript runtime/i.test(errorLine(stderr));
 }
 
-/**
- * Whether a download stopped part-way for a reason another try may not meet
- * (a connection dropped or timed out, a fragment refused mid-video, yt-dlp
- * giving up after its own retries), not because the video is gone: tried
- * again on the next route, which carries on from the bytes already here
- * (`--continue`). Oct 31, a teammate's Kroger import stopped at its first try
- * with "yt-dlp stopped part-way (exit 1)", the proxy and the sign-in never tried.
- */
+/** Whether a download stopped part-way (a connection dropped or timed out, a fragment refused mid-video, yt-dlp giving up after its own retries). */
 function partWay(stderr: string): boolean {
-  return /stopped part-way|nothing came down|connection reset|timed out|IncompleteRead|urlopen error|Remote end closed|did not get any data|giving up after|Got error|fragment/i.test(errorLine(stderr)) && !gone(stderr);
+  return /stopped part-way|nothing came down|connection reset|timed out|IncompleteRead|urlopen error|Remote end closed|did not get any data|giving up after|Got error|fragment/i.test(errorLine(stderr));
 }
 
 /** Whether the video itself can't be had (taken down, private, blocked): no route helps. */
 function gone(stderr: string): boolean {
   return /Video unavailable|has been removed|no longer available|copyright|Private video|This video is private|does not exist|terminated/i.test(stderr);
+}
+
+/** Whether a video needs a signed-in YouTube (age, members, private): only the sign-in can help. */
+function needsSignIn(stderr: string): boolean {
+  return /confirm your age|age.restricted|members.only|Join this channel|Private video|This video is private/i.test(errorLine(stderr));
 }
 
 /** yt-dlp's error line, without anything credential-like. */
@@ -261,6 +295,39 @@ function errorLine(stderr: string): string {
   // Say the ERROR, not a WARNING that happened to come first in its output.
   const error = [...lines].reverse().find((line) => line.toUpperCase().includes("ERROR")) ?? lines[lines.length - 1] ?? "yt-dlp failed";
   return diag.scrub(error.replace(/^ERROR:\s*/, "").replace(/https?:\/\/[^\s@]*@[^\s]*/g, "<proxy>"));
+}
+
+/** Why a try failed, read once from what yt-dlp said, in this order: the sign-in, gone, outdated, then what another route can help. */
+export function reasonOf(stderr: string): TryFailure {
+  const line = errorLine(stderr);
+  if (needsSignIn(stderr)) return new NeedsSignIn({ line });
+  if (gone(stderr)) return new VideoGone({ line });
+  if (outdated(stderr)) return new YtdlpOutdated({ line });
+  if (stderr.includes(STOOD_STILL)) return new StoodStill({ line });
+  if (refused(stderr)) return new RouteRefused({ line });
+  if (noVideo(stderr)) return new NoVideoHere({ line });
+  if (partWay(stderr)) return new StoppedPartWay({ line });
+  return new Unrecognised({ line });
+}
+
+/** What a failed try leads to: the next route, the sign-in route, the same route with the newest yt-dlp, or the end. */
+type Next = { readonly to: "next" } | { readonly to: "sign-in" } | { readonly to: "update" } | { readonly to: "stop" };
+
+export function afterFailure(reason: TryFailure): Next {
+  switch (reason._tag) {
+    case "VideoGone":
+      return { to: "stop" };
+    case "NeedsSignIn":
+      return { to: "sign-in" };
+    case "YtdlpOutdated":
+      return { to: "update" };
+    case "RouteRefused":
+    case "NoVideoHere":
+    case "StoppedPartWay":
+    case "StoodStill":
+    case "Unrecognised":
+      return { to: "next" };
+  }
 }
 
 export interface Downloaded {
@@ -274,7 +341,7 @@ const running = new Map<string, Promise<Downloaded>>();
 /** The wait before asking YouTube again, and how long yt-dlp may say nothing before it's stopped (tests make them short). */
 export const timing = { pause: (ms: number): Promise<void> => Bun.sleep(ms), quiet: 10 * 60_000 };
 
-/** What a run stopped for saying nothing reads as (retried like a refusal). */
+/** What a run stopped for saying nothing reads as. */
 const STOOD_STILL = "ERROR: The download stood still";
 
 /**
@@ -291,70 +358,97 @@ export function download(
   const key = join(dir, id);
   const already = running.get(key);
   if (already !== undefined) return already;
-  const work = downloadNow(home, id, dir, progress).finally(() => running.delete(key));
+  const work = runPromise(downloadWhole(home, id, dir, progress).pipe(inArea("youtube"))).finally(() => running.delete(key));
   running.set(key, work);
   return work;
 }
 
-async function downloadNow(
+const downloadWhole = Effect.fn("youtube.download")(function* (home: string, id: string, dir: string, progress: Progress) {
+  fs.mkdirSync(dir, { recursive: true });
+  const done = join(dir, ".done");
+  const kept = (() => {
+    try {
+      const name = fs.readFileSync(done, "utf8").trim();
+      const path = join(dir, name);
+      return name !== "" && fs.existsSync(path) ? { path, name, size: fs.statSync(path).size } : null;
+    } catch {
+      // Not downloaded yet.
+      return null;
+    }
+  })();
+  if (kept !== null) {
+    progress(kept.size, kept.size, kept.name);
+    return kept;
+  }
+  const path = yield* overRoutes(home, id, dir, 2, null, null, progress, `YouTube video ${id} couldn't be downloaded`);
+  const name = path.slice(dir.length + 1);
+  fs.writeFileSync(done, name);
+  const size = fs.statSync(path).size;
+  progress(size, size, name);
+  return { path, name, size };
+});
+
+type Progress = (bytes: number, total: number | null, name: string) => void;
+
+/**
+ * Tries the routes in order until one gives the file, as `afterFailure`
+ * says; when none does, fails with `DownloadFailed` saying the last reason.
+ */
+const overRoutes = Effect.fn("youtube.overRoutes")(function* (
   home: string,
   id: string,
   dir: string,
-  progress: (bytes: number, total: number | null, name: string) => void,
-): Promise<Downloaded> {
-  fs.mkdirSync(dir, { recursive: true });
-  const done = join(dir, ".done");
-  try {
-    const name = fs.readFileSync(done, "utf8").trim();
-    const path = join(dir, name);
-    if (name !== "" && fs.existsSync(path)) {
-      const size = fs.statSync(path).size;
-      progress(size, size, name);
-      return { path, name, size };
-    }
-  } catch {
-    // Not downloaded yet.
-  }
-  let binary = await ytdlp(home);
+  straight: number,
+  range: [number, number] | null,
+  format: string | null,
+  progress: Progress,
+  saying: string,
+) {
+  let binary = yield* Effect.promise(() => ytdlp(home));
   const url = `https://www.youtube.com/watch?v=${id}`;
-  const proxy = await proxyUrl();
-  const routes = routesFor(proxy, 2);
-  let failure = "";
+  const routes = routesFor(yield* Effect.promise(() => proxyUrl()), straight);
   let updated = false;
+  let last: TryFailure = new Unrecognised({ line: "yt-dlp failed" });
   for (let attempt = 0; attempt < routes.length; ) {
     const route = routes[attempt]!;
-    const result = await diag.timeOnAsync("youtube", "youtube: download", `${id}${said(route)}`, () =>
-      runYtdlp(binary, url, dir, route, progress),
-    );
-    if (result.path !== null) {
-      const name = result.path.slice(dir.length + 1);
-      fs.writeFileSync(done, name);
-      const size = fs.statSync(result.path).size;
-      progress(size, size, name);
-      return { path: result.path, name, size };
-    }
-    failure = errorLine(result.stderr);
-    // YouTube changed and this yt-dlp doesn't know yet: the newest one, and this route again.
-    if (!updated && outdated(result.stderr) && binary === join(home, "bin", "yt-dlp")) {
+    const began = Date.now();
+    const tried = yield* tryRoute(binary, url, dir, route, progress, range, format);
+    diag.record("youtube", "youtube: download", Date.now() - began, tried.path === null ? `${id}${said(route)}: ${errorLine(tried.stderr)}` : null);
+    if (tried.path !== null) return tried.path;
+    last = reasonOf(tried.stderr);
+    const next = afterFailure(last);
+    if (next.to === "update" && !updated && binary === join(home, "bin", "yt-dlp")) {
       updated = true;
-      try {
-        binary = await freshen(binary, true);
-        diag.warn("youtube", `${id}: ${failure}; trying again with the newest yt-dlp`);
+      const fresh = yield* Effect.tryPromise(() => freshen(binary, true)).pipe(
+        Effect.tapError((error) => Effect.logWarning(`updating yt-dlp: ${diag.messageOf(error.cause)}`)),
+        Effect.option,
+      );
+      if (Option.isSome(fresh)) {
+        binary = fresh.value;
+        yield* Effect.logWarning(`${id}: ${last.line}; trying again with the newest yt-dlp`);
         routes.splice(attempt + 1, 0, route);
         attempt += 1;
         continue;
-      } catch (error) {
-        diag.warn("youtube", `updating yt-dlp: ${diag.messageOf(error)}`);
       }
     }
-    const next = nextRoute(routes, attempt, result.stderr);
-    if (next === null) break;
-    diag.warn("youtube", `${id}: ${failure}; trying again${said(routes[next]!)}`);
-    await timing.pause(attempt === 0 ? 3000 : 1000);
-    attempt = next;
+    const to =
+      next.to === "stop"
+        ? null
+        : next.to === "sign-in"
+          ? (() => {
+              const at = routes.findIndex((one, index) => index > attempt && one.signIn);
+              return at < 0 ? null : at;
+            })()
+          : attempt + 1 < routes.length
+            ? attempt + 1
+            : null;
+    if (to === null) break;
+    yield* Effect.logWarning(`${id}: ${last.line}${last._tag === "Unrecognised" ? " (not a failure Edit knows: the next route may still get it)" : ""}; trying again${said(routes[to]!)}`);
+    yield* Effect.promise(() => timing.pause(attempt === 0 ? 3000 : 1000));
+    attempt = to;
   }
-  throw new Error(`YouTube video ${id} couldn't be downloaded: ${failure}`);
-}
+  return yield* new DownloadFailed({ reason: last._tag, message: `${saying}: ${last.line}` });
+});
 
 /** The relay's proxy, asked for once in a while (it's the same for everyone). */
 let fromRelay: { url: string; at: number } | null = null;
@@ -406,39 +500,30 @@ function said(route: Route): string {
   return route.proxy !== null ? " (proxy)" : route.signIn ? " (with the YouTube sign-in from Chrome)" : "";
 }
 
-/** Whether a video needs a signed-in YouTube (age, members, private): only the sign-in can help. */
-function needsSignIn(stderr: string): boolean {
-  return /confirm your age|age.restricted|members.only|Join this channel|Private video|This video is private/i.test(errorLine(stderr));
-}
+/** An excerpt's try is stopped after this. */
+const EXCERPT_MS = 12 * 60_000;
 
 /**
- * The route to try after `attempt` failed, or null when none can help: a
- * video that needs a signed-in YouTube goes straight to the sign-in (no other
- * route can get it), a refusal or no video to the next route.
+ * One yt-dlp run on `route`: the file it made, or what it said (never a
+ * failure of its own: `reasonOf` reads the words). yt-dlp and the FFmpeg it
+ * merges with are one process group, ended together when the try is stopped
+ * (saying nothing for `timing.quiet`, an excerpt past `EXCERPT_MS`) or the
+ * download is.
  */
-function nextRoute(routes: Route[], attempt: number, stderr: string): number | null {
-  if (needsSignIn(stderr)) {
-    const at = routes.findIndex((route, index) => index > attempt && route.signIn);
-    return at < 0 ? null : at;
-  }
-  return attempt + 1 < routes.length && (refused(stderr) || noVideo(stderr) || partWay(stderr)) ? attempt + 1 : null;
-}
-
-async function runYtdlp(
+const tryRoute = Effect.fn("youtube.tryRoute")(function* (
   binary: string,
   url: string,
   dir: string,
   route: Route,
-  progress: (bytes: number, total: number | null, name: string) => void,
-  range: [number, number] | null = null,
-  format: string | null = null,
-): Promise<{ path: string | null; stderr: string }> {
+  progress: Progress,
+  range: [number, number] | null,
+  format: string | null,
+) {
   const proxy = route.proxy;
   const signIn = route.signIn ? cookieArgs() : [];
   if (route.signIn && signIn.length === 0) return { path: null, stderr: "ERROR: no YouTube sign-in in Chrome on this Mac" };
   const runtime = runtimeArgs();
-  const command = [
-    binary,
+  const args = [
     "--no-playlist",
     "--no-warnings",
     "--newline",
@@ -472,12 +557,8 @@ async function runYtdlp(
     ...(proxy === null ? signIn : []),
     url,
   ];
-  let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
-  try {
-    child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: runtimeEnv(runtime) });
-  } catch (error) {
-    return { path: null, stderr: `ERROR: yt-dlp couldn't start: ${diag.messageOf(error)}` };
-  }
+  const env = runtimeEnv(runtime);
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   // Two streams (video, then sound) are downloaded one after the other: the
   // bytes before the current one are carried. The total is the whole video's
   // (both streams, yt-dlp's estimate) from the start and never shrinks: it
@@ -486,57 +567,71 @@ async function runYtdlp(
   let current = 0;
   let largest = 0;
   let path: string | null = null;
-  // Nothing said for this long (no progress, no merge finishing): stopped, and
-  // the try counts as a failed one, never a download frozen for good.
   let heard = Date.now();
-  let quiet = false;
-  const watch = setInterval(() => {
-    if (Date.now() - heard < timing.quiet) return;
-    quiet = true;
-    child.kill();
-  }, Math.min(timing.quiet, 5000));
-  const lines = async () => {
-    const decoder = new TextDecoder();
-    let pending = "";
-    for await (const chunk of child.stdout) {
-      heard = Date.now();
-      pending += decoder.decode(chunk, { stream: true });
-      let newline = pending.indexOf("\n");
-      while (newline >= 0) {
-        const line = pending.slice(0, newline).trim();
-        pending = pending.slice(newline + 1);
-        newline = pending.indexOf("\n");
-        if (line.startsWith("EDIT-FILE ")) {
-          path = line.slice("EDIT-FILE ".length);
-        } else if (line.startsWith("EDIT ")) {
-          const [bytes, total, estimate, approx, ...title] = line.slice("EDIT ".length).split(" ");
-          const done = Number(bytes);
-          if (!Number.isFinite(done)) continue;
-          if (done < current) earlier += current;
-          current = done;
-          const size = Number(total);
-          const guess = Number(estimate);
-          const whole = Number.isFinite(size) ? size : Number.isFinite(guess) ? guess : null;
-          const both = Number(approx);
-          largest = Math.max(largest, whole === null ? 0 : earlier + whole, Number.isFinite(both) ? both : 0, earlier + done);
-          progress(earlier + done, largest > 0 ? largest : null, title.join(" "));
-        }
-      }
+  const line = (text: string) => {
+    heard = Date.now();
+    const said = text.trim();
+    if (said.startsWith("EDIT-FILE ")) {
+      path = said.slice("EDIT-FILE ".length);
+    } else if (said.startsWith("EDIT ")) {
+      const [bytes, total, estimate, approx, ...title] = said.slice("EDIT ".length).split(" ");
+      const done = Number(bytes);
+      if (!Number.isFinite(done)) return;
+      if (done < current) earlier += current;
+      current = done;
+      const size = Number(total);
+      const guess = Number(estimate);
+      const whole = Number.isFinite(size) ? size : Number.isFinite(guess) ? guess : null;
+      const both = Number(approx);
+      largest = Math.max(largest, whole === null ? 0 : earlier + whole, Number.isFinite(both) ? both : 0, earlier + done);
+      progress(earlier + done, largest > 0 ? largest : null, title.join(" "));
     }
   };
-  const timer = range === null ? null : setTimeout(() => child.kill(), 12 * 60_000);
-  let stderr: string;
-  let code: number;
-  try { [, stderr, code] = await Promise.all([lines(), new Response(child.stderr).text(), child.exited]); }
-  finally { if (timer !== null) clearTimeout(timer); clearInterval(watch); }
-  if (quiet) return { path: null, stderr: `${stderr}\n${STOOD_STILL} (nothing for ${Math.round(timing.quiet / 60_000)} minutes).` };
-  if (code !== 0) return { path: null, stderr };
+  const run = Effect.gen(function* () {
+    const handle = yield* spawner.spawn(
+      ChildProcess.make(binary, args, { stdin: "ignore", stdout: "pipe", stderr: "pipe", forceKillAfter: "5 seconds", ...(env ? { env, extendEnv: false } : {}) }),
+    );
+    const errors = yield* Stream.mkString(Stream.decodeText(handle.stderr)).pipe(Effect.orElseSucceed(() => ""), Effect.forkScoped);
+    let pending = "";
+    yield* Stream.runForEach(Stream.decodeText(handle.stdout), (text) =>
+      Effect.sync(() => {
+        heard = Date.now();
+        pending += text;
+        let newline = pending.indexOf("\n");
+        while (newline >= 0) {
+          line(pending.slice(0, newline));
+          pending = pending.slice(newline + 1);
+          newline = pending.indexOf("\n");
+        }
+      }),
+    ).pipe(Effect.ignore);
+    const code = Number(yield* handle.exitCode.pipe(Effect.orElseSucceed(() => -1)));
+    return { code, stderr: yield* Fiber.join(errors) };
+  }).pipe(
+    Effect.scoped,
+    Effect.catch((error) => Effect.succeed({ code: -1, stderr: `ERROR: yt-dlp couldn't start: ${error.message}` })),
+  );
+  // Nothing said for this long (no progress, no merge finishing): stopped, and
+  // the try counts as a failed one, never a download frozen for good.
+  const quiet = Effect.gen(function* () {
+    for (;;) {
+      yield* Effect.sleep(Math.min(timing.quiet, 5000));
+      if (Date.now() - heard >= timing.quiet) return { code: -1, stderr: `${STOOD_STILL} (nothing for ${Math.round(timing.quiet / 60_000)} minutes).` };
+    }
+  });
+  const watched = Effect.raceFirst(run, quiet);
+  const ran = yield* range === null
+    ? watched
+    : watched.pipe(Effect.timeoutOrElse({ duration: EXCERPT_MS, orElse: () => Effect.succeed({ code: -1, stderr: "ERROR: The excerpt took more than 12 minutes and was stopped." }) }));
+  if (ran.code !== 0) return { path: null, stderr: ran.stderr };
   // yt-dlp said yes and made nothing (a route withholding formats can hand
-  // back only storyboards): say so in words the retry above reads.
-  if (path === null) return { path: null, stderr: `${stderr}\nERROR: The download did not produce a video.` };
-  if (!fs.existsSync(path)) return { path: null, stderr: `${stderr}\nERROR: The download did not produce a video (yt-dlp finished without the file it named).` };
-  return { path, stderr };
-}
+  // back only storyboards): say so in words `reasonOf` reads.
+  // Set by `line` as the output came: the type checker can't see into it.
+  const made = path as string | null;
+  if (made === null) return { path: null, stderr: `${ran.stderr}\nERROR: The download did not produce a video.` };
+  if (!fs.existsSync(made)) return { path: null, stderr: `${ran.stderr}\nERROR: The download did not produce a video (yt-dlp finished without the file it named).` };
+  return { path: made, stderr: ran.stderr };
+});
 
 /** Download only a selected stretch, with exact cuts. Never fall back to a
  * whole stream: visual sourcing must not materialize hours for a few seconds. */
@@ -546,14 +641,6 @@ export const PREVIEW_FORMAT = "b[vcodec^=avc1][height<=480][ext=mp4]/bv*[vcodec^
 export async function downloadRange(home: string, id: string, range: [number, number], dir: string, progress: (bytes: number, total: number | null, name: string) => void = () => {}, format: string | null = null): Promise<Downloaded> {
   if (!/^[A-Za-z0-9_-]{11}$/.test(id) || !range.every(Number.isFinite) || range[0] < 0 || range[1] <= range[0] || range[1] - range[0] > 600) throw new Error("YouTube excerpt needs a valid video and a source range of at most 10 minutes");
   fs.mkdirSync(dir, { recursive: true });
-  const binary = await ytdlp(home); const proxy = await proxyUrl();
-  const routes = routesFor(proxy, 1);
-  let failure = "";
-  for (let attempt: number | null = 0; attempt !== null; ) {
-    const result = await runYtdlp(binary, `https://www.youtube.com/watch?v=${id}`, dir, routes[attempt]!, progress, range, format);
-    if (result.path !== null) return { path: result.path, name: result.path.slice(dir.length + 1), size: fs.statSync(result.path).size };
-    failure = errorLine(result.stderr);
-    attempt = nextRoute(routes, attempt, result.stderr);
-  }
-  throw new Error(`YouTube excerpt ${id} ${range[0]}–${range[1]} couldn't be downloaded: ${failure}`);
+  const path = await runPromise(overRoutes(home, id, dir, 1, range, format, progress, `YouTube excerpt ${id} ${range[0]}–${range[1]} couldn't be downloaded`).pipe(inArea("youtube")));
+  return { path, name: path.slice(dir.length + 1), size: fs.statSync(path).size };
 }

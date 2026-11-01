@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 
 import type { ScriptBlock } from "../src/model.ts";
 import { parse, REUSE } from "../src/script.ts";
-import { download, downloadRange, fileOf, idOf, startOf, timing, videoId } from "../src/youtube.ts";
+import { afterFailure, download, downloadRange, fileOf, idOf, reasonOf, startOf, timing, videoId } from "../src/youtube.ts";
 import { scratch } from "./helpers/home.ts";
 import { Database } from "bun:sqlite";
 import { status as signInStatus, where as signInWhere } from "../src/youtube_signin.ts";
@@ -384,6 +384,40 @@ test("a download that drops part-way is tried again on the next route, and a gon
     const failed = await download(gone, "abcdefghijk", `${gone}/out`, () => {}).catch((error: Error) => error.message);
     expect(failed).toContain("Video unavailable");
     expect(fs.readFileSync(goneCalls, "utf8").trim()).toBe("1");
+  } finally {
+    if (proxy !== undefined) process.env.PROXY_URL = proxy;
+    cleanup();
+  }
+});
+
+test("each way yt-dlp fails is read once into a reason, and only a gone video or one needing the sign-in stops the routes", () => {
+  const cases: [string, string, string][] = [
+    ["ERROR: [youtube] abc: Video unavailable. This video has been removed by the uploader", "VideoGone", "stop"],
+    ["ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users.", "NeedsSignIn", "sign-in"],
+    ["ERROR: [youtube] abc: Sign in to confirm you're not a bot", "RouteRefused", "next"],
+    ["ERROR: [youtube] abc: Requested format is not available", "NoVideoHere", "next"],
+    ["ERROR: unable to download video data: <urlopen error [Errno 54] Connection reset by peer>", "StoppedPartWay", "next"],
+    ["ERROR: The download stood still (nothing for 10 minutes).", "StoodStill", "next"],
+    // Oct 31, Kroger: a wording nobody had seen stopped the download at its first try.
+    ["ERROR: [youtube] abc: Something YouTube never said before", "Unrecognised", "next"],
+  ];
+  for (const [stderr, reason, next] of cases) {
+    const read = reasonOf(stderr);
+    expect([stderr, read._tag]).toEqual([stderr, reason]);
+    expect([stderr, afterFailure(read).to]).toEqual([stderr, next]);
+  }
+});
+
+test("a failure Edit doesn't know is tried on the next route instead of ending the download", async () => {
+  const { dir, cleanup } = scratch("youtube-unknown");
+  const proxy = process.env.PROXY_URL;
+  delete process.env.PROXY_URL;
+  try {
+    const calls = fakeScripted(dir, ["ERROR: [youtube] abc: Something YouTube never said before"]);
+    process.env.EDIT_YTDLP = `${dir}/yt-dlp`;
+    const got = await download(dir, "abcdefghijk", `${dir}/out`, () => {});
+    expect(fs.readFileSync(got.path, "utf8")).toBe("video");
+    expect(fs.readFileSync(calls, "utf8").trim()).toBe("2");
   } finally {
     if (proxy !== undefined) process.env.PROXY_URL = proxy;
     cleanup();

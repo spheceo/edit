@@ -946,7 +946,7 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
         await drive.download(await drive.hooks.accessToken(), recording, dest, onBytes);
       } catch (error) {
         problem = diag.messageOf(error);
-        if (problem.includes("came down short")) {
+        if (error instanceof drive.DownloadShort) {
           try {
             await drive.download(await drive.hooks.accessToken(), recording, dest, onBytes);
             problem = null;

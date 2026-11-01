@@ -874,7 +874,7 @@ export async function fetchVideo(app: App, url: string, dest: string, onPercent:
   const paths: string[] = [];
   for (const [index, recording] of recordings.entries()) {
     const path = parts.driveFile(folder, index, recording);
-    if (!downloaded(path, recording)) {
+    if (!(await downloaded(path, recording))) {
       await drive.download(token, recording, path, (bytes) => onPercent(Math.floor(((index * 100 + Math.floor((Math.min(bytes, Math.max(recording.size, 1)) * 100) / Math.max(recording.size, 1))) * 70) / (recordings.length * 100)), null), signal);
     }
     paths.push(path);
@@ -900,9 +900,15 @@ export function overLimits(recordings: drive.Recording[]): string | null {
   return null;
 }
 
-function downloaded(path: string, recording: drive.Recording): boolean {
-  const size = isFile(path) ? fs.statSync(path).size : 0;
-  return recording.size > 0 ? size === recording.size : size > 0;
+/** Whether `path` is already the whole recording, exactly as Drive holds it (drive.intact: its size and MD5, proven once); a damaged copy of the right size is fetched again. */
+async function downloaded(path: string, recording: drive.Recording): Promise<boolean> {
+  if (!isFile(path)) return false;
+  try {
+    return await drive.intact(await drive.hooks.accessToken(), recording, path);
+  } catch {
+    const size = fs.statSync(path).size;
+    return recording.size > 0 ? size === recording.size : size > 0;
+  }
 }
 
 /** Stops before a download this Mac has no room for. */
@@ -988,7 +994,7 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
     const dest = parts.driveFile(folder, index, recording);
     let problem: string | null = null;
     const began = Date.now();
-    if (stream && !downloaded(dest, recording)) {
+    if (stream && !(await downloaded(dest, recording))) {
       try {
         const put = await streamed.drive(dir, recording, (bytes) => {
           pulled[step] = Math.min(bytes, recording.size);
@@ -1003,7 +1009,7 @@ async function fetchDrive(dir: string, script: Script): Promise<Fetched> {
       } catch (error) {
         problem = diag.scrub(diag.messageOf(error));
       }
-    } else if (!downloaded(dest, recording)) {
+    } else if (!(await downloaded(dest, recording))) {
       const onBytes = (bytes: number) => {
         pulled[step] = Math.min(bytes, recording.size);
         report();

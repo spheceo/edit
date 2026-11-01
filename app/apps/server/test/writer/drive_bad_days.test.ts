@@ -63,12 +63,13 @@ test("an answer that isn't Drive's is said at once, not read as an empty folder"
   expect(seen.length).toBe(2);
 });
 
-const recording: drive.Recording = { id: "f1", name: "Interview.mp4", size: VIDEO.length, audio: false };
+const recording: drive.Recording = { id: "f1", name: "Interview.mp4", size: VIDEO.length, audio: false, md5: null };
 
 /** The bytes from a Range request's start, or all of them. */
 const from = (request: Request) => Number(/bytes=(\d+)-/.exec(request.headers.get("range") ?? "")?.[1] ?? 0);
-const media = (request: Request, body: ReadableStream<Uint8Array> | Uint8Array) =>
-  new Response(body, { status: from(request) > 0 ? 206 : 200, headers: { "content-type": "video/mp4" } });
+/** As Drive answers: a range with its Content-Range (`at`: where it says it starts, if not where it was asked). */
+const media = (request: Request, body: ReadableStream<Uint8Array> | Uint8Array, at = from(request)) =>
+  new Response(body, { status: from(request) > 0 ? 206 : 200, headers: { "content-type": "video/mp4", ...(from(request) > 0 ? { "content-range": `bytes ${at}-${VIDEO.length - 1}/${VIDEO.length}` } : {}) } });
 
 test("a download whose connection closes half-way carries on from where it got to", async () => {
   // 80 kB of 200 kB, then the answer ends: no error, just a connection closed early.
@@ -114,4 +115,58 @@ test("a download Drive won't give is said at once; one that keeps coming up shor
   expect(kindOf(short)).toBe("temporary");
   // Five tries in all: the first and four more.
   expect(seen.length).toBe(5);
+});
+
+// Nov 1, Mathias's Mac: a 5.3 GB recording's copy was the right size but damaged
+// (FFmpeg read it as thousands of "Invalid NAL unit size"), and every retry used
+// it again. A download is now proven to be Drive's file: its MD5, once.
+
+const MD5 = new Bun.CryptoHasher("md5").update(VIDEO).digest("hex");
+const checked: drive.Recording = { ...recording, md5: MD5 };
+
+test("a range Drive answers from anywhere but where the file stops is never appended: the file starts over", async () => {
+  handler = (request, n) => (n === 1 ? media(request, VIDEO.subarray(0, 80_000)) : n === 2 ? media(request, VIDEO.subarray(40_000), 40_000) : media(request, VIDEO.subarray(from(request))));
+  const dest = join(dir, "misplaced.mp4");
+  await drive.download("token", checked, dest);
+  expect(Buffer.compare(fs.readFileSync(dest), VIDEO)).toBe(0);
+  expect(drive.rangeStart("bytes 40000-199999/200000")).toBe(40_000);
+  expect(drive.rangeStart(null)).toBeNull();
+});
+
+test("a whole download that isn't Drive's file is fetched again from scratch; damaged twice, it's said and removed", async () => {
+  const damaged = Buffer.from(VIDEO);
+  damaged[100_000] = 9;
+  handler = (request, n) => media(request, n === 1 ? damaged : VIDEO);
+  const dest = join(dir, "damaged.mp4");
+  await drive.download("token", checked, dest);
+  expect(Buffer.compare(fs.readFileSync(dest), VIDEO)).toBe(0);
+  expect(fs.readFileSync(`${dest}.verified`, "utf8")).toBe(`${VIDEO.length} ${MD5}`);
+
+  seen = [];
+  handler = (request) => media(request, damaged);
+  const twice = join(dir, "twice.mp4");
+  const failed = await drive.download("token", checked, twice).catch((error: unknown) => error);
+  expect(failed).toBeInstanceOf(drive.DownloadCorrupt);
+  expect(kindOf(failed)).toBe("temporary");
+  expect(fs.existsSync(twice)).toBe(false);
+});
+
+test("a copy already here of the right size is used only if it's Drive's file; Drive's MD5 is asked when the manifest has none", async () => {
+  const dest = join(dir, "kept.mp4");
+  const damaged = Buffer.from(VIDEO);
+  damaged[5] = 1;
+  fs.writeFileSync(dest, damaged);
+  const asked: string[] = [];
+  handler = (request) => (asked.push(new URL(request.url).searchParams.get("fields") ?? ""), Response.json({ md5Checksum: MD5 }));
+  const unknown: drive.Recording = { id: "f1", name: "Interview.mp4", size: VIDEO.length, audio: false };
+  expect(await drive.intact("token", unknown, dest)).toBe(false);
+  expect(asked).toEqual(["md5Checksum"]);
+  fs.writeFileSync(dest, VIDEO);
+  expect(await drive.intact("token", unknown, dest)).toBe(true);
+  // Proven once: not read through again.
+  seen = [];
+  expect(await drive.intact("token", checked, dest)).toBe(true);
+  expect(seen.length).toBe(0);
+  // Drive keeping no MD5: the size is all there is.
+  expect(await drive.intact("token", recording, join(dir, "missing.mp4"))).toBe(false);
 });

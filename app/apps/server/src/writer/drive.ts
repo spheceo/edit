@@ -3,6 +3,7 @@
 // lists a case folder, downloads its recordings and reads its PDFs as Edit
 // reads its sound library.
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
 import { Effect, Schema } from "effect";
@@ -77,12 +78,14 @@ export class DriveNotShared extends Schema.TaggedError<DriveNotShared>()("DriveN
 export class NotRecordings extends Schema.TaggedError<NotRecordings>()("NotRecordings", { message: Schema.String }) {}
 /** A recording came down short after every try: Try again carries on from what's here. */
 export class DownloadShort extends Schema.TaggedError<DownloadShort>()("DownloadShort", { message: Schema.String }) {}
+/** A recording came down whole but not as Drive holds it (its MD5 differs), even fetched again from scratch. */
+export class DownloadCorrupt extends Schema.TaggedError<DownloadCorrupt>()("DownloadCorrupt", { message: Schema.String }) {}
 /** Drive sent a small page (a quota, a scan warning) instead of the recording. */
 export class DrivePage extends Schema.TaggedError<DrivePage>()("DrivePage", { message: Schema.String }) {}
 
-service.kinds({ DriveNotShared: "later", NotRecordings: "permanent", DownloadShort: "temporary", DrivePage: "later" });
+service.kinds({ DriveNotShared: "later", NotRecordings: "permanent", DownloadShort: "temporary", DownloadCorrupt: "temporary", DrivePage: "later" });
 
-export type DriveError = DriveNotShared | NotRecordings | DownloadShort | DrivePage | service.ServiceError;
+export type DriveError = DriveNotShared | NotRecordings | DownloadShort | DownloadCorrupt | DrivePage | service.ServiceError;
 
 /** The Promise side's switch for tests: no waits between tries. */
 export const timing = { instant: false };
@@ -144,6 +147,8 @@ export interface Recording {
   audio: boolean;
   /** The length Drive reports, when it knows. */
   claimedMs?: number | null;
+  /** Drive's MD5 of the file (null: Drive keeps none; absent: not known, asked when a download is checked): a download is checked against it (`intact`). */
+  md5?: string | null;
 }
 
 function claimed(file: DriveFile): number | null {
@@ -204,12 +209,12 @@ export const recordingsOf = Effect.fn("drive.recordings")(function* (token: stri
     const name = file.name ?? "Drive video";
     const audio = kind(name, mime);
     if (audio === null) return yield* new NotRecordings({ message: "That Drive file is not a video or audio recording." });
-    return [stem(name), [{ id, name, size: Number(file.size ?? 0) || 0, audio, claimedMs: claimed(file) }]] as [string, Recording[]];
+    return [stem(name), [{ id, name, size: Number(file.size ?? 0) || 0, audio, claimedMs: claimed(file), md5: file.md5Checksum ?? null }]] as [string, Recording[]];
   }
   const folder = yield* getJson(token, `${API}/files/${link.id}?fields=name&supportsAllDrives=true`, Schema.Struct({ name: Schema.optional(Schema.String) }));
   const found = yield* walk(token, link.id, (file, id, mime, name, size) => {
     const audio = kind(name, mime);
-    return audio === null ? null : { id, name, size, audio, claimedMs: claimed(file) };
+    return audio === null ? null : { id, name, size, audio, claimedMs: claimed(file), md5: file.md5Checksum ?? null };
   });
   if (found.length === 0) return yield* new NotRecordings({ message: "That folder has no video or audio recordings." });
   return [folder.name ?? "Drive folder", found] as [string, Recording[]];
@@ -254,8 +259,17 @@ const downloadTry = (token: string, recording: Recording, dest: string, onBytes:
         if (!answer.ok || answer.body === null) {
           return { kind: "failed", error: new service.ServiceRefused({ service: SERVICE, status: answer.status, retryAfterMs: service.retryAfterOf(answer.headers), message: `Google Drive answered ${answer.status}` }) } as const;
         }
-        // A server that ignores the range sends the whole file again.
+        // A server that ignores the range sends the whole file again; one that
+        // answers a range from anywhere but where this file stops would put its
+        // bytes in the wrong place (Nov 1: a damaged 5.3 GB copy that FFmpeg read
+        // as thousands of "Invalid NAL unit size"), so the file starts over.
         const resumed = answer.status === 206;
+        const from = resumed ? rangeStart(answer.headers.get("content-range")) : null;
+        if (resumed && from !== have) {
+          await answer.body.cancel().catch(() => {});
+          fs.rmSync(dest, { force: true });
+          return { kind: "failed", error: new service.ServiceUnreachable({ service: SERVICE, message: `Google Drive answered from byte ${from ?? "?"}, not ${have}: starting ${recording.name} over` }) } as const;
+        }
         const out = fs.openSync(dest, resumed ? "a" : "w");
         let written = resumed ? have : 0;
         try {
@@ -267,6 +281,11 @@ const downloadTry = (token: string, recording: Recording, dest: string, onBytes:
           }
         } finally {
           fs.closeSync(out);
+        }
+        // More than the recording holds: something was written twice. Start over.
+        if (recording.size > 0 && written > recording.size) {
+          fs.rmSync(dest, { force: true });
+          return { kind: "failed", error: new service.ServiceUnreachable({ service: SERVICE, message: `${recording.name} came down longer than Drive's file (${written} of ${recording.size} bytes): starting it over` }) } as const;
         }
         // The answer ended before the recording did, without an error: a connection closed early, to carry on from.
         if (recording.size > 0 && written < recording.size) return { kind: "ended", written } as const;
@@ -313,7 +332,67 @@ export const downloading = Effect.fn("drive.download")(function* (token: string,
     const head = fs.readFileSync(dest).subarray(0, 1).toString();
     if (head === "{" || head === "<") return yield* new DrivePage({ message: `Drive sent a page instead of ${recording.name}.` });
   }
+  // Whole, but is it Drive's file? Checked against Drive's MD5; one that isn't is fetched again from scratch, once.
+  if (yield* intactNow(token, recording, dest)) return;
+  diag.warn("writer", `${recording.name} came down damaged (its MD5 isn't Drive's): fetching it again from the start`);
+  fs.rmSync(dest, { force: true });
+  yield* downloadTry(token, recording, dest, onBytes).pipe(Effect.retry(service.temporaryRetries(`downloading ${recording.name} again from Google Drive`, timing.instant ? { base: 1, times: 4 } : { base: "2 seconds", times: 4 })));
+  if (!(yield* intactNow(token, recording, dest))) {
+    fs.rmSync(dest, { force: true });
+    return yield* new DownloadCorrupt({ message: `${recording.name} came down damaged twice (it isn't the file Drive holds). Try again later.` });
+  }
 });
+
+/** "bytes 100-199/1000" → 100; null when it doesn't say. */
+export function rangeStart(header: string | null): number | null {
+  const found = /^bytes (\d+)-\d+\/(?:\d+|\*)$/u.exec(header?.trim() ?? "");
+  return found ? Number(found[1]) : null;
+}
+
+/** The MD5 of a file, read through once. */
+export function md5Of(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("md5");
+    fs.createReadStream(path)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("error", reject)
+      .on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+/** Where a file proven to be Drive's notes its size and MD5, so it's read through once, not at every import. */
+const proofOf = (dest: string) => `${dest}.verified`;
+
+/**
+ * Whether `dest` is exactly the recording Drive holds: its size, and its MD5
+ * when Drive has one (asked of Drive when the recording doesn't carry it: a
+ * manifest from before Nov 1). Size alone let a damaged copy of the right
+ * length be used at every retry.
+ */
+const intactNow = (token: string, recording: Recording, dest: string) =>
+  Effect.gen(function* () {
+    if (!fs.existsSync(dest)) return false;
+    const size = fs.statSync(dest).size;
+    if (recording.size > 0 ? size !== recording.size : size === 0) return false;
+    // null: Drive has none. Absent: not known yet (a manifest from before Nov 1), so asked.
+    const md5 = recording.md5 !== undefined ? recording.md5 : (yield* getJson(token, `${API}/files/${recording.id}?fields=md5Checksum&supportsAllDrives=true`, Schema.Struct({ md5Checksum: Schema.optional(Schema.String) })).pipe(
+      Effect.map((file) => file.md5Checksum ?? null),
+      Effect.orElseSucceed(() => null),
+    ));
+    // Drive keeps no MD5 for some files: the size is all there is to go on.
+    if (md5 === null) return true;
+    const proof = proofOf(dest);
+    if (fs.existsSync(proof) && fs.readFileSync(proof, "utf8") === `${size} ${md5}`) return true;
+    const found = yield* Effect.promise(() => md5Of(dest));
+    if (found !== md5) return false;
+    fs.writeFileSync(proof, `${size} ${md5}`);
+    return true;
+  });
+
+/** `intactNow` for code that isn't Effect yet. */
+export function intact(token: string, recording: Recording, dest: string): Promise<boolean> {
+  return runPromise(intactNow(token, recording, dest).pipe(inArea("writer")));
+}
 
 /** `downloading` for code that isn't Effect yet; a stop (`signal`) abandons the request, keeping what came down. */
 export function download(token: string, recording: Recording, dest: string, onBytes: (bytes: number) => void = () => {}, signal?: AbortSignal): Promise<void> {

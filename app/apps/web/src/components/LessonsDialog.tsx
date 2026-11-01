@@ -74,23 +74,24 @@ function LessonCard({ lesson }: { lesson: InboxLesson }) {
     <article className="flex shrink-0 flex-col gap-1.5 rounded-[10px] border border-line bg-panel px-3.5 py-3">
       <p className="text-[13px] leading-[1.5] font-medium break-words">{lesson.lesson}</p>
       <blockquote className="border-l-2 border-line pl-2.5 text-[12px] leading-[1.5] break-words text-muted">“{lesson.quote}”</blockquote>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-faint">
-        <span className="flex min-w-0 items-center gap-1.5">
+      <div className="flex min-w-0 items-center gap-2 text-[12px] whitespace-nowrap text-faint">
+        <span className="flex min-w-0 shrink items-center gap-1.5">
           {lesson.from === null && lesson.by !== null && <StartedBy by={{ sub: lesson.by.sub, name: lesson.by.name, ...(lesson.by.picture === null ? {} : { picture: lesson.by.picture }) }} size={20} />}
-          <span className="truncate">{who}</span>
+          <span className="max-w-[200px] truncate">{who}</span>
         </span>
         <span>·</span>
-        <span>{day(lesson.at)}</span>
+        <span className="shrink-0">{day(lesson.at)}</span>
         {lesson.source !== null && lesson.source.name !== "" && (
           <>
             <span>·</span>
-            <span className="max-w-[260px] truncate">{lesson.source.name}</span>
+            <span className="min-w-0 truncate">{lesson.source.name}</span>
           </>
         )}
+      </div>
+      <div className="flex min-w-0 items-center gap-2 text-[12px] whitespace-nowrap text-faint">
+        <span className="min-w-0 truncate">{lesson.part}</span>
         <span>·</span>
-        <span>{lesson.part}</span>
-        <span>·</span>
-        <span>{SCOPE[lesson.scope]}</span>
+        <span className="shrink-0">{SCOPE[lesson.scope]}</span>
       </div>
       {lesson.status !== "open" && (
         <div className={cx("text-[12px] leading-[1.5] break-words", lesson.status === "taught" ? "text-fg/85" : "text-muted")}>

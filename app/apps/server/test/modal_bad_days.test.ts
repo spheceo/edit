@@ -105,3 +105,20 @@ test("the local driver: its progress and done lines read, its error said, and a 
     cleanup();
   }
 }, 30_000);
+
+test("an Edit on the team's relay starts Modal exports through it, never the checkout's driver (Nov 1: Kroger's 404s from dev's R2)", () => {
+  const was = { relay: process.env.EDIT_RELAY_URL, via: process.env.EDIT_MODAL_VIA_RELAY };
+  try {
+    delete process.env.EDIT_MODAL_VIA_RELAY;
+    delete process.env.EDIT_RELAY_URL;
+    expect(modal.onProdRelay()).toBe(true);
+    expect(modal.here()).toBe(false);
+    process.env.EDIT_RELAY_URL = "https://edit-relay-dev.sphe-g-personal.workers.dev";
+    expect(modal.onProdRelay()).toBe(false);
+  } finally {
+    if (was.relay === undefined) delete process.env.EDIT_RELAY_URL;
+    else process.env.EDIT_RELAY_URL = was.relay;
+    if (was.via === undefined) delete process.env.EDIT_MODAL_VIA_RELAY;
+    else process.env.EDIT_MODAL_VIA_RELAY = was.via;
+  }
+});

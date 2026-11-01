@@ -17,7 +17,7 @@ import { runPromise } from "./effect/runtime.ts";
 import * as service from "./effect/service.ts";
 import { serdeParse } from "./rust.ts";
 
-const DEFAULT_RELAY = "https://edit-relay.sphe-g-personal.workers.dev";
+export const DEFAULT_RELAY = "https://edit-relay.sphe-g-personal.workers.dev";
 
 /** The relay's base URL. */
 export function url(): string {

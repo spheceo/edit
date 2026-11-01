@@ -44,9 +44,18 @@ function workerRoot(): string {
  */
 export const enabled = () => process.env.EDIT_MODAL_EXPORTS !== "0" && (here() || relayOn);
 
-/** Whether this Mac drives Modal itself (a developer's checkout with the worker, Repack, Bun and uv); EDIT_MODAL_VIA_RELAY=1 goes through the relay as an installed Edit does. */
-function here(): boolean {
-  if (process.env.EDIT_MODAL_VIA_RELAY === "1") return false;
+/**
+ * Whether this Mac drives Modal itself (a developer's checkout with the
+ * worker, Repack, Bun and uv); EDIT_MODAL_VIA_RELAY=1 goes through the relay
+ * as an installed Edit does. On the team's relay (prod) it always goes
+ * through the relay too: the driver reads Infisical's dev keys and deploys its
+ * checkout's code, so a checkout run on prod data read dev's R2 (Nov 1:
+ * Kroger's Modal export 404ed three times, edit-dev holding 22 of its 114
+ * originals) and could have deployed unreleased code to prod Modal, which only
+ * a nightly's tag may do.
+ */
+export function here(): boolean {
+  if (process.env.EDIT_MODAL_VIA_RELAY === "1" || onProdRelay()) return false;
   try {
     command();
     return true;
@@ -54,6 +63,9 @@ function here(): boolean {
     return false;
   }
 }
+
+/** Whether this Edit talks to the team's relay (prod), not a dev one (`just dev` sets EDIT_RELAY_URL to edit-relay-dev). */
+export const onProdRelay = (): boolean => relay.url() === relay.DEFAULT_RELAY;
 
 /**
  * Whether the relay starts cloud exports for this Edit (an installed one,

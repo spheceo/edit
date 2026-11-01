@@ -21,7 +21,7 @@
 
 import * as fs from "node:fs";
 
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Effect, Option, Predicate, Schedule, Schema } from "effect";
 
 import * as diag from "./diag.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
@@ -58,6 +58,10 @@ export const timing = {
   sleep: (ms: number): Promise<void> => Bun.sleep(ms),
   filePart: FILE_PART,
   streamPart: STREAM_PART,
+  /** A transfer is given up on after this long below STALL_BYTES_PER_SECOND. */
+  stallMs: STALL_WINDOW_MS,
+  /** A download may take this long to answer at all. */
+  connectMs: CONNECT_MS,
 };
 
 /** Whether cloud calls can work: someone is signed in (or `EDIT_RELAY_TOKEN` is set). Cloud is always on then. */
@@ -104,7 +108,7 @@ export async function presign(key: string, method: Method, expires: number | nul
   const body: Record<string, unknown> = { key, method };
   if (expires !== null) body.expires = Math.max(Math.floor(expires), 1);
   const answer = await relayJson("r2/url", body);
-  if (typeof answer.url !== "string") throw new Error("the relay gave no URL");
+  if (typeof answer.url !== "string") throw lacking("the relay gave no URL");
   return answer.url;
 }
 
@@ -251,7 +255,7 @@ export async function uploadFile(path: string, key: string, progress: Report = (
     }
     try {
       const sent = await upload(fileSource(fd), key, size, partSize(timing.filePart, size), FILE_PARALLEL, progress);
-      if (sent !== size) throw new Error(`${path} changed while uploading (${size} bytes, sent ${sent})`);
+      if (sent !== size) throw new TransferMismatch({ message: `${path} changed while uploading (${size} bytes, sent ${sent})` });
     } finally {
       fs.closeSync(fd);
     }
@@ -397,7 +401,7 @@ async function upload(
     return size;
   }
   const created = await relayJson("r2/multipart/create", { key, contentType: kind });
-  if (typeof created.uploadId !== "string") throw new Error("the relay gave no upload id");
+  if (typeof created.uploadId !== "string") throw lacking("the relay gave no upload id");
   const uploadId = created.uploadId;
   try {
     const size = await multipart(source, key, uploadId, first, part, parallel, progress);
@@ -474,7 +478,7 @@ async function multipart(
   const parts = etags.map(([partNumber, etag]) => ({ partNumber, etag }));
   const done = await relayJson("r2/multipart/complete", { key, uploadId, parts });
   const stored = asU64(done.size);
-  if (stored !== null && stored !== size) throw new Error(`${key} came out ${stored} bytes in the cloud, not ${size}`);
+  if (stored !== null && stored !== size) throw new TransferMismatch({ message: `${key} came out ${stored} bytes in the cloud, not ${size}` });
   return size;
 }
 
@@ -484,27 +488,53 @@ function putPart(key: string, uploadId: string, number: number, data: Uint8Array
     const answer = await relayJson("r2/multipart/urls", { key, uploadId, parts: [number] });
     const urls = answer.urls as Record<string, unknown> | undefined;
     const url = urls !== undefined && urls !== null && typeof urls === "object" ? urls[String(number)] : undefined;
-    if (typeof url !== "string") throw new Error("the relay gave no part URL");
+    if (typeof url !== "string") throw lacking("the relay gave no part URL");
     const etag = await put(url, data, null, progress);
-    if (etag === null) throw new Error("R2 gave no ETag for the part");
+    if (etag === null) throw new service.AnswerInvalid({ service: "R2", message: "R2 gave no ETag for the part" });
     return etag;
   });
 }
 
-/** Runs `attempt` up to ATTEMPTS times, waiting 2, 4, 8 s between. A bug isn't retried. */
-export async function retry<T>(what: string, attempt: () => Promise<T>): Promise<T> {
+/**
+ * Runs `attempt` up to ATTEMPTS times, waiting 2, 4, 8 s between, but asks
+ * again only after a temporary failure (effect/service.ts `kindOf`: R2 or
+ * the relay unreachable, a stall, a 5xx or 429, a connection closed early).
+ * A refusal (a 403, a 400), an answer missing what it should hold, or a bug
+ * is said at once: the old loop asked again after anything but a bug, so a
+ * refused upload took four tries and 14 s to say so. The waits go through
+ * `timing.sleep`, which tests make instant.
+ */
+export function retry<T>(what: string, attempt: () => Promise<T>): Promise<T> {
   let tries = 0;
-  for (;;) {
-    tries += 1;
-    try {
-      return await attempt();
-    } catch (error) {
-      if (isBug(error) || tries >= ATTEMPTS) throw error;
-      diag.warn("cloud", `${what} failed (try ${tries}): ${diag.messageOf(error)}`);
-      await timing.sleep((1 << tries) * 1000);
-    }
-  }
+  const once = Effect.tryPromise({ try: () => ((tries += 1), attempt()), catch: (error) => error as Error });
+  return runPromise(
+    once.pipe(
+      Effect.retry(
+        Schedule.recurs(ATTEMPTS - 1).pipe(
+          Schedule.setInputType<Error>(),
+          Schedule.while(({ input }) => !isBug(input) && service.isTemporary(input)),
+          Schedule.tap(({ input }) =>
+            Effect.logWarning(`${what} failed (try ${tries}): ${diag.messageOf(input)}`).pipe(Effect.andThen(Effect.promise(() => timing.sleep((1 << tries) * 1000)))),
+          ),
+        ),
+      ),
+      inArea("cloud"),
+    ),
+  );
 }
+
+/** R2 couldn't be reached, or a transfer stalled (said as a timeout). */
+function unreached(message: string, stalled: boolean): service.ServiceUnreachable | service.ServiceTimedOut {
+  return stalled ? new service.ServiceTimedOut({ service: "R2", afterMs: timing.stallMs, message }) : new service.ServiceUnreachable({ service: "R2", message });
+}
+
+/** The relay's answer lacked what it always holds. */
+const lacking = (message: string) => new service.AnswerInvalid({ service: "Edit's relay", message });
+
+/** A file changed under an upload, or R2 stored a different size: uploading it again can fix it. */
+export class TransferMismatch extends Schema.TaggedError<TransferMismatch>()("TransferMismatch", { message: Schema.String }) {}
+
+service.kinds({ TransferMismatch: "temporary" });
 
 /**
  * Gives up on a transfer that moves less than 1 KB/s for a minute (curl's
@@ -518,12 +548,13 @@ export class Stall {
   reason: string | null = null;
 
   constructor(connectMs: number | null = null) {
+    const window = timing.stallMs;
     this.timer = setInterval(() => {
-      if (this.moved_ < STALL_BYTES_PER_SECOND * (STALL_WINDOW_MS / 1000)) {
-        this.abort(`Operation too slow. Less than ${STALL_BYTES_PER_SECOND} bytes/sec transferred the last ${STALL_WINDOW_MS / 1000} seconds`);
+      if (this.moved_ < STALL_BYTES_PER_SECOND * (window / 1000)) {
+        this.abort(`Operation too slow. Less than ${STALL_BYTES_PER_SECOND} bytes/sec transferred the last ${window / 1000} seconds`);
       }
       this.moved_ = 0;
-    }, STALL_WINDOW_MS);
+    }, window);
     unref(this.timer);
     if (connectMs !== null) {
       this.connect = setTimeout(() => this.abort(`Connection timed out after ${connectMs} milliseconds`), connectMs);
@@ -597,11 +628,11 @@ async function put(url: string, data: Uint8Array, kind: string | null, progress:
     try {
       response = await fetch(url, { method: "PUT", body, headers, signal: stall.signal, duplex: "half" } as RequestInit);
     } catch (error) {
-      throw new Error(`could not reach R2: ${diag.scrub(stall.why(error))}`);
+      throw unreached(`could not reach R2: ${diag.scrub(stall.why(error))}`, stall.reason !== null);
     }
     const text = await response.text().catch(() => "");
     if (response.status !== 200) {
-      throw new Error(`R2 refused the upload (${response.status}): ${r2Message(text)}`);
+      throw new service.ServiceRefused({ service: "R2", status: response.status, retryAfterMs: service.retryAfterOf(response.headers), message: `R2 refused the upload (${response.status}): ${r2Message(text)}` });
     }
     const etag = (response.headers.get("etag") ?? "").trim();
     return etag === "" ? null : etag;
@@ -678,7 +709,7 @@ export function download(key: string, dest: string, progress: Report = () => {})
     const got = sizeOf(partial);
     if (got !== object.size) {
       fs.rmSync(partial, { force: true });
-      throw new Error(`${key}: got ${got} bytes of ${object.size}`);
+      throw new TransferMismatch({ message: `${key}: got ${got} bytes of ${object.size}` });
     }
     try {
       fs.renameSync(partial, dest);
@@ -738,13 +769,13 @@ async function fetchRest(key: string, object: Head, partial: string, progress: R
     // the ETag it answers with is checked below too.
     if (object.etag !== null) headers["if-range"] = object.etag;
   }
-  const stall = new Stall(CONNECT_MS);
+  const stall = new Stall(timing.connectMs);
   try {
     let response: Response;
     try {
       response = await fetch(url, { headers, signal: stall.signal });
     } catch (error) {
-      throw new Error(`downloading ${key} (000): ${diag.scrub(stall.why(error))}`);
+      throw unreached(`downloading ${key} (000): ${diag.scrub(stall.why(error))}`, stall.reason !== null);
     }
     stall.connected();
     const code = String(response.status);
@@ -752,19 +783,23 @@ async function fetchRest(key: string, object: Head, partial: string, progress: R
     if (object.etag !== null && etag !== "" && strongEtag(etag) !== strongEtag(object.etag)) {
       await response.body?.cancel().catch(() => {});
       fs.rmSync(partial, { force: true });
-      throw new Error(`${key} changed while downloading; download it again`);
+      throw new TransferMismatch({ message: `${key} changed while downloading; download it again` });
     }
     if (response.status >= 400) {
       await response.body?.cancel().catch(() => {});
-      // 416: nothing past what we have; start again from nothing.
-      if (code === "416") fs.rmSync(partial, { force: true });
-      throw new Error(`downloading ${key} (${code}): The requested URL returned error: ${code}`);
+      // 416: nothing past what we have; start again from nothing, on the next try.
+      if (code === "416") {
+        fs.rmSync(partial, { force: true });
+        throw new TransferMismatch({ message: `downloading ${key} (416): The requested range was past the object; starting again` });
+      }
+      throw new service.ServiceRefused({ service: "R2", status: response.status, retryAfterMs: service.retryAfterOf(response.headers), message: `downloading ${key} (${code}): The requested URL returned error: ${code}` });
     }
     if (have > 0 && response.status !== 206) {
       // The server ignored the range: start again from nothing.
       await response.body?.cancel().catch(() => {});
       fs.rmSync(partial, { force: true });
-      throw new Error(`downloading ${key} (${code}): HTTP server doesn't seem to support byte ranges. Cannot resume.`);
+      // Started again from nothing on the next try (the partial file is gone).
+      throw new TransferMismatch({ message: `downloading ${key} (${code}): HTTP server doesn't seem to support byte ranges. Cannot resume.` });
     }
     const fd = fs.openSync(partial, have > 0 ? "a" : "w");
     let reported = 0;
@@ -782,7 +817,7 @@ async function fetchRest(key: string, object: Head, partial: string, progress: R
       }
     } catch (error) {
       if (isBug(error)) throw error;
-      throw new Error(`downloading ${key} (${code}): ${diag.scrub(stall.why(error))}`);
+      throw unreached(`downloading ${key} (${code}): ${diag.scrub(stall.why(error))}`, stall.reason !== null);
     } finally {
       fs.closeSync(fd);
     }

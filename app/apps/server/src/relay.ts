@@ -123,62 +123,24 @@ export async function forwardTiles(request: Request, from: URL): Promise<Respons
 }
 
 /**
- * Sends one request to the relay; a network failure is `UNREACHABLE: <why>`.
- * Refused (401) with a person's token, the sign-in is renewed and the request
- * sent once more (accounts.renewRefused: a cut-off refuses tokens made before it).
- */
-async function send(method: string, route: string, body: unknown, timeoutSeconds: number, again = false): Promise<Response> {
-  const used = token();
-  const headers: Record<string, string> = authHeaders(used);
-  let payload: string | undefined;
-  if (body !== undefined && body !== null) {
-    headers["content-type"] = "application/json";
-    payload = JSON.stringify(body);
-  }
-  let response: Response;
-  try {
-    response = await fetch(`${url()}${route}`, {
-      method,
-      headers,
-      body: payload,
-      signal: AbortSignal.timeout(timeoutSeconds * 1000),
-    });
-  } catch (error) {
-    throw new Error(`${UNREACHABLE}: ${messageOf(error)}`);
-  }
-  if (response.status === 401 && !again && used !== null && used !== envToken() && (await accounts.renewRefused(used))) {
-    await response.body?.cancel();
-    return send(method, route, body, timeoutSeconds, true);
-  }
-  return response;
-}
-
-/**
  * One relay request: the answer goes to `out`; a failure comes back with the
  * relay's (or the service behind it's) reason. On success, the request id the
- * relay passed on (`x-request-id`), if any.
+ * relay passed on (`x-request-id`), if any. On `ask` (below): a timed
+ * request, a refused token renewed once.
  */
-export async function call(
-  method: string,
-  route: string,
-  body: unknown,
-  out: string,
-  feature: string,
-): Promise<string | null> {
-  const response = await send(method, route, body, 300);
-  let answer: Uint8Array;
-  try {
-    answer = await response.bytes();
-  } catch (error) {
-    throw new Error(`${UNREACHABLE}: ${messageOf(error)}`);
-  }
-  if (response.status === 200) {
-    fs.writeFileSync(out, answer);
-    const request = (response.headers.get("x-request-id") ?? "").trim();
-    return request === "" ? null : request;
-  }
-  fs.rmSync(out, { force: true });
-  throw new Error(failure(String(response.status), answer, feature));
+export function call(method: string, route: string, body: unknown, out: string, feature: string): Promise<string | null> {
+  return runPromise(
+    Effect.gen(function* () {
+      const answer = yield* ask(method, route, body, 300_000);
+      if (answer.status === 200) {
+        fs.writeFileSync(out, answer.body);
+        const request = (answer.headers.get("x-request-id") ?? "").trim();
+        return request === "" ? null : request;
+      }
+      fs.rmSync(out, { force: true });
+      return yield* new service.ServiceRefused({ service: SERVICE, status: answer.status, retryAfterMs: service.retryAfterOf(answer.headers), message: failure(String(answer.status), answer.body, feature) });
+    }),
+  );
 }
 
 // ── The relay as an Effect (docs/plans/2026-11-01-effect.md, round 2) ──

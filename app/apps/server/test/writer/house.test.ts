@@ -84,4 +84,8 @@ test("flags the opening and pacing the producers revised", () => {
   expect(withMuteNotes(muted, 1)).toBe(1);
   expect(muted.clips[0]!.notes![0]!.text).toBe('edit: mute "sex" (15:00).');
   expect(withMuteNotes(muted, 2)).toBe(0);
+  // Past an hour, as the Doc writes it.
+  const late = { ...script, words: [word("w9", "raped", 16_746_000)], clips: [{ id: "t", startMs: 16_745_000, endMs: 16_748_000 }] } as Script;
+  withMuteNotes(late, 1);
+  expect(late.clips[0]!.notes![0]!.text).toBe('edit: mute "raped" (4:39:06).');
 });

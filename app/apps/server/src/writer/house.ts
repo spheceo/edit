@@ -254,7 +254,12 @@ const BLOCK_MOST_MS = 200_000;
 const BLOCK_LEAST_MS = 45_000;
 const CHILD_WORDS = /\bchild(?:ren)?\b/giu;
 
-const at = (ms: number): string => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`;
+/** A time as the Doc writes it: m:ss, or h:mm:ss past an hour. */
+const at = (ms: number): string => {
+  const whole = Math.floor(ms / 1000);
+  const [h, m, sec] = [Math.floor(whole / 3600), Math.floor((whole % 3600) / 60), whole % 60];
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}` : `${m}:${String(sec).padStart(2, "0")}`;
+};
 
 /**
  * The opening and the pacing, as the producers revised them in Script mode

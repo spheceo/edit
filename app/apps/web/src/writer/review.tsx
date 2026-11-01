@@ -324,8 +324,8 @@ export function ReviewDialog({
       title={link ? "Review" : "Share for review"}
       description={
         link
-          ? "Anyone with the link can read the script and leave notes under a name. Share again to publish the script as it is now, as the next version on the same link."
-          : "Publishes the script on a Repack link. Anyone with it can read the script and leave notes under a name, with no account."
+          ? "Only people signed in can open the link, read the script and leave notes. Share again to publish the script as it is now, as the next version on the same link."
+          : "Publishes the script on a Repack link. Only people signed in can open it, read the script and leave notes."
       }
       width={560}
       footer={

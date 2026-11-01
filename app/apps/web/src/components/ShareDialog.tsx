@@ -118,8 +118,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
         <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Share</h2>
         <p className="mt-1 text-[13px] leading-relaxed text-muted">
           {link
-            ? "Each share exports the edit as it is now and adds it to this link as a new version. Anyone with the link can watch it and leave notes at a moment; the notes come back to the agent."
-            : "Exports the whole edit and makes a review link. Anyone with it can watch and leave notes at a moment; the notes come back to the agent. Later shares go on the same link as new versions."}
+            ? "Each share exports the edit as it is now and adds it to this link as a new version. Only people signed in can open the link, watch it and leave notes at a moment; the notes come back to the agent."
+            : "Exports the whole edit and makes a review link. Only people signed in can open it, watch and leave notes at a moment; the notes come back to the agent. Later shares go on the same link as new versions."}
         </p>
 
         {link && (

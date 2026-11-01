@@ -12,7 +12,7 @@ import { caseCount, isCutIn } from "./blocks.ts";
 import { describe } from "./brief.ts";
 import * as formats from "./formats.ts";
 import type { Format } from "./formats.ts";
-import { textFlags } from "./house.ts";
+import { paceFlags, textFlags } from "./house.ts";
 import { COMPILATION_PAGES, pageCount } from "./pages.ts";
 import { clock } from "./paragraphs.ts";
 import * as tidy from "./tidy.ts";
@@ -616,8 +616,10 @@ export function teamFlags(script: Script, format: Format, clips: Clip[]): string
 /** What the team would flag on a footage script as it's saved, shown before sharing. */
 export function audit(script: Script): string[] {
   const format = formatOfScript(script);
-  if (formats.isFoia(format)) return textFlags(script, script.clips, purposes(script.clips, format, "one-run"), false);
-  return teamFlags(script, format, script.clips);
+  const pace = format.kind === "courtroom" ? [] : paceFlags(script, script.clips, !format.compilation);
+  if (formats.isFoia(format)) return [...textFlags(script, script.clips, purposes(script.clips, format, "one-run"), false), ...pace];
+  if (!format.compilation && format.kind !== "courtroom") return [...textFlags(script, script.clips, purposes(script.clips, format, "one-run"), false), ...pace];
+  return [...teamFlags(script, format, script.clips), ...pace];
 }
 
 /** How a cut that passed misses its format's target, if it does: a compilation outside its pages, a FOIA cut under ten minutes, or what the team flags. */
@@ -629,12 +631,12 @@ export function offTarget(script: Script, format: Format, done: Compiled): strin
       const change = pages > most ? "Shorten it: tighter cut-ins and fewer or shorter footage ranges" : "Lengthen it: fuller cut-ins and more of the strongest footage";
       return `The script runs ${pages} Letter pages; a compilation's runs ${least} to ${most}. ${change}, keeping every case.`;
     }
-    const flags = teamFlags(script, format, done.clips);
+    const flags = [...teamFlags(script, format, done.clips), ...(format.kind === "courtroom" ? [] : paceFlags(script, done.clips, false))];
     if (flags.length > 0) return `The team would flag this: ${flags.join(" ")}`;
   }
   if (formats.isFoia(format) && done.belowFloor) return "The cut runs under a FOIA video's ten-minute floor even with every pause kept. Keep more of the footage.";
-  if (formats.isFoia(format)) {
-    const flags = textFlags(script, done.clips, purposes(done.clips, format, "one-run"), false);
+  if (format.kind !== "courtroom" && !format.compilation) {
+    const flags = [...textFlags(script, done.clips, purposes(done.clips, format, "one-run"), false), ...paceFlags(script, done.clips, true)];
     if (flags.length > 0) return `Writer's house rules would flag this: ${flags.join(" ")}`;
   }
   return null;

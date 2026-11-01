@@ -32,7 +32,8 @@ test("a bodycam compilation reads both guides as Repack gives them", () => {
   expect(names("foia", true, "When Cops")).toEqual(["PRODUCER'S COMPILATION GUIDE", "PRODUCER'S FOIA GUIDE", "WRITER'S HOUSE RULES"]);
   expect(names("interrogation", true, "When Cops")).toEqual(["PRODUCER'S COMPILATION GUIDE", "WRITER'S HOUSE RULES"]);
   expect(names("foia", false, "A case")).toEqual(["PRODUCER'S FOIA GUIDE", "WRITER'S HOUSE RULES"]);
-  expect(names("interrogation", false, "A case")).toEqual([]);
+  // Since Nov 1 an interrogation gets them too: the opening and pacing notes (Roblox, Kroger).
+  expect(names("interrogation", false, "A case")).toEqual(["WRITER'S HOUSE RULES"]);
   const [shape, length] = shapeLengthSequence(formatOf("foia", true, "When Cops"), 3);
   expect(shape).toContain("standard compilation");
   expect(length).toContain("6 to 7 Letter pages");

@@ -240,3 +240,91 @@ export function textFlags(script: Script, clips: Clip[], purposes: string[], com
   if (lateNames.length > 0) flags.push(`People first named in an outro: ${lateNames.join(", ")}. Introduce them where they first matter in the case; an outro only uses names the viewer knows.`);
   return flags;
 }
+
+/** Words a footage clip's people say, in order. */
+function saidIn(script: Script, clip: Clip): string[] {
+  return (script.words ?? []).filter((word) => word.startMs >= clip.startMs - 50 && word.startMs < clip.endMs).map((word) => word.text);
+}
+
+const soundOnly = (script: Script, clip: Clip): boolean =>
+  (script.parts ?? []).some((part) => part.audio && clip.startMs >= part.startMs && clip.startMs < part.startMs + part.durationMs);
+
+const FILLER = new Set(["yeah", "yes", "no", "okay", "ok", "um", "uh", "umm", "uhh", "mm", "hmm", "mhm", "right", "alright", "so", "and", "but"]);
+const BLOCK_MOST_MS = 200_000;
+const BLOCK_LEAST_MS = 45_000;
+const CHILD_WORDS = /\bchild(?:ren)?\b/giu;
+
+const at = (ms: number): string => `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, "0")}`;
+
+/**
+ * The opening and the pacing, as the producers revised them in Script mode
+ * (Oct 26–Nov 1): the first clip is the title's moment with picture, no
+ * footage block past about three minutes, no cut-in after a sliver of
+ * footage, no crumbs, "child" kept out of the narration. `single` is a
+ * one-case script (a compilation's case intros and transitions sit close by design).
+ */
+export function paceFlags(script: Script, clips: Clip[], single: boolean): string[] {
+  const flags: string[] = [];
+  const footage = clips.filter((clip) => !isCutIn(clip));
+  const first = footage[0];
+  if (first !== undefined && soundOnly(script, first)) {
+    flags.push(`The video opens on a sound-only recording (${quote(saidIn(script, first).join(" "))}). The first clip is the title's moment with picture: the person confronted with what the title promises; a sound-only clip can come later in the intro, with an edit note saying what it is.`);
+  }
+  // Footage between cut-ins, in played time, with where each block starts in the script.
+  const blocks: { ms: number; from: number }[] = [];
+  let run = { ms: 0, from: 0 };
+  let played = 0;
+  for (const clip of clips) {
+    if (isCutIn(clip)) {
+      blocks.push(run);
+      played += 3000;
+      run = { ms: 0, from: played };
+      continue;
+    }
+    run.ms += Math.max(0, clip.endMs - clip.startMs);
+    played += Math.max(0, clip.endMs - clip.startMs);
+  }
+  blocks.push(run);
+  const body = blocks.slice(2);
+  const long = body.filter((block) => block.ms > BLOCK_MOST_MS).map((block) => `${(block.ms / 60_000).toFixed(1)} min from ${at(block.from)}`);
+  if (long.length > 0) {
+    flags.push(`Footage blocks over about three minutes (${long.join("; ")}). Break each where the conversation turns, with a cut-in that adds what the footage can't (the people's life, the motive, what changed), early or late in the video.`);
+  }
+  // A short cut (a test, a sample) has no pacing to speak of.
+  if (single && footage.reduce((sum, clip) => sum + Math.max(0, clip.endMs - clip.startMs), 0) >= 600_000) {
+    const short = body.slice(0, -1).filter((block) => block.ms > 0 && block.ms < BLOCK_LEAST_MS).map((block) => `${Math.round(block.ms / 1000)} s from ${at(block.from)}`);
+    if (short.length > 0) flags.push(`Cut-ins after too little footage (${short.join("; ")}). A cut-in needs a block worth breaking, about a minute or more: join it to the next, or move the cut-in.`);
+  }
+  const crumbs = footage.filter((clip) => {
+    const said = saidIn(script, clip).map((word) => word.toLowerCase().replace(/[^\p{L}']/gu, ""));
+    return said.length > 0 && said.length <= 4 && said.every((word) => word === "" || FILLER.has(word));
+  });
+  if (crumbs.length > 0) flags.push(`Crumbs: clips of only ${crumbs.slice(0, 6).map((clip) => quote(saidIn(script, clip).join(" "))).join(", ")}. Take them out, or play the stretch around them as one range.`);
+  const child = clips.filter(isCutIn).flatMap((clip) => (clip.narration ?? "").match(CHILD_WORDS) ?? []);
+  if (child.length > 0) flags.push(`"Child" or "children" ${child.length} time${child.length === 1 ? "" : "s"} in the narration. Write around it where it reads as well: "a five-year-old boy", "young students", "the young girl".`);
+  return flags;
+}
+
+const MUTE_WORDS = /\b(sex|sexual|sexually|rape|raped|raping|penis|vagina|molest(?:ed|ing)?|porn)\b/iu;
+
+/**
+ * The editor's mute notes, put on by the app (a producer, Masseur, Oct 30:
+ * "Make editor notes on words such as 'sex'… where we tell the editor to mute
+ * this word"): each footage clip saying one gets an edit: note naming the
+ * words and when, unless a note there already asks to mute them.
+ */
+export function withMuteNotes(script: Script, now = Date.now()): number {
+  let added = 0;
+  for (const clip of script.clips) {
+    if (isCutIn(clip)) continue;
+    const words = (script.words ?? []).filter((word) => word.startMs >= clip.startMs - 50 && word.startMs < clip.endMs && MUTE_WORDS.test(word.text));
+    if (words.length === 0) continue;
+    const notes = clip.notes ?? [];
+    if (notes.some((note) => /\bmute\b/iu.test(note.text))) continue;
+    const said = [...new Set(words.map((word) => word.text.replace(/[^\p{L}']/gu, "").toLowerCase()))];
+    notes.push({ id: crypto.randomUUID(), text: `edit: mute ${said.map((word) => `"${word}"`).join(", ")} (${words.map((word) => at(word.startMs)).join(", ")}).`, at: now });
+    clip.notes = notes;
+    added++;
+  }
+  return added;
+}

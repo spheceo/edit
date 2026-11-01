@@ -12,6 +12,7 @@ import { isFile } from "../paths.ts";
 import * as build from "./build.ts";
 import * as casefiles from "./casefiles.ts";
 import * as chat from "./chat.ts";
+import * as house from "./house.ts";
 import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import { checkClips } from "./edits.ts";
@@ -160,6 +161,8 @@ export async function buildOnce(app: App, data: string, id: string, note: string
     failed(dir, job, error);
   }
   now.proposals = [];
+  const muted = house.withMuteNotes(now);
+  if (muted > 0) report = `${report}\n\nMute notes for the editor on ${muted} footage clip${muted === 1 ? "" : "s"} (sex and rape-type words).`;
   save(dir, before, now);
   chat.add(dir, "editor", report, built.costUsd);
   return [report, built.costUsd];

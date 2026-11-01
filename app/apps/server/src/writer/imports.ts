@@ -526,7 +526,14 @@ const importScript = Effect.fn("writer.import")(function* (app: App, dir: string
   const from = script.sourceKind === "file" ? `the file ${script.originalPath.split("/").pop()}` : script.sourceKind === "compilation" ? `${script.sourceUrl.split("\n").length} videos` : `${script.sourceKind} ${script.sourceUrl.split("\n")[0]}`;
   yield* Effect.logInfo(`${name}: importing from ${from}`);
   say(script, "Starting.");
-  const ran = yield* pipeline(app, dir, script).pipe(Effect.scoped, Effect.result);
+  let ran = yield* pipeline(app, dir, script).pipe(Effect.scoped, Effect.result);
+  // Footage Edit made or fetched itself whose sound can't be read is made again, once (Nov 1, Mathias's "Mom
+  // Secretly": its preview held damaged packets at the right length, and every retry read the same file, while the
+  // recording itself, in the cloud, reads whole).
+  if (ran._tag === "Failure" && unreadable(ran.failure) && remakeFootage(dir, script)) {
+    yield* Effect.logWarning(`${jobs.named(script.id, script.title)}: its footage couldn't be read for its sound (${diag.gist(diag.messageOf(ran.failure))}); made again from the recording`);
+    ran = yield* pipeline(app, dir, script).pipe(Effect.scoped, Effect.result);
+  }
   if (ran._tag === "Success") {
     const step = ran.success;
     const seconds = `${Math.round((Date.now() - began) / 1000)} s`;
@@ -555,6 +562,38 @@ const importScript = Effect.fn("writer.import")(function* (app: App, dir: string
   say(script, message);
   return yield* new ImportStopped({ message, kind: service.kindOf(error) });
 });
+
+/** The sound couldn't be taken from the footage: a damaged file, not a passing failure. */
+export function unreadable(error: unknown): boolean {
+  const tag = (error as { _tag?: unknown } | null)?._tag;
+  return tag === "AudioUnreadable" || /^could not (extract|cut) (the )?audio/u.test(diag.messageOf(error));
+}
+
+/**
+ * Takes away the footage Edit made or fetched for this script (its preview and
+ * the preview's pieces, its Drive and YouTube downloads in the script's folder),
+ * so the import makes it again; false when there's none (a person's own file is
+ * theirs, never removed).
+ */
+export function remakeFootage(dir: string, script: Script): boolean {
+  if (script.sourceKind !== "drive" && script.sourceKind !== "youtube" && script.sourceKind !== "compilation") return false;
+  const gone: string[] = [];
+  const remove = (path: string) => {
+    if (!fs.existsSync(path)) return;
+    fs.rmSync(path, { recursive: true, force: true });
+    gone.push(path);
+  };
+  remove(store.proxyPath(dir));
+  remove(join(dir, "pieces"));
+  // Downloaded recordings (and the proof each was Drive's), never the manifest that says which they are.
+  for (const sub of ["drive", "compilation"]) {
+    const folder = join(dir, sub);
+    if (!fs.existsSync(folder)) continue;
+    for (const name of fs.readdirSync(folder)) if (name !== "manifest.json" && name !== "videos.json") remove(join(folder, name));
+  }
+  if (script.originalPath !== "" && script.originalPath.startsWith(`${dir}/`)) remove(script.originalPath);
+  return gone.length > 0;
+}
 
 /** `importScript` for the code that isn't Effect yet: its failure an Error with the same words. */
 function run(app: App, dir: string, script: Script): Promise<Script> {

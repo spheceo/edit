@@ -100,3 +100,31 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
     cleanup();
   }
 }, 60_000);
+
+test("footage Edit made whose sound can't be read is taken away to be made again; a person's own file never is (Nov 1, Mom Secretly)", () => {
+  const { dir, cleanup } = fixtureHome("import-remake");
+  try {
+    const scriptDir = `${dir}/s`;
+    fs.mkdirSync(`${scriptDir}/drive`, { recursive: true });
+    fs.mkdirSync(`${scriptDir}/pieces`, { recursive: true });
+    for (const file of ["proxy.mp4", "pieces/a.mp4", "drive/00-rec.mp4", "drive/00-rec.mp4.verified", "drive/manifest.json"]) fs.writeFileSync(`${scriptDir}/${file}`, "x");
+    const script = { sourceKind: "drive", originalPath: `${scriptDir}/proxy.mp4` } as Parameters<typeof imports.remakeFootage>[1];
+    expect(imports.remakeFootage(scriptDir, script)).toBe(true);
+    expect(fs.existsSync(`${scriptDir}/proxy.mp4`)).toBe(false);
+    expect(fs.existsSync(`${scriptDir}/pieces`)).toBe(false);
+    expect(fs.existsSync(`${scriptDir}/drive/00-rec.mp4`)).toBe(false);
+    expect(fs.existsSync(`${scriptDir}/drive/00-rec.mp4.verified`)).toBe(false);
+    expect(fs.existsSync(`${scriptDir}/drive/manifest.json`)).toBe(true);
+    // Nothing left to make again: not asked twice.
+    expect(imports.remakeFootage(scriptDir, script)).toBe(false);
+    // A person's own file is theirs.
+    fs.writeFileSync(`${dir}/mine.mp4`, "x");
+    expect(imports.remakeFootage(scriptDir, { sourceKind: "file", originalPath: `${dir}/mine.mp4` } as Parameters<typeof imports.remakeFootage>[1])).toBe(false);
+    expect(fs.existsSync(`${dir}/mine.mp4`)).toBe(true);
+    expect(imports.unreadable({ _tag: "AudioUnreadable", message: "x" })).toBe(true);
+    expect(imports.unreadable(new Error("could not extract audio: [aac @ 0x1] channel element 0.0 duplicate"))).toBe(true);
+    expect(imports.unreadable(new Error("could not reach the transcription relay"))).toBe(false);
+  } finally {
+    cleanup();
+  }
+});

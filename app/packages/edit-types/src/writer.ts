@@ -99,6 +99,8 @@ export type Script = {
   stage: string;
   progress: number;
   error: string | null;
+  /** The build its import stopped on, when that failure is one the same build meets again however often it's asked (a 413, an unreadable file): Retry waits for an update. */
+  stuckOn?: string;
   durationMs: number;
   words: Word[];
   clips: Clip[];
@@ -149,6 +151,8 @@ export type Script = {
 export type Archive = { at: number; by: string; freedBytes: number; restoring: boolean; missing: string[] };
 
 export type Summary = {
+  /** Its import stopped on a failure Retry can't get past on this build (`Script.stuckOn`): Retry isn't offered until Edit is updated. */
+  retryHelps?: false;
   /** Its first prompt (New project's first message) still to start: it's still importing. */
   firstBuild?: boolean;
   dismissedAt?: number;

@@ -99,7 +99,7 @@ async function attention(app: App, setup: { id: string; ok: boolean; title: stri
   for (const row of writerStore.list(data)) {
     const refused = writerCloud.refused(row.id);
     if (refused !== null) out.push(`Script ${row.id} "${row.title}": NOT IN THE CLOUD: ${refused}`);
-    if (row.status === "error" && !writerImports.importing(row.id)) out.push(`Script ${row.id} "${row.title}": its import stopped${row.error ? ` (${row.error})` : ""}.`);
+    if (row.status === "error" && !writerImports.importing(row.id)) out.push(`Script ${row.id} "${row.title}": its import stopped${row.error ? ` (${row.error})` : ""}${row.retryHelps === false ? "; this build stops there again however often it's retried: it needs a fix in Edit, then an update" : ""}.`);
     if (row.status === "needs_choice") out.push(`Script ${row.id} "${row.title}": its import waits on their choice: ${row.decision?.summary ?? ""}`);
   }
   for (const [project, quiet] of turns(app)) if (quiet > QUIET_MS) out.push(`Project ${project}: its agent turn has said nothing for ${Math.round(quiet / 60_000)} min (unstick stops it).`);
@@ -347,6 +347,11 @@ export async function unstick(app: App): Promise<string> {
   const data = writerStore.dataDir(app.store.home);
   for (const row of writerStore.list(data)) {
     if (row.status !== "error" || writerImports.importing(row.id)) continue;
+    // Stopped on a failure this build meets again (a 413): started again it would only stop there again, after its download (Nov 1).
+    if (row.retryHelps === false) {
+      done.push(`script "${row.title}": left stopped, as this build stops there again (${row.error ?? ""}); update this Mac, then resume it`);
+      continue;
+    }
     void writerImports.resume(app, data, row.id, { kind: "retry" }).catch((error: unknown) => diag.warn("remote", `unstick: script ${row.id}: ${diag.messageOf(error)}`));
     done.push(`script "${row.title}": import started again`);
   }

@@ -20,4 +20,4 @@ Sphe: "investigate why it took over 20 minutes for a script that my mathias was 
 - Mathias's Mac needs a nightly with this fix (`just nightly`, then `edit remote update fd1604bf-23bc-499a-9ef3-16803137a712`), then `edit remote resume` for 9a9a4282 and 5f9276ca. Not done: a nightly is a push.
 - The report's log was drowned by one warning, 1,747× "its footage stays here: That script is missing.", for 141 folders with no script.json. Fixed in plan part 5 (said once a start, and as one line); why those folders are on his Mac is still open.
 - One footage file of "Son Spent His Dead Mom's Money On Roblox While Rats Ate Her" couldn't be downloaded; that import waits.
-- Retry is still offered for a failure that can't change (plan part 6).
+- Retry for a failure that can't change: fixed in plan part 6 (not offered on the build it stopped on). Whether a resume re-runs steps that had finished is still open: his resumes took up to 11 minutes each before the 413.

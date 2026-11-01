@@ -8,11 +8,14 @@
 
 import * as fs from "node:fs";
 
+import { Predicate } from "effect";
+
 import type { Choice, Decision, ImportProgress, Kind, Label, Research, Reuse, Script, VideoCheck } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import { creator } from "../accounts.ts";
 import * as diag from "../diag.ts";
+import { BUILD } from "../version.ts";
 import { isFile, join } from "../paths.ts";
 import { isUrl } from "../tools.ts";
 import * as brief from "./brief.ts";
@@ -415,6 +418,7 @@ export async function resume(app: App, data: string, id: string, choice: Choice)
     else if (choice.kind !== "retry") throw new Error("That answer doesn't fit what this import asked.");
     delete script.decision;
     delete script.dismissedAt;
+    delete script.stuckOn;
     script.status = "processing";
     script.error = null;
     script.updatedAt = Date.now();
@@ -454,6 +458,22 @@ function replaceSource(dir: string, script: Script, id: string | null, url: stri
   script.sourceUrl = url;
 }
 
+/**
+ * Failures the same build meets again however often it's asked, by their
+ * tags (docs/plans/2026-11-01-effect.md, part 6): Nov 1, Mathias resumed two
+ * imports 13 times, each ~41 minutes of footage before the same 413. Retry
+ * isn't offered for one of these until Edit is updated (`Script.stuckOn`):
+ * Replace, Dismiss and an admin's `edit remote resume` still are. Everything
+ * else (the relay busy, a dropped connection, the day's allowance, a refusal
+ * that may change) keeps Retry.
+ */
+const STUCK = new Set(["TooLongForOneRequest", "AudioUnreadable"]);
+
+/** Whether `error` is one of those. */
+export function stuck(error: unknown): boolean {
+  return Predicate.hasProperty(error, "_tag") && typeof error._tag === "string" && STUCK.has(error._tag);
+}
+
 /** Runs the pipeline. A failure, or even a bug, ends as a failed import that says so and can be retried; it never leaves the script stuck importing. */
 async function run(app: App, dir: string, script: Script): Promise<Script> {
   const began = Date.now();
@@ -476,6 +496,8 @@ async function run(app: App, dir: string, script: Script): Promise<Script> {
     diag.error("writer", `${jobs.named(script.id, script.title)}: stopped after ${Math.round((Date.now() - began) / 1000)} s${spent ? ` (${spent})` : ""}: ${message}`);
     script.status = "error";
     script.error = message;
+    if (stuck(error)) script.stuckOn = BUILD;
+    else delete script.stuckOn;
     delete script.decision;
     script.updatedAt = Date.now();
     try {

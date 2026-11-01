@@ -9,6 +9,7 @@ import type { Script, Summary } from "@edit/types/writer";
 
 import { writeAtomic } from "../files.ts";
 import { join } from "../paths.ts";
+import { BUILD } from "../version.ts";
 import { isCutIn } from "./blocks.ts";
 import * as chat from "./chat.ts";
 import { draftWords } from "./paragraphs.ts";
@@ -114,6 +115,7 @@ export function summary(script: Script, dir?: string): Summary {
     ...(script.decision ? { decision: script.decision } : {}),
     ...(script.dismissedAt ? { dismissedAt: script.dismissedAt } : {}),
     ...(script.firstBuild ? { firstBuild: true } : {}),
+    ...(script.status === "error" && script.stuckOn === BUILD ? { retryHelps: false as const } : {}),
     draftWords: script.commentary?.draft ? draftWords(script.commentary.draft) : 0,
     compilation: script.compilation ?? false,
     // Said either way once the folder's read (null: its last run finished), so the cloud's row shows it was looked at.

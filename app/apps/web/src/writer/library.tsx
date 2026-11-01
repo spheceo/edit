@@ -686,17 +686,20 @@ function RecoverDialog({
         <>
           <span className="bad">{importError(current?.error)}</span>
           <br />
-          Retry keeps completed downloads, the preview and saved transcription parts. An interrupted transcription
-          request may already have been charged and may be charged again on retry.
+          {current?.retryHelps === false
+            ? "Retrying stops here again: this needs a fix in Edit. Once Edit is updated, Retry carries on from what it kept."
+            : "Retry keeps completed downloads, the preview and saved transcription parts. An interrupted transcription request may already have been charged and may be charged again on retry."}
         </>
       }
       width={480}
       footer={foot(
         <>
-          <button type="button" className="ghost" onClick={onClose}>Close</button>
-          <button type="button" className="primary" disabled={busy} onClick={() => void answer({ kind: "retry" })}>
-            {busy ? "Starting…" : "Retry import"}
-          </button>
+          <button type="button" className={current?.retryHelps === false ? "primary" : "ghost"} onClick={onClose}>Close</button>
+          {current?.retryHelps !== false && (
+            <button type="button" className="primary" disabled={busy} onClick={() => void answer({ kind: "retry" })}>
+              {busy ? "Starting…" : "Retry import"}
+            </button>
+          )}
         </>,
       )}
     />

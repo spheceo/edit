@@ -979,7 +979,12 @@ export type ScriptIssueRow = {
   createdAt?: number;
   /** Its script being written (a build running on this Mac). */
   building?: boolean;
+  /** Stopped on a failure this build meets again however often it's retried (a 413): Retry isn't offered until an update. */
+  retryHelps?: false;
 };
+
+/** What a stopped import that Retry can't help says instead of offering it. */
+export const NEEDS_A_FIX = "Retrying stops here again: this needs a fix in Edit. Once Edit is updated, Retry carries on from what it kept.";
 
 /** Answers a stopped import; it carries on in the background and Home follows it. */
 async function answerIssue(issue: ScriptIssueRow, choice: Record<string, unknown>) {
@@ -1008,9 +1013,10 @@ export function useIssueDialogs(issue: ScriptIssueRow) {
     close();
     void answerIssue(issue, { kind: "retry" });
   };
+  const helps = issue.retryHelps !== false;
   const items: MenuItem[] = [
     { label: "View error", icon: <TriangleAlert size={14} />, onSelect: () => setOpen("error") },
-    { label: "Retry", icon: <RotateCw size={14} />, onSelect: retry },
+    ...(helps ? [{ label: "Retry", icon: <RotateCw size={14} />, onSelect: retry }] : []),
     ...(issue.decision?.kind === "failed_recordings" ? [{ label: "Go on without them", icon: <SkipForward size={14} />, onSelect: () => void answerIssue(issue, { kind: "skip_failed" }) }] : []),
     { label: "Replace…", icon: <Replace size={14} />, onSelect: () => setOpen("replace") },
     { separator: true },
@@ -1023,6 +1029,7 @@ export function useIssueDialogs(issue: ScriptIssueRow) {
           <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Why “{issue.title}” stopped</h2>
           <p className="mt-1 text-[13px] text-muted">Stopped {stageWords(issue.stage)}{issue.progress ? `, ${Math.round(issue.progress)}% in` : ""}. It waits there until it’s answered.</p>
           <pre className="mt-4 max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-black p-3 font-mono text-[12px] leading-relaxed text-secondary select-text">{full}</pre>
+          {!helps && <p className="mt-3 text-[13px] leading-relaxed text-muted">{NEEDS_A_FIX}</p>}
           <div className="mt-[22px] flex items-center justify-between gap-2">
             <Button
               variant="ghost"
@@ -1036,12 +1043,14 @@ export function useIssueDialogs(issue: ScriptIssueRow) {
               {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
             </Button>
             <div className="flex gap-2">
-              <Button variant="subtle" onClick={() => setOpen("replace")}>
+              <Button variant={helps ? "subtle" : "primary"} onClick={() => setOpen("replace")}>
                 Replace…
               </Button>
-              <Button variant="primary" onClick={retry}>
-                Retry
-              </Button>
+              {helps && (
+                <Button variant="primary" onClick={retry}>
+                  Retry
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -1118,11 +1127,16 @@ function IssueActions({ issue }: { issue: ScriptIssueRow }) {
       {issue.decision?.kind === "failed_recordings" ? (
         <Button onClick={() => void answerIssue(issue, { kind: "skip_failed" })}>Go on without them</Button>
       ) : (
-        <Button onClick={replace}>Replace…</Button>
+        <Button variant={issue.retryHelps === false ? "primary" : undefined} onClick={replace}>
+          Replace…
+        </Button>
       )}
-      <Button variant="primary" onClick={retry}>
-        Retry
-      </Button>
+      {/* A failure this build meets again isn't offered Retry: it would download it all again to stop in the same place (Nov 1, 13 retries of a 413). */}
+      {issue.retryHelps !== false && (
+        <Button variant="primary" onClick={retry}>
+          Retry
+        </Button>
+      )}
       {dialogs}
     </>
   );
@@ -1290,7 +1304,9 @@ export function ImportDialog({ id, writing, issues, onClose }: { id: string | nu
         </ol>
         {/* One row: Close, and only what fits where it is (stopped: Replace and Retry; in: Open the script). */}
         <div className="flex items-center gap-2">
-          <span className="mr-auto text-[12px] text-faint">{began.start && !stopped && !done ? `Running for ${elapsed(now - began.start)}` : ""}</span>
+          <span className="mr-auto text-[12px] text-faint" title={stopped?.retryHelps === false ? NEEDS_A_FIX : undefined}>
+            {began.start && !stopped && !done ? `Running for ${elapsed(now - began.start)}` : stopped?.retryHelps === false ? "Needs a fix in Edit before Retry." : ""}
+          </span>
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>

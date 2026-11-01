@@ -90,7 +90,11 @@ export async function transcribeJobs(request: Request, url: URL, env: JobsEnv): 
     form.set("webhook_metadata", JSON.stringify({ key: audio }));
     const started = await fetch(SCRIBE, { method: "POST", headers: { "xi-api-key": key }, body: form });
     const text = await started.text();
-    if (!started.ok) return new Response(text, { status: started.status, headers: { "content-type": started.headers.get("content-type") ?? "application/json" } });
+    if (!started.ok) {
+      // Refused: nothing will fetch the audio (Nov 1, the first live test left one behind when Scribe refused the job).
+      await r2Fetch(r2, "DELETE", audio, {}, { allow404: true }).catch(() => undefined);
+      return new Response(text, { status: started.status, headers: { "content-type": started.headers.get("content-type") ?? "application/json" } });
+    }
     let answer: { transcription_id?: unknown; request_id?: unknown } = {};
     try {
       answer = JSON.parse(text) as typeof answer;

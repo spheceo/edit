@@ -463,10 +463,14 @@ const startJob = Effect.fn("transcribe.startJob")(function* (key: string, again:
         ServiceTimedOut: (error) => Effect.fail(new RelayTimedOut({ message: error.message })),
       }),
     );
-  // An older relay (no such route) or one not set up for it.
-  if (answer.status === 404 || answer.status === 405 || answer.status === 503) return yield* new JobsUnavailable({ message: said(answer.text()) });
-  if (answer.status !== 202 && answer.status !== 200) return yield* refusalOf(answer.status, answer.text(), 0, false);
-  return yield* service.decodeJson("the transcription relay", JobStarted, answer.text()).pipe(Effect.mapError((error) => new AnswerUnreadable({ message: error.message })));
+  // An older relay (no such route), one not set up for it, or a job refused for itself (Nov 1, the first live
+  // test: "The webhook ID … is not configured for speech-to-text", a 400 that stopped the import): heard the old
+  // way. A busy relay, the gateway or a used-up allowance are said as they are.
+  if (answer.status === 200 || answer.status === 202) {
+    return yield* service.decodeJson("the transcription relay", JobStarted, answer.text()).pipe(Effect.mapError((error) => new AnswerUnreadable({ message: error.message })));
+  }
+  if (answer.status === 429 || GATEWAY.has(answer.status)) return yield* refusalOf(answer.status, answer.text(), 0, false);
+  return yield* new JobsUnavailable({ message: `${answer.status}: ${said(answer.text())}` });
 });
 
 /** The job's transcript once Scribe has it; none while it's still hearing. */

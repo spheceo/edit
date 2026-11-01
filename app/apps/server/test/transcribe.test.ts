@@ -442,6 +442,22 @@ test.skipIf(ffmpeg === null)("a job a restart cut off is asked for again, never 
   }
 }, 30_000);
 
+test.skipIf(ffmpeg === null)("a job the relay refuses for itself is heard the old way, never stopping the import (the first live test, Nov 1)", async () => {
+  const { dir, cleanup } = scratch("transcribe-job-refused");
+  try {
+    const run1 = jobRun(dir);
+    mock.on("GET", "/health", () => Response.json({ ok: true, jobs: true }), 1);
+    mock.on("POST", "/v1/transcribe/jobs", () => Response.json({ detail: { message: "The webhook ID 'x' is not configured for speech-to-text in this workspace." } }, { status: 400 }), 1);
+    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Hello", "there."], "speaker_3")));
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    await run1.hear();
+    expect(run1.sentWhole(before)).toBe(1);
+    expect((JSON.parse(fs.readFileSync(run1.target, "utf8")) as { words: Word[] }).words.some((word) => word.speaker === "speaker_3")).toBe(true);
+  } finally {
+    cleanup();
+  }
+}, 30_000);
+
 test.skipIf(ffmpeg === null)("a relay without jobs hears it the old way, nothing uploaded", async () => {
   const { dir, cleanup } = scratch("transcribe-no-jobs");
   try {

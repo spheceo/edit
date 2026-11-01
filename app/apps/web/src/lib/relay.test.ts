@@ -663,6 +663,10 @@ describe("relay transcription by link (Nov 1)", () => {
     expect((await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key: "edit/originals/a.mp4" }) })).status).toBe(400);
     world(() => Response.json({}), new Map());
     expect((await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key }) })).status).toBe(400);
+    // A start Scribe refuses deletes the audio: nothing will fetch it.
+    const refused = world(() => Response.json({ detail: { message: "The webhook ID is not configured for speech-to-text" } }, { status: 400 }));
+    expect((await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key }) })).status).toBe(400);
+    expect(refused.stored.has(key)).toBe(false);
     const bare = await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key }) }, { ...env, ELEVENLABS_WEBHOOK_ID: undefined } as Env);
     expect([bare.status, ((await bare.json()) as { jobs: boolean }).jobs]).toEqual([503, false]);
     expect((await relay.fetch(new Request("https://relay.test/v1/transcribe/jobs", { method: "POST", body: "{}" }), env)).status).toBe(401);

@@ -19,3 +19,12 @@ Mathias's Mac, project p1793492055193-220550, started ~02:14 SAST. Reported (scr
 ## Still open
 
 - **Why that script's sound couldn't be extracted.** Not the recording: the cloud original (Drive 1jKGSJSlkSEnHaQYmxUMW7vVvbJ1PjLif, 5.3 GB, 83 min) extracts whole with no errors (4,978 s of sound in 4.4 min). So the import read a damaged copy on Mathias's Mac, most likely its local download of the Drive file. After the nightly, retry the import (`edit remote resume` with the script's id) and pull diagnostics. If it fails the same way, that local copy is still being read: delete it so the cloud copy is used, and look at how Drive downloads resume (a resumed download with bytes in the wrong place gives exactly these "Invalid NAL unit size" errors).
+
+## Changed so these don't come back (Sphe: "fundamentally change how things work")
+
+- Every excerpt is checked as it's cut (1f307309): one that doesn't read back as long as was cut is refused with its reason, whatever the container.
+- Every Script-mode Drive download is proven to be Drive's file (9d02f83c): it appends only where Drive's Content-Range says, checks the MD5 (asking Drive when an old manifest lacks it) and fetches again from scratch once. A copy of the right size is no longer trusted at every retry. Edit mode's copies through the relay already ask exact ranges of exact lengths.
+- One list of what a restart would cut off (d3ac3ff5), for an update and a remote restart alike.
+- Diagnostics say when the window was last used, and how many of each problem came since Edit started (9273ccfc).
+- The rule is written in app/AGENTS.md ("Checked before it's used").
+- Not mine to change: Off-Duty Officer's export running 29 min past its edit (the review-repair session found it).

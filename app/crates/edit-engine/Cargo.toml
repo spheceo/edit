@@ -3,6 +3,7 @@ name = "edit-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Edit's native engine: frame renders, exports, previews, sound measurement, tracking and face detection"
 
 [features]

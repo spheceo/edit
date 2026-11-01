@@ -3,6 +3,7 @@ name = "edit-window"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Edit's desktop window: a Tauri webview onto the server `edit` runs"
 
 [[bin]]

@@ -12,7 +12,8 @@ members = [
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
-license = "MIT"
+license = "LicenseRef-MAMAGI-Proprietary"
+publish = false
 
 [workspace.dependencies]
 edit-core = { path = "crates/edit-core" }

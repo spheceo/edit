@@ -16,6 +16,7 @@
 // - `timeline_bar`: Red File's "1986 ——— 2009", the line drawing across.
 
 import { clipFrom } from "./clips.ts";
+import { framingAt } from "./frames_fill.ts";
 import type { Project } from "./model.ts";
 import { addTrack, clipEnd, fps as fpsOf, freshId, mediaOf, trackOf } from "./project.ts";
 import { charCount, round, splitWhitespace, trim } from "./rust.ts";
@@ -269,7 +270,12 @@ export function pause(project: Project, args: Args): Record<string, unknown> {
     .sort((a, b) => video.indexOf(b.track) - video.indexOf(a.track))[0];
   if (under === undefined || under.type !== "video") throw new Error(`pause: no footage on the timeline at frame ${from} to hold`);
   const at = under.source_in + ((from - under.start) / fps) * under.speed;
-  const scale = under.transform.scale ?? 1;
+  // The held picture's framing at that frame, its push-in included: a pause
+  // on the clip's base scale snapped back from its zoom (Jones JJ, OnlyFans,
+  // Oct 31: "we cut over to the clip, and then we have a zoom in a weird way";
+  // the fix: "Pause zoom continues from the shot before"; loop 7 R1 had five).
+  const framing = framingAt(under, from - under.start);
+  const scale = framing.scale;
   const duration = end - start;
   const made: string[] = [];
   push(project, made, {
@@ -281,7 +287,7 @@ export function pause(project: Project, args: Args): Record<string, unknown> {
     media: under.media,
     source_in: at,
     speed: 0.05,
-    transform: { ...under.transform },
+    transform: { ...under.transform, x: framing.x, y: framing.y, scale },
     crop: under.crop,
     keyframes: { scale: [key(0, scale), key(duration - 1, scale * 1.08)] },
   });

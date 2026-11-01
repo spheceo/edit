@@ -83,3 +83,19 @@ test("a date over a top-down map is a lower third with its place above it, not d
   expect(text.text).toBe("October 13th, 2011\nKeller, Texas");
   expect(text.transform.y).toBeGreaterThan(300);
 });
+
+test("a pause holds the shot at its zoom on that frame, then pushes in", () => {
+  // Jones JJ, OnlyFans (Oct 31): "we cut over to the clip, and then we have a zoom in a weird way"; the fix: "Pause zoom continues from the shot before".
+  const p = room();
+  const shot = p.clips.find((clip) => clip.type === "video")!;
+  if (shot.type !== "video") throw new Error("no shot");
+  shot.duration = 141;
+  shot.transform = { ...shot.transform, scale: 1.4 };
+  shot.keyframes = { scale: [{ frame: 0, value: 1.5, ease: "linear" }, { frame: 140, value: 1.6, ease: "linear" }] };
+  apply(p, [{ op: "pause", start: 141, end: 231, text: "June 2013" }]);
+  const pause = clipNamed(p, "Pause");
+  if (pause.type !== "video") throw new Error("no pause");
+  expect(pause.transform.scale).toBeCloseTo(1.6, 2);
+  expect(pause.keyframes!.scale![0]!.value).toBeCloseTo(1.6, 2);
+  expect(pause.keyframes!.scale!.at(-1)!.value).toBeGreaterThan(1.6);
+});

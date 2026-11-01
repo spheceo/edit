@@ -12,7 +12,10 @@
 // started a third time.
 
 
+import { Effect } from "effect";
+
 import * as diag from "./diag.ts";
+import { inArea, runPromise } from "./effect/runtime.ts";
 import { nowMs, readState, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 
@@ -112,17 +115,30 @@ export function takeOver(home: string): Job[] {
 /** What starts each kind again; a handler that throws is logged and skipped. */
 export type Resumers = Partial<Record<Kind, (job: Job) => Promise<void> | void>>;
 
-/** Starts again what the last run left unfinished. */
-export async function resume(home: string, resumers: Resumers): Promise<void> {
-  for (const job of takeOver(home)) {
-    const run = resumers[job.kind];
-    if (run === undefined) continue;
-    try {
-      diag.info("jobs", `starting ${job.key} again (cut short by a restart)`);
-      await run(job);
-    } catch (error) {
-      carried.get(home)?.delete(job.key);
-      diag.warn("jobs", `couldn't start ${job.key} again: ${diag.messageOf(error)}`);
-    }
-  }
+/** A resumer that hasn't come back in this long is left to it, and the next is started (one hanging used to hold up every other). */
+export const RESUME_MS = { value: 60_000 };
+
+/**
+ * Starts again what the last run left unfinished, one after another: a
+ * handler that fails is logged and skipped, one still starting after
+ * `RESUME_MS` is left running and the next goes on.
+ */
+export function resume(home: string, resumers: Resumers): Promise<void> {
+  return runPromise(
+    Effect.forEach(
+      takeOver(home),
+      (job) => {
+        const run = resumers[job.kind];
+        if (run === undefined) return Effect.void;
+        return Effect.logInfo(`starting ${job.key} again (cut short by a restart)`).pipe(
+          Effect.andThen(Effect.tryPromise(async () => run(job))),
+          Effect.timeoutOrElse({ duration: RESUME_MS.value, orElse: () => Effect.logWarning(`${job.key} is still starting after ${Math.round(RESUME_MS.value / 1000)} s; the others go on`) }),
+          Effect.catch((error) =>
+            Effect.sync(() => carried.get(home)?.delete(job.key)).pipe(Effect.andThen(Effect.logWarning(`couldn't start ${job.key} again: ${diag.messageOf(error.cause)}`))),
+          ),
+        );
+      },
+      { discard: true },
+    ).pipe(inArea("jobs")),
+  );
 }

@@ -5,6 +5,11 @@
 
 import * as fs from "node:fs";
 
+import { Effect } from "effect";
+
+import * as proc from "./effect/proc.ts";
+import { runPromise } from "./effect/runtime.ts";
+
 import { native } from "./native/index.ts";
 import { isAbsolute, isFile, join, parent } from "./paths.ts";
 
@@ -146,22 +151,32 @@ export function lastLine(stderr: string, fallback = "ffmpeg failed"): string {
   return (line ?? fallback).trim();
 }
 
+/** How long a tool may run before it's taken as stuck and ended (a review copy of a long edit takes a while; none takes this long). */
+export const TOOL_MS = 4 * 3600_000;
+
 /**
- * Runs FFmpeg (or any tool) to the end, stdin closed. Its stdout, or why it
- * failed: the last line it wrote (as the engine's media.rs `run` says it).
+ * Runs FFmpeg (or any tool) to the end within `timeoutMs`, stdin closed: its
+ * stdout, or why it failed, the last line it wrote (as the engine's
+ * media.rs `run` says it). In Effect since Nov 1 (docs/plans/2026-11-01-effect.md,
+ * round 2, area 4): the tool's whole process group is the run's, ended when
+ * its time runs out or the work around it is interrupted, and its failures
+ * are typed with kinds (`proc.failureKind`: a network read that dropped is
+ * temporary, a damaged file permanent).
  */
-export async function run(command: string[]): Promise<Uint8Array> {
-  let child: Bun.Subprocess<"ignore", "pipe", "pipe">;
-  try {
-    child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  } catch (error) {
-    throw new Error(`ffmpeg is not available (${(error as Error).message}); install FFmpeg`);
+export const runTool = Effect.fn("tools.run")(function* (command: readonly string[], timeoutMs: number = TOOL_MS) {
+  const [program = "", ...args] = command;
+  const done = yield* proc.capture(program, args, timeoutMs).pipe(
+    Effect.mapError((error) =>
+      error._tag === "ProcessNotStarted" ? new proc.ProcessNotStarted({ command: error.command, message: `ffmpeg is not available (${error.message}); install FFmpeg` }) : error,
+    ),
+  );
+  if (done.exitCode !== 0) {
+    return yield* new proc.ProcessFailed({ command: program.slice(program.lastIndexOf("/") + 1), exitCode: done.exitCode, stderr: done.stderr, message: lastLine(done.stderr) });
   }
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).bytes(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  if (code !== 0) throw new Error(lastLine(stderr));
-  return stdout;
+  return done.stdout;
+});
+
+/** `runTool` for code that isn't Effect yet; `signal` ends the tool's group. */
+export function run(command: string[], options: { readonly timeoutMs?: number; readonly signal?: AbortSignal } = {}): Promise<Uint8Array> {
+  return runPromise(runTool(command, options.timeoutMs), options.signal ? { signal: options.signal } : undefined);
 }

@@ -8,10 +8,12 @@
 // program it started, so yt-dlp's own FFmpeg (it merges and remuxes with
 // one) went on downloading after its import was stopped.
 
-import { Effect, Fiber, Schema, Stream } from "effect";
+import { Effect, Fiber, Predicate, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
+import { failureKind } from "../effect/proc.ts";
 import { runPromise } from "../effect/runtime.ts";
+import * as service from "../effect/service.ts";
 import { lastLine } from "../tools.ts";
 
 export interface RunOptions {
@@ -35,6 +37,14 @@ export class ProgramTimedOut extends Schema.TaggedError<ProgramTimedOut>()("Prog
 export class ProgramFailed extends Schema.TaggedError<ProgramFailed>()("ProgramFailed", { exitCode: Schema.Number, message: Schema.String }) {}
 
 export type ProgramError = ProgramNotStarted | ProgramTimedOut | ProgramFailed;
+
+// Their kinds (effect/service.ts): a program that ran past its time may finish another time; one that
+// failed is read from its last words (a network read that dropped is temporary, a damaged file permanent).
+service.kinds({
+  ProgramNotStarted: "permanent",
+  ProgramTimedOut: "temporary",
+  ProgramFailed: (error) => failureKind(Predicate.hasProperty(error, "message") && typeof error.message === "string" ? error.message : ""),
+});
 
 /** The lines of a stream of text, as the old runner cut them: at "\n", a trailing "\r" taken off (yt-dlp's "\r" progress stays one line). */
 function eachLine(onLine: (line: string) => void) {

@@ -229,6 +229,9 @@ async function next(app: App): Promise<void> {
   publish(app, id);
   const started = performance.now();
   try {
+    // Its record and file live here whichever way it's made (Nov 1: made on Modal into a fresh data folder, its record
+    // couldn't be written, so it was never copied down and a restart would have paid Modal to make it again).
+    fs.mkdirSync(join(app.store.cacheDir(), "playback"), { recursive: true });
     if (current.cloud) await renderOnModal(app, project, current);
     else await render(app, project, current);
     if (!current.cancelled) {
@@ -306,7 +309,6 @@ async function renderOnModal(app: App, project: Project, current: Running): Prom
 
 async function render(app: App, project: Project, current: Running): Promise<void> {
   const output = file(app, project.id);
-  fs.mkdirSync(join(app.store.cacheDir(), "playback"), { recursive: true });
   await seams.cloudMedia.restoreStills(app, project);
   if (current.cancelled) return;
   const options = playbackOptions();

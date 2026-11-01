@@ -208,9 +208,14 @@ export function textLate(project: Project, transcripts: Map<string, Transcript>)
   const issues: unknown[] = [];
   // A text already up within half a second of its narration's start can't come
   // any earlier: its words are the bridge's first (nothing before it to go over).
+  // The cut-in's picture starts the narration's room before its voice (NARRATION_ROOM):
+  // a text up with that picture (on the flash into it) is up at its start too, and
+  // earlier would be over the raw tape the house keeps clean (R2V, Nov 1: two
+  // "(ILLUSTRATIVE)" labels flagged against the word said on the tape before).
   const narrations = project.clips.filter((clip) => clip.type === "audio" && clip.name === "Voice-over").map((clip) => clip.start);
   const opening = toI64(round(0.5 * fps));
-  const atItsStart = (start: number) => narrations.some((from) => start >= from && start - from <= opening);
+  const room = toI64(round(ROOM_SECONDS * fps)) + grace;
+  const atItsStart = (start: number) => narrations.some((from) => start >= from - room && start - from <= opening);
   const check = (start: number, until: number, text: string, extra: Record<string, unknown>) => {
     if (atItsStart(start)) return;
     const telling = tellingWords(text).slice(0, 3);

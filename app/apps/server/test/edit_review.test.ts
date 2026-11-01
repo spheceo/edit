@@ -346,3 +346,14 @@ test("words on screen after they're said are late, with where they should start;
   p.markers = [{ frame: 60, name: "desktop line", note: "- Baby in the backyard" }];
   expect((textLate(p, new Map([["m7", TEASER]])) as Record<string, unknown>[]).map((issue) => issue.kind)).toEqual(["text_late"]);
 });
+
+test("a label up with a cut-in's picture, its narration in the room after it, isn't late for the word said on the tape before", () => {
+  // R2V, Nov 1: "(ILLUSTRATIVE)" labels on the flash into a cut-in were flagged against the tape's own "knife" just before.
+  const p = footageProject();
+  const v2 = addTrack(p, "video");
+  const a5 = addTrack(p, "audio");
+  // "medic" is heard at frame 18; the cut-in's picture starts at 40, its narration 8 frames later (the room).
+  p.clips.push({ id: "vo", track: a5, start: 48, duration: 90, color: "purple", fade_in: 0, fade_out: 0, type: "audio", name: "Voice-over", media: "m7", source_in: 0, speed: 1, volume_db: -60, muted: true } as never);
+  p.clips.push({ id: "t1", track: v2, start: 40, duration: 45, color: "red", fade_in: 0, fade_out: 0, keyframes: {}, type: "text", name: "Label", text: "MEDIC CALLED", style: {}, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, animation: { preset: "none", duration: 0, stagger: 0 }, opacity: 1 } as never);
+  expect(textLate(p, new Map([["m7", TEASER]]))).toEqual([]);
+});

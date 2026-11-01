@@ -316,4 +316,4 @@ jobs:
             exit 0
           fi
           bun install --frozen-lockfile
-          cd apps/relay && npx wrangler deploy
+          cd apps/relay && npx wrangler deploy --env=""

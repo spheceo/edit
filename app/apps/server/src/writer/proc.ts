@@ -1,6 +1,17 @@
 // Running a program for Script mode (ffmpeg, ffprobe, yt-dlp): its output a
 // line at a time or whole, stopped by a deadline or the job's stop.
+//
+// In Effect since Nov 1 (docs/plans/2026-11-01-effect.md, part 3): the
+// program runs in its own process group, owned by the scope that started it.
+// A stop, a deadline or a failure of the work around it ends the whole
+// group (SIGTERM, then SIGKILL after 5 s): the old runner SIGKILLed only the
+// program it started, so yt-dlp's own FFmpeg (it merges and remuxes with
+// one) went on downloading after its import was stopped.
 
+import { Effect, Fiber, Schema, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+
+import { runPromise } from "../effect/runtime.ts";
 import { lastLine } from "../tools.ts";
 
 export interface RunOptions {
@@ -13,59 +24,83 @@ export interface RunOptions {
   env?: Record<string, string | undefined>;
 }
 
-/** Runs `program` to its end: its standard output, or an Error saying why it failed (its last line of errors). */
-export async function run(program: string, args: string[], options: RunOptions = {}): Promise<string> {
-  if (options.signal?.aborted) throw new Error("Stopped by you. Completed work is saved.");
-  let child: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
-  try {
-    child = Bun.spawn([program, ...args], {
-      stdin: options.stdin === undefined ? "ignore" : "pipe",
-      stdout: "pipe",
-      stderr: "pipe",
-      ...(options.env ? { env: options.env } : {}),
-    }) as Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
-  } catch (error) {
-    throw new Error(`${program} failed to start (${error instanceof Error ? error.message : String(error)}).`);
-  }
-  if (options.stdin !== undefined) {
-    const sink = child.stdin as Bun.FileSink;
-    void sink.write(options.stdin);
-    void sink.end();
-  }
-  let killed: "time" | "stop" | null = null;
-  const kill = (why: "time" | "stop") => {
-    killed ??= why;
-    child.kill("SIGKILL");
-  };
-  const timer = setTimeout(() => kill("time"), options.timeoutMs ?? 3_600_000);
-  const stop = () => kill("stop");
-  options.signal?.addEventListener("abort", stop, { once: true });
-  const errors = new Response(child.stderr).text();
-  let out = "";
-  try {
-    const decoder = new TextDecoder();
-    let pending = "";
-    for await (const chunk of child.stdout) {
-      if (options.onBytes) {
-        options.onBytes(chunk);
-        continue;
-      }
-      const text = decoder.decode(chunk, { stream: true });
-      if (options.onLine) {
+/** What a stopped job's programs say, the same for every step. */
+export const STOPPED = "Stopped by you. Completed work is saved.";
+
+/** The program couldn't be started (not found, not executable). */
+export class ProgramNotStarted extends Schema.TaggedError<ProgramNotStarted>()("ProgramNotStarted", { message: Schema.String }) {}
+/** The program ran past its deadline and was stopped. */
+export class ProgramTimedOut extends Schema.TaggedError<ProgramTimedOut>()("ProgramTimedOut", { message: Schema.String }) {}
+/** The program exited with a code other than 0: its last line of errors. */
+export class ProgramFailed extends Schema.TaggedError<ProgramFailed>()("ProgramFailed", { exitCode: Schema.Number, message: Schema.String }) {}
+
+export type ProgramError = ProgramNotStarted | ProgramTimedOut | ProgramFailed;
+
+/** The lines of a stream of text, as the old runner cut them: at "\n", a trailing "\r" taken off (yt-dlp's "\r" progress stays one line). */
+function eachLine(onLine: (line: string) => void) {
+  let pending = "";
+  return {
+    take: (text: string) =>
+      Effect.sync(() => {
         pending += text;
         const lines = pending.split("\n");
         pending = lines.pop() ?? "";
-        for (const line of lines) options.onLine(line.replace(/\r$/, ""));
-      } else out += text;
+        for (const line of lines) onLine(line.replace(/\r$/, ""));
+      }),
+    end: Effect.sync(() => {
+      if (pending !== "") onLine(pending);
+    }),
+  };
+}
+
+/** Runs `program` to its end: its standard output (empty when it's given to `onLine` or `onBytes`). */
+export const runProgram = Effect.fn("writer.proc.run")(function* (program: string, args: readonly string[], options: Omit<RunOptions, "signal"> = {}) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const work = Effect.gen(function* () {
+    const handle = yield* spawner
+      .spawn(
+        ChildProcess.make(program, [...args], {
+          stdin: options.stdin === undefined ? "ignore" : Stream.make(typeof options.stdin === "string" ? new TextEncoder().encode(options.stdin) : options.stdin),
+          stdout: "pipe",
+          stderr: "pipe",
+          forceKillAfter: "5 seconds",
+          // As Bun.spawn's `env`: the whole environment, not added to this one.
+          ...(options.env ? { env: options.env, extendEnv: false } : {}),
+        }),
+      )
+      .pipe(Effect.mapError((error) => new ProgramNotStarted({ message: `${program} failed to start (${error.message}).` })));
+    const errors = yield* Stream.mkString(Stream.decodeText(handle.stderr)).pipe(Effect.orElseSucceed(() => ""), Effect.forkScoped);
+    let out = "";
+    if (options.onBytes) {
+      const onBytes = options.onBytes;
+      yield* Stream.runForEach(handle.stdout, (chunk) => Effect.sync(() => onBytes(chunk))).pipe(Effect.ignore);
+    } else if (options.onLine) {
+      const lines = eachLine(options.onLine);
+      yield* Stream.runForEach(Stream.decodeText(handle.stdout), lines.take).pipe(Effect.ignore);
+      yield* lines.end;
+    } else {
+      out = yield* Stream.mkString(Stream.decodeText(handle.stdout)).pipe(Effect.orElseSucceed(() => ""));
     }
-    if (options.onLine && pending !== "") options.onLine(pending);
-    const code = await child.exited;
-    if (killed === "stop") throw new Error("Stopped by you. Completed work is saved.");
-    if (killed === "time") throw new Error(`${program} took too long and was stopped.`);
-    if (code !== 0) throw new Error(lastLine(await errors, `${program} failed (exit ${code})`));
+    const code = Number(yield* handle.exitCode.pipe(Effect.orElseSucceed(() => -1)));
+    const stderr = yield* Fiber.join(errors);
+    if (code !== 0) return yield* new ProgramFailed({ exitCode: code, message: lastLine(stderr, `${program} failed (exit ${code})`) });
     return out;
-  } finally {
-    clearTimeout(timer);
-    options.signal?.removeEventListener("abort", stop);
-  }
+  }).pipe(Effect.scoped);
+  return yield* work.pipe(
+    Effect.timeoutOrElse({
+      duration: options.timeoutMs ?? 3_600_000,
+      orElse: () => Effect.fail(new ProgramTimedOut({ message: `${program} took too long and was stopped.` })),
+    }),
+  );
+});
+
+/** Runs `program` to its end: its standard output, or an Error saying why it failed (its last line of errors). */
+export function run(program: string, args: string[], options: RunOptions = {}): Promise<string> {
+  const signal = options.signal;
+  if (signal?.aborted) return Promise.reject(new Error(STOPPED));
+  return runPromise(runProgram(program, args, options), signal ? { signal } : undefined).catch((error: unknown) => {
+    // Interrupted by the job's stop: its group was ended on the way out.
+    if (signal?.aborted) throw new Error(STOPPED);
+    throw error;
+  });
 }

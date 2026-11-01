@@ -2,13 +2,15 @@
 
 ## Convex remote updates
 
-Nightly-25 and later automatically register signed-in team
-devices for remote updates over a live Convex subscription. No terminal setup is
-needed: install the new nightly, open Edit and sign in. The app must stay running.
-Nightly-24 and earlier required `edit remote enable`; their published binaries
-are unchanged. An existing explicit disable or cloud revocation stays off after
-updating, restarting or reconnecting. `edit remote disable` revokes access and
-cancels queued updates; `edit remote enable` explicitly turns it back on. An admin on
+Every signed-in Edit can be reached, always (Sphe, Nov 1: "ALL MACHINES SHOULD
+HAVE IT ON BY DEFAULT ALWAYS"). Each start registers the Mac again, on, as the
+person signed in: a device the cloud lost (remote support moved to mamagi on
+Oct 30 without its devices, so every Mac that had enrolled was told "Device
+unavailable" and was never reached again) is made again, a disable saved by an
+older build is turned back on, and another account's device gets a new
+identity. There is no off switch: `edit remote disable` is refused, and
+`edit remote enable` registers this Mac again now. No terminal setup is
+needed: install the nightly, open Edit and sign in. The app must stay running. An admin on
 another running, signed-in Edit can run `edit remote devices`, then
 `edit remote update <device-id>` and `edit remote history <device-id>`. A request
 expires after an hour. Status records distinguish a claimed update from a new
@@ -20,8 +22,7 @@ release signature/checksum and refuses an active export, Drive upload or agent
 turn. If work starts during the download, the restart waits for it to finish.
 The operator endpoint accepts direct loopback CLI connections only; Tailscale,
 proxy and browser requests cannot borrow the host's signed-in admin account.
-Disabling support takes effect locally even when offline, with cloud revocation
-retried later. Signing out closes the authenticated subscription. It cannot
+Signing out closes the authenticated subscription. It cannot
 start a closed app. Remote agent turns are disabled until a
 spending limit is implemented and accepted. The Convex functions and the relay
 support-config route and the Accounts token claim must be deployed before this

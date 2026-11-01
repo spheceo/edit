@@ -42,9 +42,9 @@ USAGE
       Install the newest release (the editor also offers it, one click).
   edit support <command> --url https://<device>.<tailnet>.ts.net
       Inspect or help an owner's already-shared Edit; \`edit support help\` says more.
-  edit remote enable|disable|devices|update|diagnostics|unstick|restart|history [device-id]
+  edit remote enable|devices|update|diagnostics|unstick|restart|history [device-id]
   edit remote resume <device-id> <project-or-script-id>
-      Enable remote support on this Edit, or, as an admin, help a teammate's: update it,
+      Remote support is always on: enable registers this Edit again now. As an admin, help a teammate's: update it,
       get its diagnostics (what needs attention first), unstick everything stuck, restart it.
   edit --version
 
@@ -116,7 +116,7 @@ export async function main(args: string[]): Promise<void> {
     case "remote": {
       const given = args[1];
       const onDevice = ["update", "diagnostics", "resume", "unstick", "restart", "history"];
-      if (!given || !["enable", "disable", "devices", ...onDevice].includes(given) || (onDevice.includes(given) && !args[2]) || (given === "resume" && !args[3])) fail("use edit remote enable|disable|devices|update|diagnostics|unstick|restart|history [device-id], or edit remote resume <device-id> <project-or-script-id>");
+      if (!given || !["enable", "devices", ...onDevice].includes(given) || (onDevice.includes(given) && !args[2]) || (given === "resume" && !args[3])) fail("use edit remote enable|devices|update|diagnostics|unstick|restart|history [device-id], or edit remote resume <device-id> <project-or-script-id>");
       // unstick and restart go as a resume of a reserved target (remote_actions.ts).
       const action = given === "unstick" || given === "restart" ? "resume" : given;
       if (action !== given) args[3] = given;

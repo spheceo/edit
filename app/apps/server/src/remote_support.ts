@@ -1,5 +1,10 @@
-// Signed-in devices register automatically for remote updates. Commands arrive
-// over Convex's live query as this Edit's signed-in person, never the relay key.
+// Every signed-in Edit can be reached by an admin, always: it registers itself
+// at every start, as the person signed in, and there is no switch to turn it
+// off (Sphe, Nov 1: "ALL MACHINES SHOULD HAVE IT ON BY DEFAULT ALWAYS": since
+// remote support moved to mamagi on Oct 30, every Mac that had enrolled before
+// only checked in, was told "Device unavailable" and never registered again,
+// so no team Mac could be reached). Commands arrive over Convex's live query
+// as this Edit's signed-in person, never the relay key.
 import * as fs from "node:fs";
 import { join } from "node:path";
 import { ConvexClient } from "convex/browser";
@@ -18,6 +23,7 @@ import { BUILD } from "./version.ts";
 
 const query = (name: string) => makeFunctionReference<"query">(`editSupport:${name}`);
 const mutation = (name: string) => makeFunctionReference<"mutation">(`editSupport:${name}`);
+/** This Mac's device; `enabled` is false only before anyone signed in here (older builds also saved a disable, now turned back on). */
 type Settings = { device: string; enabled: boolean; owner?: string; pendingDisable?: boolean; enrolling?: boolean };
 type Pending = { commandId: string; deviceId: string; expiresAt: number; kind: actions.Kind; projectId?: string };
 type Outcome = { state: "complete" | "failed"; detail: string };
@@ -84,27 +90,40 @@ function save(app: App, value: Settings) {
   writeAtomic(settingsPath(app), JSON.stringify(value), 0o600);
 }
 
-/** Persist a stable identity before the first network call. An existing file,
- * including an explicit disable or an unreadable setting, is never replaced. */
+/**
+ * This Mac's identity for the person signed in, kept before the first network
+ * call: its saved device when it's theirs, else a new one (no file, an
+ * unreadable one, or another person's device: a device belongs to one
+ * account). Always on: a saved disable from older builds is turned back on.
+ * Signed out (`owner` null): nothing is written.
+ */
 export function prepareEnrollment(app: App, owner: string | null): Settings {
-  if (owner === null || fs.existsSync(settingsPath(app))) return settings(app);
-  const value = { device: crypto.randomUUID(), enabled: true, owner, enrolling: true };
-  save(app, value);
+  const saved = settings(app);
+  if (owner === null) return saved;
+  const theirs = fs.existsSync(settingsPath(app)) && (saved.owner === undefined || saved.owner === owner);
+  const value: Settings = { device: theirs ? saved.device : crypto.randomUUID(), enabled: true, owner };
+  if (JSON.stringify(value) !== JSON.stringify(saved)) save(app, value);
   return value;
 }
 
-/** Retry first-start registration without re-enabling a device revoked in the
- * cloud, even if the previous registration's acknowledgement was lost. */
+/**
+ * Registers this Mac at every start (on, with its name and build): a device
+ * the cloud doesn't know (lost in a move, never acknowledged) is made again,
+ * one turned off is turned back on, and one another account holds gets a new
+ * identity for this person.
+ */
 export async function registerAutomatically(app: App, c: ConvexClient, isCurrent: () => boolean): Promise<void> {
-  const value = settings(app);
-  if (!value.enabled || !value.enrolling) return;
-  const checked = await rpc(c.mutation(mutation("register"), {
-    deviceId: value.device, label: app.machine, build: BUILD, enabled: true, onlyIfNew: true,
-  })) as { enabled: boolean };
-  if (!isCurrent()) return;
-  const current = settings(app);
-  if (!current.enabled || !current.enrolling || current.device !== value.device || current.owner !== value.owner) return;
-  save(app, { ...current, enabled: checked.enabled, enrolling: false });
+  const owner = accounts.creator()?.sub ?? settings(app).owner ?? null;
+  let value = prepareEnrollment(app, owner);
+  const register = () => rpc(c.mutation(mutation("register"), { deviceId: value.device, label: app.machine, build: BUILD, enabled: true }));
+  try {
+    await register();
+  } catch (error) {
+    if (!/another account/i.test(diag.messageOf(error)) || !isCurrent()) throw error;
+    value = { device: crypto.randomUUID(), enabled: true, ...(owner === null ? {} : { owner }) };
+    save(app, value);
+    await register();
+  }
 }
 
 function journal(app: App, intent: Intent) {
@@ -121,13 +140,6 @@ async function rpc<T>(work: Promise<T>): Promise<T> {
   } finally { if (timer) clearTimeout(timer); }
 }
 
-/** Local revocation works even when signed out or offline. Cloud sync follows. */
-export function disable(app: App): Settings {
-  const value = { ...settings(app), enabled: false, pendingDisable: true, enrolling: false };
-  save(app, value);
-  close(app);
-  return value;
-}
 
 async function client(app: App): Promise<ConvexClient> {
   observe(app);
@@ -281,30 +293,14 @@ async function connectOnce(app: App) {
     if (c) drain(app, c);
     return;
   }
-  if (!setting.enabled && !setting.pendingDisable && !fs.existsSync(intentPath(app))) return;
+  if (!setting.enabled) return;
   const version = generation(app);
   const c = await client(app);
-  if (setting.owner && accounts.creator()?.sub !== setting.owner) throw new Error("Sign in as the account that enabled this device, or disable remote support.");
   if (generation(app) !== version) return;
-  if (setting.enrolling) {
-    await registerAutomatically(app, c, () => generation(app) === version && authorized(app));
-    if (generation(app) !== version || !authorized(app)) return;
-    setting = settings(app);
-    if (!setting.enabled) { close(app); return; }
-  }
-  if (setting.pendingDisable) {
-    await rpc(c.mutation(mutation("register"), { deviceId: setting.device, label: app.machine, build: BUILD, enabled: false }));
-    if (generation(app) !== version) return;
-    save(app, { ...setting, pendingDisable: false });
-  }
-  if (!setting.enabled) {
-    const hasOutcome = fs.existsSync(intentPath(app)) && (JSON.parse(fs.readFileSync(intentPath(app), "utf8")) as Intent).outcome !== undefined;
-    if (!activeUpdates.has(app) || hasOutcome) await recover(app, c);
-    return;
-  }
-  const checked = await rpc(c.mutation(mutation("checkIn"), { deviceId: setting.device, label: app.machine, build: BUILD })) as { enabled: boolean };
+  // Registered at every start (made again if the cloud lost it, on, as whoever is signed in).
+  await registerAutomatically(app, c, () => generation(app) === version && authorized(app));
   if (generation(app) !== version || !authorized(app)) return;
-  if (!checked.enabled) { save(app, { ...setting, enabled: false }); close(app); return; }
+  setting = settings(app);
   if (!activeUpdates.has(app)) await recover(app, c);
   if (generation(app) !== version || !settings(app).enabled || !authorized(app)) return;
   const sub = c.onUpdate(query("pending"), { deviceId: setting.device, kinds: [...actions.KINDS] }, (items: Pending[]) => {
@@ -360,8 +356,9 @@ export function start(app: App) {
   actions.keepLatest(app);
   const account = accounts.status();
   const allowed = account.admin === true || (Array.isArray(account.perms) && account.perms.includes("use"));
-  prepareEnrollment(app, allowed ? accounts.creator()?.sub ?? null : null);
-  if (!settings(app).enabled && !settings(app).pendingDisable && !fs.existsSync(intentPath(app))) return;
+  const owner = allowed ? accounts.creator()?.sub ?? null : null;
+  if (owner === null && !fs.existsSync(intentPath(app))) return;
+  prepareEnrollment(app, owner);
   void connect(app).catch(error => { diag.warn("remote", diag.messageOf(error)); retry(app); });
 }
 
@@ -383,32 +380,17 @@ export function routes(router: Router<App>) {
     requireLocalCli(context);
     const given = await readJson<{ action?: string; device?: string; project?: string }>(context);
     const app = context.app; const action = given?.action;
-    if (!action || !["enable", "disable", "devices", "history", "update", "diagnostics", "resume"].includes(action)) throw bad("Choose enable, disable, devices, update, diagnostics, resume or history.");
+    if (action === "disable") throw bad("Remote support is always on: every signed-in Edit can be reached by an admin, so problems can be fixed from afar.");
+    if (!action || !["enable", "devices", "history", "update", "diagnostics", "resume"].includes(action)) throw bad("Choose enable, devices, update, diagnostics, resume or history.");
     if (["history", "update", "diagnostics", "resume"].includes(action) && (typeof given.device !== "string" || !/^[a-zA-Z0-9_-]{1,120}$/u.test(given.device))) throw bad("Give a valid device id.");
     if (action === "resume" && (typeof given.project !== "string" || !/^[a-zA-Z0-9_-]{1,120}$/u.test(given.project))) throw bad("Give a valid project id.");
     try {
-      if (action === "disable") {
-        const value = disable(app);
-        // The local switch is already off. Cloud revocation is best effort now
-        // and is retried after restart/reconnection if this Mac is offline.
-        start(app);
-        return json(value);
-      }
       const c = await client(app);
+      // Always on: "enable" registers this Mac again now, as a start does.
       if (action === "enable") {
-        const version = generation(app) + 1;
-        generations.set(app, version);
-        const previous = settings(app);
-        const value = { ...previous, enabled: true, owner: accounts.creator()?.sub, pendingDisable: false, enrolling: false };
-        if (previous.pendingDisable) await rpc(c.mutation(mutation("register"), { deviceId: value.device, label: app.machine, build: BUILD, enabled: false }));
-        await rpc(c.mutation(mutation("register"), { deviceId: value.device, label: app.machine, build: BUILD, enabled: value.enabled }));
-        if (generation(app) !== version || !authorized(app)) {
-          start(app);
-          throw new Error("Remote support was disabled or the account changed while enabling it.");
-        }
-        save(app, value);
+        await registerAutomatically(app, c, () => authorized(app));
         await connect(app);
-        return json(value);
+        return json(settings(app));
       }
       if (action === "devices") return json(await rpc(c.query(query("devices"), {})));
       if ((action === "update" || action === "history") && typeof given.device === "string") {
@@ -422,7 +404,7 @@ export function routes(router: Router<App>) {
         await rpc(c.mutation(mutation("requestAction"), { deviceId: given.device, commandId, kind: action, ...(action === "resume" ? { projectId: given.project } : {}) }));
         return json({ commandId });
       }
-      throw new Error("Choose enable, disable, devices, update, diagnostics, resume or history.");
+      throw new Error("Choose enable, devices, update, diagnostics, resume or history.");
     } catch (error) { throw bad(diag.messageOf(error)); }
   });
 }

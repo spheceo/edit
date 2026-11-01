@@ -17,6 +17,7 @@ import * as commentary from "./commentary.ts";
 import { checkClips } from "./edits.ts";
 import * as exact from "./exact.ts";
 import { checkStopped, type Job, type Outcome, named } from "./jobs.ts";
+import * as lessonNote from "./lesson_note.ts";
 import { lessonsText } from "./lessons.ts";
 import * as media from "./media.ts";
 import { nameVoices } from "./naming.ts";
@@ -267,10 +268,11 @@ export async function reviseWith(data: string, id: string, request: string, said
     failed(dir, job, error);
   }
   checkStopped(job);
+  const noted = await lessonNote.keep(script, done.lesson);
   // Starting over waits for the producer to confirm it in the chat.
   if (done.startOver) {
-    chat.askReset(dir, done.answer, done.costUsd);
-    return [done.answer, done.costUsd];
+    chat.askReset(dir, done.answer + noted, done.costUsd);
+    return [done.answer + noted, done.costUsd];
   }
   // Edits made by hand while Claude worked would be lost: ask again instead.
   const now = store.read(dir);
@@ -303,8 +305,8 @@ export async function reviseWith(data: string, id: string, request: string, said
   now.corrections = done.corrections;
   now.proposals = done.proposals;
   save(dir, before, now);
-  chat.add(dir, "editor", answer, done.costUsd);
-  return [answer, done.costUsd];
+  chat.add(dir, "editor", answer + noted, done.costUsd);
+  return [answer + noted, done.costUsd];
 }
 
 /** A change to a written commentary: Opus edits the paragraphs the request is about and nothing else, written straight in (undo and the versions bring back what was there). */
@@ -320,9 +322,10 @@ export async function reviseCommentary(data: string, dir: string, given: Script,
     failed(dir, job, error);
   }
   checkStopped(job);
+  const noted = await lessonNote.keep(script, done.lesson);
   if (done.startOver) {
-    chat.askReset(dir, done.answer, done.costUsd);
-    return [done.answer, done.costUsd];
+    chat.askReset(dir, done.answer + noted, done.costUsd);
+    return [done.answer + noted, done.costUsd];
   }
   const now = store.read(dir);
   if (now.revision !== script.revision) failed(dir, job, new Error(CHANGED));
@@ -331,6 +334,6 @@ export async function reviseCommentary(data: string, dir: string, given: Script,
     now.commentary.draft = done.draft;
     save(dir, before, now);
   }
-  chat.add(dir, "editor", done.answer, done.costUsd);
-  return [done.answer, done.costUsd];
+  chat.add(dir, "editor", done.answer + noted, done.costUsd);
+  return [done.answer + noted, done.costUsd];
 }

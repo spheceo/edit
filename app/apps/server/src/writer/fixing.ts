@@ -31,6 +31,7 @@ import { noteLines } from "./paragraphs.ts";
 import * as research from "./research.ts";
 import * as reviews from "./reviews.ts";
 import { apply, editNote, revise, type Edit } from "./revise.ts";
+import * as lessonNote from "./lesson_note.ts";
 import { peaksOf, reviseCommentary, reviseWith } from "./scripting.ts";
 import * as store from "./store.ts";
 import * as versions from "./versions.ts";
@@ -408,12 +409,12 @@ function save(dir: string, before: Script, changedScript: Script, said: string, 
 async function answerOnly(data: string, dir: string, script: Script, ask: string, job: jobs.Job): Promise<[string, number]> {
   if (script.commentary) {
     const done = await commentary.revise(dir, script, ask, lessonsText(data), job.signal);
-    return [done.answer, done.costUsd];
+    return [done.answer + (await lessonNote.keep(script, done.lesson)), done.costUsd];
   }
   const peaks = await peaksOf(dir, script, job.signal);
   const found = casefiles.withDocuments(dir, research.load(dir) ?? { articles: [], queries: [], at: 0 });
   const done = await revise(script, ask, { selected: [], picked: null, playheadMs: null }, chat.recent(dir), found, peaks, true, job.signal);
-  return [done.answer, done.costUsd];
+  return [done.answer + (await lessonNote.keep(script, done.lesson)), done.costUsd];
 }
 
 // ---- Carried out exactly ----

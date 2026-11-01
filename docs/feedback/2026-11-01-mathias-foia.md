@@ -21,3 +21,16 @@ Sphe: "investigate why it took over 20 minutes for a script that my mathias was 
 - The report's log was drowned by one warning, 1,747× "its footage stays here: That script is missing.", for 141 folders with no script.json. Fixed in plan part 5 (said once a start, and as one line); why those folders are on his Mac is still open.
 - One footage file of "Son Spent His Dead Mom's Money On Roblox While Rats Ate Her" couldn't be downloaded; that import waits.
 - Retry for a failure that can't change: fixed in plan part 6 (not offered on the build it stopped on). Whether a resume re-runs steps that had finished is still open: his resumes took up to 11 minutes each before the 413.
+
+## Again, Nov 1 afternoon: two imports stopped at Transcribing
+
+Sphe: "imports are stopping again, look" (Home, Importing: three of Mathias's scripts stopped). Read from prod's script index (his Mac has remote support off, and isn't in prod's device list any more):
+
+- **Predator Cop Realizes His Life Is Over…** (6 h 20 min, 15:31) and **8-Year-Old Points Officers To Dad's Hidden Torture Room** (7 h 43 min, 15:27): stopped at Transcribing, 60%, "could not reach the transcription relay: The socket connection was closed unexpectedly".
+- **Mom Secretly Has a Baby With Her Daughter's Boyfriend**: stopped downloading at 13:01, "The import stopped when Edit closed". Builds from nightly-41 carry such an import on 15 s after Edit starts again; it didn't, so his Edit was likely on an older build, or hadn't started again since.
+
+- **Root cause:** for a long recording the pieces (words) and one whole-file hearing (only for who speaks) run together, and any failure ended both. The whole hearing of a 6–7 h file holds one request open through the relay for minutes; when its connection dropped after its two retries, the import stopped, its words already heard. The morning's fix was checked in tests only, never on a real multi-hour hearing.
+- **Fix:** a whole hearing that fails for a temporary reason once its retries are spent (a dropped connection, a timeout, the gateway, a busy relay) costs the voices, never the import: its words stand from the pieces, who speaks is left for the watch, as for a file too long to send whole. A refusal or an allowance used up still stops it (the pieces meet it too). `test/transcribe.test.ts`: a whole hearing failing every time keeps the words, no voices, nothing kept for the whole.
+- **For Mathias:** update to the next nightly and press Retry on both: the pieces heard are kept, so only what's left is asked.
+
+Open: why the whole hearing's connection drops (the relay waits on Scribe synchronously; a multi-hour file may take Scribe longer than a connection lasts). ElevenLabs' asynchronous mode (a webhook to the relay) would hold no connection open. And his Mac's remote support: prod's `editSupportDevices` has only kenobi, so no team Mac can be reached until they enable it again.

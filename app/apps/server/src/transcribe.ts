@@ -403,6 +403,10 @@ const saved = <E, R>(file: string, tag: string, hear: Effect.Effect<Transcript, 
 /** Times into the file, not the piece. */
 const shifted = (words: readonly Word[], by: number): Word[] => words.map((word) => ({ text: word.text, start: round3(word.start + by), end: round3(word.end + by) }));
 
+/** The whole hearing given up: the words stand from the pieces, who speaks is left for the watch. */
+const withoutVoices = (source: string, why: string) =>
+  Effect.logWarning(`${source}: hearing it whole for its voices failed (${why}); its words are from the pieces and who speaks is left for the watch`).pipe(Effect.as(Option.none<Transcript>()));
+
 /**
  * A long file heard in pieces for its words and whole for its voices, both
  * at once: the pieces four at a time, any failure interrupting the rest.
@@ -450,6 +454,19 @@ const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, aud
     Effect.catchTag("TooLongForOneRequest", (refused) =>
       Effect.logWarning(`${source}: ${refused.message}; its words are from the pieces and who speaks is left for the watch`).pipe(Effect.as(Option.none<Transcript>())),
     ),
+    // The whole hearing is only for its voices, so once its own retries are
+    // spent it never stops the import either (Nov 1, Mathias's 6 h 20 min and
+    // 7 h 43 min FOIA recordings: the whole hearing held one request open for
+    // minutes, the connection dropped three times, and both imports stopped
+    // at Transcribing with their words heard). Only for the temporary kinds:
+    // a refusal (a quota, a sign-in) or an allowance used up stops the pieces
+    // too, so it's said as it is.
+    Effect.catchTags({
+      RelayUnreachable: (failed) => withoutVoices(source, failed.message),
+      RelayTimedOut: (failed) => withoutVoices(source, failed.message),
+      GatewayDown: (failed) => withoutVoices(source, failed.message),
+      RelayBusy: (failed) => withoutVoices(source, failed.message),
+    }),
     Effect.ensuring(Effect.sync(() => (wholeMs = Date.now() - began))),
   );
 

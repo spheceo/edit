@@ -343,6 +343,27 @@ test.skipIf(ffmpeg === null)("a long file over the limit at 32 kbps is heard who
   }
 }, 30_000);
 
+test.skipIf(ffmpeg === null)("a whole hearing whose connection keeps dropping costs the voices, never the import (Nov 1)", async () => {
+  const { dir, cleanup } = scratch("transcribe-whole-drops");
+  const limit = 1_000_000;
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=100", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    // The pieces (~230 kB) are heard; the whole (~550 kB) fails at the gateway every time it's asked, as Mathias's dropped.
+    mock.on("POST", "/v1/transcribe", (request) => (request.body.length > 400_000 ? new Response("bad gateway", { status: 502 }) : Response.json(scribeAnswer(["Hello", "there."], "speaker_3"))));
+    const target = `${dir}/cache/transcript.json`;
+    await runtime.runPromise(transcribeFile(source, target).pipe(Effect.provideService(RelayMaxBytes, limit), Effect.provideService(Retries, Retries.instant)));
+    const written = JSON.parse(fs.readFileSync(target, "utf8")) as { words: Word[] };
+    expect(written.words.length).toBeGreaterThan(0);
+    expect(written.words.every((word) => word.speaker === undefined)).toBe(true);
+    // Nothing kept for the whole, so a later run asks for it again.
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.json`)).toBe(false);
+  } finally {
+    cleanup();
+  }
+}, 30_000);
+
 test.skipIf(ffmpeg === null)("a relay that doesn't answer in time is abandoned and asked again; an answer that isn't Scribe's is said at once", async () => {
   const { dir, cleanup } = scratch("transcribe-slow");
   try {

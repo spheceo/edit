@@ -291,9 +291,11 @@ export function paceFlags(script: Script, clips: Clip[], single: boolean): strin
   }
   blocks.push(run);
   const body = blocks.slice(2);
-  const long = body.filter((block) => block.ms > BLOCK_MOST_MS).map((block) => `${(block.ms / 60_000).toFixed(1)} min from ${at(block.from)}`);
+  // A compilation's pages are tight (6 to 7): its blocks may run to about four minutes.
+  const most = single ? BLOCK_MOST_MS : 260_000;
+  const long = body.filter((block) => block.ms > most).map((block) => `${(block.ms / 60_000).toFixed(1)} min from ${at(block.from)}`);
   if (long.length > 0) {
-    flags.push(`Footage blocks over about three minutes (${long.join("; ")}). Break each where the conversation turns, with a cut-in that adds what the footage can't (the people's life, the motive, what changed), early or late in the video.`);
+    flags.push(`Footage blocks over about ${single ? "three" : "four"} minutes (${long.join("; ")}). Break each where the conversation turns, with a cut-in that adds what the footage can't (the people's life, the motive, what changed), early or late in the video.`);
   }
   // A short cut (a test, a sample) has no pacing to speak of.
   if (single && footage.reduce((sum, clip) => sum + Math.max(0, clip.endMs - clip.startMs), 0) >= 600_000) {

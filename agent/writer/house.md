@@ -7,7 +7,7 @@ Writer's own rules, from the team's reviews of its bodycam and interrogation scr
 - A sound-only clip can play later in the intro; its clip gets an edit note saying what it is ("edit: the victim's recorded statement: show it over the audio waveform, labelled"). ("It's really important that we… make it clear when we have this audio spectrum that this is a victim statement.")
 
 ## Pacing
-- No footage block runs past about three minutes anywhere in the video, early or late: break a long one where the conversation turns, with a cut-in that adds what the footage can't. ("We have 4 minutes of footage in a row. We need to break this up… That's also something we need to do later in the video as well.")
+- No footage block runs past about three minutes anywhere in the video, early or late (about four in a compilation, whose pages are tight): break a long one where the conversation turns, with a cut-in that adds what the footage can't. ("We have 4 minutes of footage in a row. We need to break this up… That's also something we need to do later in the video as well.")
 - A cut-in needs a block worth breaking: never one after less than about a minute of footage, outside the intro. ("It makes no sense to have a cut-in after this short amount of footage.")
 - Get to the picture. Calls, recorded interviews and procedure (name and birthday lookups, paperwork, who drives, repeated tellings) never hold back the footage the viewer can see: keep the clip that shows the point and move on. ("It takes a really really long time before we even get to the point where we see some visual footage.")
 - No crumbs: never a clip of only "Yeah.", "Okay." or "Um", nor a stretch chopped into pieces a second apart; it plays as one range.

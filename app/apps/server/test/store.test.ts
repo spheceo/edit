@@ -33,10 +33,14 @@ test("nothing_is_lost_quietly", async () => {
     await store.replace(id, null, renamed, "test");
     expect(names(`${home}/projects/history/${id}`).length).toBe(1);
 
-    // Deleting moves it aside.
+    // Deleting moves it aside, with its chat and its sub-agents' (the fresh-eyes pass's).
+    fs.writeFileSync(store.chatPath(id), "{}");
+    fs.writeFileSync(store.chatPath(`${id}~review`), "{}");
     expect(store.delete(id)).toBe(true);
     expect(store.get(id)).toBeNull();
     expect(names(`${home}/projects/deleted`).some((name) => name.startsWith(id) && name.endsWith(".json"))).toBe(true);
+    expect(fs.existsSync(store.chatPath(`${id}~review`))).toBe(false);
+    expect(names(`${home}/projects/deleted`).some((name) => name.startsWith(`${id}~review-`) && name.endsWith(".chat.json"))).toBe(true);
   } finally {
     cleanup();
   }

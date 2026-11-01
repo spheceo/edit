@@ -469,10 +469,20 @@ export class Store {
     // What Edit rendered for it and can render again (smoothed slow motion,
     // map shots) goes: a teaching loop's 15 deleted trials left 8 GB of it.
     for (const made of ["smooth", "maps"]) fs.rmSync(join(this.uploadsDir(id), made), { recursive: true, force: true });
+    // Its chat and its sub-agents' (`<id>~review.chat.json`, the fresh-eyes pass).
+    let names: string[] = [];
     try {
-      fs.renameSync(this.chatPath(id), join(bin, `${id}-${stamp}.chat.json`));
+      names = fs.readdirSync(join(this.home, "projects"));
     } catch {
-      // No chat to keep.
+      // No folder, no chats.
+    }
+    const chats = [id, ...names.flatMap((name) => (name.startsWith(`${id}~`) && name.endsWith(".chat.json") ? [name.slice(0, -".chat.json".length)] : []))];
+    for (const chat of chats) {
+      try {
+        fs.renameSync(this.chatPath(chat), join(bin, `${chat}-${stamp}.chat.json`));
+      } catch {
+        // No chat to keep.
+      }
     }
     try {
       fs.renameSync(this.path(id), join(bin, `${id}-${stamp}.json`));

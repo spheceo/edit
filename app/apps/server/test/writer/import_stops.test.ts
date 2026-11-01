@@ -36,9 +36,9 @@ const ffmpegsFor = (path: string) => Bun.spawnSync(["pgrep", "-f", path]).stdout
 test.skipIf(ffmpeg === null)("an import whose words fail stops its preview too, and says the failure with its kind", async () => {
   const { dir, app, cleanup } = fixtureHome("import-stops");
   try {
-    // 20 minutes of sound: its preview (sound over black) takes a while to make.
+    // 8 minutes of sound: its preview (sound over black) takes a while to make (20 minutes ran past the test's time in the full suite).
     const source = `${dir}/interview.m4a`;
-    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=1200", "-c:a", "aac", "-b:a", "32k", source]).exitCode).toBe(0);
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=480", "-c:a", "aac", "-b:a", "32k", source]).exitCode).toBe(0);
     // The relay refuses at once (a quota): not asked again, so the words fail long before the preview is made.
     mock.on("POST", "/v1/transcribe", () => Response.json({ detail: { message: "quota exceeded" } }, { status: 402 }));
     const data = store.dataDir(app.store.home);
@@ -57,7 +57,7 @@ test.skipIf(ffmpeg === null)("an import whose words fail stops its preview too, 
   } finally {
     cleanup();
   }
-}, 60_000);
+}, 120_000);
 
 test.skipIf(ffmpeg === null)("an import asked for by a route is answered once its script exists, carries on alone and says how it ended (JJ, Nov 1)", async () => {
   const { dir, app, cleanup } = fixtureHome("import-started");

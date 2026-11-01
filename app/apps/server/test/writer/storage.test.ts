@@ -6,7 +6,8 @@ import { join } from "node:path";
 import type { Script } from "@edit/types/writer";
 
 import * as cloud from "../../src/writer/cloud.ts";
-import { free } from "../../src/writer/storage.ts";
+import * as diag from "../../src/diag.ts";
+import { free, roundForTests } from "../../src/writer/storage.ts";
 import * as store from "../../src/writer/store.ts";
 
 const ID = "7d0e4c1a-2b3f-4a5e-8c9d-0f1e2d3c4b5a";
@@ -58,4 +59,28 @@ describe("a script's footage left to the cloud", () => {
     fs.writeFileSync(join(data, "cloud", "ledger.json"), JSON.stringify({ scripts: {} }));
     expect(await free(data, ID)).toBe(0);
   });
+});
+
+test("a round tells a folder with no script from a script whose footage can't go, and says each once", async () => {
+  const [data] = setUp({}, []);
+  // Nov 1, Mathias's Mac: folders with no script.json, a warning each at every round for two days.
+  const stray = "aaaaaaaa-1111-4222-8333-444444444444";
+  fs.mkdirSync(store.scriptDir(data, stray), { recursive: true });
+  fs.writeFileSync(join(store.scriptDir(data, stray), "piece.mp4"), "kept");
+  // A script that can't be read: its footage stays, said why.
+  const broken = "bbbbbbbb-1111-4222-8333-444444444444";
+  fs.mkdirSync(store.scriptDir(data, broken), { recursive: true });
+  fs.writeFileSync(join(store.scriptDir(data, broken), "script.json"), "{ not json");
+  const said = new Map<string, string>();
+  const warned = () => diag.lines(10_000).filter((line) => line.level === "warn" && line.message.includes("its footage stays here")).length;
+  const before = warned();
+  const first = await roundForTests(data, said);
+  const second = await roundForTests(data, said);
+  expect(first.strays).toEqual([stray]);
+  expect(second.strays).toEqual([stray]);
+  // The stray isn't a failure, and the broken script is said once over two rounds.
+  expect(warned() - before).toBe(1);
+  expect(diag.lines(10_000).some((line) => line.message.includes(`${stray.slice(0, 8)}: its footage stays here`))).toBe(false);
+  // Nothing of the stray's is touched.
+  expect(fs.readFileSync(join(store.scriptDir(data, stray), "piece.mp4"), "utf8")).toBe("kept");
 });

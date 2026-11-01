@@ -13,9 +13,12 @@
 
 import * as fs from "node:fs";
 
+import { Effect, Schema } from "effect";
+
 import type { App } from "../app.ts";
 import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
+import { idle, inArea, runPromise, runtime } from "../effect/runtime.ts";
 import { isFile, join } from "../paths.ts";
 import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
@@ -189,6 +192,72 @@ export async function bringBack(app: App, data: string, id: string, job?: jobs.J
   return missing;
 }
 
+// ── The rounds (in Effect since Nov 1: docs/plans/2026-11-01-effect.md, part 5) ──
+//
+// Nov 1, Mathias's Mac: its problem report was 1,747 lines of one warning,
+// "27739305: its footage stays here: That script is missing.", and the same
+// for 140 other folders, a round every ten minutes for two days: folders in
+// the scripts' root with no script.json, each a failure again at every round,
+// which hid everything else the report had to say. A round now tells what it
+// found apart: a folder with no script isn't a script (noted once a start,
+// left as it is: footage there may be another project's), and a script whose
+// footage can't go yet is said once, and again only when what's in the way
+// changes.
+
+/** A folder in the scripts' root with no script.json. */
+export class NoScriptHere extends Schema.TaggedError<NoScriptHere>()("NoScriptHere", { id: Schema.String }) {}
+/** A script's footage can't be left to the cloud this round (it's said why). */
+export class FootageStays extends Schema.TaggedError<FootageStays>()("FootageStays", { id: Schema.String, message: Schema.String }) {}
+
+/** One script's idle footage left to the cloud: the bytes freed. */
+const freeOne = (data: string, id: string, now?: number, idle?: number) =>
+  Effect.gen(function* () {
+    if (!isFile(join(store.scriptDir(data, id), "script.json"))) return yield* new NoScriptHere({ id });
+    return yield* Effect.tryPromise({
+      try: () => free(data, id, now, idle),
+      catch: (error) => new FootageStays({ id, message: diag.messageOf(error) }),
+    });
+  });
+
+/** What a loop of rounds has said about each script, so a failure that hasn't changed isn't said again. */
+type Said = Map<string, string>;
+
+const sayOnce = (said: Said, error: FootageStays) =>
+  said.get(error.id) === error.message ? Effect.void : Effect.sync(() => said.set(error.id, error.message)).pipe(Effect.andThen(Effect.logWarning(`${error.id.slice(0, 8)}: its footage stays here: ${error.message}`)));
+
+/** One round over every script: the bytes freed; folders with no script are gathered into `strays`. */
+const round = (data: string, said: Said, strays: Set<string>) =>
+  Effect.forEach(
+    store.ids(data),
+    (id) =>
+      freeOne(data, id).pipe(
+        Effect.tap(() => Effect.sync(() => said.delete(id))),
+        Effect.catchTags({
+          NoScriptHere: (stray) => Effect.sync(() => strays.add(stray.id)).pipe(Effect.as(0)),
+          FootageStays: (stays) => sayOnce(said, stays).pipe(Effect.as(0)),
+        }),
+      ),
+    { concurrency: 1 },
+  ).pipe(Effect.map((bytes) => bytes.reduce((sum, one) => sum + one, 0)));
+
+/** Rounds a couple of minutes after Edit starts, then every ten, for as long as Edit runs. */
+const rounds = (data: string) =>
+  Effect.gen(function* () {
+    const said: Said = new Map();
+    const strays = new Set<string>();
+    let told = 0;
+    yield* idle(2 * 60_000);
+    for (;;) {
+      const freed = yield* round(data, said, strays);
+      if (freed > 0) yield* Effect.logInfo(`${(freed / 1e9).toFixed(2)} GB of scripts' footage left to the cloud`);
+      if (strays.size > told) {
+        told = strays.size;
+        yield* Effect.logWarning(`${strays.size} folder${strays.size === 1 ? "" : "s"} among the scripts ha${strays.size === 1 ? "s" : "ve"} no script.json, left as they are (${[...strays].map((id) => id.slice(0, 8)).join(", ")})`);
+      }
+      yield* idle(EVERY_MS);
+    }
+  }).pipe(inArea("writer"));
+
 /**
  * Leaves idle scripts' footage to the cloud a couple of minutes after Edit
  * starts, then every ten; and a script's the moment a sync puts it there (the
@@ -197,22 +266,19 @@ export async function bringBack(app: App, data: string, id: string, job?: jobs.J
  */
 export function start(data: string): void {
   cloud.onPushed((id) => {
-    void free(data, id, Date.now(), 0)
-      .then((bytes) => bytes > 0 && diag.info("writer", `${id.slice(0, 8)}: ${Math.round(bytes / 1e6)} MB left to the cloud as soon as it was there`))
-      .catch((error: unknown) => diag.warn("writer", `${id.slice(0, 8)}: its footage stays here: ${diag.messageOf(error)}`));
+    void runPromise(
+      freeOne(data, id, Date.now(), 0).pipe(
+        Effect.tap((bytes) => (bytes > 0 ? Effect.logInfo(`${id.slice(0, 8)}: ${Math.round(bytes / 1e6)} MB left to the cloud as soon as it was there`) : Effect.void)),
+        Effect.catchTags({ NoScriptHere: () => Effect.void, FootageStays: (stays) => Effect.logWarning(`${stays.id.slice(0, 8)}: its footage stays here: ${stays.message}`) }),
+        inArea("writer"),
+      ),
+    );
   });
-  let running = false;
-  const round = async () => {
-    if (running) return;
-    running = true;
-    let freed = 0;
-    try {
-      for (const id of store.ids(data)) freed += await free(data, id).catch((error: unknown) => (diag.warn("writer", `${id.slice(0, 8)}: its footage stays here: ${diag.messageOf(error)}`), 0));
-      if (freed > 0) diag.info("writer", `${(freed / 1e9).toFixed(2)} GB of scripts' footage left to the cloud`);
-    } finally {
-      running = false;
-    }
-  };
-  setTimeout(() => void round(), 2 * 60_000);
-  setInterval(() => void round(), EVERY_MS);
+  runtime.runFork(rounds(data));
+}
+
+/** One round, as the loop runs it, for tests: the bytes freed, and the folders found with no script. */
+export function roundForTests(data: string, said: Said = new Map()): Promise<{ freed: number; strays: string[] }> {
+  const strays = new Set<string>();
+  return runPromise(round(data, said, strays).pipe(Effect.map((freed) => ({ freed, strays: [...strays] })), inArea("writer")));
 }

@@ -132,6 +132,7 @@ export async function buildOnce(app: App, data: string, id: string, note: string
     found = await research.run(script, dir, job.signal);
   }
   found = casefiles.withDocuments(dir, found);
+  found = await withNoteDocs(note, found, id, script.title);
   script = await pickReused(dir, script, job);
   // The sound, so pauses with speech the transcript missed are kept.
   const peaks = await peaksOf(dir, script, job.signal);
@@ -180,6 +181,30 @@ export const SCRIPT_FRESH_EYES =
 
 // Off by default until loop 7 shows it helps (EDIT_SCRIPT_FRESH_EYES=1 turns it on; a build may ask with review).
 export const scriptFreshEyes = (asked: boolean | undefined): boolean => asked ?? process.env.EDIT_SCRIPT_FRESH_EYES === "1";
+
+/**
+ * A Google Doc the build's note links to, read with the team's sign-in and
+ * given to the builder beside the research (Republican Chairman, Nov 1: "you
+ * can basically look at this script right here and more or less take direct
+ * inspiration from it, in particular when it comes to the intro since this is
+ * the same case: <Doc>"; the build answered "I couldn't open your reference
+ * doc"). One that can't be read is said so to the builder, which tells the producer.
+ */
+export async function withNoteDocs(note: string, found: Research, id: string, title: string): Promise<Research> {
+  const links = [...new Set(note.match(/https:\/\/docs\.google\.com\/document\/d\/[\w-]+[^\s)]*/gu) ?? [])].slice(0, 3);
+  if (links.length === 0) return found;
+  const articles = [...found.articles];
+  for (const link of links) {
+    try {
+      const [name, text] = await commentary.fetchSource(link);
+      articles.push({ title: `The producer's reference: ${name}`, outlet: "A Doc the producer's note links to (follow the note on what to take from it)", published: null, url: link, summary: [...text.trim()].slice(0, 20_000).join(""), facts: [] });
+    } catch (error) {
+      diag.warn("writer", `${named(id, title)}: the note's Doc ${link} couldn't be read: ${diag.messageOf(error)}`);
+      articles.push({ title: "The producer's reference (not read)", outlet: "A Doc the producer's note links to", published: null, url: link, summary: `This Doc couldn't be read (${diag.messageOf(error)}). Say so in the report, with the reason.`, facts: [] });
+    }
+  }
+  return { ...found, articles };
+}
 
 /** A build, then (unless asked not to) the fresh read. */
 export async function buildAndReview(app: App, data: string, id: string, note: string, kind: Kind | undefined, review: boolean, job: Job): Promise<Outcome> {

@@ -60,6 +60,8 @@ export const EDIT_CALLS = new Map<string, string>([
   ["edit:clearRestore", "mutation"], ["edit:getMedia", "query"], ["edit:listMedia", "query"], ["edit:putMedia", "mutation"],
   // Home's Later: what someone set aside, the team's (who set it aside comes from the token).
   ["edit:listLater", "query"], ["edit:setLater", "mutation"], ["edit:clearLater", "mutation"],
+  // The lessons inbox: the team's lasting feedback, noted by the agents, closed by a teaching round (who comes from the token).
+  ["edit:listLessons", "query"], ["edit:noteLesson", "mutation"], ["edit:closeLesson", "mutation"],
 ]);
 
 /** Calls that change a project (refused outside the caller's kinds). */

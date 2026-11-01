@@ -2,8 +2,11 @@
 // commands beside them. `main.ts` runs it; this file only defines it, so
 // tests can call its parts.
 
+import type { InboxLesson } from "@edit/types/lessons";
+
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
+import { lessonsText } from "./lesson_text.ts";
 import { runCli as mediaCli } from "./media_drive/move.ts";
 import { initNative } from "./native/index.ts";
 import { join } from "./paths.ts";
@@ -46,6 +49,11 @@ USAGE
   edit remote resume <device-id> <project-or-script-id>
       Remote support is always on: enable registers this Edit again now. As an admin, help a teammate's: update it,
       get its diagnostics (what needs attention first), unstick everything stuck, restart it.
+  edit lessons [--all] [--json] [--port N]
+  edit lessons taught <id> <where it landed…> | drop <id> <why…> | reopen <id>
+      The lessons inbox: the team's lasting feedback the agents noted, for the
+      next teaching round. Lists the open ones (--all: closed too); a round
+      closes each with where it landed (the skill, the commit, the audit).
   edit --version
 
 ENV
@@ -129,6 +137,32 @@ export async function main(args: string[]): Promise<void> {
         const value = await response.json() as { error?: unknown };
         if (!response.ok) fail(typeof value.error === "string" ? value.error : "remote support request failed");
         console.log(JSON.stringify(value, null, 2));
+      } catch (error) { fail(diag.messageOf(error)); }
+      return;
+    }
+    case "lessons": {
+      const verb = args[1];
+      const json = args.includes("--json");
+      try {
+        if (verb === undefined || verb.startsWith("--")) {
+          const response = await fetch(`http://127.0.0.1:${port()}/api/lessons${args.includes("--all") ? "?all=1" : ""}`, { signal: AbortSignal.timeout(30000) });
+          const value = await response.json() as { error?: unknown; lessons?: InboxLesson[] };
+          if (!response.ok) fail(typeof value.error === "string" ? value.error : "the lessons inbox didn't load");
+          console.log(json ? JSON.stringify(value.lessons ?? [], null, 2) : lessonsText(value.lessons ?? []));
+          return;
+        }
+        const status = verb === "taught" ? "taught" : verb === "drop" ? "dropped" : verb === "reopen" ? "open" : null;
+        const id = args[2];
+        const outcome = args.slice(3).filter((word, at, all) => word !== "--port" && all[at - 1] !== "--port").join(" ").trim();
+        if (status === null || !id || (status !== "open" && outcome === "")) fail("use edit lessons [--all], or edit lessons taught <id> <where it landed…> | drop <id> <why…> | reopen <id>");
+        const response = await fetch(`http://127.0.0.1:${port()}/api/lessons/${encodeURIComponent(id!)}`, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify(status === "open" ? { status } : { status, outcome }),
+          signal: AbortSignal.timeout(30000),
+        });
+        const value = await response.json() as { error?: unknown };
+        if (!response.ok) fail(typeof value.error === "string" ? value.error : "the lessons inbox didn't take it");
+        console.log(`${id}: ${status}`);
       } catch (error) { fail(diag.messageOf(error)); }
       return;
     }

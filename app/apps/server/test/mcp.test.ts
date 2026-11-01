@@ -31,12 +31,12 @@ test("tool_reference_is_one_short_line_per_tool", () => {
   expect(reference.trimEnd().split("\n").length).toBe(TOOLS.length);
   expect(reference).toContain("- apply_edit_plan(base_rev: integer, operations: array, ");
   // Commentary's posts, video references and shot checks, Edit Script and the team's effects, came in Oct 26;
-  // read_upload (any file dropped in, Oct 31) one short line more.
-  expect(reference.length).toBeLessThan(21_100);
+  // read_upload (any file dropped in, Oct 31) one short line more, note_lesson (the lessons inbox, Nov 1) another.
+  expect(reference.length).toBeLessThan(21_250);
 });
 
 test("every tool takes project_id; the instructions list the skills", () => {
-  expect(TOOLS.length).toBe(99);
+  expect(TOOLS.length).toBe(100);
   for (const tool of TOOLS) {
     expect(tool.inputSchema.type).toBe("object");
     expect(tool.inputSchema.properties.project_id).toEqual({

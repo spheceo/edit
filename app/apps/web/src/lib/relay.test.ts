@@ -320,6 +320,19 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "query", path: "edit:setLater" }, { token: NAMED })).status).toBe(403);
   });
 
+  it("the lessons inbox: who noted or closed a lesson comes from the token, never the caller", async () => {
+    const upstream = vi.fn(async () => Response.json({ status: "success", value: { id: "l1" } })); vi.stubGlobal("fetch", upstream);
+    const sent = () => JSON.parse(String((upstream.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body));
+    const person = { sub: "person-t", name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" };
+    await call("convex", { kind: "mutation", path: "edit:noteLesson", args: { lesson: "l", quote: "q", part: "intro", scope: "house", actor: { sub: "forged", name: "x" } } }, { token: NAMED });
+    expect(sent().args).toEqual({ lesson: "l", quote: "q", part: "intro", scope: "house", actor: person, token: "service-token" });
+    await call("convex", { kind: "mutation", path: "edit:closeLesson", args: { id: "l1", status: "taught", outcome: "intro.md" } }, { token: NAMED });
+    expect(sent().args).toEqual({ id: "l1", status: "taught", outcome: "intro.md", actor: person, token: "service-token" });
+    await call("convex", { kind: "query", path: "edit:listLessons", args: { all: true } }, { token: NAMED });
+    expect(sent()).toMatchObject({ path: "edit:listLessons", args: { all: true } });
+    expect((await call("convex", { kind: "query", path: "edit:noteLesson" }, { token: NAMED })).status).toBe(403);
+  });
+
   it("passes Convex's errors on", async () => {
     // A function's error (or no such function): Convex's own shape, as 200.
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:listMedia'.\n" })));

@@ -1,6 +1,6 @@
-// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens. Settings: who's signed in, YouTube, updates and the betas.
+// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Lessons inbox, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens. Settings: who's signed in, YouTube, updates and the betas.
 
-import { Bug, ChevronDown, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
+import { Bug, ChevronDown, Ellipsis, GraduationCap, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
@@ -10,6 +10,7 @@ import { buildReport, closeReport, copyText, openReport, useReport } from "../li
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { api, type YoutubeSignIn } from "../lib/api";
+import { LessonsView } from "./LessonsDialog";
 import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
 import { Button, cx, IconButton, Modal, Select, Switch, Tabs } from "./ui";
@@ -32,6 +33,7 @@ export function AppMenu({ row = false }: { row?: boolean } = {}) {
       : []),
     { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
     { label: "Logs", icon: <ScrollText size={14} />, onSelect: () => openDialog("logs") },
+    { label: "Lessons inbox", icon: <GraduationCap size={14} />, disabled: person === null, onSelect: () => openDialog("lessons") },
     { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
     { separator: true },
     person !== null
@@ -90,6 +92,10 @@ export function AppDialogs() {
       <Modal open={open === "logs"} onClose={closeDialog} width={920}>
         <DialogHeader title="Logs" />
         <LogsView />
+      </Modal>
+      <Modal open={open === "lessons"} onClose={closeDialog} width={640}>
+        <DialogHeader title="Lessons inbox" />
+        <LessonsView />
       </Modal>
       <ReportDialog />
     </>

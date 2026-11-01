@@ -1336,6 +1336,50 @@
     "name": "read_review"
   },
   {
+    "description": "Notes the team's lasting lesson for the next teaching round. It goes in Edit's lessons inbox, which teaches it to every later edit (the skills, code and audits). Call it when someone gives a preference or a correction that should hold beyond this video (\"we never\u2026\", \"always\u2026\", the same note several times, a rule the skill seems to have wrong); not for a one-off fix to this cut. Once per lesson, then fix this project as usual: it doesn't change how you work now.",
+    "inputSchema": {
+      "properties": {
+        "lesson": {
+          "description": "The lesson in general terms, for any video (what to do, and when), never naming this video's clips or times.",
+          "type": "string"
+        },
+        "quote": {
+          "description": "The team's own words, verbatim (the comment, the chat message).",
+          "type": "string"
+        },
+        "part": {
+          "description": "The part of the edit it belongs to: the skill's name (intro, transitions, cut-ins, outro, subtitles, music-and-sound, final-pass\u2026), or script, ideas, other.",
+          "type": "string"
+        },
+        "scope": {
+          "description": "house: every video; style: this kind of video; person: one person's or channel's taste.",
+          "enum": [
+            "house",
+            "style",
+            "person"
+          ],
+          "type": "string"
+        },
+        "from": {
+          "description": "Who said it, when it isn't the person in this chat (a reviewer's name on a review comment).",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lesson",
+        "quote",
+        "part",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "name": "note_lesson"
+  },
+  {
     "description": "Marks a Repack review note fixed. Call it after each note Edit set you on, before the next: Edit works out what you changed since the note before (the clips and their stretch of the timeline), keeps it with the note so the timeline shows the change and the reviewer's words over it, and marks the note done on the review with your summary.",
     "inputSchema": {
       "properties": {

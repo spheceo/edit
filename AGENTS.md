@@ -39,4 +39,6 @@ Every round of feedback on an edit (a Frame.io link, notes in chat) is a chance 
 4. Write it down in `docs/feedback/<date>-<video>.md`: each pattern with its comments, cause, lesson, code and tool; the one-offs; open questions for the user.
 5. Apply it to the project through the in-app agent (the `feedback` skill: read, sort, fix across the video, report each comment), with the new build, so the lesson is exercised; fix in code whatever it still gets wrong.
 
+Feedback the team gives the agents between rounds lands in the lessons inbox: the in-app agent calls `note_lesson` for anything meant to hold beyond that video (team-wide, in mamagi). `edit lessons` lists what's open; a round teaches each lesson (or drops a one-off) and closes it with where it landed (`edit lessons taught <id> <skill/commit>`). Closed lessons stay, so a note that comes back after it was taught shows the teaching didn't hold. The inbox is never memory the agent reads back: the skills, code and audits stay what teaches it.
+
 To make a round of feedback (or a new style) stick across videos, run the teaching loop (`.claude/skills/teaching-loop`): fresh from-scratch edits of test videos, round after round, judged against a private answer key, the harness and the skills improved between rounds, a holdout last.

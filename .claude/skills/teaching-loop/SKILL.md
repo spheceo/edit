@@ -17,6 +17,7 @@ What it's for: the next edit shouldn't get the same notes. The agent never sees 
 - A trial that hits a bug in Edit or the harness: fix the root cause, verify it, log it in `LOG.md`, and run that trial again on the fix; never score around a broken tool (root `AGENTS.md`: the whole flow, no shortcuts).
 
 ## Before round 1
+0. **The lessons inbox** (Nov 1): what the agents noted from the team between loops (`note_lesson`, kept in mamagi prod). `edit lessons` lists the open ones by part, each with the team's words, who and where (`--all` adds the closed ones: a note that's back after it was taught means that teaching didn't hold); it asks the installed Edit (prod, :7700), never `just dev`'s (dev's Convex has its own, empty inbox). Each open lesson is a row for the key, or a one-off to drop.
 1. **The answer key** (private: `$LOOP/keys/<style>.md`, never in the repo or the agent's reach): every pattern from the feedback as one row: the pattern, the team's words, how it's checked (A = audit or project data, F = frames, J = judgement). Loop 2's are in `~/edit-experiments/loop2/keys/`.
 2. **The test videos**: one or more per style the feedback touches, with a Doc script each; plus one **holdout** never used in the loop.
 3. **Limits and credit** (loop 2 lost hours to these): the relay's daily transcription and map allowances (`app/apps/relay/wrangler.toml`, deploy with `npx wrangler deploy`), the AI Gateway's credit (a test call: `curl https://ai-gateway.vercel.sh/v1/chat/completions` with `AI_GATEWAY_API_KEY`), free disk. Without gateway credit: `EDIT_AI_PROVIDER=gemini` in `/tmp/run/serve.sh` (`app/apps/server/src/gemini.ts`, Gemini's free tier with xAI behind it for pictures).
@@ -41,5 +42,6 @@ The agent's turn ends with flags it hasn't fixed → Edit already follows up by 
 
 ## The holdout and the write-up
 - When the loop stops: one from-scratch edit of the holdout, judged against the same key. One clean shot; no teaching from it.
+- Close every inbox lesson the loop took: `edit lessons taught <id> <the skill, audit or code and its commit>`, or `edit lessons drop <id> <why>` (a one-off, or against what the team wants elsewhere). Never close one the loop didn't measure.
 - Write it up in `docs/feedback/<date>-<name>.md` (rounds, the table, what changed by kind with commits, what's open for the user) and update the agent memory. Everything else stays under `$LOOP`.
 - Say plainly what the measures can't: nothing was heard or judged for taste; the team's review of a fresh edit is the real test.

@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 
 import type { Script, Summary } from "@edit/types/writer";
 
+import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { join } from "../paths.ts";
 import { BUILD } from "../version.ts";
@@ -104,7 +105,8 @@ export function summary(script: Script, dir?: string): Summary {
     status: script.status,
     stage: script.stage,
     progress: script.progress,
-    error: script.error,
+    // Kept short: the cloud refuses a summary over 64 KB, and one long error kept a script out of it (diag.gist).
+    error: script.error !== null && script.error.length > 2000 ? diag.gist(script.error, 2000) : script.error,
     durationMs: script.durationMs,
     updatedAt: script.updatedAt,
     wordCount: script.words.length,

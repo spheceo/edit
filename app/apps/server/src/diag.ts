@@ -247,6 +247,32 @@ export function scrub(text: string): string {
   return out + rest;
 }
 
+/**
+ * A tool's error output (FFmpeg's stderr) short enough to keep: each message
+ * once, in order (the same line with another decoder address or count is the
+ * same message), at most `max` characters, and how many lines were left out.
+ * Nov 1: a damaged file's "could not extract audio" kept all 545 KB of
+ * FFmpeg's "Invalid NAL unit size" lines as the script's error, and its
+ * summary was then too large for the cloud, so the script never got there.
+ */
+export function gist(text: string, max = 600): string {
+  const all = text.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  let length = 0;
+  for (const line of all) {
+    const key = line.replace(/@ 0x[0-9a-f]+/giu, "@").replace(/-?\d+/gu, "#");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (length + line.length > max) break;
+    kept.push(line);
+    length += line.length + 2;
+  }
+  if (kept.length === 0 && all.length > 0) kept.push(`${all[0]!.slice(0, max)}…`);
+  const left = all.length - kept.length;
+  return kept.join("; ") + (left > 0 ? ` (and ${left} more line${left === 1 ? "" : "s"})` : "");
+}
+
 /** Where native log lines go (`native.init({log})`): logged, scrubbed, timings kept. */
 export function nativeLog(
   line:

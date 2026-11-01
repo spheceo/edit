@@ -271,7 +271,7 @@ const encode = Effect.fn("transcribe.encode")(function* (input: readonly string[
   yield* proc
     .run(tools.ffmpeg(), ["-hide_banner", "-loglevel", "error", "-y", ...input, "-ac", "1", "-ar", "16000", "-c:a", "libopus", "-b:a", `${kbps}k`, "-application", "voip", out], { stdout: "ignore" })
     .pipe(
-      Effect.mapError((error) => new AudioUnreadable({ message: `${failure}: ${error._tag === "ProcessFailed" ? error.stderr : error.message}` })),
+      Effect.mapError((error) => new AudioUnreadable({ message: `${failure}: ${diag.gist(error._tag === "ProcessFailed" ? error.stderr : error.message)}` })),
       Effect.onError(() => Effect.sync(() => fs.rmSync(out, { force: true }))),
     );
 });

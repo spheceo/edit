@@ -260,7 +260,6 @@ export async function execute(app: App, c: ConvexClient, item: Pending, ownsSess
       const status = await app.updater.status() as { enabled?: boolean; latest?: string | null; phase?: string };
       if (!status.enabled) throw new Error("This build cannot update itself.");
       if (status.phase !== "idle") throw new Error("An update is already running.");
-      if ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.()) throw new Error("An agent turn is running; request the update after it finishes.");
       if (!status.latest) throw new Error("No newer verified release is available.");
       intent = { ...intent, expected: status.latest };
       journal(app, intent);

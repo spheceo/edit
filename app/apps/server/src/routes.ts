@@ -10,7 +10,8 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
-import { importDrive, importing } from "./drive_import.ts";
+import { importDrive } from "./drive_import.ts";
+import * as remoteActions from "./remote_actions.ts";
 import * as youtubeSignIn from "./youtube_signin.ts";
 import * as problemReports from "./problem_reports.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
@@ -32,8 +33,6 @@ import * as patches from "./patch.ts";
 import { canonical, expandHome, extension, fileName, fileStem, isFile, join, parent } from "./paths.ts";
 import { DEFAULT_SETTINGS, SHORTS_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
-import * as writerImports from "./writer/imports.ts";
-import * as writerJobs from "./writer/jobs.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { listFiles, migrateMediaFiles, storageReport, verifyExports } from "./storage.ts";
 import { readLocalOriginals } from "./cloud_media.ts";
@@ -453,26 +452,13 @@ async function updateInstall({ app }: Context): Promise<Response> {
 
 /** Shared by the local update route and an explicitly enabled remote request. */
 export async function installUpdate(app: App, remote = false) {
-  const workRunning = () => {
-    let uploading = false;
-    try {
-      uploading = seams.drive.uploading();
-    } catch (error) {
-      if (!seams.isUnavailable(error)) throw error;
-    }
-    // An import too: a restart mid-download used to leave it waiting for someone to open the project.
-    const scripts = (app.scripts as { running?: () => boolean } | undefined)?.running?.() ?? false;
-    // Script mode's imports and Claude's work on scripts too (they'd be cut off).
-    const writing = writerImports.anyImporting() || writerJobs.runningList().length > 0;
-    return app.exports.running() || uploading || scripts || importing() || writing;
-  };
-  const agentRunning = () => remote && ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() ?? false);
-  if (workRunning()) {
-    throw new ApiError(409, "an export, upload or footage import is running; update when it's done");
-  }
-  if (agentRunning()) throw new ApiError(409, "an agent turn is running; update when it's done");
+  // What a restart would cut off (remote_actions.busyWith, the one list a remote restart uses too); an agent turn only
+  // when the update was asked from afar (here, the person asking is the one with the turn).
+  const busy = () => remoteActions.busyWith(app, remote);
+  const now = busy();
+  if (now.length > 0) throw new ApiError(409, `${now.join(", ")} ${now.length === 1 ? "is" : "are"} running; update when it's done`);
   try {
-    return await app.updater.install(remote ? () => !workRunning() && !agentRunning() : undefined);
+    return await app.updater.install(remote ? () => busy().length === 0 : undefined);
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

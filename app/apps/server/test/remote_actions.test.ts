@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Script } from "@edit/types/writer";
 
 import type { App } from "../src/app.ts";
-import { problems, RESTART, resume, UNSTICK } from "../src/remote_actions.ts";
+import { busyWith, problems, RESTART, resume, UNSTICK } from "../src/remote_actions.ts";
 import * as store from "../src/writer/store.ts";
 
 /** An Edit home with one script in Script mode's folder, and no projects. */
@@ -50,6 +50,19 @@ describe("remote support's other actions", () => {
   test("unstick on a Mac with nothing stuck says so; restart refuses while work would be cut off", async () => {
     expect(await resume(quiet(), UNSTICK)).toBe("nothing was stuck");
     await expect(resume(quiet(true), RESTART)).rejects.toThrow("Not restarted: an export would be cut off");
+  });
+
+  test("one list of what a restart would cut off, for a remote restart and an update alike; an agent turn only when asked from afar", async () => {
+    const app = quiet();
+    expect(busyWith(app)).toEqual([]);
+    // A footage import (Edit's own) was missed by the remote restart before Nov 1, though an update waited for it.
+    Object.assign(app.scripts, { running: () => true });
+    expect(busyWith(app)).toEqual(["a footage import"]);
+    await expect(resume(app, RESTART)).rejects.toThrow("Not restarted: a footage import would be cut off");
+    Object.assign(app.scripts, { running: () => false });
+    Object.assign(app, { agents: { hasRunningTurns: () => true, runningProjects: () => ["p1"] } });
+    expect(busyWith(app)).toEqual(["an agent turn"]);
+    expect(busyWith(app, false)).toEqual([]);
   });
 
   test("the problems of the last two days come once per kind, most frequent first, numbers and ids aside", () => {

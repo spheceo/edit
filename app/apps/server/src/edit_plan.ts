@@ -1343,6 +1343,9 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     const inNarrations = new Map<string, Set<number>>();
     for (const clip of project.clips) {
       if (clip.type !== "video" || !faces.has(clip.media) || !visible(clip.track)) continue;
+      // The window's own frame (a File Viewer's chrome) is no one's face.
+      const shown = mediaOf(project, clip.media);
+      if (shown === undefined || shown.kind !== "image" || /[\\/]graphics[\\/]/u.test(shown.path) || /^(desktop|frame|board|paper|map)-/u.test(shown.name)) continue;
       const index = voiced.findIndex(([from, to]) => clip.start >= from && clip.start < to);
       if (index < 0) continue;
       const set = inNarrations.get(clip.media) ?? new Set<number>();

@@ -159,6 +159,9 @@ test("a_persons_photo_in_cut_in_after_cut_in_is_flagged", () => {
     ops.push({ op: "add", clip: { type: "audio", track: "new", media: "vo", source_in: i * 10, start: 300 + i * 500, duration: 200, name: "Voice-over" } });
     if (i < 4) ops.push({ op: "add", clip: { type: "video", track: "new", media: "face", source_in: 0, start: 330 + i * 500, duration: 90, name: "File Viewer · Chandler" } });
   }
+  // The window's own frame, in every File Viewer, is no one's face.
+  p.media.push(media({ id: "chrome", name: "desktop-window-file-viewer-v2-1076x648-e.png", path: "/home/graphics/desktop-window-file-viewer.png", kind: "image", duration: 30, width: 1076, height: 648 }));
+  for (let i = 0; i < 5; i++) ops.push({ op: "add", clip: { type: "video", track: "new", media: "chrome", source_in: 0, start: 330 + i * 500, duration: 90, name: "File Viewer" } });
   apply(p, ops);
   const found = kinds(p, "face_overused");
   expect(found.length).toBe(1);

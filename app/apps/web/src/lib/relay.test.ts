@@ -57,6 +57,14 @@ describe("relay atomic spend reservations", () => {
     expect(values.get("all")).toBe(70);
     expect((await reserve("b", 50)).status).toBe(200);
     expect(values.get("all")).toBe(120);
+    // A recording heard by link goes past one request's limit (Nov 1: every 5-hour job was refused here); the day's caps still hold.
+    const job = (client: string, size: number) => budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client: client.repeat(64), size, job: true }) }));
+    await budget.alarm();
+    expect((await reserve("c", 110)).status).toBe(400);
+    expect((await job("c", 110)).status).toBe(429);
+    const roomy = new TranscriptionBudget({ storage }, { DAILY_BYTES_PER_IP: "1000", DAILY_BYTES_TOTAL: "1000", MAX_UPLOAD_BYTES: "100" } as Env);
+    expect((await roomy.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client: "d".repeat(64), size: 500, job: true }) }))).status).toBe(200);
+    expect((await roomy.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client: "d".repeat(64), size: 500 }) }))).status).toBe(400);
     await budget.alarm(); expect(values.size).toBe(0);
   });
 

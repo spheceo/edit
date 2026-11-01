@@ -4,7 +4,7 @@ import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
-import { transcribeJobs, type JobsEnv } from "./transcribe_jobs";
+import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
 
 export { DriveToR2 } from "./jobs";
 export { ExportJobs } from "./exports";
@@ -466,8 +466,11 @@ export class TranscriptionBudget {
       const { client } = await request.json() as { client: string };
       return json(200, { connection: await this.state.storage.get<number>(`ip:${client}`) ?? 0, total: await this.state.storage.get<number>("all") ?? 0, again: await this.state.storage.get<number>("again") ?? 0 });
     }
-    const { client, size, again } = await request.json() as { client: string; size: number; again?: boolean };
-    if (!/^[a-f0-9]{64}$/.test(client) || !Number.isSafeInteger(size) || size <= 0 || size > Number(this.env.MAX_UPLOAD_BYTES)) return json(400, { error: "Invalid budget reservation." });
+    const { client, size, again, job } = await request.json() as { client: string; size: number; again?: boolean; job?: boolean };
+    // A recording heard by link (transcribe_jobs.ts) goes past one request's limit, up to what Scribe fetches (Nov 1:
+    // every 5-hour job was refused here, "Invalid budget reservation", and heard the old way); the day's caps still hold.
+    const most = job === true ? MAX_JOB_BYTES : Number(this.env.MAX_UPLOAD_BYTES);
+    if (!/^[a-f0-9]{64}$/.test(client) || !Number.isSafeInteger(size) || size <= 0 || size > most) return json(400, { error: "Invalid budget reservation." });
     const answer = await this.state.storage.transaction(async storage => {
       const ipKey = `ip:${client}`;
       const ipUsed = await storage.get<number>(ipKey) ?? 0;

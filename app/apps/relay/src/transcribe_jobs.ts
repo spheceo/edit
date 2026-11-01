@@ -39,7 +39,7 @@ export const JOB_AUDIO = /^edit\/transcribe\/[A-Za-z0-9_-]{8,100}\.ogg$/;
 /** What Scribe said of a job that failed, by its request (and transcription) id. */
 const FAILED = "edit/transcribe/failed/";
 /** Scribe fetches by URL up to 2 GB. */
-const MAX_JOB_BYTES = 2_000_000_000;
+export const MAX_JOB_BYTES = 2_000_000_000;
 /** How long Scribe has to fetch the audio. */
 const FETCH_SECONDS = 6 * 3600;
 const ID = /^[A-Za-z0-9_-]{6,100}$/;
@@ -77,7 +77,7 @@ export async function transcribeJobs(request: Request, url: URL, env: JobsEnv): 
     if (size > MAX_JOB_BYTES) return json(413, { error: "That recording is too long even to hear by link (2 GB)." });
     if (!(await env.TRANSCRIBE_BURST.limit({ key: burstKey(request, found) })).success) return json(429, { error: "Too many transcriptions at once; try again in a minute." });
     const budget = env.BUDGET.get(env.BUDGET.idFromName(new Date().toISOString().slice(0, 10)));
-    const reserved = await budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client: await budgetKey(request, found), size, again: body.again === true }) }));
+    const reserved = await budget.fetch(new Request("https://budget/reserve", { method: "POST", body: JSON.stringify({ client: await budgetKey(request, found), size, again: body.again === true, job: true }) }));
     if (!reserved.ok) return reserved;
 
     const form = new FormData();

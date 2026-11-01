@@ -307,7 +307,9 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
         start: clip.start,
         text: mark.text,
         blur_box: box,
-        fix: "op blur_marks (a blur stuck to the picture, following its push-in and ending with it); or crop past it (scale, x/y or crop so it's off the frame); or another picture",
+        fix: /^(File Viewer ·|Photo Viewer|Photo inset)|Desktop ·/u.test(clip.name ?? "")
+          ? "a photo in our window: crop past the mark (the clip's crop) or choose another photo; never a blur on the window"
+          : "op blur_marks (a blur stuck to the picture, following its push-in and ending with it); or crop past it (scale, x/y or crop so it's off the frame); or another picture",
       });
     }
   }

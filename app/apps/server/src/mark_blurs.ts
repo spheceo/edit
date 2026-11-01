@@ -34,6 +34,8 @@ const FEATHER = 10;
 export const NAME = "Mark blur";
 /** Pictures shown only blurred (a card's backdrop): their marks can't be read. */
 const BLURRED_ALREADY = /card backdrop$/u;
+/** Our windows' photos (a File Viewer's, a Photo Viewer's, an inset, a Windows screen's). */
+const IN_WINDOW = /^(File Viewer ·|Photo Viewer|Photo inset)|Desktop ·/u;
 
 /** A picture clip's framing at a frame of the clip (its own seconds from its start). */
 /** A mark's box on the frame at a frame of the clip: centre x, y and size in project px. */
@@ -237,6 +239,7 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
   const pending: string[] = [];
   const skipped: string[] = [];
   const ours = new Set(watermarks.ours(project));
+  const inWindows: string[] = [];
   for (const clip of project.clips) {
     if (clip.type !== "video" || (only !== null && !only.has(clip.id)) || trackOf(project, clip.track)?.hidden === true) continue;
     // A card's backdrop is its own picture blurred already: a mark's blur on it
@@ -244,6 +247,15 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
     if (BLURRED_ALREADY.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
     if (media === undefined || ours.has(media.id) || !watermarks.looksForMarks(media)) continue;
+    // A photo in one of our windows is never patched with a blur: it reads as a
+    // smudge on the window (Jones JJ, Helpful Son, Oct 31: "We need to remove the
+    // blur on the top left of this file view"; "Remove the blur on the top of the
+    // file viewer here"). Its mark is cropped past, or the photo replaced.
+    if (media.kind === "image" && IN_WINDOW.test(clip.name ?? "")) {
+      const marks = watermarks.marksOf(project, media);
+      if (marks !== null && marks.some((mark) => !watermarks.left(media, mark)) && !inWindows.includes(media.name)) inWindows.push(media.name);
+      continue;
+    }
     const marks = watermarks.marksOf(project, media);
     if (marks === null) {
       if (!pending.includes(media.name)) pending.push(media.name);
@@ -282,6 +294,7 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
     removed_still_blurs: removed,
     ...(pending.length > 0 ? { not_looked_at_yet: pending, note: "these files are being looked at for marks now: run blur_marks again in a minute" } : {}),
     ...(skipped.length > 0 ? { too_big: skipped } : {}),
+    ...(inWindows.length > 0 ? { in_windows: inWindows, in_windows_note: "photos in our windows are never blurred: crop each past its mark (update the clip's crop) or choose another photo" } : {}),
   };
 }
 

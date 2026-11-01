@@ -168,6 +168,35 @@ export async function buildOnce(app: App, data: string, id: string, note: string
   return [report, built.costUsd];
 }
 
+/**
+ * Fresh eyes for a script (loop 7, Nov 2; Edit mode's FRESH_EYES, agent.ts):
+ * once a build is saved, a second Opus turn reads it as the team reviews it,
+ * with only the script, its sources and the house rules, and fixes what it
+ * finds, saved narration written straight in. On with EDIT_SCRIPT_FRESH_EYES=1
+ * or a build asked with review: true.
+ */
+export const SCRIPT_FRESH_EYES =
+  "Read this script once more with fresh eyes, as the team reviews it before recording, and fix what they would flag. The very first clip: the title's moment, with picture? Every footage block: none past about three minutes (break it where the conversation turns, with a cut-in that adds what the footage can't), no cut-in after less than about a minute of footage, no crumbs, no procedure or sound-only stretch holding the picture back. Every cut-in: does it turn what the viewer just saw rather than describe it again, carry what the footage can't show (the people's life, the motive, what changed), introduce anyone it speaks of? The house rules and the format's shape hold throughout. Change only what needs it; keep what already works, and say in a few lines what you changed and why.";
+
+// Off by default until loop 7 shows it helps (EDIT_SCRIPT_FRESH_EYES=1 turns it on; a build may ask with review).
+export const scriptFreshEyes = (asked: boolean | undefined): boolean => asked ?? process.env.EDIT_SCRIPT_FRESH_EYES === "1";
+
+/** A build, then (unless asked not to) the fresh read. */
+export async function buildAndReview(app: App, data: string, id: string, note: string, kind: Kind | undefined, review: boolean, job: Job): Promise<Outcome> {
+  const [report, cost] = await buildOnce(app, data, id, note, kind, job);
+  if (!review) return [report, cost];
+  checkStopped(job);
+  job.stage("Reading it with fresh eyes");
+  try {
+    const [again, more] = await reviseWith(data, id, SCRIPT_FRESH_EYES, "Fresh eyes: the final read.", { selected: [], picked: null, playheadMs: null }, true, job);
+    return [`${report}\n\nFresh eyes: ${again}`, cost + more];
+  } catch (error) {
+    checkStopped(job);
+    diag.warn("writer", `${named(id, store.read(store.scriptDir(data, id)).title)}: the fresh read didn't finish: ${diag.messageOf(error)}`);
+    return [report, cost];
+  }
+}
+
 /** A commentary is written from its sources alone: no speakers to name or case to research. */
 async function buildCommentary(data: string, dir: string, script: Script, note: string, job: Job): Promise<Outcome> {
   job.stage("Writing the script");

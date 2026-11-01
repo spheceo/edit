@@ -553,12 +553,13 @@ export function routes(router: Router<App>): void {
     })
     .get("/api/writer/trello/{list}", (context) => answer(() => trello.cards(context.params.list ?? "", titles(context.app))))
     .post("/api/writer/scripts/{id}/build", async (context) => {
-      const given = await body<{ note?: string; kind?: Kind }>(context);
+      const given = await body<{ note?: string; kind?: Kind; review?: boolean }>(context);
       return answer(() => {
         const script = readFor(dataOf(context.app), id(context));
         if (given.kind !== undefined) can.requireKind(script, given.kind);
         const note = String(given.note ?? "");
-        return startJob(context.app, id(context), { kind: "build", note, ...(given.kind ? { format: given.kind } : {}) }, (job) => scripting.buildOnce(context.app, dataOf(context.app), id(context), note, given.kind, job));
+        const review = scripting.scriptFreshEyes(given.review);
+        return startJob(context.app, id(context), { kind: "build", note, ...(given.kind ? { format: given.kind } : {}) }, (job) => scripting.buildAndReview(context.app, dataOf(context.app), id(context), note, given.kind, review, job));
       });
     })
     .post("/api/writer/scripts/{id}/revise", async (context) => {
@@ -697,7 +698,7 @@ const firstBuild = (build: unknown): { note: string } | null => (typeof build ==
 
 // A script made with a first build is built once its import is ready, as the Build button would.
 imports.hooks.build = (app, id, note) => {
-  startJob(app, id, { kind: "build", note }, (job) => scripting.buildOnce(app, dataOf(app), id, note, undefined, job));
+  startJob(app, id, { kind: "build", note }, (job) => scripting.buildAndReview(app, dataOf(app), id, note, undefined, scripting.scriptFreshEyes(undefined), job));
 };
 
 export function startJob(app: App, scriptId: string, work: jobs.Work, run: (job: jobs.Job) => Promise<jobs.Outcome>, after?: () => void): BuildStatus {

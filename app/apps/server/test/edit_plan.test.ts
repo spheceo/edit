@@ -192,6 +192,22 @@ test("an_interrogation_countdown_runs_from_the_date", () => {
   expect(kinds(right, "countdown_late").length).toBe(1);
 });
 
+test("a_new_picture_after_the_last_page_is_flagged", () => {
+  // Jones JJ, OnlyFans (Oct 31): "We'd rather just stay on the previous screen and have that written out as well".
+  const p = project("plan");
+  p.style = "interrogation";
+  p.media.push(footage(), media({ id: "mug", name: "mug", path: "/mug.png", kind: "image", duration: 30, width: 800, height: 1000 }));
+  apply(p, [
+    { op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 0, start: 0, duration: 900 } },
+    { op: "add", clip: { type: "video", track: "new", media: "mug", source_in: 0, start: 600, duration: 300, name: "Resolution · mugshot" } },
+    { op: "add", clip: { type: "text", track: "new", start: 600, duration: 180, text: "He was charged.", name: "Resolution · page 1" } },
+    { op: "add", clip: { type: "video", track: "new", media: "mug", source_in: 0, start: 780, duration: 120, name: "Resolution · mugshot full" } },
+  ]);
+  expect(kinds(p, "end_new_picture").length).toBe(1);
+  apply(p, [{ op: "delete", select: { ids: [p.clips.find((c) => c.name === "Resolution · mugshot full")!.id] } }]);
+  expect(kinds(p, "end_new_picture").length).toBe(0);
+});
+
 test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {
   const p = project("plan");
   p.media.push(footage(), media({ id: "m2", name: "g", path: "/g.mp4", kind: "video", duration: 600, width: 1920, height: 1080 }));

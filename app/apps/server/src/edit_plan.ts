@@ -1691,6 +1691,22 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       }
     }
   }
+  // The video ends on its last screen held and faded, never a new picture
+  // after the last page (Jones JJ, OnlyFans, Oct 31: "We don't want to have
+  // this image right here in the end. We'd rather just stay on the previous
+  // screen and have that written out as well").
+  if (project.style === "interrogation") {
+    const shown = project.clips.filter((clip) => visible(clip.track) && clip.type !== "audio" && clip.type !== "adjustment");
+    const last = shown.reduce((most, clip) => Math.max(most, clipEnd(clip)), 0);
+    const pages = shown.filter((clip) => clip.type === "text" && !/^(Subtitle|Caption|Countdown)/u.test(clip.name ?? ""));
+    const lastPage = pages.reduce((most, clip) => Math.max(most, clipEnd(clip)), 0);
+    if (lastPage > 0 && last - lastPage > idiv(second, 2) && last - lastPage < 8 * second) {
+      const after = shown.filter((clip) => clip.type === "video" && clip.start >= lastPage - 1 && clip.start < last).map((clip) => clip.id);
+      if (after.length > 0) {
+        issues.push({ kind: "end_new_picture", clips: after, at: lastPage, fix: "end on the last page held (its picture and words) to the last word, fading out; take the picture after it away" });
+      }
+    }
+  }
   // A found photo or still as plain B-roll (letterboxed, often): pictures go
   // on screen only inside a designed graphic (an evidence card or board).
   issues.push(...graphics.bareStills(project));

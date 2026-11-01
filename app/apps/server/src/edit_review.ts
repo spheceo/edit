@@ -328,6 +328,13 @@ export function cutMidWord(project: Project, transcripts: Map<string, Transcript
           Math.abs((frame === clip.start ? clipEnd(other) : other.start) - frame) <= 1 &&
           Math.abs((frame === clip.start ? other.source_in + (other.duration / fps) * other.speed : other.source_in) - at) <= 0.1,
       );
+    // Beside a cut-in, even the start of a word at the cut is heard in the
+    // narration's room (R3, Nov 1: 0.01–0.04 s of "Okay." and "shit" before the
+    // narration): no margin there.
+    const narrationNear = (frame: number, after: boolean) =>
+      project.clips.some((other) => other.type === "audio" && other.name === "Voice-over" && (after ? other.start >= frame && other.start - frame <= fps : clipEnd(other) <= frame && frame - clipEnd(other) <= fps));
+    const outMargin = narrationNear(clipEnd(clip), true) ? 0 : margin;
+    const inMargin = narrationNear(clip.start, false) ? 0 : margin;
     for (const word of transcript.words) {
       // A "word" of several seconds is the transcriber's times gone wrong
       // (Mom Leaves 5 Kids' "picked" over 17 s), not one a cut clips.
@@ -336,10 +343,10 @@ export function cutMidWord(project: Project, transcripts: Map<string, Transcript
       // ("sir." at 286.62–286.66): it's heard for at least ~0.2 s, longer by its letters.
       const letters = chars(word.text).filter((c) => isAlphanumeric(c)).length;
       const ends = word.end - word.start < 0.15 ? word.start + Math.max(0.2, 0.06 * letters) : word.end;
-      if (word.start < to - margin && ends > to + margin && !carried(to, clipEnd(clip))) {
+      if (word.start < to - outMargin && ends > to + margin && !carried(to, clipEnd(clip))) {
         issues.push({ kind: "cut_mid_word", clip: clip.id, at: clipEnd(clip), side: "out", word: trim(word.text), word_ends: round(ends * 100) / 100, fix: EXTEND });
       }
-      if (word.start < from - margin && word.end > from + margin && !carried(from, clip.start)) {
+      if (word.start < from - margin && word.end > from + inMargin && !carried(from, clip.start)) {
         issues.push({ kind: "cut_mid_word", clip: clip.id, at: clip.start, side: "in", word: trim(word.text), word_starts: round(word.start * 100) / 100, fix: EXTEND });
       }
     }

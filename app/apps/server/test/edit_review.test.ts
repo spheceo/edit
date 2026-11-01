@@ -306,6 +306,11 @@ test("footage cut inside a word is flagged, with where the word ends; a cut the 
   p.clips.pop();
   sound25.duration = 80;
   expect(cutMidWord(p, new Map([["m7", TEASER]]))).toEqual([]);
+  // 0.02 s of "baby." (from 274.45) at the cut: below the margin elsewhere, heard beside a cut-in (R3, Nov 1: "Okay." and "shit").
+  sound25.duration = 68;
+  expect(cutMidWord(p, new Map([["m7", TEASER]]))).toEqual([]);
+  p.clips.push(sound("vo1", sound25.track, "vo", 76, 60, { name: "Voice-over" }));
+  expect((cutMidWord(p, new Map([["m7", TEASER]])) as Record<string, unknown>[]).map((issue) => [issue.clip, issue.side, issue.word])).toEqual([["c25", "out", "baby."]]);
 });
 
 test("a desktop profile's lines are timed to the narration that says them, and flagged when they're off it", () => {

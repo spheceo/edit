@@ -1026,6 +1026,13 @@ export function padsOf(blocks: ScriptBlock[], index: number): [number, number] {
  */
 const RUN_ON = 0.3;
 const SETTLE = 0.06;
+/**
+ * The room a pad stops short of the word beside it: its start (or end) never
+ * falls in the range once rounded to frames, give or take transcript times
+ * (R3, Nov 1: a range padded to the next word's very start played 0.01–0.04 s
+ * of "Okay." and "shit" into a cut-in's room).
+ */
+const NEIGHBOUR_GAP = 0.1;
 /** How far from the written time a cue word may be found. */
 const CUE_SEARCH = 3.0;
 
@@ -1150,7 +1157,7 @@ export function align(
           : quietest(peaks, Math.max(word.start - SETTLE, before), word.start + Math.min(SETTLE, word.end - word.start) / 2, word.start);
       cut = found ?? word.start;
     } else {
-      cut = Math.max(word.start - pads[0], before ?? -Number.MAX_VALUE);
+      cut = Math.max(word.start - pads[0], before === null ? -Number.MAX_VALUE : Math.min(before + NEIGHBOUR_GAP, word.start));
     }
     // Never into the word (the quietest moment can fall after it starts),
     // give or take what transcript times are off by.
@@ -1168,7 +1175,7 @@ export function align(
           : quietest(peaks, word.end - Math.min(SETTLE, word.end - word.start) / 2, Math.min(word.end + SETTLE, after), word.end);
       cutOut = found ?? word.end;
     } else {
-      cutOut = Math.min(word.end + pads[1], after ?? Number.MAX_VALUE);
+      cutOut = Math.min(word.end + pads[1], after === null ? Number.MAX_VALUE : Math.max(after - NEIGHBOUR_GAP, word.end));
     }
     // Never before the word is over (the team: "I'm with you" clipped; the
     // audit's cut_mid_word): a word squeezed to a few hundredths is heard

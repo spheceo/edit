@@ -66,9 +66,20 @@ export function videoMs(timing: VideoTiming): number {
   return (timing.runs.reduce((sum, [count, delta]) => sum + count * delta, 0) / timing.timescale) * 1000;
 }
 
-/** Whether the video runs longer than the edit it's of (`durationMs`): a second, and a hundredth, of slack. */
+/** Frames held far longer than one (a piece's last frame stretched to the export's end). */
+export const heldFrames = (timing: VideoTiming): number => {
+  const frame = frameDelta(timing);
+  return timing.runs.filter(([, delta]) => delta > frame * 1.5).reduce((sum, [count]) => sum + count, 0);
+};
+
+/**
+ * Whether the video runs longer than the edit it's of (`durationMs`, a second
+ * and a hundredth of slack) because frames were held: a copy as long as an
+ * export that is itself longer than the edit (Off-Duty Officer, Oct 29) is
+ * another fault, which making the copy again wouldn't change.
+ */
 export function stretched(timing: VideoTiming, durationMs: number): boolean {
-  return videoMs(timing) > durationMs * 1.01 + 1000;
+  return videoMs(timing) > durationMs * 1.01 + 1000 && heldFrames(timing) > 0;
 }
 
 /**

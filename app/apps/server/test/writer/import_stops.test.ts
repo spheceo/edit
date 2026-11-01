@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import * as tools from "../../src/tools.ts";
+import * as captionTurns from "../../src/writer/caption_turns.ts";
 import { timing } from "../../src/transcribe.ts";
 import * as imports from "../../src/writer/imports.ts";
 import * as store from "../../src/writer/store.ts";
@@ -20,6 +21,10 @@ beforeAll(() => {
   restore = mock.useEnv({ EDIT_RELAY_TOKEN: "relay-token" });
   timing.instant = true;
   tools.forget();
+  // Who says each line asks Claude: not here (it waited on the real one, 10–16 s, and the wait below ran out).
+  captionTurns.asking.ask = () => async () => {
+    throw new Error("no Claude in tests");
+  };
 });
 afterAll(() => {
   restore();

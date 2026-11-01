@@ -26,6 +26,8 @@ test("a stretched review copy is told from its index, and its moments are mapped
   expect(stretched(timing, edit)).toBe(true);
   expect(videoMs(timing) / 3_600_000).toBeGreaterThan(17);
   expect(stretched({ timescale: 15360, runs: [[148_463, 512]] }, edit)).toBe(false);
+  // Longer than the edit with every frame its own length (the export itself was longer): not this fault.
+  expect(stretched({ timescale: 15360, runs: [[220_273, 512]] }, 5_610_000)).toBe(false);
   // Inside piece 0's own frames: the same moment.
   expect(fixedMs(timing, 43_000)).toBe(43_000);
   // Piece 1 starts in the broken file after piece 0's own 206.17 s and its 4742.6 s tail.

@@ -110,8 +110,11 @@ const askSonnet =
   };
 
 /** Who says each line, for a script whose words came (some or all) from captions. `names` are the case's names, `notes` what the producer and the research say about it. */
+/** Who's asked (tests stand in their own: an import's test otherwise waits on the real Claude). */
+export const asking = { ask: (signal?: AbortSignal): Ask => askSonnet(signal) };
+
 export function run(script: Script, dir: string, names: string[], notes: string, onWindow: (done: number, total: number) => void = () => {}, signal?: AbortSignal): Promise<Report> {
-  return runWith(script, dir, names, notes, onWindow, askSonnet(signal));
+  return runWith(script, dir, names, notes, onWindow, asking.ask(signal));
 }
 
 const tidy = (text: string): string => [...splitWords(text.replace(/[()[\]]/g, "")).join(" ")].slice(0, 48).join("");

@@ -80,6 +80,6 @@ test("a date over a top-down map is a lower third with its place above it, not d
   const [date] = apply(p, [{ op: "date_title", text: "October 13th, 2011", place: "Keller, Texas", position: "bottom", start: 0, end: 120 }]).results as { date: string; darken: string | null }[];
   expect(date!.darken).toBeNull();
   const text = clipNamed(p, "Date") as TextClip;
-  expect(text.text).toBe("Keller, Texas\nOctober 13th, 2011");
+  expect(text.text).toBe("October 13th, 2011\nKeller, Texas");
   expect(text.transform.y).toBeGreaterThan(300);
 });

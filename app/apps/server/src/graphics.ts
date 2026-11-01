@@ -106,12 +106,14 @@ export function dateTitle(project: Project, args: Args): Record<string, unknown>
   const [start, end] = span(args, "date_title");
   const k = project.settings.height / 1080;
   // position "bottom": Red Thread's lower third over its top-down map, the
-  // place ("Keller, Texas") over the date in white, smaller, no darkening.
+  // date first, then the place ("Keller, Texas") under it, in white, smaller,
+  // no darkening (Jones JJ, Nov 1, three videos: "Have the date appear first
+  // here before the location").
   // An interrogation's dates go at the bottom unless asked to the middle (the
   // team: "We can't really have this text in the middle of the screen").
   const bottom = args.position === "bottom" || (args.position === undefined && project.style === "interrogation");
   const place = typeof args.place === "string" && trim(args.place) !== "" ? trim(args.place) : null;
-  const text = place === null ? given : `${place}\n${given}`;
+  const text = place === null ? given : `${given}\n${place}`;
   const made: string[] = [];
   let darken: string | null = null;
   if (typeof args.darken === "boolean" ? args.darken : !bottom) {

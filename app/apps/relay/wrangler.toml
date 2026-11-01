@@ -35,8 +35,8 @@ OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
 STAMP_CREATOR = "1"                # a project's first commit records who started it (`actor`, from the token); Repack's edit:commitProject takes it since 906b67a (Oct 23)
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
-DAILY_BYTES_PER_IP = "2160000000"  # ~150 hours (Oct 30: raised for five projects at once; 20 until Oct 30, when the cap stopped the team's imports mid-evening)
-DAILY_BYTES_TOTAL = "4320000000"  # ~300 hours (~250k credits a day at most; Oct 30: raised for five projects at once; 20 from Oct 22, after Oct 19–21's re-hearing, which names.ts and the kept pieces since stop)
+DAILY_BYTES_PER_IP = "3240000000"  # ~225 hours (Nov 1: raised by half, as a long file's whole hearing now goes by link at the full 32 kbps, not squeezed under 45 MB: a 7 h 43 min file counts ~222 MB, not ~156; 150 from Oct 30, raised for five projects at once; 20 until Oct 30, when the cap stopped the team's imports mid-evening)
+DAILY_BYTES_TOTAL = "6480000000"  # ~450 hours (~375k credits a day at most; Nov 1: raised by half for the full-rate whole hearing by link; 300 from Oct 30, raised for five projects at once; 20 from Oct 22, after Oct 19–21's re-hearing, which names.ts and the kept pieces since stop)
 DAILY_REHEAR_BYTES = "720000000"  # ~50 hours of the day for hearing finished footage again with the case's names (Oct 22: re-hears spent the whole day by 00:20 UTC and a new import went unheard)
 MAX_UPLOAD_BYTES = "45000000"     # ~3 hours in one request
 
@@ -152,8 +152,8 @@ ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
 MODAL_PROXY_URL = "https://sphealt-dev--edit-proxies-endpoint.us-east.modal.run"
 OPEN_MAPS = "0"
 STAMP_CREATOR = "1"
-DAILY_BYTES_PER_IP = "2160000000"
-DAILY_BYTES_TOTAL = "4320000000"
+DAILY_BYTES_PER_IP = "3240000000"
+DAILY_BYTES_TOTAL = "6480000000"
 DAILY_REHEAR_BYTES = "720000000"
 MAX_UPLOAD_BYTES = "45000000"
 DAILY_MAP_SESSIONS_PER_IP = "200"

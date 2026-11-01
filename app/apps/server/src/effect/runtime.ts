@@ -8,7 +8,7 @@
 // recent log, the reports), under the `area` annotation (`inArea`).
 
 import { BunServices } from "@effect/platform-bun";
-import { Cause, Effect, Layer, Logger, LogLevel, ManagedRuntime, References } from "effect";
+import { Cause, Duration, Effect, Layer, Logger, LogLevel, ManagedRuntime, References } from "effect";
 
 import * as diag from "../diag.ts";
 
@@ -33,6 +33,19 @@ export const inArea =
   (area: string) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
     Effect.annotateLogs(effect, "area", area);
+
+/**
+ * A background wait that never keeps the process alive by itself, as an
+ * unref'd timer doesn't: a short `edit` command that renewed a sign-in on
+ * the way exits when it's done, not when the next renewal is due. Work that
+ * must finish uses `Effect.sleep`.
+ */
+export const idle = (duration: Duration.Input): Effect.Effect<void> =>
+  Effect.callback<void>((resume) => {
+    const timer = setTimeout(() => resume(Effect.void), Duration.toMillis(Duration.fromInputUnsafe(duration)));
+    timer.unref?.();
+    return Effect.sync(() => clearTimeout(timer));
+  });
 
 /** Everything a part may need from the platform: child processes, files, paths. */
 export const ServerLive = Layer.mergeAll(BunServices.layer, Logger.layer([diagLogger]));

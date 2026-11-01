@@ -7,6 +7,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 
+import { Duration, Effect, Schedule } from "effect";
+
 import * as accounts from "../src/accounts.ts";
 import type { App } from "../src/app.ts";
 import * as relay from "../src/relay.ts";
@@ -285,4 +287,19 @@ test("a token the relay refuses (a cut-off made after it) is renewed once and th
   } finally {
     delete process.env.EDIT_RELAY_URL;
   }
+});
+
+test("a failed renewal is asked again three times 15 s apart, inside the site's 60 s grace, then each minute; a Retry-After is waited instead", async () => {
+  const delays = await Effect.runPromise(
+    Effect.gen(function* () {
+      const step = yield* Schedule.toStep(accounts.renewalRetries);
+      const out: number[] = [];
+      const offline = new accounts.RenewalFailed({ message: "offline" });
+      for (let attempt = 0; attempt < 5; attempt += 1) out.push(Duration.toSeconds((yield* step(attempt * 1000, offline))[1]));
+      // The per-minute limit (429) says how long.
+      out.push(Duration.toSeconds((yield* step(6000, new accounts.AccountsSaidLater({ status: 429, retryAfterMs: 90_000, message: "busy" })))[1]));
+      return out;
+    }),
+  );
+  expect(delays).toEqual([15, 15, 15, 60, 60, 90]);
 });

@@ -18,9 +18,12 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Queue, Schedule, Schema } from "effect";
+
 import type { App } from "./app.ts";
 import type { Creator } from "./model.ts";
 import * as diag from "./diag.ts";
+import { idle, inArea, runtime } from "./effect/runtime.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as keychain from "./keychain.ts";
 import * as windowFocus from "./window_focus.ts";
@@ -32,16 +35,6 @@ const CLIENT = "edit";
 const EARLY_MS = 5 * 60_000;
 /** A sign-in started and never finished is forgotten after this. */
 const PENDING_MS = 10 * 60_000;
-/**
- * After a failed renewal (offline, the site down), the next tries: three
- * 15 s apart (at 15, 30 and 45 s), all inside the 60 s in which the accounts
- * site still takes a refresh token it has just rotated (its answer may have
- * been lost on the way), then once a minute.
- */
-const SOON_RETRY_MS = 15_000;
-const SOON_RETRIES = 3;
-const RETRY_MS = 60_000;
-let failures = 0;
 
 export function accountsUrl(): string {
   return (process.env.EDIT_ACCOUNTS_URL ?? DEFAULT_ACCOUNTS).replace(/\/+$/u, "");
@@ -71,8 +64,6 @@ interface State {
   device: { userCode: string; uri: string; complete: string | null; expires: number; via: string } | null;
   /** Why the last sign-in or renewal failed, for the UI. */
   problem: string | null;
-  refreshing: Promise<void> | null;
-  timer: ReturnType<typeof setTimeout> | null;
 }
 
 /** Whether the accounts site answers (its JWKS): signing in is offered only then, so a build out before the site is never stuck on it. */
@@ -87,7 +78,7 @@ async function checkAvailable(): Promise<void> {
   }
 }
 
-const state: State = { home: null, access: null, expires: 0, person: null, perms: [], admin: false, kept: false, pending: null, device: null, problem: null, refreshing: null, timer: null };
+const state: State = { home: null, access: null, expires: 0, person: null, perms: [], admin: false, kept: false, pending: null, device: null, problem: null };
 
 /** Session observers close authenticated connections on sign-out or account changes. */
 const sessionObservers = new Set<() => void>();
@@ -196,16 +187,6 @@ function userAgent(via: string): string {
   return `Edit/${BUILD.replace(/^v/u, "")} (${via === "" ? system : `${system}; ${via}`})`;
 }
 
-/** A refusal that waits (the site's per-minute limit: 429 temporarily_unavailable) or a failure to try again after. */
-class TryLater extends Error {
-  constructor(
-    message: string,
-    readonly after: number | null,
-  ) {
-    super(message);
-  }
-}
-
 /** Takes a token answer: the access token in memory, the new refresh token in the Keychain. */
 async function take(home: string, value: Tokens): Promise<void> {
   if (typeof value.access_token !== "string" || typeof value.refresh_token !== "string") throw new Error("the accounts site's answer had no tokens");
@@ -226,15 +207,9 @@ async function take(home: string, value: Tokens): Promise<void> {
     image: typeof user.image === "string" ? user.image : typeof found.picture === "string" ? found.picture : null,
   };
   state.problem = null;
-  schedule(home);
+  // The renewer renews this token five minutes before it runs out.
+  ask(home, null);
   sessionChanged();
-}
-
-function schedule(home: string): void {
-  if (state.timer !== null) clearTimeout(state.timer);
-  const wait = Math.max(state.expires - Date.now() - EARLY_MS, 5_000);
-  state.timer = setTimeout(() => void renew(home), wait);
-  state.timer.unref?.();
 }
 
 function forget(problem: string | null): void {
@@ -245,55 +220,149 @@ function forget(problem: string | null): void {
   state.perms = [];
   state.admin = false;
   state.problem = problem;
-  if (state.timer !== null) clearTimeout(state.timer);
-  state.timer = null;
   sessionChanged();
 }
 
+// ── Renewing (in Effect: docs/plans/2026-11-01-effect.md, part 2) ───────────
+//
+// The policy was fixed three times on Oct 23 (81614d69, 8eda3b50, 8a793d7d)
+// and again on Oct 30 (4a10063f), each time in timers and a failure counter
+// spread through `renew`. Now each answer is a typed error, the policy is one
+// Schedule (`renewalRetries`, tested on its own), and one fiber owns renewing
+// (`renewer`): it sleeps until the token is due (five minutes before it runs
+// out) or a retry is (the schedule says when), or until someone asks
+// (`renew`), and then asks the site once. Everyone who asked while it was
+// asking is answered by that one request, as a refresh token rotates on use.
+
+/** The site ended the sign-in (`invalid_grant`: signed out elsewhere, removed by an admin, gone stale): the only answer that signs out here. */
+export class SignInEnded extends Schema.TaggedError<SignInEnded>()("SignInEnded", { message: Schema.String }) {}
+
+/** The site answered, but not with tokens (its per-minute limit's 429, a 5xx): the refresh token is kept and it's asked again, after its Retry-After when it gives one. */
+export class AccountsSaidLater extends Schema.TaggedError<AccountsSaidLater>()("AccountsSaidLater", {
+  status: Schema.Number,
+  retryAfterMs: Schema.NullOr(Schema.Number),
+  message: Schema.String,
+}) {}
+
+/** The site couldn't be reached, or the Keychain read or written, or the answer had no tokens: asked again. */
+export class RenewalFailed extends Schema.TaggedError<RenewalFailed>()("RenewalFailed", { message: Schema.String }) {}
+
+export type RenewError = SignInEnded | AccountsSaidLater | RenewalFailed;
+
 /**
- * Renews the access token with the Keychain's refresh token, one at a time.
- * Refused (`invalid_grant`: signed out elsewhere, removed by an admin, the
- * token gone stale), the person is signed out here; offline, it tries again.
+ * After a failed renewal (offline, the site down), the next tries: three
+ * 15 s apart (at 15, 30 and 45 s), all inside the 60 s in which the accounts
+ * site still takes a refresh token it has just rotated (its answer may have
+ * been lost on the way), then once a minute; a Retry-After the site gives is
+ * waited instead.
+ */
+export const renewalRetries: Schedule.Schedule<unknown, RenewError> = Schedule.concat(Schedule.spaced("15 seconds").pipe(Schedule.upTo({ times: 3 })), Schedule.spaced("60 seconds")).pipe(
+  Schedule.setInputType<RenewError>(),
+  Schedule.modifyDelay(({ input, duration }) => Effect.succeed(input._tag === "AccountsSaidLater" && input.retryAfterMs !== null ? Duration.millis(input.retryAfterMs) : duration)),
+);
+
+/** One request to the site with the Keychain's refresh token; "signed-out" when there's none kept. */
+const attempt = Effect.fn("accounts.renew")(function* (home: string) {
+  const refresh = yield* Effect.tryPromise({
+    try: () => keychain.get(home),
+    catch: (error) => new RenewalFailed({ message: `reading the Keychain: ${diag.messageOf(error)}` }),
+  });
+  if (refresh === null) return "signed-out" as const;
+  state.kept = true;
+  const answer = yield* Effect.tryPromise({
+    try: () => post("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT }),
+    catch: (error) => new RenewalFailed({ message: diag.messageOf(error) }),
+  });
+  if (answer.status === 200) {
+    yield* Effect.tryPromise({ try: () => take(home, answer.value), catch: (error) => new RenewalFailed({ message: diag.messageOf(error) }) });
+    return "renewed" as const;
+  }
+  // Only `invalid_grant` ends a sign-in (signed out elsewhere, removed, gone stale): anything
+  // else, the per-minute limit's 429 above all, keeps the refresh token and tries again.
+  if (answer.value.error === "invalid_grant") {
+    return yield* new SignInEnded({ message: typeof answer.value.error_description === "string" ? answer.value.error_description : "Your sign-in ended: sign in again." });
+  }
+  return yield* new AccountsSaidLater({
+    status: answer.status,
+    retryAfterMs: answer.retryAfter,
+    message: `the accounts site answered ${answer.status}${typeof answer.value.error === "string" ? ` (${answer.value.error})` : ""}`,
+  });
+});
+
+/** Someone asking for a renewal now (`done`: answered once it's been asked), or only telling the renewer a new token came in (null). */
+interface Request {
+  readonly home: string;
+  readonly done: Deferred.Deferred<void> | null;
+}
+
+const requests = Effect.runSync(Queue.unbounded<Request>());
+
+/** The fiber that renews: started by the first ask, stopped only by `resetForTests`. */
+const renewer = Effect.gen(function* () {
+  let retry = yield* Schedule.toStep(renewalRetries);
+  // When to renew without being asked: the token's due time, or a retry's; null, only when asked.
+  let due: number | null = null;
+  let home: string | null = null;
+  for (;;) {
+    const before = yield* Clock.currentTimeMillis;
+    const asked: readonly Request[] = yield* Effect.raceFirst(
+      Queue.takeAll(requests),
+      due === null ? Effect.never : idle(Math.max(due - before, 0)).pipe(Effect.as([])),
+    );
+    home = asked.at(-1)?.home ?? home ?? state.home;
+    const now = yield* Clock.currentTimeMillis;
+    // Only told of a new token (a sign-in, or the renewal just made): no request, its due time noted.
+    if (home === null || (asked.length > 0 && asked.every((request) => request.done === null))) {
+      due = state.access === null ? null : Math.max(state.expires - EARLY_MS, now + 5_000);
+      continue;
+    }
+    const exit = yield* Effect.exit(attempt(home));
+    const answered = [...asked, ...(yield* Queue.clear(requests))];
+    if (Exit.isSuccess(exit)) {
+      retry = yield* Schedule.toStep(renewalRetries);
+      if (exit.value === "signed-out") forget(null);
+      due = state.access === null ? null : Math.max(state.expires - EARLY_MS, now + 5_000);
+    } else {
+      const failure = Cause.squash(exit.cause);
+      const error: RenewError = failure instanceof SignInEnded || failure instanceof AccountsSaidLater || failure instanceof RenewalFailed ? failure : new RenewalFailed({ message: diag.messageOf(failure) });
+      if (error._tag === "SignInEnded") {
+        yield* Effect.tryPromise(() => keychain.remove(home!)).pipe(Effect.ignore);
+        forget(error.message);
+        yield* Effect.logInfo("sign-in ended (invalid_grant); signed out");
+        due = null;
+      } else {
+        state.problem = `Couldn't renew the sign-in: ${error.message}`;
+        const wait = yield* retry(now, error).pipe(
+          Effect.map(([, delay]) => Duration.toMillis(delay)),
+          Effect.catch(() => Effect.succeed(60_000)),
+        );
+        yield* Effect.logWarning(`renewing the sign-in: ${error.message}; trying again in ${Math.round(wait / 1000)} s`);
+        due = now + wait;
+      }
+    }
+    for (const request of answered) if (request.done !== null) Deferred.doneUnsafe(request.done, Exit.void);
+  }
+}).pipe(inArea("accounts"));
+
+let running: Fiber.Fiber<never> | null = null;
+
+function ask(home: string, done: Deferred.Deferred<void> | null): void {
+  running ??= runtime.runFork(renewer);
+  Queue.offerUnsafe(requests, { home, done });
+}
+
+/**
+ * Renews the access token with the Keychain's refresh token now, answering
+ * once the site has been asked (renewed, signed out, or failed and to be
+ * asked again as `renewalRetries` says). Refused (`invalid_grant`: signed out
+ * elsewhere, removed by an admin, the token gone stale), the person is signed
+ * out here; offline, it tries again.
  */
 export function renew(home: string | null = state.home): Promise<void> {
   if (home === null) return Promise.resolve();
-  state.refreshing ??= (async () => {
-    try {
-      const refresh = await keychain.get(home);
-      if (refresh === null) {
-        forget(null);
-        return;
-      }
-      state.kept = true;
-      const { status: code, value, retryAfter } = await post("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT });
-      if (code === 200) {
-        failures = 0;
-        await take(home, value);
-        return;
-      }
-      // Only `invalid_grant` ends a sign-in (signed out elsewhere, removed, gone stale): anything
-      // else, the per-minute limit's 429 above all, keeps the refresh token and tries again.
-      if (value.error === "invalid_grant") {
-        await keychain.remove(home);
-        forget(typeof value.error_description === "string" ? value.error_description : "Your sign-in ended: sign in again.");
-        diag.info("accounts", `sign-in ended (${typeof value.error === "string" ? value.error : code}); signed out`);
-        return;
-      }
-      throw new TryLater(`the accounts site answered ${code}${typeof value.error === "string" ? ` (${value.error})` : ""}`, retryAfter);
-    } catch (error) {
-      state.problem = `Couldn't renew the sign-in: ${diag.messageOf(error)}`;
-      const asked = error instanceof TryLater ? error.after : null;
-      const wait = asked ?? (failures < SOON_RETRIES ? SOON_RETRY_MS : RETRY_MS);
-      failures += 1;
-      diag.warn("accounts", `renewing the sign-in: ${diag.messageOf(error)}; trying again in ${wait / 1000} s`);
-      if (state.timer !== null) clearTimeout(state.timer);
-      state.timer = setTimeout(() => void renew(home), wait);
-      state.timer.unref?.();
-    } finally {
-      state.refreshing = null;
-    }
-  })();
-  return state.refreshing;
+  const done = Deferred.makeUnsafe<void>();
+  ask(home, done);
+  return runtime.runPromise(Deferred.await(done));
 }
 
 /** When the relay last refused a token and a renewal was asked for (at most one a minute). */
@@ -620,6 +689,9 @@ export function signedInForTests(perms: string[], admin = false): void {
 }
 
 export function resetForTests(): void {
+  if (running !== null) runtime.runFork(Fiber.interrupt(running));
+  running = null;
+  Effect.runSync(Queue.clear(requests));
   forget(null);
   state.pending = null;
   state.device = null;

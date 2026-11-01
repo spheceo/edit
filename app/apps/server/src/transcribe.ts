@@ -458,15 +458,11 @@ const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, aud
     // spent it never stops the import either (Nov 1, Mathias's 6 h 20 min and
     // 7 h 43 min FOIA recordings: the whole hearing held one request open for
     // minutes, the connection dropped three times, and both imports stopped
-    // at Transcribing with their words heard). Only for the temporary kinds:
-    // a refusal (a quota, a sign-in) or an allowance used up stops the pieces
-    // too, so it's said as it is.
-    Effect.catchTags({
-      RelayUnreachable: (failed) => withoutVoices(source, failed.message),
-      RelayTimedOut: (failed) => withoutVoices(source, failed.message),
-      GatewayDown: (failed) => withoutVoices(source, failed.message),
-      RelayBusy: (failed) => withoutVoices(source, failed.message),
-    }),
+    // at Transcribing with their words heard). Only a temporary failure, by
+    // the one kinds rule (`service.kinds` above: a dropped connection, a
+    // timeout, the gateway, a busy relay): a refusal or an allowance used up
+    // stops the pieces too, so it's said as it is.
+    Effect.catchIf(service.isTemporary, (failed) => withoutVoices(source, failed.message)),
     Effect.ensuring(Effect.sync(() => (wholeMs = Date.now() - began))),
   );
 

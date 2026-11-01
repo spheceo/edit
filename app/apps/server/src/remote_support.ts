@@ -355,6 +355,8 @@ function retry(app: App) {
 export function start(app: App) {
   observe(app);
   actions.keepLatest(app);
+  // An update asked for "when idle" waits across restarts.
+  actions.watchIdle(app);
   const account = accounts.status();
   const allowed = account.admin === true || (Array.isArray(account.perms) && account.perms.includes("use"));
   const owner = allowed ? accounts.creator()?.sub ?? null : null;

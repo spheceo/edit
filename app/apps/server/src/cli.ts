@@ -45,7 +45,8 @@ USAGE
       Install the newest release (the editor also offers it, one click).
   edit support <command> --url https://<device>.<tailnet>.ts.net
       Inspect or help an owner's already-shared Edit; \`edit support help\` says more.
-  edit remote enable|devices|update|diagnostics|unstick|restart|history [device-id]
+  edit remote enable|devices|update|update-when-idle|diagnostics|unstick|restart|history [device-id]
+  edit remote probe <device-id> <project-or-script-id>
   edit remote resume <device-id> <project-or-script-id>
       Remote support is always on: enable registers this Edit again now. As an admin, help a teammate's: update it,
       get its diagnostics (what needs attention first), unstick everything stuck, restart it.
@@ -123,11 +124,12 @@ export async function main(args: string[]): Promise<void> {
       return;
     case "remote": {
       const given = args[1];
-      const onDevice = ["update", "diagnostics", "resume", "unstick", "restart", "history"];
-      if (!given || !["enable", "devices", ...onDevice].includes(given) || (onDevice.includes(given) && !args[2]) || (given === "resume" && !args[3])) fail("use edit remote enable|devices|update|diagnostics|unstick|restart|history [device-id], or edit remote resume <device-id> <project-or-script-id>");
-      // unstick and restart go as a resume of a reserved target (remote_actions.ts).
-      const action = given === "unstick" || given === "restart" ? "resume" : given;
-      if (action !== given) args[3] = given;
+      const onDevice = ["update", "update-when-idle", "diagnostics", "resume", "unstick", "restart", "history", "probe"];
+      if (!given || !["enable", "devices", ...onDevice].includes(given) || (onDevice.includes(given) && !args[2]) || ((given === "resume" || given === "probe") && !args[3])) fail("use edit remote enable|devices|update|update-when-idle|diagnostics|unstick|restart|history [device-id], or edit remote resume|probe <device-id> <project-or-script-id>");
+      // unstick, restart, update-when-idle and probe go as a resume of a reserved target (remote_actions.ts).
+      const action = given === "unstick" || given === "restart" || given === "update-when-idle" || given === "probe" ? "resume" : given;
+      if (given === "probe") args[3] = `probe-${args[3]}`;
+      else if (action !== given) args[3] = given;
       try {
         const response = await fetch(`http://127.0.0.1:${port()}/api/remote-support`, {
           method: "POST", headers: { "content-type": "application/json" },

@@ -6,7 +6,9 @@ import { join } from "node:path";
 import type { Script } from "@edit/types/writer";
 
 import type { App } from "../src/app.ts";
-import { busyWith, lastUsed, problems, RESTART, resume, UNSTICK } from "../src/remote_actions.ts";
+import * as presence from "../src/presence.ts";
+import { busyWith, IDLE_MS, idleNow, lastUsed, problems, probe, RESTART, resume, UNSTICK, updateWhenIdle } from "../src/remote_actions.ts";
+import * as problemReports from "../src/problem_reports.ts";
 import * as store from "../src/writer/store.ts";
 
 /** An Edit home with one script in Script mode's folder, and no projects. */
@@ -88,5 +90,40 @@ describe("remote support's other actions", () => {
   test("diagnostics say when the window was last used, or that it wasn't since Edit started", () => {
     expect(lastUsed(null)).toBe("last used: not since Edit started (no key, click or scroll in its window)");
     expect(lastUsed(1_000, 1_000 + 3 * 60_000)).toMatch(/^last used: 3 min.* ago/);
+  });
+});
+
+describe("update when idle, and probing an import (Nov 1)", () => {
+  const mac = (exporting = false) => {
+    const root = fs.mkdtempSync(join(os.tmpdir(), "edit-remote-"));
+    return { machine: "Test Mac", store: { home: root, get: () => null, list: () => [], cloud: () => null }, scripts: { get: () => null, running: () => false }, agents: { runningProjects: () => [], hasRunningTurns: () => false }, exports: { running: () => exporting } } as unknown as App;
+  };
+
+  test("idle is nobody at the window for 20 minutes and nothing running; the ask is kept until then", () => {
+    const now = Date.now();
+    presence.used(now - 5 * 60_000);
+    expect(idleNow(mac(), now).idle).toBe(false);
+    expect(idleNow(mac(), now).why).toContain("5 min ago");
+    presence.used(now - IDLE_MS - 1000);
+    expect(idleNow(mac(), now)).toEqual({ idle: true, why: "idle" });
+    expect(idleNow(mac(true), now).why).toContain("an export");
+    const app = mac();
+    expect(updateWhenIdle(app)).toContain("will update once idle");
+    expect(fs.existsSync(join(app.store.home, "update-when-idle.json"))).toBe(true);
+  });
+
+  test.skipIf(Bun.which("ffmpeg") === null)("a probe reports a script's whole error and decodes the sound of its footage", async () => {
+    const [app, id] = home({ status: "error", stage: "transcribing", error: "could not extract audio: [aac] channel element 0.0 duplicate (and 6328 more lines)", sourceKind: "drive", sourceUrl: "https://drive.google.com/drive/folders/x" });
+    (app as unknown as { machine: string }).machine = "Test Mac";
+    const dir = store.scriptDir(store.dataDir(app.store.home), id);
+    fs.mkdirSync(join(dir, "drive"), { recursive: true });
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=duration=1", "-c:a", "aac", join(dir, "drive", "00-rec.m4a")]).exitCode).toBe(0);
+    let sent = "";
+    const send: typeof problemReports.send = async (_home, _machine, report) => ((sent = report), { key: "edit/reports/x.txt" });
+    expect(await probe(app, id, send)).toBe("Sent: edit/reports/x.txt");
+    expect(sent).toContain("channel element 0.0 duplicate (and 6328 more lines)");
+    expect(sent).toContain("00-rec.m4a");
+    expect(sent).toContain("codec_type=audio");
+    expect(sent).toContain("sound decoded: exit 0, 0 error lines");
   });
 });

@@ -12,7 +12,13 @@
 //   - unstick: everything that's stuck, unstuck at once (syncs waiting out a
 //     failure tried again, stopped imports started again, agent turns quiet
 //     for 15 minutes stopped, the cache cleaned when the disk is nearly full);
-//   - restart: Edit started again in place, only when nothing's running.
+//   - restart: Edit started again in place, only when nothing's running;
+//   - update-when-idle: the update installs itself once nobody has used the
+//     window for 20 minutes and nothing's running (Sphe, Nov 1: "dont
+//     restart the app while mathias is using it, wait for idle");
+//   - probe-<project or script>: a report of one import's whole error, its
+//     source files' streams and a decode of their sound, so a damaged file
+//     is seen from here without fetching it (Nov 1: Mom Secretly's 5.3 GB).
 // None of these runs an agent turn, so nothing spends beyond what an import
 // itself would.
 
@@ -51,6 +57,11 @@ export type Kind = (typeof KINDS)[number];
  */
 export const UNSTICK = "unstick";
 export const RESTART = "restart";
+export const IDLE_UPDATE = "update-when-idle";
+export const PROBE = "probe-";
+
+/** Idle: nobody has used the window this long (presence.ts), and nothing would be cut off (busyWith). */
+export const IDLE_MS = 20 * 60_000;
 
 /** An agent turn whose chat hasn't changed this long is stuck, not thinking. */
 const QUIET_MS = 15 * 60_000;
@@ -303,6 +314,8 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
 export async function resume(app: App, projectId: string): Promise<string> {
   if (projectId === UNSTICK) return unstick(app);
   if (projectId === RESTART) return restart(app);
+  if (projectId === IDLE_UPDATE) return updateWhenIdle(app);
+  if (projectId.startsWith(PROBE)) return probe(app, projectId.slice(PROBE.length));
   const live = app.store.get(projectId);
   if (live === null && writerStore.idOk(projectId) && writerStore.ids(writerStore.dataDir(app.store.home)).includes(projectId)) return resumeScript(app, projectId);
   if (live === null) throw new Error(`There's no project or script ${projectId} on this Mac.`);
@@ -420,4 +433,111 @@ export function restart(app: App): string {
   diag.info("remote", "restarting, as an admin asked");
   setTimeout(() => restartSelf(), 3_000).unref?.();
   return "restarting in 3 s";
+}
+
+// ---------------------------------------------------------------------------
+// Update when idle
+
+const idleIntent = (app: App) => join(app.store.home, "update-when-idle.json");
+const watchingIdle = new WeakSet<App>();
+
+/** Whether this Mac is idle now: nobody used the window for IDLE_MS (or since Edit started, that long ago) and nothing's running. */
+export function idleNow(app: App, now = Date.now(), started = now - process.uptime() * 1000): { idle: boolean; why: string } {
+  const used = presence.lastUsedAt() ?? started;
+  if (now - used < IDLE_MS) return { idle: false, why: `the window was used ${Math.round((now - used) / 60_000)} min ago` };
+  const running = busyWith(app);
+  if (running.length > 0) return { idle: false, why: `${running.join(", ")} running` };
+  return { idle: true, why: "idle" };
+}
+
+/** Asked from afar: the update waits for idle, kept across restarts, looked at every minute. */
+export function updateWhenIdle(app: App): string {
+  fs.writeFileSync(idleIntent(app), JSON.stringify({ at: Date.now() }));
+  watchIdle(app);
+  const now = idleNow(app);
+  diag.info("remote", `update when idle asked (${now.why})`);
+  return `will update once idle (nobody using the window for ${IDLE_MS / 60_000} min and nothing running); now: ${now.why}`;
+}
+
+/** Looks every minute whether an update asked for "when idle" can go in; started at boot, so an intent survives restarts. */
+export function watchIdle(app: App, install: () => Promise<unknown> = () => app.updater.install()): void {
+  if (watchingIdle.has(app)) return;
+  watchingIdle.add(app);
+  const look = async () => {
+    if (!fs.existsSync(idleIntent(app))) return;
+    const status = (await app.updater.status().catch(() => null)) as { enabled?: boolean; latest?: string | null } | null;
+    if (status?.enabled !== true || !status.latest || status.latest === BUILD) {
+      fs.rmSync(idleIntent(app), { force: true });
+      diag.info("remote", `update when idle: nothing newer than ${BUILD}; forgotten`);
+      return;
+    }
+    const now = idleNow(app);
+    if (!now.idle) return;
+    fs.rmSync(idleIntent(app), { force: true });
+    diag.info("remote", `update when idle: idle, installing ${status.latest}`);
+    await install().catch((error: unknown) => {
+      // Not this time (work began meanwhile): asked again at the next look.
+      fs.writeFileSync(idleIntent(app), JSON.stringify({ at: Date.now() }));
+      diag.warn("remote", `update when idle: ${diag.messageOf(error)}; trying again when idle`);
+    });
+  };
+  setInterval(() => void look(), 60_000).unref?.();
+}
+
+// ---------------------------------------------------------------------------
+// Probe one import
+
+/** One import's whole error, its source files' streams and a decode of their sound, sent as a report; the report's key. */
+export async function probe(app: App, id: string, send: typeof problemReports.send = problemReports.send): Promise<string> {
+  const lines: string[] = [`Probe of ${id}, asked for by an admin (edit remote probe), on ${app.machine}, Edit ${BUILD}.`, ""];
+  const files: string[] = [];
+  const data = writerStore.dataDir(app.store.home);
+  if (writerStore.idOk(id) && writerStore.ids(data).includes(id)) {
+    const dir = writerStore.scriptDir(data, id);
+    const found = writerStore.read(dir);
+    lines.push(`Script "${found.title}": ${found.status} at ${found.stage} (${found.progress}%), source ${found.sourceKind} ${found.sourceUrl.split("\n").join(" ")}`);
+    lines.push(`Its error, whole: ${found.error ?? "none"}`, "");
+    const walk = (folder: string) => {
+      if (!fs.existsSync(folder)) return;
+      for (const name of fs.readdirSync(folder)) {
+        const path = join(folder, name);
+        if (fs.statSync(path).isDirectory()) walk(path);
+        else if (/\.(mp4|mov|m4v|mkv|m4a|mp3|wav|webm|ts)$/iu.test(name)) files.push(path);
+      }
+    };
+    for (const sub of ["drive", "compilation", "pieces"]) walk(join(dir, sub));
+    if (fs.existsSync(writerStore.proxyPath(dir))) files.push(writerStore.proxyPath(dir));
+    if (found.originalPath && fs.existsSync(found.originalPath) && !files.includes(found.originalPath)) files.push(found.originalPath);
+  } else {
+    const live = app.store.get(id);
+    if (live === null) throw new Error(`There's no project or script ${id} on this Mac.`);
+    lines.push(`Project "${live.project.name}"`, "");
+    for (const media of live.project.media) if (fs.existsSync(media.path)) files.push(media.path);
+  }
+  const ffmpeg = (await import("./tools.ts")).ffmpeg();
+  const ffprobe = (await import("./tools.ts")).ffprobe();
+  for (const file of files.slice(0, 20)) {
+    const size = fs.statSync(file).size;
+    lines.push(`== ${file} (${(size / 1e6).toFixed(1)} MB)`);
+    const streams = await ran([ffprobe, "-v", "error", "-show_entries", "stream=index,codec_type,codec_name,profile,channels,sample_rate,duration,nb_frames:format=duration", "-of", "compact", file], 60_000);
+    lines.push(streams.stdout.trim() || `ffprobe: ${streams.stderr.trim().slice(0, 400)}`);
+    // The sound decoded through, as transcription reads it: how many errors, and the first of them.
+    const decoded = await ran([ffmpeg, "-hide_banner", "-v", "error", "-nostdin", "-i", file, "-map", "0:a:0?", "-f", "null", "-"], 15 * 60_000);
+    const errors = decoded.stderr.split("\n").filter((line) => line.trim() !== "");
+    lines.push(`sound decoded: exit ${decoded.code}, ${errors.length} error lines${errors.length > 0 ? `; the first: ${errors.slice(0, 12).join(" | ")}` : ""}`, "");
+  }
+  if (files.length === 0) lines.push("No footage of its own on this Mac.");
+  const { key } = await send(app.store.home, app.machine, diag.scrub(lines.join("\n")));
+  diag.info("remote", `probe ${id}: sent ${key}`);
+  return `Sent: ${key}`;
+}
+
+/** A program run without holding up the server, ended after `ms`. */
+async function ran(cmd: string[], ms: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const child = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+  const timer = setTimeout(() => child.kill(), ms);
+  const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  const code = await child.exited;
+  clearTimeout(timer);
+  return { code, stdout, stderr };
 }

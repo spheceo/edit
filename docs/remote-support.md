@@ -13,7 +13,7 @@ unreachable when prod had them all; ask a server on `~/.edit` instead). There is
 `edit remote enable` registers this Mac again now. No terminal setup is
 needed: install the nightly, open Edit and sign in. The app must stay running. An admin on
 another running, signed-in Edit can run `edit remote devices`, then
-`edit remote update <device-id>` and `edit remote history <device-id>`. A request
+`edit remote update <device-id>` (or `edit remote update-when-idle <device-id>`, which waits for 20 minutes without anyone at the window and nothing running), `edit remote probe <device-id> <project-or-script-id>` (one import's whole error, its files' streams and a decode of their sound, as a report) and `edit remote history <device-id>`. A request
 expires after an hour. Status records distinguish a claimed update from a new
 build that actually restarted. No command is replayed after an ambiguous crash.
 

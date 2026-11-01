@@ -20,7 +20,7 @@ import { importPaths } from "./import.ts";
 import { probe as probeFile, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project, VideoClip } from "./model.ts";
 import { canonical, fileName, fileStem, isFile, join, withExtension } from "./paths.ts";
-import { measuredTrack } from "./graphics.ts";
+import { measuredTrack, repinPlaceLabels } from "./graphics.ts";
 import { clipMedia, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import * as relay from "./relay.ts";
 import { compareStrings, display, fixed, round, serdeParse, toI64, trim } from "./rust.ts";
@@ -66,8 +66,13 @@ export const timing = {
   now: () => performance.now(),
   /** Optical flow gives up after this. */
   smoothLimitMs: 120_000,
-  /** How long map_view waits for a moving shot's first frame and building track before answering that it's still loading. */
-  mapReadyWaitMs: 180_000,
+  /**
+   * How long map_view waits for a moving shot's first frame and building
+   * track; after that a dark frame stands in for it and the agent goes on
+   * (E2, Oct 31: told to call again, an agent asked for the same three maps
+   * seven times each while they queued on a busy Mac, an hour of turns).
+   */
+  mapReadyWaitMs: 60_000,
   /**
    * How long a map page may take in all: a moving shot waits on tiles for
    * every frame, and a busy 8 GB Mac took 1.9 s a frame (Oct 21's 600-frame
@@ -1257,7 +1262,7 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
       // A stand-in still in the project (its swap never happened) becomes
       // the footage, so clips placed on it play the shot.
       const first = join(dir, `map-${key}-first.jpg`);
-      if (isFile(first)) await swapInMap(app, projectId, first, out);
+      if (isFile(first) || isFile(waitOf(first))) await swapInMap(app, projectId, first, out);
     }
     // Asked again: the media it already is (in a cloud project its path is
     // the cloud copy now, so importing the file again made a second media
@@ -1304,7 +1309,10 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
   if (building !== null && building !== undefined && (Math.abs(bx) > width * 0.15 || Math.abs(by) > height * 0.2)) {
     note += ` CHECK: the marker sits off the middle of the frame (x ${bx}, y ${round(by)} from the centre) where the camera aims at the place: look at a frame; if it isn't on the place, call map_view again with the building's own lat/lon.`;
   }
-  if (rendering) {
+  if (rendering && info === null) {
+    note +=
+      " Its first frame isn't in yet (maps ahead of it, or a busy Mac), so a dark frame stands in for it: place it now and go on, never call map_view again for it. The first frame, then the moving shot, take the same media id's place by themselves; a place_label on it needs no track and pins itself to the building when it's in. get_edit_context lists it under smoothing until it's done, and exports wait for it.";
+  } else if (rendering) {
     note +=
       " It's still rendering in the background: place it now (the media is its first frame until the footage is done, then the same media id is the moving shot by itself; get_edit_context lists it under smoothing until then, and exports wait for it).";
   }
@@ -1378,8 +1386,10 @@ export function lookOf(measured: string): number {
   }
 }
 
-/** The job file of a moving shot's stand-in (`map-<key>-first.jpg`). */
-export const standInJob = (first: string) => first.replace(/-first\.jpg$/, ".job.json");
+/** The job file of a moving shot's stand-in (`map-<key>-first.jpg`, or `map-<key>-wait-first.jpg` before its first frame is in). */
+export const standInJob = (first: string) => first.replace(/(-wait)?-first\.jpg$/, ".job.json");
+/** The dark frame standing in for a moving shot whose first frame isn't in yet. */
+const waitOf = (first: string) => first.replace(/-first\.jpg$/, "-wait-first.jpg");
 /** Its first frame, which stands in for it until it's done. */
 const jobFirst = (job: MapShotJob) => join(job.dir, `map-${job.key}-first.jpg`);
 const jobShots = (job: MapShotJob) => join(job.dir, `map-${job.key}.frames`);
@@ -1397,16 +1407,23 @@ async function movingMap(app: App, projectId: string, job: MapShotJob): Promise<
   });
   const ready = await Promise.race([render.ready.wait(), late]);
   if (timer !== null) clearTimeout(timer);
-  if (ready === null) {
-    throw new Error(
-      "the map is still loading its first frame; call map_view again with the same arguments in a minute (the render carries on)",
-    );
-  }
-  if ("error" in ready) throw new Error(ready.error);
-  const info = ready.ok;
+  if (ready !== null && "error" in ready) throw new Error(ready.error);
   const out = jobOut(job);
   const first = jobFirst(job);
-  const media = await importOne(app, projectId, first);
+  // Not in yet (maps ahead of it, a busy Mac): a dark frame stands in for
+  // its first frame, which takes its place when it comes (place labels on it
+  // pinned again then), so the agent places it and goes on.
+  let info: Json = null;
+  let standIn = first;
+  if (ready !== null) info = ready.ok;
+  else if (!isFile(first)) {
+    standIn = waitOf(first);
+    if (!isFile(standIn)) {
+      const made = await ffmpeg(["-y", "-v", "error", "-f", "lavfi", "-i", `color=c=0x0b0f14:s=${job.width}x${job.height}`, "-frames:v", "1", standIn], 30_000);
+      if (!made.ok) throw new Error(`the map's stand-in: ${made.stderr.trim().split("\n").pop() ?? "ffmpeg failed"}`);
+    }
+  }
+  const media = await importOne(app, projectId, standIn);
   {
     // Read with the render's failure, so one that failed meanwhile is never
     // left looking as if it were still rendering.
@@ -1463,8 +1480,8 @@ export function resumeMap(app: App, projectId: string, first: string): boolean {
   } catch {
     return false;
   }
-  const standIn = canonical(jobFirst(job));
-  const media = app.store.get(projectId)?.project.media.find((one) => one.path === standIn);
+  const standIns = [canonical(jobFirst(job)), canonical(waitOf(jobFirst(job)))];
+  const media = app.store.get(projectId)?.project.media.find((one) => standIns.includes(one.path));
   if (media === undefined) return false;
   const render = startRender(app, job, projectId);
   // Keyed as the render reports back (its failure, its swap).
@@ -1521,6 +1538,8 @@ async function renderMoving(app: App, job: MapShotJob, render: MapRender): Promi
           // Only for reuse.
         }
         render.ready.send({ ok: measured });
+        // Projects given the dark frame get the first frame, their labels pinned to the building.
+        for (const project of render.projects) void swapMedia(app, project, waitOf(firstFrame), firstFrame).catch((error: unknown) => diag.warn("agent", `map first frame into ${project}: ${diag.messageOf(error)}`));
       };
       const measuredEarly = "measured" in first ? first.measured : undefined;
       if (measuredEarly !== undefined) standIn(measuredEarly);
@@ -1591,12 +1610,17 @@ export async function swapInMap(app: App, projectId: string, first: string, out:
 
 async function swapMedia(app: App, projectId: string, first: string, out: string): Promise<void> {
   const probe = await probeFile(out);
-  // As import keeps them.
-  const standIn = canonical(first);
+  // As import keeps them; the dark frame of one whose first frame never came first.
   const outPath = canonical(out);
   const live = app.store.get(projectId);
-  if (live === null || !live.project.media.some((media) => media.path === standIn)) return;
-  const [, replaced] = await app.store.update(projectId, "agent", (project) => replaceMediaPath(project, standIn, outPath, probe));
+  const standIn = [canonical(first), canonical(waitOf(first))].find((path) => live?.project.media.some((media) => media.path === path));
+  if (live === null || standIn === undefined) return;
+  const [, replaced] = await app.store.update(projectId, "agent", (project) => {
+    const media = project.media.find((one) => one.path === standIn);
+    if (!replaceMediaPath(project, standIn, outPath, probe)) return false;
+    if (media !== undefined) repinPlaceLabels(project, media.id);
+    return true;
+  });
   if (replaced) {
     app.media.ensure(outPath, probe);
     // The footage (never the stand-in) goes up for a cloud project.

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import * as cutin from "../src/cutin.ts";
 import { frameKey } from "../src/desktop_screen.ts";
 import { needs } from "../src/edit_plan.ts";
-import { bareStills, dateDrift, dateTitle, placeLabel } from "../src/graphics.ts";
+import { bareStills, dateDrift, dateTitle, placeLabel, repinPlaceLabels } from "../src/graphics.ts";
 import type { Project, TextClip, VideoClip } from "../src/model.ts";
 import { native } from "../src/native/index.ts";
 import { clip, clipById, level, media, project as newProject, stubNative } from "./helpers/model.ts";
@@ -81,6 +81,28 @@ test("a_place_label_given_no_track_takes_its_maps_own_from_beside_the_footage_or
   bare.media.push(media({ id: "map", name: "gone.mp4", path: join(dir, "gone.mp4"), kind: "video", duration: 9, width: 1920, height: 1080 }));
   bare.clips.push(clip({ id: "m", track: "v2", start: 0, duration: 267, type: "video", media: "map" }));
   expect(() => placeLabel(bare, { text: "X Street", start: 0, end: 200, map: "m" })).toThrow("give building_track");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a_label_on_a_map_still_waiting_for_its_first_frame_sits_over_the_middle_then_pins_to_the_building", () => {
+  const dir = fs.mkdtempSync(join(os.tmpdir(), "edit-label-"));
+  const p = project();
+  p.media.push(media({ id: "map", name: "map-k-wait-first.jpg", path: join(dir, "map-k-wait-first.jpg"), kind: "image", duration: 0, width: 1920, height: 1080 }));
+  p.clips.push(clip({ id: "m", track: "v2", start: 0, duration: 267, type: "video", media: "map" }));
+  const id = placeLabel(p, { text: "Kitsap Mall", start: 30, end: 200, map: "m" });
+  const label = clipById(p, id) as TextClip;
+  expect(label.transform.x).toBe(0);
+  // In: the first frame and its track (the building moving right), the media now the first frame.
+  fs.writeFileSync(join(dir, "map-k-first.json"), JSON.stringify({ track: Array.from({ length: 200 }, (_, i) => [1100 + i, 400, 1200 + i, 600]) }));
+  p.media.find((one) => one.id === "map")!.path = join(dir, "map-k-first.jpg");
+  expect(repinPlaceLabels(p, "map")).toBe(1);
+  expect(Math.abs(label.transform.x - (1150 + 30 - 960))).toBeLessThan(1.01);
+  // Keyed every half second at the project's rate (a first frame has none of its own), not every frame.
+  expect(label.keyframes!.x!.length).toBeGreaterThan(5);
+  expect(label.keyframes!.x!.length).toBeLessThan(20);
+  // A map's stand-in isn't a bare still to push into.
+  expect(bareStills(p)).toEqual([]);
+  valid(p);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

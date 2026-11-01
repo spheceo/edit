@@ -197,7 +197,8 @@ function mapMeasured(project: Project, mediaId: string | undefined): Record<stri
   } catch {
     return null;
   }
-  const { building, track } = measuredTrack(info, project.settings.width, project.settings.height, media.fps ?? fpsOf(project));
+  // A first frame (a still) has no rate of its own: the map renders at the project's.
+  const { building, track } = measuredTrack(info, project.settings.width, project.settings.height, media.fps || fpsOf(project));
   return track.length > 0 ? track : building !== null ? [building] : null;
 }
 
@@ -216,13 +217,51 @@ export function placeLabel(project: Project, args: Args): string {
   const map = typeof args.map === "string" ? clipOf(project, args.map) : undefined;
   if (map === undefined) throw new Error("place_label needs map: the map's clip id");
   if (map.type !== "video") throw new Error("place_label: map must be the map's video clip");
+  const trackGiven = Array.isArray(args.building_track) ? (args.building_track as unknown[]) : [];
+  // Given none, the map's own: what its render measured (E2, Oct 31: a label from e-code was refused for want of the track map_view had answered with).
+  const points: unknown[] = trackGiven.length > 0 ? trackGiven : args.building !== undefined ? [args.building] : (mapPoints(project, map.media) ?? []);
+  const pinned = pin(project, map, start, end, text, points);
+  if (pinned === null) throw new Error("place_label: this map's building track isn't on this Mac; give building_track (or building) from map_view");
+  const k = project.settings.height / 1080;
+  const track = addTrack(project, "video");
+  const made: string[] = [];
+  return push(project, made, {
+    type: "text",
+    name: "Place label",
+    track,
+    start,
+    duration: end - start,
+    fade_out: 8,
+    text,
+    style: mapLabelStyle(k),
+    transform: { x: pinned.x, y: pinned.y },
+    keyframes: pinned.xs.length > 1 ? { x: pinned.xs, y: pinned.ys } : {},
+    animation: { preset: "typewriter", duration: 1, stagger: 1 },
+  });
+}
+
+/** A map still waiting for its first frame (a dark stand-in, `map-<key>-wait-first.jpg`): its building is taken as the middle of the frame, where the camera aims, until the map is in. */
+const WAITING = /-wait-first\.jpg$/u;
+
+/** The points a label on a map is pinned to: its measured track, or the middle while it's still waiting for its first frame; null when this Mac has neither. */
+function mapPoints(project: Project, mediaId: string | undefined): unknown[] | null {
+  const measured = mapMeasured(project, mediaId);
+  if (measured !== null) return measured;
+  const path = mediaId === undefined ? undefined : mediaOf(project, mediaId)?.path;
+  return typeof path === "string" && WAITING.test(path) ? [{ x: 0, top: Math.round(-0.06 * project.settings.height), frame: 0 }] : null;
+}
+
+/**
+ * A label's place over its map: just above the building (bottom ~30 px over
+ * its top), kept in frame, keyed at every tracked point inside the label
+ * (linear). Null when none of the points is usable.
+ */
+function pin(project: Project, map: Clip, start: number, end: number, text: string, points: unknown[]): { x: number; y: number; xs: Args[]; ys: Args[] } | null {
+  if (map.type !== "video") return null;
   const [mapStart, sourceIn, speed] = [map.start, map.source_in ?? 0, map.speed ?? 1];
   const fps = fpsOf(project);
   const k = project.settings.height / 1080;
   const [width, height] = [project.settings.width, project.settings.height];
-  const trackGiven = Array.isArray(args.building_track) ? (args.building_track as unknown[]) : [];
-  // Given none, the map's own: what its render measured (E2, Oct 31: a label from e-code was refused for want of the track map_view had answered with).
-  const points: unknown[] = trackGiven.length > 0 ? trackGiven : args.building !== undefined ? [args.building] : (mapMeasured(project, map.media) ?? []);
   // The box: one line of 36 px monospace (0.6 em a character), 7 px padding above and below.
   const boxW = charCount(text) * 36 * k * 0.6 + 28 * k;
   const boxH = 36 * k * 1.15 + 14 * k;
@@ -240,7 +279,7 @@ export function placeLabel(project: Project, args: Args): string {
     const clamped = clamp(x, -width / 2 + margin + boxW / 2, width / 2 - margin - boxW / 2);
     keys.push([at, clamped, y]);
   }
-  if (keys.length === 0) throw new Error("place_label: this map's building track isn't on this Mac; give building_track (or building) from map_view");
+  if (keys.length === 0) return null;
   keys.sort((a, b) => a[0] - b[0]);
   const last = end - start - 1;
   // Where it is on its first frame (between the tracked points around it).
@@ -262,21 +301,33 @@ export function placeLabel(project: Project, args: Args): string {
     xs.push({ frame, value: x, ease: "linear" });
     ys.push({ frame, value: y, ease: "linear" });
   }
-  const track = addTrack(project, "video");
-  const made: string[] = [];
-  return push(project, made, {
-    type: "text",
-    name: "Place label",
-    track,
-    start,
-    duration: end - start,
-    fade_out: 8,
-    text,
-    style: mapLabelStyle(k),
-    transform: { x: x0, y: y0 },
-    keyframes: xs.length > 1 ? { x: xs, y: ys } : {},
-    animation: { preset: "typewriter", duration: 1, stagger: 1 },
-  });
+  return { x: x0, y: y0, xs, ys };
+}
+
+/**
+ * Pins again every place label over a map of `mediaId` to what its render
+ * measured, now that it's in (labels placed while the map waited for its
+ * first frame sat over the middle). Returns how many moved.
+ */
+export function repinPlaceLabels(project: Project, mediaId: string): number {
+  const points = mapMeasured(project, mediaId);
+  if (points === null) return 0;
+  let moved = 0;
+  for (const map of project.clips) {
+    if (map.type !== "video" || map.media !== mediaId) continue;
+    for (const label of project.clips) {
+      if (label.type !== "text" || label.name !== "Place label") continue;
+      if (label.start >= clipEnd(map) || clipEnd(label) <= map.start) continue;
+      const pinned = pin(project, map, label.start, clipEnd(label), label.text, points);
+      if (pinned === null) continue;
+      label.transform.x = pinned.x;
+      label.transform.y = pinned.y;
+      label.keyframes = { ...(label.keyframes ?? {}), x: pinned.xs as never, y: pinned.ys as never };
+      if (pinned.xs.length <= 1) { delete label.keyframes.x; delete label.keyframes.y; }
+      moved++;
+    }
+  }
+  return moved;
 }
 
 /** Rust's `f64::clamp`, which panics (a bug: a RangeError here) when min > max. */
@@ -435,7 +486,8 @@ export function bareStills(project: Project): Record<string, unknown>[] {
   for (const clip of project.clips) {
     if (clip.type !== "video" || (clip.frame !== undefined && clip.frame !== null)) continue;
     const media = mediaOf(project, clip.media);
-    if (media === undefined || media.kind !== "image") continue;
+    // A moving map's stand-in (its first frame, or the dark frame before it) is footage on its way, never pushed into.
+    if (media === undefined || media.kind !== "image" || /^map-\w+(-wait)?-first\.jpg$/u.test(media.name)) continue;
     const track = trackOf(project, clip.track);
     if (track === undefined || track.hidden || designedOver(project, clip)) continue;
     const [w, h] = [Math.max(media.width, 1), Math.max(media.height, 1)];

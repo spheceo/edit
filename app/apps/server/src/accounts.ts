@@ -18,12 +18,13 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 
-import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Queue, Schedule, Schema } from "effect";
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Option, Queue, Schedule, Schema } from "effect";
 
 import type { App } from "./app.ts";
 import type { Creator } from "./model.ts";
 import * as diag from "./diag.ts";
-import { idle, inArea, runtime } from "./effect/runtime.ts";
+import { idle, inArea, runPromise, runtime } from "./effect/runtime.ts";
+import * as service from "./effect/service.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as keychain from "./keychain.ts";
 import * as windowFocus from "./window_focus.ts";
@@ -148,37 +149,69 @@ export function status(): Record<string, unknown> {
   };
 }
 
-interface Tokens {
-  device_code?: unknown;
-  user_code?: unknown;
-  verification_uri?: unknown;
-  verification_uri_complete?: unknown;
-  interval?: unknown;
-  access_token?: unknown;
-  expires_in?: unknown;
-  refresh_token?: unknown;
-  user?: { email?: unknown; name?: unknown; image?: unknown };
-  error?: unknown;
-  error_description?: unknown;
+// ── The accounts site's answers (in Effect: docs/plans/2026-11-01-effect.md, round 2, area 5) ──
+
+const ACCOUNTS = "the accounts site";
+
+/** How long one call to the accounts site may take (tests make it short). */
+export const ACCOUNTS_MS = { value: 20_000 };
+
+/**
+ * What the accounts site answers `/app/token`, `/app/device` and
+ * `/app/revoke` with: tokens, a device code, or an error and its
+ * description. Every field may be missing; what each use needs is checked
+ * where it's used (`Granted` for tokens).
+ */
+const TokensSchema = Schema.Struct({
+  device_code: Schema.optional(Schema.String),
+  user_code: Schema.optional(Schema.String),
+  verification_uri: Schema.optional(Schema.String),
+  verification_uri_complete: Schema.optional(Schema.NullOr(Schema.String)),
+  interval: Schema.optional(Schema.Number),
+  access_token: Schema.optional(Schema.String),
+  token_type: Schema.optional(Schema.String),
+  expires_in: Schema.optional(Schema.Number),
+  refresh_token: Schema.optional(Schema.String),
+  user: Schema.optional(Schema.Struct({ email: Schema.optional(Schema.NullOr(Schema.String)), name: Schema.optional(Schema.NullOr(Schema.String)), image: Schema.optional(Schema.NullOr(Schema.String)) })),
+  error: Schema.optional(Schema.String),
+  error_description: Schema.optional(Schema.String),
+});
+type Tokens = typeof TokensSchema.Type;
+
+/** A token answer that grants a sign-in: both tokens there. */
+const Granted = Schema.Struct({ access_token: Schema.String, refresh_token: Schema.String, expires_in: Schema.optional(Schema.Number) });
+
+/** What one POST answered: its status, its body read as `Tokens` (empty when it isn't JSON, as an error page), its Retry-After. */
+interface Posted {
+  readonly status: number;
+  readonly value: Tokens;
+  readonly retryAfter: number | null;
 }
 
-/** One POST to the accounts site, JSON both ways. */
-async function post(path: string, body: Record<string, string>, via = ""): Promise<{ status: number; value: Tokens; retryAfter: number | null }> {
-  const answer = await fetch(`${accountsUrl()}${path}`, {
-    method: "POST",
+/**
+ * One POST to the accounts site, JSON both ways, within `ACCOUNTS_MS`: a
+ * dropped connection or the time running out is a typed (temporary) failure;
+ * a success that isn't the site's answer is `AnswerInvalid`; an error page
+ * that isn't JSON reads as an empty answer with its status.
+ */
+const postEffect = Effect.fn("accounts.post")(function* (path: string, body: Record<string, string>, via = "") {
+  const answer = yield* service.request(
+    ACCOUNTS,
+    `${accountsUrl()}${path}`,
     // What admins see as "where" on the person's page.
-    headers: { "content-type": "application/json", accept: "application/json", "user-agent": userAgent(via) },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(20_000),
-  });
-  let value: Tokens = {};
-  try {
-    value = (await answer.json()) as Tokens;
-  } catch {
-    value = {};
-  }
-  const after = Number(answer.headers.get("retry-after"));
-  return { status: answer.status, value, retryAfter: Number.isFinite(after) && after > 0 ? after * 1000 : null };
+    { method: "POST", headers: { "content-type": "application/json", accept: "application/json", "user-agent": userAgent(via) }, body: JSON.stringify(body) },
+    ACCOUNTS_MS.value,
+  );
+  const value: Tokens =
+    answer.status === 200
+      ? yield* service.decodeJson(ACCOUNTS, TokensSchema, answer.text())
+      : yield* service.decodeJson(ACCOUNTS, TokensSchema, answer.text()).pipe(Effect.orElseSucceed((): Tokens => ({})));
+  return { status: answer.status, value, retryAfter: service.retryAfterOf(answer.headers) } satisfies Posted;
+});
+
+/** `postEffect` for the code that isn't Effect yet. */
+function post(path: string, body: Record<string, string>, via = ""): Promise<Posted> {
+  return runPromise(postEffect(path, body, via).pipe(inArea("accounts")));
 }
 
 /** `Edit/<build> (macOS)`, or `(macOS; edit serve)` for a device sign-in: what admins and the approval page show. */
@@ -189,13 +222,15 @@ function userAgent(via: string): string {
 
 /** Takes a token answer: the access token in memory, the new refresh token in the Keychain. */
 async function take(home: string, value: Tokens): Promise<void> {
-  if (typeof value.access_token !== "string" || typeof value.refresh_token !== "string") throw new Error("the accounts site's answer had no tokens");
+  const granted = Schema.decodeUnknownOption(Granted)(value);
+  if (Option.isNone(granted)) throw new Error("the accounts site's answer had no tokens");
+  const { access_token: access, refresh_token: refreshToken } = granted.value;
   const seconds = typeof value.expires_in === "number" && value.expires_in > 0 ? value.expires_in : 3600;
   // Kept before it's used: a rotated token lost here would sign the person out.
-  await keychain.set(home, value.refresh_token);
+  await keychain.set(home, refreshToken);
   state.kept = true;
-  const found = claims(value.access_token);
-  state.access = value.access_token;
+  const found = claims(access);
+  state.access = access;
   state.expires = Date.now() + seconds * 1000;
   state.perms = Array.isArray(found.perms) ? found.perms.filter((one): one is string => typeof one === "string") : [];
   state.admin = found.admin === true;
@@ -269,10 +304,9 @@ const attempt = Effect.fn("accounts.renew")(function* (home: string) {
   });
   if (refresh === null) return "signed-out" as const;
   state.kept = true;
-  const answer = yield* Effect.tryPromise({
-    try: () => post("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT }),
-    catch: (error) => new RenewalFailed({ message: diag.messageOf(error) }),
-  });
+  const answer = yield* postEffect("/app/token", { grant_type: "refresh_token", refresh_token: refresh, client_id: CLIENT }).pipe(
+    Effect.mapError((error) => new RenewalFailed({ message: error.message })),
+  );
   if (answer.status === 200) {
     yield* Effect.tryPromise({ try: () => take(home, answer.value), catch: (error) => new RenewalFailed({ message: diag.messageOf(error) }) });
     return "renewed" as const;
@@ -479,30 +513,30 @@ export async function beginDevice(app: App, via: string): Promise<NonNullable<St
   state.problem = null;
   const device = value.device_code;
   const started = state.device;
-  polling = (async () => {
+  // Asks every `interval` while the code lasts: pending goes on, slow_down
+  // waits 5 s longer, the per-minute limit (429) waits its Retry-After, a
+  // connection that drops or times out is asked again; anything else ends it.
+  const waiting = Effect.gen(function* () {
     let wait = interval * 1000;
     while (state.device === started && Date.now() < started.expires) {
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      yield* idle(wait);
       if (state.device !== started) return;
-      let answer: Awaited<ReturnType<typeof post>>;
-      try {
-        answer = await post("/app/token", { grant_type: DEVICE_GRANT, device_code: device, client_id: CLIENT }, via);
-      } catch (error) {
+      const asked = yield* postEffect("/app/token", { grant_type: DEVICE_GRANT, device_code: device, client_id: CLIENT }, via).pipe(Effect.result);
+      if (asked._tag === "Failure") {
         // Offline for a moment: keep asking while the code lasts.
-        diag.warn("accounts", `waiting for the device sign-in: ${diag.messageOf(error)}`);
+        yield* Effect.logWarning(`waiting for the device sign-in: ${asked.failure.message}`);
         continue;
       }
+      const answer = asked.success;
       if (answer.status === 200) {
-        try {
-          await take(app.store.home, answer.value);
-          diag.info("accounts", `signed in as ${state.person?.email.split("@")[0] ?? "?"} (with a code)`);
-        } catch (error) {
-          state.problem = `Signing in failed: ${diag.messageOf(error)}`;
-        }
+        yield* Effect.tryPromise(() => take(app.store.home, answer.value)).pipe(
+          Effect.tap(() => Effect.logInfo(`signed in as ${state.person?.email.split("@")[0] ?? "?"} (with a code)`)),
+          Effect.catch((error) => Effect.sync(() => (state.problem = `Signing in failed: ${diag.messageOf(error.cause)}`))),
+        );
         state.device = null;
         return;
       }
-      const error = typeof answer.value.error === "string" ? answer.value.error : "";
+      const error = answer.value.error ?? "";
       if (error === "authorization_pending") continue;
       if (error === "slow_down") {
         wait += 5_000;
@@ -514,9 +548,7 @@ export async function beginDevice(app: App, via: string): Promise<NonNullable<St
       }
       state.problem =
         error === "access_denied"
-          ? typeof answer.value.error_description === "string"
-            ? answer.value.error_description
-            : "The sign-in was turned down (or your account can't use Edit yet: ask an admin)."
+          ? (answer.value.error_description ?? "The sign-in was turned down (or your account can't use Edit yet: ask an admin).")
           : error === "expired_token"
             ? "The code ran out before it was used: start again."
             : `Signing in failed: ${error || `the accounts site answered ${answer.status}`}`;
@@ -527,7 +559,8 @@ export async function beginDevice(app: App, via: string): Promise<NonNullable<St
       state.device = null;
       state.problem = "The code ran out before it was used: start again.";
     }
-  })().finally(() => {
+  });
+  polling = runPromise(waiting.pipe(inArea("accounts"))).finally(() => {
     polling = null;
   });
   return state.device;
@@ -592,10 +625,7 @@ export async function signOut(app: App): Promise<void> {
     try {
       const { status: code, retryAfter } = await post("/app/revoke", { token: refresh });
       // The per-minute limit: revoked once more after it, in the background (it's forgotten here now).
-      if (code === 429) {
-        const later = setTimeout(() => void post("/app/revoke", { token: refresh }).catch(() => {}), retryAfter ?? 60_000);
-        later.unref?.();
-      }
+      if (code === 429) runtime.runFork(idle(retryAfter ?? 60_000).pipe(Effect.andThen(postEffect("/app/revoke", { token: refresh })), Effect.ignore));
     } catch (error) {
       diag.warn("accounts", `revoking the sign-in: ${diag.messageOf(error)} (forgotten here anyway)`);
     }

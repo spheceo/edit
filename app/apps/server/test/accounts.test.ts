@@ -45,7 +45,7 @@ beforeAll(() => {
       const body = (await request.json().catch(() => ({}))) as Record<string, string>;
       seen.push({ path: url.pathname, body });
       if (url.pathname.startsWith("/app/") && !/^Edit\/\S+ \((macOS|linux)(; [a-z ]+)?\)$/u.test(request.headers.get("user-agent") ?? "")) return Response.json({ error: "no user agent" }, { status: 400 });
-      if (url.pathname === "/app/revoke") return Response.json({});
+      if (url.pathname === "/app/revoke") return revokeBusy-- > 0 ? Response.json({ error: "slow_down" }, { status: 429, headers: { "retry-after": "0" } }) : Response.json({});
       if (url.pathname === "/app/device") {
         devices.push(request.headers.get("user-agent") ?? "");
         const code = `dev-${devices.length}`;
@@ -78,6 +78,9 @@ beforeAll(() => {
       if (body.grant_type === "refresh_token") {
         if (body.refresh_token === "dead-token-aaaaaaaa") return Response.json({ error: "invalid_grant", error_description: "Signed out elsewhere." }, { status: 400 });
         if (body.refresh_token === "busy-token-aaaaaaaa") return Response.json({ error: "temporarily_unavailable" }, { status: 429, headers: { "retry-after": "60" } });
+        if (body.refresh_token === "slow-token-aaaaaaaa") return Bun.sleep(1500).then(() => Response.json({ error: "too late" }));
+        if (body.refresh_token === "odd-token-aaaaaaaa") return Response.json({ hello: "there" });
+        if (body.refresh_token === "down-token-aaaaaaaa") return new Response("<html>502 Bad Gateway</html>", { status: 502 });
         refreshes += 1;
         return Response.json({ access_token: jwt({ perms: ["use"], email: "someone@gmail.com", n: refreshes }), token_type: "Bearer", expires_in: 3600, refresh_token: `refresh-${refreshes + 1}-aaaaaaaa`, user: { email: "someone@gmail.com", name: "Someone", image: null } });
       }
@@ -86,6 +89,8 @@ beforeAll(() => {
   });
   process.env.EDIT_ACCOUNTS_URL = `http://127.0.0.1:${server.port}`;
 });
+
+let revokeBusy = 0;
 
 afterEach(() => accounts.resetForTests());
 afterAll(() => {
@@ -302,4 +307,41 @@ test("a failed renewal is asked again three times 15 s apart, inside the site's 
     }),
   );
   expect(delays).toEqual([15, 15, 15, 60, 60, 90]);
+});
+
+test("the accounts site's bad days keep the sign-in: too slow, a 200 with no tokens, a 502 page; each said, none signing out", async () => {
+  const before = accounts.ACCOUNTS_MS.value;
+  accounts.ACCOUNTS_MS.value = 300;
+  try {
+    // Signed in first, with a good token.
+    const begun = new URL(accounts.begin(app));
+    challenges.set("code-bad-days", begun.searchParams.get("code_challenge")!);
+    expect((await accounts.finish(app, new URLSearchParams({ code: "code-bad-days", state: begun.searchParams.get("state")! }))).ok).toBe(true);
+    const keep = Object.keys(kept());
+    for (const [token, said] of [
+      ["slow-token-aaaaaaaa", "didn't answer within"],
+      ["odd-token-aaaaaaaa", "had no tokens"],
+      ["down-token-aaaaaaaa", "502"],
+    ] as const) {
+      fs.writeFileSync(join(dir, "keychain.json"), JSON.stringify(Object.fromEntries(keep.map((key) => [key, token]))));
+      await accounts.renew(app.store.home);
+      expect([token, accounts.status().signed_in]).toEqual([token, true]);
+      expect(String(accounts.status().problem)).toContain(said);
+      expect(Object.values(kept())).toEqual([token]);
+    }
+  } finally {
+    accounts.ACCOUNTS_MS.value = before;
+  }
+});
+
+test("a sign-out the site's limit refuses (429) is revoked again after its Retry-After, in the background", async () => {
+  const begun = new URL(accounts.begin(app));
+  challenges.set("code-revoke", begun.searchParams.get("code_challenge")!);
+  expect((await accounts.finish(app, new URLSearchParams({ code: "code-revoke", state: begun.searchParams.get("state")! }))).ok).toBe(true);
+  revokeBusy = 1;
+  const from = seen.length;
+  await accounts.signOut(app);
+  expect(accounts.status().signed_in).toBe(false);
+  for (let i = 0; i < 100 && seen.slice(from).filter((one) => one.path === "/app/revoke").length < 2; i++) await Bun.sleep(10);
+  expect(seen.slice(from).filter((one) => one.path === "/app/revoke").length).toBe(2);
 });

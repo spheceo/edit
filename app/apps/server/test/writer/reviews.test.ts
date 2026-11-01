@@ -3,7 +3,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { approvalOf, isOpen, noteOf, sharedAnchor, untaken } from "../../src/writer/reviews.ts";
+import type { App } from "../../src/app.ts";
+import { approvalOf, isOpen, noteOf, shareState, shareWork, sharedAnchor, startShare, untaken } from "../../src/writer/reviews.ts";
+import type { Script } from "@edit/types/writer";
 
 test("reads notes and approvals as Repack sends them", () => {
   const note = noteOf({
@@ -38,4 +40,32 @@ test("names a comment's words in the shared text", () => {
   // Words written since the share aren't on the page.
   expect(() => sharedAnchor(dir, link, 6, { kind: "text", blockId: "p1", start: 0, end: 5, quote: "Drake" })).toThrow();
   fs.rmSync(dir, { recursive: true });
+});
+
+test("scripts share on their own, several at once, and one share of a script at a time (JJ, Nov 1)", async () => {
+  const before = shareWork.run;
+  const waiting = new Map<string, { resolve: (script: Script) => void; reject: (error: Error) => void }>();
+  shareWork.run = (_app, _data, id) => new Promise<Script>((resolve, reject) => void waiting.set(id, { resolve, reject }));
+  try {
+    const app = {} as App;
+    const a = startShare(app, "/nowhere", "share-a");
+    const b = startShare(app, "/nowhere", "share-b");
+    // Both under way at once; a second share of the same script is refused, saying the first carries on.
+    expect(shareState("share-a").sharing).toBeDefined();
+    expect(shareState("share-b").sharing).toBeDefined();
+    await expect(startShare(app, "/nowhere", "share-a")).rejects.toThrow("already being shared");
+    waiting.get("share-a")!.resolve({ id: "share-a" } as Script);
+    await a;
+    expect(shareState("share-a")).toEqual({});
+    // One that fails says why until the next share.
+    waiting.get("share-b")!.reject(new Error("R2 unreachable"));
+    await expect(b).rejects.toThrow("R2 unreachable");
+    expect(shareState("share-b").shareFailed?.error).toBe("R2 unreachable");
+    const again = startShare(app, "/nowhere", "share-b");
+    expect(shareState("share-b").shareFailed).toBeUndefined();
+    waiting.get("share-b")!.resolve({ id: "share-b" } as Script);
+    await again;
+  } finally {
+    shareWork.run = before;
+  }
 });

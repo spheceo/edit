@@ -56,7 +56,7 @@ export function detail(data: string, script: Script): Script {
   // Archived on Repack's page: its footage freed, read-only until restored.
   const archived = archive.state(data, script.id);
   if (archived !== null) out.archive = archived;
-  return out;
+  return Object.assign(out, reviews.shareState(script.id));
 }
 
 /** The script `id` read for the signed-in person: refused when its kind isn't theirs. */
@@ -110,7 +110,7 @@ export function routes(router: Router<App>): void {
           .map((row) => {
             const refusal = cloud.refused(row.id);
             const archived = archive.state(data, row.id);
-            return Object.assign(row, { building: jobs.running(row.id) }, refusal === null ? {} : { cloudRefused: refusal }, archived === null ? {} : { archive: archived });
+            return Object.assign(row, { building: jobs.running(row.id) }, reviews.shareState(row.id), refusal === null ? {} : { cloudRefused: refusal }, archived === null ? {} : { archive: archived });
           });
       }),
     )
@@ -281,8 +281,13 @@ export function routes(router: Router<App>): void {
     .post("/api/writer/scripts/{id}/share", (context) =>
       answer(async () => {
         can.require(can.SHARE);
-        readFor(dataOf(context.app), id(context));
-        return detail(dataOf(context.app), await reviews.share(context.app, dataOf(context.app), id(context)));
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        // It runs on its own, as an edit's share does (JJ, Nov 1): refused at once says so, else the script says it's sharing.
+        const started = reviews.startShare(context.app, data, id(context));
+        started.catch((error: unknown) => diag.warn("writer", `sharing ${id(context)}: ${diag.messageOf(error)}`));
+        const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 300))]);
+        return detail(data, first === null ? readFor(data, id(context)) : first.done);
       }),
     )
     .post("/api/writer/scripts/{id}/review/compress", (context) =>

@@ -226,7 +226,7 @@ export function Home() {
   const projectRows: Listed[] = [
     ...all.filter((project) => !project.subtitles).map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudOnly.filter((project) => project.summary?.subtitles !== true).map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), here: localScripts.some((local) => local.id === one.id) })),
+    ...scriptOnly.filter((one) => !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), sharing: localScripts.some((local) => local.id === one.id && local.sharing !== undefined), here: localScripts.some((local) => local.id === one.id) })),
   ].sort((a, b) => b.at - a.at);
   const subtitledRows: Listed[] = [
     ...all.filter((project) => project.subtitles).map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -283,7 +283,7 @@ export function Home() {
         title: script.title,
         mine: isMe(script.createdBy),
         needs: needsYou.has(row),
-        row: () => <ScriptTableRow script={script} importing={row.importing} writing={row.writing === true} here={row.here === true} onChanged={refresh} onImport={row.importing ? () => setWatching(script.id) : undefined} />,
+        row: () => <ScriptTableRow script={script} importing={row.importing} writing={row.writing === true} sharing={row.sharing === true} here={row.here === true} onChanged={refresh} onImport={row.importing ? () => setWatching(script.id) : undefined} />,
       });
       continue;
     }
@@ -628,7 +628,7 @@ export type NewProjectStart = { title: string; text: string; style: Style };
 export type Listed =
   | { at: number; local: ProjectSummary; cloud: null; script: WriterScriptRow | null }
   | { at: number; local: null; cloud: CloudProject; script: WriterScriptRow | null }
-  | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing; writing?: boolean; here?: boolean };
+  | { at: number; local: null; cloud: null; script: WriterScriptRow; importing?: Importing; writing?: boolean; sharing?: boolean; here?: boolean };
 
 /** A script's import while it isn't done: its word for it ("Importing 40%", "Stopped"). */
 export type Importing = { word: string; stopped: boolean; percent?: number; step?: string };
@@ -977,6 +977,8 @@ export type ScriptIssueRow = {
   runFailed?: { at: number; error: string } | null;
   /** When it was started. */
   createdAt?: number;
+  /** Being shared for review on this Mac (it runs on its own). */
+  sharing?: { startedAt: number };
   /** Its script being written (a build running on this Mac). */
   building?: boolean;
   /** Stopped on a failure this build meets again however often it's retried (a 413): Retry isn't offered until an update. */
@@ -1383,7 +1385,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
 }
 
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
-function ScriptTableRow({ script, importing, writing, here, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; here: boolean; onChanged: () => void; onImport?: () => void }) {
+function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; sharing: boolean; here: boolean; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -1501,6 +1503,12 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
           <span className={cx(CHIP, "text-info")}>
             <Spinner size={12} />
             Writing
+          </span>
+        ) : sharing ? (
+          // Shared for review on its own, as an edit's share is (JJ, Nov 1): other scripts can be shared meanwhile.
+          <span className={cx(CHIP, "text-info")} title="Its footage is going up to the review link">
+            <Spinner size={12} />
+            Sharing
           </span>
         ) : failed !== null ? (
           // Its last run failed: said in orange, and a click runs it again (what went wrong is in its tooltip and ⋯ View error).

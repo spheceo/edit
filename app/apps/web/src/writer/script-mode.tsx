@@ -171,7 +171,9 @@ export function ScriptMode() {
         .then((fresh) => {
           const current = shown.current;
           // Imports save words, speakers and status without making an edit revision.
-          if (!gone && current && fresh.id === current.id && fresh.updatedAt > current.updatedAt && fresh.revision >= current.revision) {
+          // A share ending (it runs on its own) saves no revision either: its link and state follow.
+          const shareMoved = Boolean(fresh.sharing) !== Boolean(current?.sharing) || fresh.review?.version !== current?.review?.version || fresh.shareFailed?.at !== current?.shareFailed?.at;
+          if (!gone && current && fresh.id === current.id && (fresh.updatedAt > current.updatedAt || shareMoved) && fresh.revision >= current.revision) {
             acceptScript(fresh);
             if (current.status === "processing" && fresh.status === "ready") setImportNotice({ id: fresh.id, title: fresh.title });
           }

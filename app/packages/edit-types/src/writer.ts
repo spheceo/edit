@@ -141,6 +141,10 @@ export type Script = {
   captions?: boolean;
   /** The stretches (ms) of captioned footage heard exactly since: their words have Scribe's times and spelling. */
   exact?: [number, number][];
+  /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). */
+  sharing?: { startedAt: number };
+  /** The last share failed: why. */
+  shareFailed?: { error: string; at: number };
   revision: number;
   createdAt: number;
   updatedAt: number;
@@ -157,6 +161,10 @@ export type Summary = {
   firstBuild?: boolean;
   dismissedAt?: number;
   archive?: Archive;
+  /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). */
+  sharing?: { startedAt: number };
+  /** The last share failed: why. */
+  shareFailed?: { error: string; at: number };
   createdBy?: Creator;
   /** Footage a commentary was written from: that commentary's title. The list keeps it inside it. */
   inCommentary?: string;

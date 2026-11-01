@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { CommentsPanel, hoverNote } from "./comments";
-import { approveReview, compressReview, fixNotes, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
+import { approveReview, compressReview, fixNotes, getScript, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
 import type { BuildStatus, Cite, Paragraph, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, Script } from "./types";
 import { CAN, useGrants } from "./can";
 import { Dialog, Icon } from "./ui";
@@ -253,6 +253,22 @@ export function ReviewDialog({
     void scriptAudit(script.id).then((found) => setFlags(found.flags), () => setFlags([]));
   }, [open, script.id, script.revision]);
 
+  // A share runs on its own (JJ, Nov 1: "so we're not freezed on that screen"): this can close, and other scripts share meanwhile.
+  const sharingNow = script.sharing !== undefined;
+  const shareId = script.id;
+  useEffect(() => {
+    if (!sharingNow) return;
+    let live = true;
+    const timer = window.setInterval(() => void getScript(shareId).then((fresh) => live && fresh.sharing === undefined && onChange(fresh), () => {}), 3000);
+    return () => {
+      live = false;
+      window.clearInterval(timer);
+    };
+  }, [sharingNow, shareId]);
+  useEffect(() => {
+    if (script.shareFailed) setProblem(`Sharing failed: ${script.shareFailed.error}`);
+  }, [script.shareFailed?.at]);
+
   const link = script.review;
   const share = async () => {
     setSharing(true);
@@ -344,18 +360,19 @@ export function ReviewDialog({
             </button>
           )}
           {mayShare && link && link.version > 1 && !approved && (
-            <button type="button" className="ghost" disabled={sharing || busy} title="The script as it is now becomes the link's only version, v1; every note is kept" onClick={() => void makeFirst()}>
+            <button type="button" className="ghost" disabled={sharing || sharingNow || busy} title="The script as it is now becomes the link's only version, v1; every note is kept" onClick={() => void makeFirst()}>
               Make this v1
             </button>
           )}
           {mayShare && (
-            <button type="button" className={link && !behind ? "ghost" : "primary"} disabled={sharing || busy} onClick={() => void share()}>
-              {sharing ? "Sharing…" : `${link ? `Share again as v${link.version + 1}` : "Share"}${flags.length ? " anyway" : ""}`}
+            <button type="button" className={link && !behind ? "ghost" : "primary"} disabled={sharing || sharingNow || busy} onClick={() => void share()}>
+              {sharing || sharingNow ? "Sharing…" : `${link ? `Share again as v${link.version + 1}` : "Share"}${flags.length ? " anyway" : ""}`}
             </button>
           )}
         </>
       }
     >
+      {sharingNow && <p className="faint review-meta">Sharing: its footage goes up with it, which takes a while. It carries on if you close this, and other scripts can be shared meanwhile.</p>}
       {mayShare && flags.length > 0 && !approved && (
         <div className="review-flags">
           <strong>Before sharing: {flags.length === 1 ? "one thing" : `${flags.length} things`} the team would flag</strong>

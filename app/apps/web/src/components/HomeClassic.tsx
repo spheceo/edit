@@ -207,7 +207,7 @@ export function HomeClassic() {
   const everyProjectRow: Listed[] = [
     ...edits.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: scriptOf.get(project.id) ?? null })),
     ...cloudEdits.map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: scriptOf.get(project.id) ?? null })),
-    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), here: localScripts.some((local) => local.id === one.id) })),
+    ...scriptOnly.filter((one) => kept(one.title, one.style ?? undefined) && !issues.some((issue) => issue.id === one.id && !writing.some((going) => going.id === one.id))).map((one): Listed => ({ at: one.updatedAt, local: null, cloud: null, script: withKind(one), importing: importingNow.get(one.id), writing: localScripts.some((local) => local.id === one.id && local.building === true), sharing: localScripts.some((local) => local.id === one.id && local.sharing !== undefined), here: localScripts.some((local) => local.id === one.id) })),
   ].sort((a, b) => b.at - a.at);
   const everySubtitledRow: Listed[] = [
     ...subtitled.map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
@@ -788,7 +788,7 @@ function ProjectTable({
     ) : row.cloud !== null ? (
       <CloudTableRow project={row.cloud} script={row.script} onChanged={onChanged} />
     ) : (
-      <ScriptTableRow script={row.script} importing={row.importing} writing={row.writing === true} here={row.here === true} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
+      <ScriptTableRow script={row.script} importing={row.importing} writing={row.writing === true} sharing={row.sharing === true} here={row.here === true} onChanged={onChanged} onImport={row.importing ? () => onImport(row.script.id) : undefined} />
     );
   // One stage (or the subtitled videos): newest first, by when they changed.
   const groups = !grouped
@@ -926,7 +926,7 @@ function Type({ kind }: { kind: "script" | "edit" | "subtitles" }) {
 }
 
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
-function ScriptTableRow({ script, importing, writing, here, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; here: boolean; onChanged: () => void; onImport?: () => void }) {
+function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; sharing: boolean; here: boolean; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -1037,6 +1037,12 @@ function ScriptTableRow({ script, importing, writing, here, onChanged, onImport 
           <span className={cx(CHIP, "text-info")}>
             <Spinner size={12} />
             Writing
+          </span>
+        ) : sharing ? (
+          // Shared for review on its own, as an edit's share is (JJ, Nov 1): other scripts can be shared meanwhile.
+          <span className={cx(CHIP, "text-info")} title="Its footage is going up to the review link">
+            <Spinner size={12} />
+            Sharing
           </span>
         ) : failed !== null ? (
           // Its last run failed: said in orange, and a click runs it again (what went wrong is in its tooltip and ⋯ View error).

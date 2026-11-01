@@ -374,6 +374,46 @@ export async function share(app: App, data: string, id: string): Promise<Script>
   return shareNext(app, data, id);
 }
 
+/**
+ * The shares running now, by script, and the last one that failed: a share
+ * runs on its own, as an edit's does, so the person can close the dialog and
+ * share other scripts meanwhile (JJ, Nov 1: "can we at least have the feature
+ * of exporting multiple scripts at once then? so we're not freezed on that
+ * screen and cant do anything else").
+ */
+const sharing = new Map<string, { startedAt: number }>();
+const shareFailed = new Map<string, { error: string; at: number }>();
+
+/** A script's share as it stands now, for its detail and its row. */
+export function shareState(id: string): { sharing?: { startedAt: number }; shareFailed?: { error: string; at: number } } {
+  const running = sharing.get(id);
+  if (running !== undefined) return { sharing: running };
+  const failed = shareFailed.get(id);
+  return failed === undefined ? {} : { shareFailed: failed };
+}
+
+/** The share itself (tests give their own). */
+export const shareWork = { run: (app: App, data: string, id: string): Promise<Script> => shareNext(app, data, id) };
+
+/** Starts sharing a script; refused at once when it's already being shared or Claude is on it. Settles when the share does. */
+export function startShare(app: App, data: string, id: string): Promise<Script> {
+  if (sharing.has(id)) return Promise.reject(new Error("This script is already being shared: it carries on if you close this."));
+  if (jobs.running(id)) return Promise.reject(new Error("Claude is still working on this script. Share it when that's done."));
+  sharing.set(id, { startedAt: Date.now() });
+  shareFailed.delete(id);
+  return shareWork
+    .run(app, data, id)
+    .catch((error: unknown) => {
+      shareFailed.set(id, { error: diag.messageOf(error), at: Date.now() });
+      throw error;
+    })
+    .finally(() => {
+      sharing.delete(id);
+      // The lists hear it: Home's row and the open script stop saying "Sharing".
+      store.libraryChanged();
+    });
+}
+
 /** Shares the next version, also from inside the fix that made it (still the script's running job). */
 export async function shareNext(app: App, data: string, id: string): Promise<Script> {
   const dir = store.scriptDir(data, id);

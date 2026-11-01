@@ -44,9 +44,10 @@ export const SCRIPT_CAPABILITIES = [
   { id: "review.lessons", label: "Teach the scripts from feedback", description: "Turn reviewers' feedback into lessons and keep them. Lessons are shared by every Mac and change everyone's builds.", group: "Sharing and teaching" },
 ];
 
-/** Ideas (Oct 31 2026): a case repackaged into titles and a thumbnail guide, sent to the board. One workspace for now, more later. */
+/** Ideas (Oct 31 2026): a case repackaged into titles and a thumbnail guide, sent to the board. Interrogation, and bodycam (Nov 1). */
 export const IDEA_CAPABILITIES = [
   { id: "ideas.interrogation", label: "Interrogation ideas", description: "Repackage cases (YouTube videos, articles) into titles and a thumbnail guide, send them to the Interrogation board's repackaging lanes, and make the changes reviewers ask for there.", group: "Ideas" },
+  { id: "ideas.bodycam", label: "Bodycam ideas", description: "Repackage bodycam cases (YouTube videos, articles) into titles and a thumbnail guide, send them to the Raw Channels board's Ideas - Sphe list, and make the changes reviewers ask for there.", group: "Ideas" },
 ];
 
 /** Whether a capability id is one of the edit styles (voice-overs come with any of them). */

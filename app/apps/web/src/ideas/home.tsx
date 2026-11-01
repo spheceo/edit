@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Button, cx, Modal, Spinner, Switch } from "../components/ui";
 import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LengthCell, NAME, ROW, RowButtons, StatusCell, Updated, useAside, withAside } from "../components/HomeTable";
+import { WORKSPACE_NAMES, type Workspace } from "@edit/types/ideas";
 import { ideasApi, NICHE, viewsLabel, type ChangeCard, type IdeaRow, type IdeasHome } from "../lib/ideas";
 import { useKept } from "../lib/kept";
 import { laterKey } from "../lib/later";
@@ -115,7 +116,8 @@ export function IdeaTableRow({ row }: { row: IdeaRow }) {
         {aside.woke && <BackMark entry={aside.woke} />}
         <span className={NAME}>{summary.title}</span>
       </div>
-      <Category text={summary.niche ? NICHE[summary.niche].label : ""} />
+      {/* Its kind (Interrogation or Bodycam); a niche an older run gave beside it. */}
+      <Category text={[WORKSPACE_NAMES[row.workspace ?? "interrogation"], summary.niche ? NICHE[summary.niche].label : ""].filter(Boolean).join(" · ")} />
       <StatusCell>{aside.entry ? <AsideStatus entry={aside.entry} /> : <Status row={row} />}</StatusCell>
       <CreatorCell by={row.createdBy === null ? null : { sub: row.createdBy.sub, name: row.createdBy.name, ...(row.createdBy.picture !== null ? { picture: row.createdBy.picture } : {}) }} />
       <LengthCell title={summary.views !== null ? `${summary.views.toLocaleString()} views` : undefined}>
@@ -141,7 +143,7 @@ export function CardTableRow({ card, onOpened }: { card: ChangeCard; onOpened?: 
     aside.seen();
     setOpening(true);
     ideasApi
-      .fromCard(card.id)
+      .fromCard(card.id, card.workspace)
       .then(({ id }) => {
         onOpened?.();
         navigate(`/ideas/${id}`);
@@ -187,7 +189,7 @@ export function NoIdeas({ onNew }: { onNew: () => void }) {
     <div className="flex flex-col items-center px-4 py-16 text-center">
       <Lightbulb size={22} className="text-muted" />
       <div className="mt-3 text-[14px] font-medium">No ideas yet</div>
-      <p className="mt-1 max-w-[380px] text-[12.5px] text-muted">Paste a YouTube interrogation or an article: Claude writes the titles and the thumbnail guide, and you send it to the board.</p>
+      <p className="mt-1 max-w-[380px] text-[12.5px] text-muted">Paste a YouTube interrogation or bodycam video, or an article: Claude writes the titles and the thumbnail guide, and you send it to the board.</p>
       <Button className="mt-4" variant="light" onClick={onNew}>
         New idea
       </Button>
@@ -195,9 +197,29 @@ export function NoIdeas({ onNew }: { onNew: () => void }) {
   );
 }
 
-/** New idea: links (one idea each), the angle, a summary or not, the footage folder. */
+/** What a kind of idea is made from and an angle for it, as the dialog asks. */
+const KIND: Record<Workspace, { what: string; angle: string }> = {
+  interrogation: { what: "YouTube interrogations or articles", angle: "e.g. the GPS data, the moment her story collapses" },
+  bodycam: { what: "YouTube bodycam videos or articles", angle: "e.g. what officers find inside, the moment she plays the victim" },
+};
+
+/** New idea: links (one idea each), interrogation or bodycam, the angle, a summary or not, the footage folder. */
 export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () => void; onMade: () => void }) {
   const [links, setLinks] = useState("");
+  // The kinds this person works on (both: they choose; the last choice is remembered on this Mac).
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [workspace, setWorkspace] = useState<Workspace>(() => (localStorage.getItem("ideas.workspace") === "bodycam" ? "bodycam" : "interrogation"));
+  useEffect(() => {
+    if (!open) return;
+    void ideasApi.workspaces().then(({ workspaces: mine }) => {
+      setWorkspaces(mine);
+      setWorkspace((now) => (mine.length === 0 || mine.includes(now) ? now : mine[0]!));
+    }, () => {});
+  }, [open]);
+  const choose = (value: Workspace) => {
+    setWorkspace(value);
+    localStorage.setItem("ideas.workspace", value);
+  };
   const [steer, setSteer] = useState("");
   const [summary, setSummary] = useState(false);
   const [footage, setFootage] = useState("");
@@ -216,7 +238,7 @@ export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () 
     setProblem(null);
     setKnown([]);
     ideasApi
-      .create(links, steer, summary, count === 1 ? footage : "")
+      .create(links, steer, summary, count === 1 ? footage : "", workspace)
       .then(({ ideas, refused }) => {
         onMade();
         const others = refused.filter((one) => one.id === undefined);
@@ -240,7 +262,7 @@ export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () 
     <Modal open={open} onClose={close} width={520}>
       <div className="p-5">
         <h2 className="text-[15px] font-semibold">New idea</h2>
-        <p className="mt-1 text-[12px] text-muted">YouTube interrogations or articles, one a line. Each becomes an idea Claude repackages: 3–5 titles and a thumbnail guide.</p>
+        <p className="mt-1 text-[12px] text-muted">{KIND[workspace].what}, one a line. Each becomes an idea Claude repackages: 3–5 titles and a thumbnail guide.</p>
         <textarea
           autoFocus
           value={links}
@@ -249,12 +271,31 @@ export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () 
           rows={4}
           className="mt-4 w-full resize-none rounded-lg border border-line-strong bg-bg px-3 py-2 text-[13px] text-fg outline-none placeholder:text-faint focus:border-muted"
         />
+        {workspaces.length > 1 && (
+          <div className="mt-3 flex items-center justify-between text-[13px]">
+            <span>Kind</span>
+            {/* The kit's segmented control (.sp-seg), as Home's tabs. */}
+            <div className="flex h-[30px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5" role="radiogroup" aria-label="Kind of idea">
+              {workspaces.map((value) => (
+                <button
+                  key={value}
+                  role="radio"
+                  aria-checked={workspace === value}
+                  onClick={() => choose(value)}
+                  className={cx("rounded-md px-2.5 text-[12.5px] font-medium transition-colors", workspace === value ? "bg-active text-fg" : "text-muted hover:text-fg")}
+                >
+                  {WORKSPACE_NAMES[value]}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <label className="mt-3 block text-[12px] text-muted">
           Angle <span className="text-faint">(optional)</span>
           <input
             value={steer}
             onChange={(event) => setSteer(event.target.value)}
-            placeholder="e.g. the GPS data, the moment her story collapses"
+            placeholder={KIND[workspace].angle}
             className="mt-1 h-[34px] w-full rounded-lg border border-line-strong bg-bg px-3 text-[13px] text-fg outline-none placeholder:text-faint focus:border-muted"
           />
         </label>
@@ -271,7 +312,7 @@ export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () 
         )}
         <label className="mt-3 flex items-center justify-between text-[13px]">
           <span>
-            Write a summary <span className="text-[12px] text-faint">one sentence, 30 words at most</span>
+            Write a summary <span className="text-[12px] text-faint">one paragraph, 35–55 words</span>
           </span>
           <Switch checked={summary} onChange={setSummary} />
         </label>

@@ -63,7 +63,7 @@ export function IdeasTab({ home, error, query, onNew }: { home: IdeasHome | null
   const open = (card: ChangeCard) => {
     setOpening(card.id);
     ideasApi
-      .fromCard(card.id)
+      .fromCard(card.id, card.workspace)
       .then(({ id }) => navigate(`/ideas/${id}`))
       .catch((failure: unknown) => useEditor.getState().toastError(failure, "open that card"))
       .finally(() => setOpening(null));

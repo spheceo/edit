@@ -6,7 +6,7 @@ import { exportJWK, generateKeyPair, SignJWT, createLocalJWKSet, type JWK } from
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { readCutOffsWith, useKeys } from "../../../relay/src/auth";
-import { BOARD, coverWaits, described, holdsApproved, isoSeconds, outlier, resetForTests, titleOf, youtubeIds } from "../../../relay/src/ideas";
+import { approvedList, BOARD, BODYCAM_BOARD, coverWaits, described, holdsApproved, isoSeconds, outlier, resetForTests, titleOf, youtubeIds } from "../../../relay/src/ideas";
 import relay, { type Env } from "../../../relay/src/index";
 
 const ISSUER = "https://accounts.example.test";
@@ -89,8 +89,20 @@ describe("who may work on ideas", () => {
     expect((await ask("/v1/ideas/lanes", { claims: { perms: ["use"], admin: true } })).status).toBe(200);
     const refused = await ask("/v1/ideas/lanes", { claims: { perms: ["use", "edit.interrogation", "scripts.interrogation"] } });
     expect(refused.status).toBe(403);
-    expect(((await refused.json()) as { error: string }).error).toContain("Interrogation ideas");
+    expect(((await refused.json()) as { error: string }).error).toContain("Interrogation or bodycam ideas");
     expect((await ask("/v1/ideas/lanes", { bearer: null })).status).toBe(401);
+  });
+
+  it("a workspace is its own board and capability: bodycam ideas go to Raw Channels' Ideas - Sphe", async () => {
+    const bodycam = { claims: { perms: ["use", "ideas.bodycam"] } };
+    const lanes = await ask("/v1/ideas/lanes?workspace=bodycam", bodycam);
+    expect(lanes.status).toBe(200);
+    expect(await lanes.json()).toMatchObject({ board: { name: "Raw Channels" }, lanes: [{ key: "sphe", name: "Ideas - Sphe" }] });
+    // Only their own workspace: Interrogation's board (the default) is refused them.
+    const other = await ask("/v1/ideas/lanes", bodycam);
+    expect(other.status).toBe(403);
+    expect(((await other.json()) as { error: string }).error).toContain("Interrogation ideas");
+    expect((await ask("/v1/ideas/lanes?workspace=courtroom", { claims: { perms: ["use"], admin: true } })).status).toBe(400);
   });
 
   it("keeps an idea's pictures on R2 to people who work on ideas", async () => {
@@ -190,6 +202,10 @@ describe("the board", () => {
     const { titles } = (await (await ask("/v1/ideas/trello/approved")).json()) as { titles: { title: string; list: string; cover: string | null }[] };
     expect(titles.map((one) => one.title)).toEqual(["Uploaded Title", "Killer Mom Realizes She's Been Exposed After 26 Years"]);
     expect(titles[1]!.cover).toBe("https://p/big");
+    // Raw Channels names its approved lists: Ted's and Sams's pipeline, never another channel's uploads or footage sourcing.
+    expect(approvedList(BODYCAM_BOARD, { id: "68e2cb0bfd3cf343f0b69629", name: "Uploaded (ted) 🟦" })).toBe(true);
+    expect(approvedList(BODYCAM_BOARD, { id: "6aa86135f4525effb72a4333", name: "Uploaded (Penguin)  🟧" })).toBe(false);
+    expect(approvedList(BODYCAM_BOARD, { id: "69f376f8bb97f92be025964e", name: "Channels to source footage from" })).toBe(false);
     expect(holdsApproved("Repackaging (JJ)")).toBe(false);
     expect(holdsApproved("Script - Genius")).toBe(true);
     expect(titleOf("12) A Title")).toBe("A Title");

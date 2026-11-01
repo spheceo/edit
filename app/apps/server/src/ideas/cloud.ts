@@ -33,13 +33,13 @@ type Listed = Omit<IdeaRow, "id" | "place"> & { ideaId: string };
 /** Every idea, newest change first, without their bodies. */
 export async function list(): Promise<Omit<IdeaRow, "place">[]> {
   const rows = (await call("query", "ideas:list", {})) as Listed[];
-  return rows.map(({ ideaId, ...row }) => ({ id: ideaId, ...row }));
+  return rows.map(({ ideaId, ...row }) => ({ id: ideaId, ...row, workspace: row.workspace ?? "interrogation" }));
 }
 
 /** One idea and the rev it's at, or null. */
 export async function get(id: string): Promise<{ idea: Idea; rev: number } | null> {
   const found = (await call("query", "ideas:get", { ideaId: id })) as { body: Idea; rev: number } | null;
-  return found === null ? null : { idea: found.body, rev: found.rev };
+  return found === null ? null : { idea: { ...found.body, workspace: found.body.workspace ?? "interrogation" }, rev: found.rev };
 }
 
 /** Commits `idea` as the next rev after `baseRev`; the new rev. */

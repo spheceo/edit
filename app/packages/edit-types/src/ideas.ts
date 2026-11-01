@@ -3,6 +3,16 @@
 // did it. The team's, so it lives in mamagi (`ideas` module) whole: the
 // server keeps nothing of it on the Mac. One shape for the server and the UI.
 
+/**
+ * The kinds of idea, each with its own craft (agent/ideas/<workspace>.md), board
+ * and capability (`ideas.<workspace>`): Interrogation (Repack's teachings,
+ * the Interrogation board), and bodycam (Nov 1: the same teachings adapted,
+ * the Raw Channels board).
+ */
+export const WORKSPACES = ["interrogation", "bodycam"] as const;
+export type Workspace = (typeof WORKSPACES)[number];
+export const WORKSPACE_NAMES: Record<Workspace, string> = { interrogation: "Interrogation", bodycam: "Bodycam" };
+
 /** The title niches the craft sorts a case into (Sphe Research's). */
 export const NICHES = ["murder", "child-related", "karen", "other"] as const;
 export type Niche = (typeof NICHES)[number];
@@ -95,7 +105,7 @@ export type IdeaComment = { id: string; text: string; author: string; at: string
 
 export type Idea = {
   id: string;
-  workspace: "interrogation";
+  workspace: Workspace;
   sources: IdeaSource[];
   /** The angle the person asked for, if any. */
   steer: string;
@@ -153,6 +163,7 @@ export type IdeaSummary = {
 /** An idea as Home lists it. */
 export type IdeaRow = {
   id: string;
+  workspace: Workspace;
   rev: number;
   summary: IdeaSummary;
   updatedAt: number;
@@ -165,6 +176,7 @@ export type IdeaRow = {
 /** A card on a lane waiting on changes that no idea has yet. */
 export type ChangeCard = {
   id: string;
+  workspace: Workspace;
   name: string;
   url: string;
   list: string;
@@ -176,7 +188,10 @@ export type ChangeCard = {
 export type IdeasHome = {
   ideas: IdeaRow[];
   changes: ChangeCard[];
-  lanes: { key: string; name: string }[];
+  /** Each workspace's lanes (where a card is sent). */
+  lanes: { key: string; name: string; workspace: Workspace }[];
+  /** The workspaces this person may work on. */
+  workspaces: Workspace[];
   /** Why the board couldn't be read just now. */
   boardError: string | null;
 };

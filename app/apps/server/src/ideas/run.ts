@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 
-import { NICHES, type Idea, type IdeaImage, type IdeaRun, type IdeaTool, type IdeaTurn, type Niche } from "@edit/types/ideas";
+import { NICHES, type Idea, type IdeaImage, type IdeaRun, type IdeaTool, type IdeaTurn, type Niche, type Workspace } from "@edit/types/ideas";
 
 import { ideasGuide } from "../agent_text.ts";
 import * as diag from "../diag.ts";
@@ -102,7 +102,7 @@ export const TOOLS = [
   {
     name: "save_titles",
     description:
-      'Save titles, strongest first (the first names the card). mode "replace" (a repackaging\'s default) replaces the titles you wrote before; titles the person wrote stay. mode "add" adds to them. Say the niche on a repackaging. Each title is checked: the banned word, a dash, a quoted line, the team\'s length; refused ones are named with why.',
+      'Save titles, strongest first (the first names the card). mode "replace" (a repackaging\'s default) replaces the titles you wrote before; titles the person wrote stay. mode "add" adds to them. Each title is checked: the banned word, a dash, a quoted line, the team\'s length; refused ones are named with why.',
     inputSchema: { type: "object", additionalProperties: false, properties: { titles: TITLES, niche: { type: "string", enum: [...NICHES] }, mode: { type: "string", enum: ["replace", "add"] } }, required: ["titles"] },
   },
   {
@@ -117,12 +117,12 @@ export const TOOLS = [
   },
   {
     name: "save_thumbnail_guide",
-    description: "Save the Thumbnail Guide: one lowercase sentence (the place, who sits in the middle, at most one action). base_card: the link of an approved card whose thumbnail is the starting point, from the list in the message, when one fits.",
+    description: "Save the thumbnail guide for the main title: in lowercase, the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). base_card: the link of the approved card whose thumbnail is the base, from the list in the message.",
     inputSchema: { type: "object", additionalProperties: false, properties: { guide: { type: "string" }, base_card: { type: "string" } }, required: ["guide"] },
   },
   {
     name: "save_summary",
-    description: "Save the summary: one factual sentence, 30 words or fewer. Only when the message asks for one.",
+    description: "Save the summary: one compact paragraph of 35–55 words, at most three sentences. Only when the message asks for one.",
     inputSchema: { type: "object", additionalProperties: false, properties: { summary: { type: "string" } }, required: ["summary"] },
   },
   {
@@ -310,7 +310,7 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
     }
   }
   await step("Reading the approved titles");
-  const approved = await board.approved().catch((error: unknown) => {
+  const approved = await board.approved(idea.workspace).catch((error: unknown) => {
     diag.warn("ideas", `the approved titles: ${diag.messageOf(error)}`);
     return [];
   });
@@ -349,7 +349,7 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
 function ideaText(idea: Idea): string {
   return [
     "# The idea now",
-    `Niche: ${idea.niche ?? "not set"}`,
+    idea.niche === null ? "" : `Niche: ${idea.niche}`,
     "Titles:",
     ...idea.titles.map((one) => `- ${one.text}${one.text === idea.main ? " (main)" : ""}${one.by === "claude" ? "" : ` (written by ${one.by})`}`),
     `Thumbnail Guide: ${idea.thumbnailGuide || "(none)"}${idea.guideBy !== "claude" && idea.thumbnailGuide !== "" ? ` (written by ${idea.guideBy})` : ""}`,
@@ -360,7 +360,8 @@ function ideaText(idea: Idea): string {
     .join("\n");
 }
 
-const system = () => `${ideasGuide("interrogation")}\n\n${ideasGuide("interrogation-examples")}`;
+/** The workspace's craft (agent/ideas/<workspace>.md): Repack's Interrogation teachings, or bodycam's adaptation of them. */
+const system = (workspace: Workspace) => ideasGuide(workspace);
 
 // ---------------------------------------------------------------- runs
 
@@ -430,7 +431,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
       if (what === "repackage" && !options.improve && !options.changes && idea.card === null) {
         await step("Checking the board");
         const ids = idea.sources.flatMap((one) => (one.kind === "youtube" ? [one.videoId] : []));
-        const found = await board.duplicates(ids);
+        const found = await board.duplicates(ids, idea.workspace);
         const hit = ids.map((one) => found[one]).find((one) => one !== undefined);
         if (hit !== undefined) {
           await cloud.change(id, context.by, (fresh) => {
@@ -468,7 +469,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         .join("\n\n");
       try {
         const answer = await live.within(running.turn, () =>
-          asking.ask({ model: claude.OPUS, system: system(), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/ideas/${token}`, read: prepared.folder, maxTurns: 16, effort: "medium", timeoutMs: 12 * 60_000, label: `Ideas ${id}`, signal }),
+          asking.ask({ model: claude.OPUS, system: system(idea.workspace), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/ideas/${token}`, read: prepared.folder, maxTurns: 16, effort: "medium", timeoutMs: 12 * 60_000, label: `Ideas ${id}`, signal }),
         );
         const said = (answer.text ?? running.turn.text).trim();
         if (session.skipped !== null) return { state: "done" as const, text: session.skipped };
@@ -544,12 +545,12 @@ export async function answerTo(token: string, message: unknown): Promise<unknown
 }
 
 /** A fresh idea for these sources. */
-export function fresh(id: string, by: string, given: Pick<Idea, "sources" | "steer" | "wantsSummary"> & Partial<Pick<Idea, "images" | "footage">>): Idea {
+export function fresh(id: string, by: string, given: Pick<Idea, "sources" | "steer" | "wantsSummary"> & Partial<Pick<Idea, "images" | "footage" | "workspace">>): Idea {
   const thumbnail = given.sources.find((one) => one.kind === "youtube");
   const images: IdeaImage[] = given.images ?? (thumbnail?.kind === "youtube" && thumbnail.thumbnail !== null ? [{ id: newId(), name: "thumbnail", url: thumbnail.thumbnail, from: "video" }] : []);
   return {
     id,
-    workspace: "interrogation",
+    workspace: given.workspace ?? "interrogation",
     sources: given.sources,
     steer: given.steer,
     wantsSummary: given.wantsSummary,

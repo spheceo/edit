@@ -924,8 +924,13 @@ function SendDialog({ open, idea, onClose, onSent }: { open: boolean; idea: Idea
     if (!open) return;
     setProblem(null);
     setAnyway(false);
-    void ideasApi.home().then((home) => setLanes(home.lanes), () => {});
-  }, [open]);
+    void ideasApi.home().then((home) => {
+      // This idea's board's lanes; a lane remembered from the other board falls back to this one's first.
+      const own = home.lanes.filter((one) => one.workspace === idea.workspace);
+      setLanes(own);
+      setLane((now) => (own.length === 0 || own.some((one) => one.key === now) ? now : own[0]!.key));
+    }, () => {});
+  }, [open, idea.workspace]);
   const send = () => {
     setBusy(true);
     setProblem(null);
@@ -945,7 +950,7 @@ function SendDialog({ open, idea, onClose, onSent }: { open: boolean; idea: Idea
       <div className="p-5">
         <h2 className="text-[15px] font-semibold">Send to Trello</h2>
         <p className="mt-1 text-[12px] text-muted">
-          A card at the top of the lane on the Interrogation board, named “{idea.main ?? idea.titles[0]?.text}”: its titles, the thumbnail guide and {idea.images.length === 1 ? "its picture" : `its ${idea.images.length} pictures`} (the first is the cover), and the case.
+          A card at the top of the lane on the {idea.workspace === "bodycam" ? "Raw Channels" : "Interrogation"} board, named “{idea.main ?? idea.titles[0]?.text}”: its titles, the thumbnail guide and {idea.images.length === 1 ? "its picture" : `its ${idea.images.length} pictures`} (the first is the cover), and the case.
         </p>
         <div className="mt-4 space-y-1.5">
           {(lanes.length > 0 ? lanes : [{ key: lane, name: "…" }]).map((one) => (

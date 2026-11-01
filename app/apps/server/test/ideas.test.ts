@@ -10,7 +10,7 @@ import type { Idea } from "@edit/types/ideas";
 import * as board from "../src/ideas/board.ts";
 import * as cloud from "../src/ideas/cloud.ts";
 import { cleanGuide, cleanTitle, closest, guideProblem, lengthStyle, summaryProblem, titleProblem } from "../src/ideas/policy.ts";
-import { applyPatch, linksIn, mayIdeas, readiness } from "../src/ideas/routes.ts";
+import { applyPatch, linksIn, mayIdeas, mayWorkspace, readiness, workspacesOf } from "../src/ideas/routes.ts";
 import * as run from "../src/ideas/run.ts";
 import * as sources from "../src/ideas/sources.ts";
 import * as live from "../src/writer/live.ts";
@@ -83,14 +83,15 @@ test("titles keep the channel's rules: no suicide, no dash split, no quoted line
   expect(cleanTitle("2) Mom   Thinks She Got Away")).toBe("Mom Thinks She Got Away");
 });
 
-test("a guide is one lowercase note naming people by role, and a summary one short sentence", () => {
-  expect(cleanGuide("We use the interrogation room and have the mom in the middle")).toBe("we use the interrogation room and have the mom in the middle");
-  expect(guideProblem("we use the interrogation room and look at the 18 year old through the cop's POV")).toBeNull();
-  expect(guideProblem("we have the house of Dina Thetford and have her in the middle digging")).toContain("Dina");
+test("a guide is Repack's lowercase edits to the base with its caption in quotes, and a summary one compact paragraph", () => {
+  expect(cleanGuide("Make the man a middle-aged man with a shaved head")).toBe("make the man a middle-aged man with a shaved head");
+  expect(guideProblem("make the man a middle-aged man with a shaved head in a grey t-shirt. have the suspect fold his arms. change the current “CAUGHT” text to “HE KNEW”.")).toBeNull();
+  expect(guideProblem("make her look like Dina Thetford")).toContain("Dina");
+  expect(guideProblem("make the man older. use a close-up camera angle.")).toContain("camera");
   expect(guideProblem("x".repeat(601))).toContain("600");
-  expect(summaryProblem("A mother drowned her daughter and her 16-year-old escaped.")).toBeNull();
-  expect(summaryProblem("A mother drowned her daughter. Her son escaped.")).toContain("one sentence");
-  expect(summaryProblem(Array(31).fill("word").join(" "))).toContain("31 words");
+  expect(summaryProblem("A mother drowned her 4-year-old daughter in the bathtub. Her 16-year-old son escaped and called police. She told detectives the drowning was an accident, but she later admitted it.")).toBeNull();
+  expect(summaryProblem("One. Two. Three. Four.")).toContain("three sentences");
+  expect(summaryProblem(Array(66).fill("word").join(" "))).toContain("66 words");
 });
 
 test("the closest approved titles share the act and the rare words, and never borrow a relationship the case doesn't name", () => {
@@ -124,6 +125,19 @@ test("what was pasted gives each link once (a video by its id), and an idea need
   expect(mayIdeas(new Set(["edit.interrogation"]))).toBe(false);
   expect(mayIdeas(new Set(["ideas.interrogation"]))).toBe(true);
   expect(mayIdeas(null)).toBe(true);
+});
+
+test("each workspace is its own capability and craft: bodycam ideas are Repack's teachings adapted, sent to Raw Channels", async () => {
+  // The user, Nov 1: "for bodycam, we want to go with the teachings on interrogation… it just adapts some of those parts".
+  expect(workspacesOf(new Set(["ideas.bodycam"]))).toEqual(["bodycam"]);
+  expect(mayWorkspace("interrogation", new Set(["ideas.bodycam"]))).toBe(false);
+  expect(workspacesOf(null)).toEqual(["interrogation", "bodycam"]);
+  expect(run.fresh("i9-test", "Sphe", { workspace: "bodycam", sources: [], steer: "", wantsSummary: false }).workspace).toBe("bodycam");
+  expect(run.fresh("i9-test", "Sphe", { sources: [], steer: "", wantsSummary: false }).workspace).toBe("interrogation");
+  const { ideasGuide } = await import("../src/agent_text.ts");
+  expect(ideasGuide("interrogation")).toContain("You write compelling YouTube titles for true-crime interrogation videos.");
+  expect(ideasGuide("bodycam")).toContain("You write compelling YouTube titles for true-crime bodycam videos.");
+  expect(ideasGuide("bodycam")).toContain("Raw Channels");
 });
 
 test("a person's change: their reworded title stays the main one, theirs by name, and an idea is ready only with titles, a guide and its case", () => {

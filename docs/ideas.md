@@ -1,19 +1,30 @@
 # Ideas
 
-Repackaging in Edit (Oct 31 2026): a case (a YouTube interrogation, an
-article) turned into 3–5 titles and a thumbnail guide, then sent to the
-Interrogation board as a card. It brings Sphe Research's repackaging and
-Repack's Interrogation threads together, the craft word for word from Sphe
-Research, and runs on each person's own Claude Code (Opus 5.5), so the team's
-subscriptions pay instead of the AI gateway. Interrogation only for now; more
-workspaces later. The plan and the user's words: `docs/plans/2026-10-31-ideas.md`.
+Repackaging in Edit (Oct 31 2026): a case (a YouTube video, an article)
+turned into 3–5 titles and a thumbnail guide, then sent to its board as a
+card. Two kinds (workspaces), chosen in New idea: **Interrogation** (the
+Interrogation board) and **Bodycam** (Nov 1: the Raw Channels board). It runs on
+each person's own Claude Code (Opus 5.5), so the team's subscriptions pay
+instead of the AI gateway. The plan and the user's words:
+`docs/plans/2026-10-31-ideas.md`.
+
+The craft is Repack's Interrogation teachings word for word (Nov 1, the
+user: "replicate the interrogation teachings… that we have on the Repack
+websites"; it was Sphe Research's on Oct 31): its title guide, thread-chat
+rules, thumbnail editorial guide with its base inspection, and case summary.
+Bodycam is the same teachings adapted only where the encounter on camera
+differs from the room (the user: "the closest we're looking for is
+interrogation, but with bodycam, it just adapts some of those parts"; Sphe
+Research's own bodycam craft was "too far gone").
 
 ## Who
 
-`ideas.interrogation` in Edit's manifest (group "Ideas", preset "Repackager",
-in "Everything"): an admin grants it at accounts.spheceo.com. Without it the
-section isn't there, the server answers 403 and the relay refuses `/v1/ideas/*` and
-`edit/ideas/` keys. An admin has it all.
+`ideas.interrogation` and `ideas.bodycam` in Edit's manifest (group "Ideas",
+preset "Repackager", in "Everything"): an admin grants them at
+accounts.spheceo.com. Without either the section isn't there, the server
+answers 403 and the relay refuses `/v1/ideas/*` and `edit/ideas/` keys; with
+one, the person sees and makes only that kind, and the relay answers only
+that board. An admin has it all.
 
 ## Where things are
 
@@ -24,7 +35,7 @@ section isn't there, the server answers 403 and the relay refuses `/v1/ideas/*` 
 | Relay | `app/apps/relay/src/ideas.ts`: the Convex calls, YouTube's details, the board |
 | Server | `app/apps/server/src/ideas/` (`/api/ideas`, Claude's tools at `/mcp/ideas/<token>`) |
 | UI | Home's Ideas section (`/ideas`: Drafts and On the board in Home's sidebar, the rows `apps/web/src/ideas/home.tsx`; one waiting on someone is in Needs you too), the idea page (`/ideas/<id>`, `page.tsx`): Sphe Research's case on the left (its header and Titles / Thumbnail guide / Case form, word for word in look; no list of threads beside it), the editor's own chat on the right (`AgentPanel`'s `ChatTurns` and `ChatComposer`) |
-| Craft | `agent/ideas/interrogation.md` and `interrogation-examples.md` |
+| Craft | `agent/ideas/interrogation.md` (Repack's), `agent/ideas/bodycam.md` (adapted); the style examples are the board's approved titles, read live |
 | Types | `@edit/types/ideas` |
 
 Nothing of an idea is kept only on one Mac: every change reads the idea, makes
@@ -68,8 +79,12 @@ one", "make the dress title the main one".
 
 ## The board
 
-`BOARD` in `relay/src/ideas.ts` names the Interrogation board's lists and
-labels by id (read from the board Oct 31). Edit writes only:
+`BOARDS` in `relay/src/ideas.ts` names each board's lists and labels by id:
+Interrogation's (read Oct 31) and bodycam's Raw Channels (read Nov 1: ideas go
+to "Ideas - Sphe"; its approved titles are Ted's and Sams's channels from
+Ready for script to uploaded, listed by id, as the board also carries other
+channels and footage sourcing; its changes labels are "Sphe changes required"
+and "Changes made"). Edit writes only:
 
 - a card in a **lane**: Repackaging (Sphe), Repackaging (JJ), Sphe - Draft
   Ideas Ready For Check, each list checked to still be that open list first;

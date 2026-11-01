@@ -2,7 +2,7 @@
 // idea page. An idea is the team's (mamagi, through the relay); this Mac's
 // server runs Claude on it and answers what it's doing as it goes.
 
-import type { Idea, IdeaPlace, IdeasHome, Niche } from "@edit/types/ideas";
+import type { Idea, IdeaPlace, IdeasHome, Niche, Workspace } from "@edit/types/ideas";
 
 import type { Account } from "./account";
 
@@ -61,8 +61,10 @@ export type IdeaChange = {
 
 export const ideasApi = {
   home: () => call<IdeasHome>("GET", "/api/ideas"),
-  create: (links: string, steer: string, summary: boolean, footage: string) => call<{ ideas: { id: string; link: string }[]; refused: { link: string; why: string; id?: string }[] }>("POST", "/api/ideas", { links, steer, summary, footage }),
-  fromCard: (card: string) => call<{ id: string }>("POST", "/api/ideas/from-card", { card }),
+  /** The kinds of idea this person works on. */
+  workspaces: () => call<{ workspaces: Workspace[] }>("GET", "/api/ideas/workspaces"),
+  create: (links: string, steer: string, summary: boolean, footage: string, workspace: Workspace) => call<{ ideas: { id: string; link: string }[]; refused: { link: string; why: string; id?: string }[] }>("POST", "/api/ideas", { links, steer, summary, footage, workspace }),
+  fromCard: (card: string, workspace: Workspace) => call<{ id: string }>("POST", "/api/ideas/from-card", { card, workspace }),
   get: (id: string) => call<IdeaPage>("GET", `/api/ideas/${encodeURIComponent(id)}`),
   change: (id: string, change: IdeaChange) => call<{ idea: Idea; rev: number }>("PUT", `/api/ideas/${encodeURIComponent(id)}`, change),
   remove: (id: string) => call<void>("DELETE", `/api/ideas/${encodeURIComponent(id)}`),

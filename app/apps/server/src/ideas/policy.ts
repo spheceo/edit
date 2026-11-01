@@ -1,5 +1,5 @@
 // What an idea's titles, thumbnail guide and summary keep to, checked in code
-// as well as asked for in the craft (agent/ideas/interrogation.md): the
+// as well as asked for in the craft (agent/ideas/<workspace>.md, Repack's): the
 // channel's banned word and punctuation, never a quoted spoken line, the
 // length the team's approved titles run (Repack's titleLengthStyle), one title
 // never twice. A tool refuses what breaks them and says why, so Claude fixes
@@ -73,24 +73,28 @@ export function cleanGuide(guide: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
-/** What's wrong with a thumbnail guide, or null. */
+/** What's wrong with a thumbnail guide, or null: Repack's form, lowercase edits to the base and its caption in quotes. */
 export function guideProblem(guide: string): string | null {
   const text = guide.trim();
   if (text === "") return "is empty";
-  if (text.length > 600) return "is over 600 characters: write the note, not a brief";
-  if (text.split(/(?<=[.!?])\s+(?=\S)/).filter((one) => one.trim() !== "").length > 2) return "is more than a sentence or two";
+  if (text.length > 600) return "is over 600 characters: write the editor's instructions, not a brief";
+  // The caption ("change the current “CAUGHT” text to “HE KNEW”") is in quotes, its own capitals.
+  const outside = text.replace(/[“"][^”"]*[”"]/g, "");
+  if (outside.split(/(?<=[.!?])\s+(?=\S)/).filter((one) => one.trim() !== "").length > 3) return "is more than the subject, the scene and the caption";
   // Acronyms (POV, CCTV, GPS) are fine; a capitalized word is a name or a sentence's start.
-  const named = text.match(/\b[A-Z][a-z]+\b/g);
-  if (named !== null) return `has ${named.slice(0, 3).join(", ")} in capitals: write it in lowercase, and name people by role, age or "the suspect", never by name`;
+  const named = outside.match(/\b[A-Z][a-z]+\b/g);
+  if (named !== null) return `has ${named.slice(0, 3).join(", ")} in capitals: write it in lowercase (only the caption, in quotes, keeps its own)`;
+  if (/\b(?:crop|close-?up|camera angle|lighting|lens|zoom)\b/i.test(outside)) return "gives camera, crop or lighting directions, which a guide never does";
   return null;
 }
 
-/** What's wrong with a summary, or null. */
+/** What's wrong with a summary, or null (Repack's: one compact paragraph of 35–55 words, at most three sentences). */
 export function summaryProblem(summary: string): string | null {
   const text = summary.trim();
   if (text === "") return "is empty";
-  if (wordsIn(text) > 30) return `is ${wordsIn(text)} words; a summary is one sentence of 30 words or fewer`;
-  if (text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).filter((one) => one.trim() !== "").length > 1) return "is more than one sentence";
+  if (/\n\s*\n/.test(text)) return "is more than one paragraph";
+  if (wordsIn(text) > 65) return `is ${wordsIn(text)} words; a summary is one compact paragraph of 35–55`;
+  if (text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).filter((one) => one.trim() !== "").length > 3) return "is more than three sentences";
   return null;
 }
 

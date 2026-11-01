@@ -4,6 +4,7 @@
 // board and making the changes reviewers ask for there. Claude's tools are
 // served at /mcp/ideas/<token> (run.ts), for the runs on this Mac only.
 
+import { WORKSPACE_NAMES, WORKSPACES, type Workspace } from "@edit/types/ideas";
 import type { ChangeCard, Idea, IdeaImage, IdeaPlace, IdeaRow, IdeaSource, IdeasHome, IdeaTitle } from "@edit/types/ideas";
 
 import { creator } from "../accounts.ts";
@@ -27,10 +28,37 @@ export function mayIdeas(given: Set<string> | null = kinds.granted()): boolean {
   return given === null || [...given].some((perm) => perm.startsWith("ideas."));
 }
 
-const NO_IDEAS = "Your account can't work on ideas yet: an admin can give you Interrogation ideas at accounts.spheceo.com.";
+/** Whether they work on one workspace's ideas (`ideas.<workspace>`). */
+export function mayWorkspace(workspace: Workspace, given: Set<string> | null = kinds.granted()): boolean {
+  return given === null || given.has(`ideas.${workspace}`);
+}
+
+/** The workspaces they work on. */
+export function workspacesOf(given: Set<string> | null = kinds.granted()): Workspace[] {
+  return WORKSPACES.filter((one) => mayWorkspace(one, given));
+}
+
+const NO_IDEAS = "Your account can't work on ideas yet: an admin can give you Interrogation or bodycam ideas at accounts.spheceo.com.";
 
 function guard(): void {
   if (!mayIdeas()) throw new ApiError(403, NO_IDEAS);
+}
+
+function guardWorkspace(workspace: Workspace): void {
+  if (!mayWorkspace(workspace)) throw new ApiError(403, `Your account can't work on ${WORKSPACE_NAMES[workspace]} ideas: an admin can give you them at accounts.spheceo.com.`);
+}
+
+/** Refuses an idea of a workspace they don't work on (an idea that's gone is the route's to say). */
+async function guardId(id: string): Promise<void> {
+  const found = await cloud.get(id).catch(() => null);
+  if (found !== null) guardWorkspace(found.idea.workspace);
+}
+
+/** The workspace a request names: interrogation when it names none. */
+function workspaceIn(given: unknown): Workspace {
+  if (given === undefined || given === null || given === "") return "interrogation";
+  if (typeof given !== "string" || !(WORKSPACES as readonly string[]).includes(given)) throw bad(`There are no ${typeof given === "string" ? given : "such"} ideas.`);
+  return given as Workspace;
 }
 
 const by = (): string => creator()?.name || "Edit";
@@ -73,29 +101,42 @@ async function sourceOf(link: string): Promise<IdeaSource> {
   return (await sources.article(link)).source;
 }
 
-/** Where every sent card is, the board read a minute at a time; nothing when it can't be read. */
-async function places(rows: Omit<IdeaRow, "place">[]): Promise<[Record<string, IdeaPlace>, string | null]> {
-  const ids = rows.flatMap((row) => (row.summary.card !== null ? [row.summary.card.cardId] : []));
+/** Where every sent card is, each workspace's board read a minute at a time; nothing when it can't be read. */
+async function places(rows: Omit<IdeaRow, "place">[], workspace: Workspace): Promise<[Record<string, IdeaPlace>, string | null]> {
+  const ids = rows.flatMap((row) => (row.workspace === workspace && row.summary.card !== null ? [row.summary.card.cardId] : []));
   try {
-    return [await board.where(ids), null];
+    return [await board.where(ids, workspace), null];
   } catch (error) {
     return [{}, diag.messageOf(error)];
   }
 }
 
 async function home(): Promise<IdeasHome> {
-  const rows = await cloud.list();
-  const [where, boardError] = await places(rows);
+  const mine = workspacesOf();
+  const rows = (await cloud.list()).filter((row) => mine.includes(row.workspace));
   const linked = new Set(rows.flatMap((row) => (row.summary.card !== null ? [row.summary.card.cardId] : [])));
-  let changes: ChangeCard[] = [];
-  let error = boardError;
-  try {
-    changes = (await board.changes()).filter((one) => !linked.has(one.id)).map(({ id, name, url, list, comments, cover }) => ({ id, name, url, list, comments, cover }));
-  } catch (failure) {
-    error ??= diag.messageOf(failure);
-  }
-  const lanes = await board.lanes().catch(() => []);
-  return { ideas: rows.map((row) => ({ ...row, place: row.summary.card !== null ? (where[row.summary.card.cardId] ?? null) : null })), changes, lanes, boardError: error };
+  const boards = await Promise.all(
+    mine.map(async (workspace) => {
+      const [where, boardError] = await places(rows, workspace);
+      let changes: ChangeCard[] = [];
+      let error = boardError;
+      try {
+        changes = (await board.changes(workspace)).filter((one) => !linked.has(one.id)).map(({ id, name, url, list, comments, cover }) => ({ id, workspace, name, url, list, comments, cover }));
+      } catch (failure) {
+        error ??= diag.messageOf(failure);
+      }
+      const lanes = (await board.lanes(workspace).catch(() => [])).map((lane) => ({ ...lane, workspace }));
+      return { where, changes, lanes, error };
+    }),
+  );
+  const where = Object.assign({}, ...boards.map((one) => one.where)) as Record<string, IdeaPlace>;
+  return {
+    ideas: rows.map((row) => ({ ...row, place: row.summary.card !== null ? (where[row.summary.card.cardId] ?? null) : null })),
+    changes: boards.flatMap((one) => one.changes),
+    lanes: boards.flatMap((one) => one.lanes),
+    workspaces: mine,
+    boardError: boards.find((one) => one.error !== null)?.error ?? null,
+  };
 }
 
 /** An idea for the page: its body, rev, where its card is, the run's live turn (on this Mac), and each title's problems. */
@@ -103,15 +144,16 @@ async function page(id: string) {
   const found = await cloud.get(id);
   if (found === null) throw notFound("This idea was deleted.");
   const { idea, rev } = found;
+  guardWorkspace(idea.workspace);
   const live = run.liveOf(id);
   const shown: Idea = live !== null && idea.run !== null ? { ...idea, run: { ...idea.run, ...live } } : idea;
-  const style = lengthStyle((await board.approved().catch(() => [])).map((one) => one.title));
+  const style = lengthStyle((await board.approved(idea.workspace).catch(() => [])).map((one) => one.title));
   const problems: Record<string, string> = {};
   for (const title of idea.titles) {
     const problem = titleProblem(title.text, style);
     if (problem !== null) problems[title.id] = problem;
   }
-  const place = idea.card === null ? null : ((await board.where([idea.card.cardId]).catch(() => ({}) as Record<string, IdeaPlace>))[idea.card.cardId] ?? null);
+  const place = idea.card === null ? null : ((await board.where([idea.card.cardId], idea.workspace).catch(() => ({}) as Record<string, IdeaPlace>))[idea.card.cardId] ?? null);
   return { idea: shown, rev, place, problems, guideProblem: idea.thumbnailGuide.trim() === "" ? null : guideProblem(idea.thumbnailGuide), style };
 }
 
@@ -233,8 +275,8 @@ async function relayImage(url: string): Promise<Response> {
 }
 
 /** An existing card on the board as an idea: its titles, guide, links, footage and pictures, its comments when it waits on changes. */
-async function fromCard(given: string): Promise<string> {
-  const card = await board.card(given);
+async function fromCard(given: string, workspace: Workspace): Promise<string> {
+  const card = await board.card(given, workspace);
   const rows = await cloud.list();
   const had = rows.find((row) => row.summary.card?.cardId === card.id);
   if (had !== undefined) return had.id;
@@ -248,11 +290,11 @@ async function fromCard(given: string): Promise<string> {
     }
   }
   const who = by();
-  const lanes = await board.lanes().catch(() => []);
+  const lanes = await board.lanes(workspace).catch(() => []);
   const lane = lanes.find((one) => one.name === card.list)?.key ?? "";
   const pictures = card.attachments.filter((one) => one.image);
   const images: IdeaImage[] = (card.cover !== null ? [...pictures].sort((a, b) => Number(b.url === card.cover) - Number(a.url === card.cover)) : pictures).slice(0, 8).map((one) => ({ id: shortId(), name: one.name.replace(/\.[a-z0-9]{2,5}$/i, "").slice(0, 80) || "picture", url: one.url, from: "card" as const }));
-  const idea = run.fresh(newId(), who, { sources: found, steer: "", wantsSummary: parsed.summary !== "", images, footage: parsed.footage });
+  const idea = run.fresh(newId(), who, { workspace, sources: found, steer: "", wantsSummary: parsed.summary !== "", images, footage: parsed.footage });
   idea.titles = parsed.titles.map((text) => ({ id: shortId(), text, by: "the card", at: Date.now() }));
   idea.main = idea.titles[0]?.text ?? null;
   idea.thumbnailGuide = parsed.guide === "" ? "" : cleanGuide(parsed.guide);
@@ -267,6 +309,10 @@ async function fromCard(given: string): Promise<string> {
 
 export function routes(router: Router<App>): void {
   router
+    .get("/api/ideas/workspaces", () => {
+      guard();
+      return json({ workspaces: workspacesOf() });
+    })
     .get("/api/ideas", async () => {
       guard();
       try {
@@ -277,7 +323,9 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/ideas", async (context: Context) => {
       guard();
-      const body = await readJson<{ links?: unknown; steer?: unknown; summary?: unknown; footage?: unknown }>(context);
+      const body = await readJson<{ links?: unknown; steer?: unknown; summary?: unknown; footage?: unknown; workspace?: unknown }>(context);
+      const workspace = workspaceIn(body.workspace);
+      guardWorkspace(workspace);
       const links = linksIn(typeof body.links === "string" ? body.links : "");
       if (links.length === 0) throw bad("Paste a YouTube video or an article's link.");
       if (links.length > 20) throw bad("Twenty links at most at once.");
@@ -301,7 +349,7 @@ export function routes(router: Router<App>): void {
               return;
             }
             const source = await sourceOf(link);
-            const idea = run.fresh(newId(), who, { sources: [source], steer, wantsSummary: body.summary === true, footage: links.length === 1 ? footage : "" });
+            const idea = run.fresh(newId(), who, { workspace, sources: [source], steer, wantsSummary: body.summary === true, footage: links.length === 1 ? footage : "" });
             await cloud.commit(idea, 0, who);
             made.push({ id: idea.id, link });
           } catch (error) {
@@ -316,16 +364,19 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/ideas/from-card", async (context: Context) => {
       guard();
-      const body = await readJson<{ card?: unknown }>(context);
+      const body = await readJson<{ card?: unknown; workspace?: unknown }>(context);
       if (typeof body.card !== "string" || body.card.trim() === "") throw bad("Name the card (its link or id).");
+      const workspace = workspaceIn(body.workspace);
+      guardWorkspace(workspace);
       try {
-        return json({ id: await fromCard(body.card.trim()) });
+        return json({ id: await fromCard(body.card.trim(), workspace) });
       } catch (error) {
         failed(error);
       }
     })
     .get("/api/ideas/{id}", async ({ params }: Context) => {
       guard();
+      await guardId(params.id!);
       try {
         return json(await page(params.id!));
       } catch (error) {
@@ -335,6 +386,7 @@ export function routes(router: Router<App>): void {
     // A person's change to the idea (only the fields given).
     .put("/api/ideas/{id}", async (context: Context) => {
       guard();
+      await guardId(context.params.id!);
       const patch = await readJson<Patch>(context);
       const who = by();
       try {
@@ -346,6 +398,7 @@ export function routes(router: Router<App>): void {
     })
     .delete("/api/ideas/{id}", async ({ params }: Context) => {
       guard();
+      await guardId(params.id!);
       run.stop(params.id!);
       try {
         await cloud.remove(params.id!, by());
@@ -356,6 +409,7 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/ideas/{id}/repackage", async (context: Context) => {
       guard();
+      await guardId(context.params.id!);
       const body = await readJson<{ improve?: unknown; changes?: unknown; steer?: unknown }>(context).catch(() => ({}) as Record<string, unknown>);
       const id = context.params.id!;
       try {
@@ -364,7 +418,7 @@ export function routes(router: Router<App>): void {
           // The reviewers' comments, read fresh from the card: they're the brief.
           const found = await cloud.get(id);
           if (found?.idea.card == null) throw bad("This idea isn't on the board.");
-          const card = await board.card(found.idea.card.cardId);
+          const card = await board.card(found.idea.card.cardId, found.idea.workspace);
           await cloud.change(id, by(), (idea) => void (idea.changes = { comments: board.commentsOf(card), at: Date.now() }));
         }
         await run.repackage(contextOf(context.app), id, { improve: body.improve === true, changes: body.changes === true });
@@ -375,6 +429,7 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/ideas/{id}/chat", async (context: Context) => {
       guard();
+      await guardId(context.params.id!);
       const body = await readJson<{ text?: unknown }>(context);
       try {
         await run.chat(contextOf(context.app), context.params.id!, typeof body.text === "string" ? body.text : "");
@@ -384,17 +439,19 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
-    .post("/api/ideas/{id}/stop", ({ params }: Context) => {
+    .post("/api/ideas/{id}/stop", async ({ params }: Context) => {
       guard();
+      await guardId(params.id!);
       return json({ stopped: run.stop(params.id!) });
     })
     .post("/api/ideas/{id}/comments", async ({ params }: Context) => {
       guard();
+      await guardId(params.id!);
       try {
         const found = await cloud.get(params.id!);
         if (found === null) throw notFound("This idea was deleted.");
         if (found.idea.card === null) return json({ changes: null });
-        const card = await board.card(found.idea.card.cardId);
+        const card = await board.card(found.idea.card.cardId, found.idea.workspace);
         const { idea } = await cloud.change(params.id!, by(), (idea) => {
           idea.changes = card.changes ? { comments: board.commentsOf(card), at: Date.now() } : null;
           if (idea.card !== null) idea.card.list = card.list;
@@ -406,6 +463,7 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/ideas/{id}/send", async (context: Context) => {
       guard();
+      await guardId(context.params.id!);
       const body = await readJson<{ lane?: unknown; anyway?: unknown }>(context);
       if (typeof body.lane !== "string") throw bad("Choose the lane it goes to.");
       const who = by();
@@ -420,7 +478,7 @@ export function routes(router: Router<App>): void {
         // second card for a video already there only when the person says so.
         if (found.idea.card === null && body.anyway !== true) {
           const ids = found.idea.sources.flatMap((one) => (one.kind === "youtube" ? [one.videoId] : []));
-          const hit = Object.values(await board.duplicates(ids))[0];
+          const hit = Object.values(await board.duplicates(ids, found.idea.workspace))[0];
           if (hit !== undefined) {
             await cloud.change(found.idea.id, who, (idea) => void (idea.duplicate = { cardId: hit.cardId, name: hit.name, url: hit.url, list: hit.list }));
             throw new ApiError(409, `It's already on the board as “${hit.name}” (${hit.list || "archived"}). Nothing was sent.`);
@@ -439,6 +497,7 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/ideas/{id}/update-card", async ({ params }: Context) => {
       guard();
+      await guardId(params.id!);
       const who = by();
       try {
         const found = await cloud.get(params.id!);
@@ -461,6 +520,7 @@ export function routes(router: Router<App>): void {
       "/api/ideas/{id}/images",
       async (context: Context) => {
         guard();
+        await guardId(context.params.id!);
         const type = (context.request.headers.get("content-type") ?? "").split(";")[0]!.trim();
         const bytes = await readBytes(context.request, 16 * 1024 * 1024);
         try {
@@ -478,6 +538,7 @@ export function routes(router: Router<App>): void {
     )
     .get("/api/ideas/{id}/images/{image}", async ({ params }: Context) => {
       guard();
+      await guardId(params.id!);
       try {
         const found = await cloud.get(params.id!);
         const image = found?.idea.images.find((one) => one.id === params.image);

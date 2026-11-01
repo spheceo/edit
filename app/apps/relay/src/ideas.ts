@@ -30,8 +30,21 @@ export interface IdeasEnv extends CloudEnv {
   YOUTUBE_API_KEY?: string;
 }
 
+/** A workspace's Trello board: where its ideas go, which lists hold approved titles, its changes labels. */
+export interface Board {
+  id: string;
+  name: string;
+  lanes: readonly { key: string; id: string; name: string }[];
+  approved: { id: string; name: string };
+  changesRequired: readonly string[];
+  changesMade: readonly string[];
+  madeLabel: string;
+  /** The lists whose cards are approved titles, by id; null: every list but an idea list (`holdsApproved`). */
+  approvedLists: readonly string[] | null;
+}
+
 /** The Interrogation board, as Sphe Research's registry and the board itself name it (read Oct 31). */
-export const BOARD = {
+export const BOARD: Board = {
   id: "CJiVnylO",
   name: "Interrogation",
   /** Where ideas go: each repackager's lane, and the drafts waiting for a check. */
@@ -46,14 +59,76 @@ export const BOARD = {
   changesMade: ["6a5fbafa83dcd7639929dd7a", "6a8c143486ac75520a5260aa"],
   /** The label a card gets once its changes are made. */
   madeLabel: "6a5fbafa83dcd7639929dd7a",
-} as const;
+  approvedLists: null,
+};
+
+/**
+ * The bodycam ideas' board (Nov 1): Raw Channels, where the team's bodycam
+ * cases are made (Masseur, Bookkeeper, Welfare Check, Predator Tutor). Ideas go
+ * to "Ideas - Sphe" (the user's pick). Its approved titles are Ted's and Sams's
+ * channels from Ready for script to uploaded: the board also carries other
+ * channels (Penguin, snax, CopMind, Derek's) and footage sourcing, never
+ * approved titles here. Read off the board Nov 1.
+ */
+export const BODYCAM_BOARD: Board = {
+  id: "v3lybcjY",
+  name: "Raw Channels",
+  lanes: [{ key: "sphe", id: "6ab59220cf2512a8541af78f", name: "Ideas - Sphe" }],
+  approved: { id: "688d337ee84cfd881902b6c1", name: "Ready for script" },
+  changesRequired: ["6a63e2daec4a13fb57076a70"],
+  changesMade: ["6a78536e57c1750f2a390422"],
+  madeLabel: "6a78536e57c1750f2a390422",
+  approvedLists: [
+    "688d337ee84cfd881902b6c1", // Ready for script
+    "6ac784920c492d5062b58cb7", // Script - Genius
+    "6a3d4a79c48632f984713045", // Script (Bhanu)
+    "6a99e43af38d1ea2f8846c96", // Script (Jerry)
+    "69fce8a6bbea45c510007f0a", // Script Sana (test)
+    "69fcdb9465dcd347dff359b5", // Script Victor
+    "69eb256a4a7d292ca721520a", // Script (Sphe)
+    "6a15460bbd4a8152281ef140", // Dash script (Nimesh)
+    "69ac2b36d7e0a0ef67c0c952", // Ready for review (script)
+    "69e8da58a6a9392206d8550c", // Reviewed (Awaiting changes)
+    "68d077d58b560a42d6030dfe", // Ready for edit
+    "6acd044ed81b15f2cad5cfa2", // Edit - Genius
+    "68d077dcf9b5a46e990db7f7", // Edit Arslan + Team
+    "6ae30fb85cfcdba95e750f5a", // Ready for review - M
+    "6a2e89a5d8e1b4e0ddf5187c", // Ready for review
+    "695171315a40ec3277728424", // Review done (awaiting changes)
+    "697a023f168acc8660052a2b", // Subtitles (Hassan)
+    "6aac387eb0b6aa27b3293005", // Subtitles (Konain)
+    "6a948c6d93dc25fd6d4c8ca4", // Subs - Genius
+    "6a59f7f8b5fe5b920684976b", // Ready for review - Subtitles
+    "6acd067d839dffd1dcc42891", // Reviewed - Subs
+    "6a12cda933bd224e05e839cf", // Missing thumb, otherwise ready
+    "6aa85f6a5c52b6ff55e2a5ba", // Ready for upload (undefined)
+    "68e2cb086902cdb3fa4835e8", // Ready for upload (ted)
+    "68e2cb0bfd3cf343f0b69629", // Uploaded (ted)
+    "6941edf8044e61968d82137e", // Ready for upload (sams)
+    "6a084d23fb3d4b4e2b31aa03", // Uploaded (sams)
+  ],
+};
+
+/** Each workspace's board. */
+export const BOARDS: Record<string, Board> = { interrogation: BOARD, bodycam: BODYCAM_BOARD };
+
+/** The workspace a request names (interrogation when it names none), refused when unknown or not this person's. */
+function workspaceOf(given: unknown, found: Caller): Board {
+  const workspace = given === undefined || given === null || given === "" ? "interrogation" : given;
+  const board = typeof workspace === "string" ? BOARDS[workspace] : undefined;
+  if (board === undefined) throw new Refused(400, `There are no ideas for the ${String(workspace)} workspace.`);
+  if (found.kind !== "person" || !(found.admin || found.perms.includes(`ideas.${workspace as string}`))) {
+    throw new Refused(403, `Your account can't work on ${board === BOARD ? "Interrogation" : "bodycam"} ideas: an admin can give you them at accounts.spheceo.com.`);
+  }
+  return board;
+}
 
 /** Whether someone may work on ideas: an `ideas.*` capability, or an admin. */
 export function mayIdeas(found: Caller): boolean {
   return found.kind === "person" && (found.admin || found.perms.some((perm) => perm.startsWith("ideas.")));
 }
 
-export const NO_IDEAS = "Your account can't work on ideas yet: an admin can give you Interrogation ideas at accounts.spheceo.com.";
+export const NO_IDEAS = "Your account can't work on ideas yet: an admin can give you Interrogation or bodycam ideas at accounts.spheceo.com.";
 
 /** The ideas functions Edit calls, each as its kind. */
 const IDEA_FUNCTIONS = new Map([
@@ -84,12 +159,13 @@ export async function ideasRoute(request: Request, url: URL, env: IdeasEnv, foun
   const route = url.pathname.slice("/v1/ideas/".length);
   try {
     if (request.method === "GET") {
-      if (route === "lanes") return json(200, { board: { id: BOARD.id, name: BOARD.name }, lanes: BOARD.lanes, approved: BOARD.approved });
       if (route === "youtube") return json(200, await youtubeVideo(url.searchParams.get("id") ?? "", env));
-      if (route === "trello/approved") return json(200, await approvedTitles(env));
-      if (route === "trello/changes") return json(200, await changesWaiting(env));
-      if (route === "trello/card") return json(200, await oneCard(url.searchParams.get("card") ?? "", env));
       if (route === "trello/image") return await attachmentImage(url.searchParams.get("url") ?? "", env);
+      const board = workspaceOf(url.searchParams.get("workspace"), found);
+      if (route === "lanes") return json(200, { board: { id: board.id, name: board.name }, lanes: board.lanes, approved: board.approved });
+      if (route === "trello/approved") return json(200, await approvedTitles(env, board));
+      if (route === "trello/changes") return json(200, await changesWaiting(env, board));
+      if (route === "trello/card") return json(200, await oneCard(url.searchParams.get("card") ?? "", env, board));
       return json(404, { error: "not found" });
     }
     if (request.method !== "POST") return json(405, { error: `GET or POST ${url.pathname}` });
@@ -103,10 +179,11 @@ export async function ideasRoute(request: Request, url: URL, env: IdeasEnv, foun
       return json(400, { error: "Send a JSON object." });
     }
     if (route === "convex") return await convex(body, env, found);
-    if (route === "trello/duplicates") return json(200, await duplicates(body.ids, env));
-    if (route === "trello/where") return json(200, await where(body.cards, env));
-    if (route === "trello/send") return json(200, await send(body, env));
-    if (route === "trello/update") return json(200, await update(body, env));
+    const board = workspaceOf(body.workspace, found);
+    if (route === "trello/duplicates") return json(200, await duplicates(body.ids, env, board));
+    if (route === "trello/where") return json(200, await where(body.cards, env, board));
+    if (route === "trello/send") return json(200, await send(body, env, board));
+    if (route === "trello/update") return json(200, await update(body, env, board));
     return json(404, { error: "not found" });
   } catch (error) {
     if (error instanceof Refused) return json(error.status, { error: error.message });
@@ -271,24 +348,29 @@ async function cached<T>(key: string, ms: number, read: () => Promise<T>): Promi
 
 /** Forgets what was read of the board (a send or an update changed it). */
 function forget(): void {
-  for (const key of [...kept.keys()]) if (key !== "lists") kept.delete(key);
+  for (const key of [...kept.keys()]) if (!key.endsWith(":lists") && !key.endsWith(":board")) kept.delete(key);
 }
 
 export function resetForTests(): void {
   kept.clear();
 }
 
-const lists = (env: IdeasEnv) => cached("lists", 10 * 60_000, () => trello<List[]>(env, "GET", `boards/${BOARD.id}/lists`, { fields: "id,name,closed,pos", filter: "all" }));
+const lists = (env: IdeasEnv, board: Board) => cached(`${board.id}:lists`, 10 * 60_000, () => trello<List[]>(env, "GET", `boards/${board.id}/lists`, { fields: "id,name,closed,pos", filter: "all" }));
 
 /** Whether a list holds approved titles: everything from Approved on (script, edit, subtitles, upload, the archive), never an idea list. */
 export function holdsApproved(name: string): boolean {
   return !/idea|repackag|channel interro|thumb/i.test(name);
 }
 
+/** Whether one of a board's lists holds its approved titles: named on the board's own allowlist, else by `holdsApproved`. */
+export function approvedList(board: Board, list: { id: string; name: string }): boolean {
+  return board.approvedLists === null ? holdsApproved(list.name) : board.approvedLists.includes(list.id);
+}
+
 /** The board's cards (archived ones too, for duplicates), a minute at a time. */
-const allCards = (env: IdeasEnv) =>
-  cached("cards:all", 60_000, () =>
-    trello<Card[]>(env, "GET", `boards/${BOARD.id}/cards`, { filter: "all", fields: "id,name,desc,url,shortUrl,idList,idLabels,closed,dateLastActivity,idAttachmentCover", attachments: "true", attachment_fields: "id,name,url,mimeType,isUpload,previews" }),
+const allCards = (env: IdeasEnv, board: Board) =>
+  cached(`${board.id}:cards:all`, 60_000, () =>
+    trello<Card[]>(env, "GET", `boards/${board.id}/cards`, { filter: "all", fields: "id,name,desc,url,shortUrl,idList,idLabels,closed,dateLastActivity,idAttachmentCover", attachments: "true", attachment_fields: "id,name,url,mimeType,isUpload,previews" }),
   );
 
 /** Every YouTube video id in a text (Trello's Markdown escapes underscores in links: `\_`). */
@@ -301,9 +383,9 @@ export function youtubeIds(text: string): string[] {
 
 const cardIds = (card: Card) => youtubeIds([card.name, card.desc ?? "", ...(card.attachments ?? []).flatMap((one) => [one.name ?? "", one.url ?? ""])].join("\n"));
 
-async function duplicates(given: unknown, env: IdeasEnv) {
+async function duplicates(given: unknown, env: IdeasEnv, board: Board) {
   if (!Array.isArray(given) || given.length === 0 || given.length > 50 || !given.every((one) => typeof one === "string" && /^[A-Za-z0-9_-]{11}$/.test(one))) throw new Refused(400, "ids must be 1 to 50 YouTube video ids.");
-  const [cards, named] = await Promise.all([allCards(env), lists(env)]);
+  const [cards, named] = await Promise.all([allCards(env, board), lists(env, board)]);
   const listName = new Map(named.map((list) => [list.id, list.name]));
   const wanted = new Set(given as string[]);
   const found: Record<string, { cardId: string; name: string; url: string; list: string; closed: boolean }> = {};
@@ -326,10 +408,10 @@ export function titleOf(name: string): string {
   return name.replace(/^\s*\d+\)\s*/, "").trim();
 }
 
-async function approvedTitles(env: IdeasEnv) {
-  return cached("approved", 10 * 60_000, async () => {
-    const [cards, named] = await Promise.all([allCards(env), lists(env)]);
-    const approved = new Map(named.filter((list) => holdsApproved(list.name)).map((list) => [list.id, list.name]));
+async function approvedTitles(env: IdeasEnv, board: Board) {
+  return cached(`${board.id}:approved`, 10 * 60_000, async () => {
+    const [cards, named] = await Promise.all([allCards(env, board), lists(env, board)]);
+    const approved = new Map(named.filter((list) => approvedList(board, list)).map((list) => [list.id, list.name]));
     const titles = cards
       .filter((card) => approved.has(card.idList) && /\p{L}/u.test(card.name) && !/^https?:\/\//.test(card.name.trim()) && !/\.(png|jpe?g|webp)$/i.test(card.name.trim()))
       .sort((a, b) => (b.dateLastActivity ?? "").localeCompare(a.dateLastActivity ?? ""))
@@ -339,21 +421,23 @@ async function approvedTitles(env: IdeasEnv) {
   });
 }
 
-const needsChanges = (card: Card) => {
+const needsChanges = (card: Card, board: Board) => {
   const labels = new Set(card.idLabels ?? []);
-  return BOARD.changesRequired.some((id) => labels.has(id)) && !BOARD.changesMade.some((id) => labels.has(id));
+  return board.changesRequired.some((id) => labels.has(id)) && !board.changesMade.some((id) => labels.has(id));
 };
 
-async function where(given: unknown, env: IdeasEnv) {
+async function where(given: unknown, env: IdeasEnv, board: Board) {
   if (!Array.isArray(given) || given.length > 300 || !given.every((one) => typeof one === "string" && /^[a-f0-9]{24}$/.test(one))) throw new Refused(400, "cards must be at most 300 Trello card ids.");
-  const [cards, named] = await Promise.all([allCards(env), lists(env)]);
+  const [cards, named] = await Promise.all([allCards(env, board), lists(env, board)]);
   const listName = new Map(named.map((list) => [list.id, list.name]));
+  const listOf = new Map(named.map((list) => [list.id, list]));
   const byId = new Map(cards.map((card) => [card.id, card]));
   const places: Record<string, { list: string; closed: boolean; approved: boolean; changes: boolean; missing: boolean }> = {};
   for (const id of given as string[]) {
     const card = byId.get(id);
     const list = card === undefined ? "" : (listName.get(card.idList) ?? "");
-    places[id] = card === undefined ? { list: "", closed: false, approved: false, changes: false, missing: true } : { list, closed: card.closed === true, approved: holdsApproved(list) && list !== "", changes: needsChanges(card), missing: false };
+    const named = card === undefined ? undefined : listOf.get(card.idList);
+    places[id] = card === undefined ? { list: "", closed: false, approved: false, changes: false, missing: true } : { list, closed: card.closed === true, approved: named !== undefined && approvedList(board, named) && list !== "", changes: needsChanges(card, board), missing: false };
   }
   return { places };
 }
@@ -369,37 +453,36 @@ async function commentsOf(env: IdeasEnv, cardId: string): Promise<Comment[]> {
     .sort((a, b) => a.at.localeCompare(b.at));
 }
 
-const cardView = (card: Card, list: string, comments: Comment[]) => ({
+const cardView = (card: Card, list: string, comments: Comment[], board: Board) => ({
   id: card.id,
   name: card.name,
   desc: card.desc ?? "",
   url: card.shortUrl || card.url,
   list,
   closed: card.closed === true,
-  changes: needsChanges(card),
+  changes: needsChanges(card, board),
   cover: coverOf(card),
   attachments: (card.attachments ?? []).filter((one) => typeof one.url === "string").map((one) => ({ id: one.id, name: one.name ?? "", url: one.url!, mimeType: one.mimeType ?? null, image: (one.mimeType ?? "").startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(one.name ?? "") })),
   comments,
 });
 
-async function changesWaiting(env: IdeasEnv) {
-  const lanes = new Map<string, string>(BOARD.lanes.map((lane) => [lane.id, lane.name]));
-  const cards = (await allCards(env)).filter((card) => card.closed !== true && lanes.has(card.idList) && needsChanges(card)).slice(0, 30);
-  return { cards: await Promise.all(cards.map(async (card) => cardView(card, lanes.get(card.idList) ?? "", await commentsOf(env, card.id)))) };
+async function changesWaiting(env: IdeasEnv, board: Board) {
+  const lanes = new Map<string, string>(board.lanes.map((lane) => [lane.id, lane.name]));
+  const cards = (await allCards(env, board)).filter((card) => card.closed !== true && lanes.has(card.idList) && needsChanges(card, board)).slice(0, 30);
+  return { cards: await Promise.all(cards.map(async (card) => cardView(card, lanes.get(card.idList) ?? "", await commentsOf(env, card.id), board))) };
 }
 
-async function oneCard(id: string, env: IdeasEnv) {
+async function oneCard(id: string, env: IdeasEnv, board: Board) {
   const short = /trello\.com\/c\/([A-Za-z0-9]{6,32})/.exec(id)?.[1] ?? id;
   if (!/^[A-Za-z0-9]{6,32}$/.test(short)) throw new Refused(400, "That isn't a Trello card.");
   const card = await trello<Card>(env, "GET", `cards/${short}`, { fields: "id,name,desc,url,shortUrl,idList,idBoard,idLabels,closed,dateLastActivity,idAttachmentCover", attachments: "true", attachment_fields: "id,name,url,mimeType,isUpload,previews" });
-  const board = await boardId(env);
-  if (card.idBoard !== board) throw new Refused(403, "That card isn't on the Interrogation board.");
-  const list = (await lists(env)).find((one) => one.id === card.idList)?.name ?? "";
-  return cardView(card, list, await commentsOf(env, card.id));
+  if (card.idBoard !== (await boardId(env, board))) throw new Refused(403, `That card isn't on the ${board.name} board.`);
+  const list = (await lists(env, board)).find((one) => one.id === card.idList)?.name ?? "";
+  return cardView(card, list, await commentsOf(env, card.id), board);
 }
 
 /** The board's own id (its short link resolves to it). */
-const boardId = (env: IdeasEnv) => cached("board", 24 * 3600_000, async () => (await trello<{ id: string }>(env, "GET", `boards/${BOARD.id}`, { fields: "id" })).id);
+const boardId = (env: IdeasEnv, board: Board) => cached(`${board.id}:board`, 24 * 3600_000, async () => (await trello<{ id: string }>(env, "GET", `boards/${board.id}`, { fields: "id" })).id);
 
 const ATTACHMENT = /^https:\/\/trello\.com\/1\/cards\/[a-f0-9]{24}\/attachments\/[a-f0-9]{24}\/(?:download|previews)\//;
 
@@ -471,11 +554,11 @@ export function described(markdown: string, images: { name: string; url: string 
 }
 
 /** A lane's list, checked to be the open list of that name on the board before anything is written to it. */
-async function laneList(key: unknown, env: IdeasEnv) {
-  const lane = BOARD.lanes.find((one) => one.key === key);
-  if (lane === undefined) throw new Refused(400, `Choose a lane: ${BOARD.lanes.map((one) => one.key).join(", ")}.`);
+async function laneList(key: unknown, env: IdeasEnv, board: Board) {
+  const lane = board.lanes.find((one) => one.key === key);
+  if (lane === undefined) throw new Refused(400, `Choose a lane: ${board.lanes.map((one) => one.key).join(", ")}.`);
   const list = await trello<{ id: string; name: string; idBoard: string; closed: boolean }>(env, "GET", `lists/${lane.id}`, { fields: "id,name,idBoard,closed" });
-  if (list.id !== lane.id || list.closed || list.name.trim() !== lane.name || list.idBoard !== (await boardId(env))) throw new Refused(409, `Ideas go only to the open ${lane.name} list on the ${BOARD.name} board, and it isn't that now.`);
+  if (list.id !== lane.id || list.closed || list.name.trim() !== lane.name || list.idBoard !== (await boardId(env, board))) throw new Refused(409, `Ideas go only to the open ${lane.name} list on the ${board.name} board, and it isn't that now.`);
   return lane;
 }
 
@@ -537,8 +620,8 @@ async function cover(cardId: string, attachment: Attachment | undefined, env: Id
   }
 }
 
-async function send(body: Record<string, unknown>, env: IdeasEnv) {
-  const lane = await laneList(body.lane, env);
+async function send(body: Record<string, unknown>, env: IdeasEnv, board: Board) {
+  const lane = await laneList(body.lane, env, board);
   const name = text(body.name, "name", 300).trim();
   const markdown = text(body.desc, "desc", 16_000, 0);
   const images = imagesOf(body.images);
@@ -563,22 +646,22 @@ async function send(body: Record<string, unknown>, env: IdeasEnv) {
   return { cardId: card.id, url: card.shortUrl || card.url, created, lane: lane.key, list: lane.name };
 }
 
-async function update(body: Record<string, unknown>, env: IdeasEnv) {
+async function update(body: Record<string, unknown>, env: IdeasEnv, board: Board) {
   if (typeof body.cardId !== "string" || !/^[a-f0-9]{24}$/.test(body.cardId)) throw new Refused(400, "cardId must be a Trello card id.");
   const name = text(body.name, "name", 300).trim();
   const markdown = text(body.desc, "desc", 16_000, 0);
   const images = imagesOf(body.images);
   const card = await trello<Card>(env, "GET", `cards/${body.cardId}`, { fields: "id,name,url,shortUrl,idList,idBoard,idLabels,closed" });
-  if (card.idBoard !== (await boardId(env))) throw new Refused(403, "That card isn't on the Interrogation board.");
+  if (card.idBoard !== (await boardId(env, board))) throw new Refused(403, `That card isn't on the ${board.name} board.`);
   // A card in a lane, or one waiting on changes anywhere on the board: never another of the board's cards.
-  if (!BOARD.lanes.some((lane) => lane.id === card.idList) && !needsChanges(card)) throw new Refused(409, "That card isn't in a repackaging lane or waiting on changes, so Edit doesn't change it.");
+  if (!board.lanes.some((lane) => lane.id === card.idList) && !needsChanges(card, board)) throw new Refused(409, "That card isn't in a repackaging lane or waiting on changes, so Edit doesn't change it.");
   const attached = await attach(card.id, images, env);
   const desc = described(markdown, attached.map((one) => ({ name: one.name ?? "image", url: one.url ?? "" })).filter((one) => one.url !== ""));
   await trello(env, "PUT", `cards/${card.id}`, { name, desc });
   await cover(card.id, attached[0], env);
   // "Changes Made", added beside the card's other labels (never a PUT of them all: the board's workflow flags are labels too).
-  const made = needsChanges(card) && !(card.idLabels ?? []).includes(BOARD.madeLabel);
-  if (made) await trello(env, "POST", `cards/${card.id}/idLabels`, { value: BOARD.madeLabel });
+  const made = needsChanges(card, board) && !(card.idLabels ?? []).includes(board.madeLabel);
+  if (made) await trello(env, "POST", `cards/${card.id}/idLabels`, { value: board.madeLabel });
   forget();
   return { cardId: card.id, url: card.shortUrl || card.url, labelled: made };
 }

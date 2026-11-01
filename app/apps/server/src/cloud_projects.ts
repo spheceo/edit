@@ -1151,25 +1151,63 @@ export async function runStep(app: App, cloudProjects: Cloud, id: string, step: 
   }
 }
 
+// ── What a failed call leads to (docs/plans/2026-11-01-effect.md, round 3) ──
+//
+// Pure, so the promises are property-tested (test/cloud_merge.test.ts):
+// offline never copies or pulls; this machine's own lock is never "someone
+// else's"; a conflict over changes here keeps them as a copy unless the
+// cloud's rev is exactly this machine's own save whose answer was lost
+// (8f67a6cf); losing the lock with changes here keeps them as a copy.
+
+export type FailureDecision =
+  | { readonly do: "offline" }
+  | { readonly do: "lost"; readonly holder: string }
+  | { readonly do: "retake-lock" }
+  | { readonly do: "conflict" }
+  | { readonly do: "error"; readonly message: string };
+
+/** What a failed Convex call leads to, for this machine (`me`, its holder label). */
+export function decideFailure(failure: { readonly kind: ConvexFailure["kind"]; readonly code: string | null; readonly heldBy: unknown; readonly message: string }, me: string): FailureDecision {
+  if (failure.kind === "unreachable") return { do: "offline" };
+  if (failure.code === "locked" && failure.kind === "function") {
+    // Expired, or this holder's under another token: take it again.
+    return typeof failure.heldBy === "string" && failure.heldBy !== me ? { do: "lost", holder: failure.heldBy } : { do: "retake-lock" };
+  }
+  if (failure.code === "conflict") return { do: "conflict" };
+  return { do: "error", message: failure.message };
+}
+
+/** Whether the cloud's rev is this machine's own last save (sent on `base`, its body hashing to `hash`), whose answer was lost. */
+export function isOwnSave(attempt: { readonly base: number; readonly hash: string } | undefined, cloud: { readonly rev: number; readonly bodyHash: string | null } | null): boolean {
+  return attempt !== undefined && cloud !== null && cloud.bodyHash !== null && cloud.rev === attempt.base + 1 && cloud.bodyHash === attempt.hash;
+}
+
+/** Someone else took the lock: what happens to this machine's copy. */
+export function afterLost(hadChanges: boolean, cloudNewer: boolean): { readonly keepCopy: boolean; readonly pull: boolean } {
+  return { keepCopy: hadChanges, pull: hadChanges || cloudNewer };
+}
+
 /**
  * Handles a failed call: offline is a retry, a refused lock is someone else's
  * turn, anything else an error (thrown).
  */
 async function failure(app: App, cloudProjects: Cloud, id: string, given: unknown): Promise<void> {
   if (!(given instanceof ConvexFailure)) throw given;
-  if (given.kind === "unreachable") {
-    cloudProjects.with(id, (entry) => entry.unreachable(now()));
-    return;
+  const decision = decideFailure({ kind: given.kind, code: given.code, heldBy: field(given.data, "heldBy"), message: given.message }, cloudProjects.holder());
+  switch (decision.do) {
+    case "offline":
+      cloudProjects.with(id, (entry) => entry.unreachable(now()));
+      return;
+    case "lost":
+      return lost(app, cloudProjects, id, decision.holder);
+    case "retake-lock":
+      cloudProjects.with(id, (entry) => entry.forgetLock());
+      return;
+    case "conflict":
+      return conflict(app, cloudProjects, id);
+    case "error":
+      throw new Error(decision.message);
   }
-  if (given.code === "locked" && given.kind === "function") {
-    const holder = field(given.data, "heldBy");
-    if (typeof holder === "string" && holder !== cloudProjects.holder()) return lost(app, cloudProjects, id, holder);
-    // Expired, or this holder's under another token: take it again.
-    cloudProjects.with(id, (entry) => entry.forgetLock());
-    return;
-  }
-  if (given.code === "conflict") return conflict(app, cloudProjects, id);
-  throw new Error(given.message);
 }
 
 /**
@@ -1306,7 +1344,7 @@ async function ownSave(cloudProjects: Cloud, id: string): Promise<boolean> {
     const meta = await remote.get(id);
     if (meta === null || meta.rev !== attempt.base + 1 || meta.bodyUrl === "") return false;
     const body = new TextDecoder().decode(await http("GET", meta.bodyUrl, null, SLOW));
-    if (bodyHash(body) !== attempt.hash) return false;
+    if (!isOwnSave(attempt, { rev: meta.rev, bodyHash: bodyHash(body) })) return false;
     cloudProjects.with(id, (entry) => entry.pushed(meta.rev, attempt.edits));
     diag.info("cloud", `${id}: the cloud's rev ${meta.rev} is this machine's own save (its answer was lost): taken as saved, no copy`);
     return true;
@@ -1328,7 +1366,7 @@ async function lost(app: App, cloudProjects: Cloud, id: string, holder: string):
   } catch (error) {
     return failure(app, cloudProjects, id, error);
   }
-  if (hadChanges || newer) await pull(app, cloudProjects, id);
+  if (afterLost(hadChanges, newer).pull) await pull(app, cloudProjects, id);
 }
 
 async function push(app: App, cloudProjects: Cloud, id: string): Promise<void> {

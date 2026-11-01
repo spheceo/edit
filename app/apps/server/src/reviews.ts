@@ -1003,8 +1003,9 @@ const removing = new Set<string>();
  * Deletes the project's review link for good (Sphe, Nov 1: "we need to be
  * able to delete a review link"): Repack's review, every version, note and
  * reply (`reviews:remove`; the link opens nothing after), its files under
- * `edit/reviews/<project>/` (now when the account may delete from Edit's
- * cloud, an admin's; else by Repack's cleanup, which the delete queued), and
+ * `edit/reviews/<project>/` (deleted here: the relay lets whoever may share
+ * reviews delete a gone review's files; Repack's cleanup, which the delete
+ * queued, catches any a failure left), and
  * what this Mac kept of it. The exports here stay; sharing again makes a new
  * link, v1. Refused while it's being shared or a Ready for changes is being
  * fixed here.

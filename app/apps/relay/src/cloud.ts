@@ -323,15 +323,17 @@ const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2, access: 
   async delete(body, r2, access) {
     if (!Array.isArray(body.keys) || body.keys.length > MAX_DELETE) throw new BadRequest(`keys must list at most ${MAX_DELETE} keys.`);
     const keys = body.keys.map(needKey);
-    // Footage is shared by every project using it: only an admin deletes from the cloud.
-    if (!isAdmin(access.found)) throw new Forbidden("Only an admin can delete from Edit's cloud.");
+    // Footage is shared by every project using it: only an admin deletes from the cloud. A deleted review
+    // link's own files are the exception: whoever may share reviews deletes them once Repack's review is gone
+    // (Nov 1: a non-admin's delete left them for a cleanup that never runs on dev).
+    if (!isAdmin(access.found) && !(await deletedReviewFiles(access, keys))) throw new Forbidden("Only an admin can delete from Edit's cloud.");
     await Promise.all(keys.map((key) => r2Fetch(r2, "DELETE", key, {}, { allow404: true })));
     return json(200, { ok: true, deleted: keys.length });
   },
 
   async list(body, r2, access) {
     if (!validPrefix(body.prefix)) throw new BadRequest("prefix must start with edit/.");
-    if (!isAdmin(access.found) && !body.prefix.startsWith(LISTABLE)) throw new Forbidden(`Only ${LISTABLE} can be listed.`);
+    if (!isAdmin(access.found) && !body.prefix.startsWith(LISTABLE) && !(await deletedReviewFiles(access, [body.prefix]))) throw new Forbidden(`Only ${LISTABLE} can be listed.`);
     const query: Record<string, string> = { "list-type": "2", prefix: body.prefix, "max-keys": "1000" };
     if (body.cursor !== undefined) {
       if (typeof body.cursor !== "string" || !body.cursor || body.cursor.length > 2048) throw new BadRequest("Invalid cursor.");
@@ -546,6 +548,38 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
 function creatorOf(row: Record<string, unknown>): string | null {
   const by = row.createdBy;
   return isObject(by) && typeof by.sub === "string" ? by.sub : null;
+}
+
+/**
+ * Whether every key (or prefix) is one project's review files (`edit/reviews/<project>/…`), the caller may share
+ * reviews and work on that project, and Repack has no review for it any more (`reviews:get` is null): what's
+ * left of a deleted link, which nothing else reads.
+ */
+async function deletedReviewFiles(access: Access, keys: string[]): Promise<boolean> {
+  const projects = new Set(keys.map((key) => projectOfKey(key)));
+  const [project] = [...projects];
+  if (projects.size !== 1 || project === null || project === undefined || !keys.every((key) => key.startsWith(`edit/reviews/${project}/`))) return false;
+  if (!mayShareReviews(access.found)) return false;
+  await mayOpen(access, project);
+  return (await reviewOf(access.env, project)) === null;
+}
+
+/** Repack's review of a project (`reviews:get`, as Edit), or null when there's none. */
+async function reviewOf(env: CloudEnv, projectId: string): Promise<unknown> {
+  if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) throw new Upstream("Convex is not configured on the relay yet.");
+  let parsed: unknown;
+  try {
+    const answer = await fetch(`${env.CONVEX_URL.replace(/\/+$/, "")}/api/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "reviews:get", args: { app: "edit", sourceId: projectId, token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
+    });
+    parsed = await answer.json();
+  } catch (error) {
+    throw new Upstream(`Convex: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isObject(parsed) || parsed.status !== "success") throw new Upstream("Convex couldn't say whether that review is still there.");
+  return parsed.value ?? null;
 }
 
 /** A project's Convex card (`edit:getProject`, with its summary), or null when it isn't in the cloud. */

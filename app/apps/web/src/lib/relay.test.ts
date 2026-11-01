@@ -446,6 +446,23 @@ describe("relay cloud endpoints", () => {
     expect((await call("r2/list", { prefix: "edit/analysis/drive/f/" })).status).toBe(200);
     expect((await call("r2/list", { prefix: "edit/" }, { token: ADMIN })).status).toBe(200);
   });
+
+  it("a deleted review link's files are deleted by who may share reviews, only once Repack's review is gone (Nov 1)", async () => {
+    const files = ["edit/reviews/p1/v1/edit.mp4", "edit/reviews/p1/v1/poster.jpg"];
+    // The review still there: only an admin.
+    cloudWith(null, { reviewId: "r1" });
+    expect((await call("r2/delete", { keys: files }, { token: WRITER })).status).toBe(403);
+    expect((await call("r2/list", { prefix: "edit/reviews/p1/" }, { token: WRITER })).status).toBe(403);
+    // Gone: who may share reviews deletes and lists its files, nothing beyond them.
+    const { paths } = cloudWith(null, null);
+    expect((await call("r2/delete", { keys: files }, { token: WRITER })).status).toBe(200);
+    expect(paths()).toContain("reviews:get");
+    expect((await call("r2/list", { prefix: "edit/reviews/p1/" }, { token: WRITER })).status).toBe(200);
+    expect((await call("r2/delete", { keys: files })).status).toBe(403);
+    expect((await call("r2/delete", { keys: [...files, "edit/reviews/p2/v1/edit.mp4"] }, { token: WRITER })).status).toBe(403);
+    expect((await call("r2/delete", { keys: ["edit/originals/drive/f/a.mp4"] }, { token: WRITER })).status).toBe(403);
+    expect((await call("r2/list", { prefix: "edit/reviews/" }, { token: WRITER })).status).toBe(403);
+  });
 });
 
 describe("relay cloud jobs: Drive → R2", () => {

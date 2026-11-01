@@ -8,11 +8,14 @@
 
 import * as fs from "node:fs";
 
+import { Effect, Fiber, Schema } from "effect";
+
 import type { Choice, Decision, ImportProgress, Kind, Label, Research, Reuse, Script, VideoCheck } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import { creator } from "../accounts.ts";
 import * as diag from "../diag.ts";
+import { inArea, runPromise } from "../effect/runtime.ts";
 import * as service from "../effect/service.ts";
 import { BUILD } from "../version.ts";
 import { isFile, join } from "../paths.ts";
@@ -472,40 +475,56 @@ export function stuck(error: unknown): boolean {
 }
 
 /** Runs the pipeline. A failure, or even a bug, ends as a failed import that says so and can be retried; it never leaves the script stuck importing. */
-async function run(app: App, dir: string, script: Script): Promise<Script> {
+const importScript = Effect.fn("writer.import")(function* (app: App, dir: string, script: Script) {
   const began = Date.now();
   const name = jobs.named(script.id, script.title);
   const from = script.sourceKind === "file" ? `the file ${script.originalPath.split("/").pop()}` : script.sourceKind === "compilation" ? `${script.sourceUrl.split("\n").length} videos` : `${script.sourceKind} ${script.sourceUrl.split("\n")[0]}`;
-  diag.info("writer", `${name}: importing from ${from}`);
+  yield* Effect.logInfo(`${name}: importing from ${from}`);
   say(script, "Starting.");
-  try {
-    const step = await pipeline(app, dir, script);
+  const ran = yield* pipeline(app, dir, script).pipe(Effect.scoped, Effect.result);
+  if (ran._tag === "Success") {
+    const step = ran.success;
     const seconds = `${Math.round((Date.now() - began) / 1000)} s`;
     // Its recordings and words, shared with Edit mode in the background.
     if (step === "done") handoff.shareSoon(store.dataDir(app.store.home), script.id);
     const spent = stageTimes(script.id);
-    if (step === "done") diag.info("writer", `${jobs.named(script.id, script.title)}: imported in ${seconds}: ${clock(script.durationMs)} of footage, ${script.words.length} words, ${new Set(script.words.map((word) => word.speaker).filter(Boolean)).size} voices${spent ? ` (${spent})` : ""}`);
-    else diag.warn("writer", `${jobs.named(script.id, script.title)}: paused after ${seconds}${spent ? ` (${spent})` : ""} for a choice: ${script.decision?.summary ?? ""}`);
+    if (step === "done") yield* Effect.logInfo(`${jobs.named(script.id, script.title)}: imported in ${seconds}: ${clock(script.durationMs)} of footage, ${script.words.length} words, ${new Set(script.words.map((word) => word.speaker).filter(Boolean)).size} voices${spent ? ` (${spent})` : ""}`);
+    else yield* Effect.logWarning(`${jobs.named(script.id, script.title)}: paused after ${seconds}${spent ? ` (${spent})` : ""} for a choice: ${script.decision?.summary ?? ""}`);
     return script;
-  } catch (error) {
-    const message = diag.messageOf(error);
-    const spent = stageTimes(script.id);
-    diag.error("writer", `${jobs.named(script.id, script.title)}: stopped after ${Math.round((Date.now() - began) / 1000)} s${spent ? ` (${spent})` : ""}: ${message}`);
-    script.status = "error";
-    script.error = message;
-    if (stuck(error)) script.stuckOn = BUILD;
-    else delete script.stuckOn;
-    delete script.decision;
-    script.updatedAt = Date.now();
-    try {
-      store.write(dir, script);
-    } catch {
-      // The failure is said either way.
-    }
-    say(script, message);
-    throw new Error(message);
   }
+  const error = ran.failure;
+  const message = diag.messageOf(error);
+  const spent = stageTimes(script.id);
+  yield* Effect.logError(`${jobs.named(script.id, script.title)}: stopped after ${Math.round((Date.now() - began) / 1000)} s${spent ? ` (${spent})` : ""}: ${message}`);
+  script.status = "error";
+  script.error = message;
+  if (stuck(error)) script.stuckOn = BUILD;
+  else delete script.stuckOn;
+  delete script.decision;
+  script.updatedAt = Date.now();
+  try {
+    store.write(dir, script);
+  } catch {
+    // The failure is said either way.
+  }
+  say(script, message);
+  return yield* new ImportStopped({ message, kind: service.kindOf(error) });
+});
+
+/** `importScript` for the code that isn't Effect yet: its failure an Error with the same words. */
+function run(app: App, dir: string, script: Script): Promise<Script> {
+  return runPromise(importScript(app, dir, script).pipe(inArea("writer")));
 }
+
+/** An import that stopped: what it said, and the kind of what stopped it (so Try again reads it). */
+export class ImportStopped extends Schema.TaggedError<ImportStopped>()("ImportStopped", { message: Schema.String, kind: Schema.Literals(["temporary", "later", "permanent"]) }) {}
+
+/** The footage it was imported from isn't where it was: someone puts it back. */
+export class FootageMissing extends Schema.TaggedError<FootageMissing>()("FootageMissing", { message: Schema.String }) {}
+/** The footage can't be read, has no length, or is longer than an import takes. */
+export class FootageUnusable extends Schema.TaggedError<FootageUnusable>()("FootageUnusable", { message: Schema.String }) {}
+
+service.kinds({ ImportStopped: (error) => (error as ImportStopped).kind, FootageMissing: "later", FootageUnusable: "permanent" });
 
 /** Saves a question and ends the import without failing it. */
 function pause(dir: string, script: Script, decision: Decision): "paused" {
@@ -521,21 +540,31 @@ function pause(dir: string, script: Script, decision: Decision): "paused" {
 
 /** A preview still to make, made beside the words. */
 /** Makes the preview, saying how far it is (0–100). */
-type Build = (onPercent: (percent: number) => void) => Promise<void>;
+type Build = (onPercent: (percent: number) => void, signal?: AbortSignal) => Promise<void>;
 type Fetched = "paused" | "one" | { joined: Build | null };
 
-async function pipeline(app: App, dir: string, script: Script): Promise<"done" | "paused"> {
+/**
+ * The import's steps (round 3: in Effect). The footage, then its length and
+ * sound, then its words heard while its preview is made: the preview is a
+ * fiber of the import's scope, so a failure in the words (or a stop) ends
+ * its FFmpeg too, where it used to run on to the end; the progress said
+ * while it waits is a fiber too, gone with it.
+ */
+const pipeline = Effect.fn("writer.import.pipeline")(function* (app: App, dir: string, script: Script) {
   // The footage.
   let build: Build | null = null;
   let joined = false;
   if (script.sourceKind === "youtube" || script.sourceKind === "drive" || script.sourceKind === "compilation") {
-    const fetched = script.sourceKind === "youtube" ? await fetchYoutube(app, dir, script) : script.sourceKind === "drive" ? await fetchDrive(dir, script) : await fetchCompilation(app, dir, script);
-    if (fetched === "paused") return "paused";
+    const fetched = yield* Effect.tryPromise({
+      try: () => (script.sourceKind === "youtube" ? fetchYoutube(app, dir, script) : script.sourceKind === "drive" ? fetchDrive(dir, script) : fetchCompilation(app, dir, script)),
+      catch: (error) => error as Error,
+    });
+    if (fetched === "paused") return "paused" as const;
     if (fetched !== "one") {
       build = fetched.joined;
       joined = true;
     }
-  } else if (!isFile(script.originalPath)) throw new Error(`The video is no longer at ${script.originalPath}. Put it back, then retry.`);
+  } else if (!isFile(script.originalPath)) return yield* new FootageMissing({ message: `The video is no longer at ${script.originalPath}. Put it back, then retry.` });
 
   // Its length and sound.
   script.stage = "processing";
@@ -545,12 +574,10 @@ async function pipeline(app: App, dir: string, script: Script): Promise<"done" |
     build !== null
       ? // A joined preview still to make: as long as its recordings, with picture and sound.
         { durationMs: (script.parts ?? []).reduce((sum, part) => sum + part.durationMs, 0), video: true, audio: true }
-      : await media.streams(script.originalPath).catch(() => {
-          throw new Error("This file can't be read as video or audio.");
-        });
-  if (found.durationMs === 0) throw new Error("This file has no length to play.");
-  const duration = joined ? found.durationMs : await media.playableMs(script.originalPath, found.durationMs);
-  if (duration > media.MAX_CASE_MS || (!joined && duration > MAX_FILE_MS)) throw new Error("This footage runs longer than Edit imports at once (ten hours a file).");
+      : yield* Effect.tryPromise({ try: () => media.streams(script.originalPath), catch: () => new FootageUnusable({ message: "This file can't be read as video or audio." }) });
+  if (found.durationMs === 0) return yield* new FootageUnusable({ message: "This file has no length to play." });
+  const duration = joined ? found.durationMs : yield* Effect.tryPromise({ try: () => media.playableMs(script.originalPath, found.durationMs), catch: (error) => error as Error });
+  if (duration > media.MAX_CASE_MS || (!joined && duration > MAX_FILE_MS)) return yield* new FootageUnusable({ message: "This footage runs longer than Edit imports at once (ten hours a file)." });
   if (duration + 2_000 < found.durationMs) note(script, `The file is cut short: it claims ${clock(found.durationMs)} but holds ${clock(duration)}. Edit imported what it holds.`);
   script.durationMs = duration;
   store.write(dir, script);
@@ -559,40 +586,37 @@ async function pipeline(app: App, dir: string, script: Script): Promise<"done" |
   }
   // The preview, made beside the words: transcription reads the recordings themselves. Sound with no picture plays over black.
   if (!found.video && !joined) {
-    build = await audioPreview(dir, script, found);
+    build = yield* Effect.tryPromise({ try: () => audioPreview(dir, script, found), catch: (error) => error as Error });
     joined = true;
   }
-  if (!joined) build = await singlePreview(dir, script);
+  if (!joined) build = yield* Effect.tryPromise({ try: () => singlePreview(dir, script), catch: (error) => error as Error });
   // How far the preview is, said while the import waits on it (the user, Oct 30: it sat at 60% through a long join).
   let previewPercent = 0;
-  const preview: Promise<void> = build === null ? Promise.resolve() : build((percent) => (previewPercent = percent));
-  const waitOn = async (words: string) => {
-    // From where the import is toward 59 (transcription starts at 60); past that already, it holds.
-    const from = script.progress;
-    const to = Math.max(from, 59);
-    const tell = () => say(script, `${words}: ${previewPercent}%.`, script.stage, from + Math.floor(((to - from) * previewPercent) / 100));
-    tell();
-    const ticker = setInterval(tell, 2000);
-    try {
-      await preview;
-    } finally {
-      clearInterval(ticker);
-    }
-  };
-  // Its failure is said where it's waited for.
-  preview.catch(() => {});
-  let made = false;
-  void preview.then(() => (made = true), () => (made = true));
-  if ((await words(app, dir, script, waitOn)) === "paused") return "paused";
+  const making = build;
+  const preview = yield* (making === null
+    ? Effect.void
+    : Effect.tryPromise({ try: (signal) => making((percent) => (previewPercent = percent), signal), catch: (error) => error as Error })
+  ).pipe(Effect.forkScoped);
+  const waitOn = (words: string) =>
+    Effect.gen(function* () {
+      // From where the import is toward 59 (transcription starts at 60); past that already, it holds.
+      const from = script.progress;
+      const to = Math.max(from, 59);
+      const tell = Effect.sync(() => say(script, `${words}: ${previewPercent}%.`, script.stage, from + Math.floor(((to - from) * previewPercent) / 100)));
+      yield* tell;
+      yield* Fiber.join(preview).pipe(Effect.raceFirst(Effect.forever(Effect.sleep(2000).pipe(Effect.andThen(tell))).pipe(Effect.andThen(Effect.never))));
+    });
+  const said = yield* Effect.tryPromise({ try: () => words(app, dir, script, (text) => runPromise(waitOn(text))), catch: (error) => error as Error });
+  if (said === "paused") return "paused" as const;
   // Ready once its preview is: the words were heard beside it.
-  if (!made) {
+  if (preview.pollUnsafe() === undefined) {
     script.stage = "processing";
-    await waitOn("Finishing the preview");
+    yield* waitOn("Finishing the preview");
   }
-  await preview;
+  yield* Fiber.join(preview);
   // A joined preview made beside the words gives the overview after them.
   if (script.overview.length === 0) {
-    const peaks = await media.peaks(script.originalPath).catch(() => new Float32Array());
+    const peaks = yield* Effect.tryPromise(() => media.peaks(script.originalPath)).pipe(Effect.orElseSucceed(() => new Float32Array()));
     if (peaks.length > 0) script.overview = media.overview(peaks, 800);
   }
   script.status = "ready";
@@ -603,8 +627,8 @@ async function pipeline(app: App, dir: string, script: Script): Promise<"done" |
   script.updatedAt = Date.now();
   store.write(dir, script);
   say(script, "Ready.");
-  return "done";
-}
+  return "done" as const;
+});
 
 /** The case's PDFs, the words and who says them, while `preview` is made. */
 async function words(app: App, dir: string, script: Script, waitOn: (words: string) => Promise<void>): Promise<"done" | "paused"> {
@@ -705,12 +729,12 @@ async function singlePreview(dir: string, script: Script): Promise<Build | null>
   const proxy = store.proxyPath(dir);
   if (await previewFits(proxy, script.durationMs)) return null;
   const [source, duration, label] = [script.originalPath, script.durationMs, jobs.named(script.id, script.title)];
-  return async (onPercent) => {
+  return async (onPercent, signal) => {
     fs.rmSync(proxy, { force: true });
     const partial = making(proxy);
     const began = Date.now();
     try {
-      await media.encodeProxy(source, partial, duration, onPercent);
+      await media.encodeProxy(source, partial, duration, onPercent, signal);
       fs.renameSync(partial, proxy);
       diag.info("writer", `${label}: 480p preview made: ${clock(duration)} of footage in ${Math.round((Date.now() - began) / 1000)} s`);
     } catch (error) {
@@ -726,10 +750,10 @@ async function audioPreview(dir: string, script: Script, found: media.Streams): 
   const proxy = store.proxyPath(dir);
   if (await previewFits(proxy, script.durationMs)) return null;
   const [source, streams] = [script.originalPath, { ...found, durationMs: script.durationMs }];
-  return async (onPercent) => {
+  return async (onPercent, signal) => {
     const partial = making(proxy);
     try {
-      await media.join([{ path: source, streams }], partial, onPercent);
+      await media.join([{ path: source, streams }], partial, onPercent, signal);
       fs.renameSync(partial, proxy);
     } catch (error) {
       fs.rmSync(partial, { force: true });
@@ -849,11 +873,9 @@ function checkSpace(dir: string, needed: number): void {
 }
 
 /** Runs `work` on each item, `lanes` at a time. */
-async function lanes<T>(items: T[], count: number, work: (item: T, index: number) => Promise<void>): Promise<void> {
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(count, items.length) }, async () => {
-    for (let index = next++; index < items.length; index = next++) await work(items[index]!, index);
-  }));
+/** `work` over `items`, `count` at a time; one failing stops the rest (round 3: Effect.forEach, not hand-made workers). */
+function lanes<T>(items: T[], count: number, work: (item: T, index: number) => Promise<void>): Promise<void> {
+  return runPromise(Effect.forEach(items, (item, index) => Effect.tryPromise({ try: () => work(item, index), catch: (error) => error as Error }), { concurrency: Math.max(1, count), discard: true }));
 }
 
 /** The question a Drive folder or compilation asks when some of its recordings failed. */
@@ -1044,7 +1066,7 @@ async function joinPreview(dir: string, script: Script, items: [string, string, 
   }
   const pieces = items.map(([, path]) => piecePath(dir, path));
   const label = jobs.named(script.id, script.title);
-  return async (onPercent) => {
+  return async (onPercent, signal) => {
     const partial = making(proxy);
     const began = Date.now();
     try {
@@ -1052,10 +1074,10 @@ async function joinPreview(dir: string, script: Script, items: [string, string, 
       diag.info("writer", `${label}: joining ${items.length} ${what} into the preview (${clock(startMs)}), ${whole.filter(Boolean).length} of ${pieces.length} already encoded as pieces`);
       const copied =
         pieces.length > 1 && whole.every(Boolean)
-          ? await media.append(pieces[0]!, pieces.slice(1), partial, onPercent, undefined, false, label)
+          ? await media.append(pieces[0]!, pieces.slice(1), partial, onPercent, signal, false, label)
           : pieces.length === 1 && whole[0] === true
             ? (fs.renameSync(pieces[0]!, partial), true)
-            : (await media.join(toJoin, partial, onPercent), false);
+            : (await media.join(toJoin, partial, onPercent, signal), false);
       fs.renameSync(partial, proxy);
       diag.info("writer", `${label}: ${items.length} ${what} joined into the preview (${clock(startMs)}) in ${Math.round((Date.now() - began) / 1000)} s${copied ? ", copied from the pieces encoded as they came down" : ""}`);
       fs.rmSync(join(dir, "pieces"), { recursive: true, force: true });

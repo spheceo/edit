@@ -8,8 +8,11 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
+import { Effect } from "effect";
+
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
+import { runPromise } from "./effect/runtime.ts";
 import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
 import { catchBugsAsync } from "./guard.ts";
@@ -144,6 +147,18 @@ export function holdExport(path: string): () => void {
     // kept copies filled the disk and card 1's export failed, Oct 29).
     if (archivedMeanwhile.delete(path)) fs.rmSync(path, { force: true });
   };
+}
+
+/**
+ * Holds `path` for the scope it's in (docs/plans/2026-11-01-effect.md, round
+ * 3): let go however the work ends (done, failed, interrupted), so an archive
+ * waits for the reading and never waits for ever.
+ */
+export const holdingExport = (path: string) => Effect.acquireRelease(Effect.sync(() => holdExport(path)), (release) => Effect.sync(release));
+
+/** `use`, with `path` held while it runs (`holdingExport`) for the code that isn't Effect yet. */
+export function withExport<T>(path: string, use: () => Promise<T>): Promise<T> {
+  return runPromise(Effect.scoped(holdingExport(path).pipe(Effect.andThen(Effect.tryPromise({ try: use, catch: (error) => error as Error })))));
 }
 
 /** An export with no progress for `ms` has stalled: it's started again, `tries` times at most (looked at every `everyMs`). */

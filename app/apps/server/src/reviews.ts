@@ -27,7 +27,7 @@ import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
-import { chunkFolder, clipMap, deleteExport, holdExport, lastChunks, listExports, mapFile, optionsKey, timelineHash } from "./exports.ts";
+import { chunkFolder, clipMap, deleteExport, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
@@ -211,104 +211,105 @@ export async function share(app: App, projectId: string, path: string | null, re
   const copy = join(work, `${timeline}.mp4`);
   const poster = join(work, `${timeline}.jpg`);
   sharing.set(projectId, "making the review copy");
-  const release = holdExport(chosen.path);
   try {
-    const prefix = `edit/reviews/${projectId}/${timeline}`;
-    const fullKey = fullKeyOf(prefix, chosen.path);
-    const seconds = chosen.frames / fps;
-    // In the cloud when the export is there and Modal is here: its review
-    // copy, poster and full-quality file made and copied within R2, nothing
-    // through this Mac (the team, Oct 29: "everything should be done on the
-    // cloud"); else here, as before.
-    let made: Reviewed | null = null;
-    await seams.modalExports.ready();
-    if (chosen.cloudKey !== undefined && seams.modalExports.enabled()) {
-      sharing.set(projectId, "making the review copy in the cloud");
-      try {
-        made = await seams.modalExports.review(home, projectId, { source: chosen.cloudKey, video: `${prefix}/video.mp4`, poster: `${prefix}/poster.jpg`, full: fullKey }, posterSecond(live.project, seconds), fps, chosen.frames);
-      } catch (error) {
-        diag.warn("review", `${projectId}: the review copy in the cloud: ${diag.messageOf(error)}; making it on this Mac`);
-      }
-    }
-    if (made === null) await shareFromHere();
-    // What the page shows beside the video: its transcript, chapters, the
-    // censoring, a waveform and the files' details (Fields), and the clips
-    // under each moment (a note is pinned to its footage as it's written).
-    sharing.set(projectId, "describing it");
-    const extra = await describe(app, live.project, chosen.path, copy, prefix, clips, made);
-    async function shareFromHere(): Promise<void> {
-      const [pick, now] = [chosen!, live!];
-      if (!fs.existsSync(pick.path)) {
-        sharing.set(projectId, "fetching the export back from the cloud");
-        await restoreArchived(pick);
-        sharing.set(projectId, "making the review copy");
-      }
-      if (!fs.existsSync(copy)) {
-        let pieced = false;
+    // The export held while it's read (an archive waits for it), let go however this ends.
+    return await withExport(chosen.path, async () => {
+      const prefix = `edit/reviews/${projectId}/${timeline}`;
+      const fullKey = fullKeyOf(prefix, chosen.path);
+      const seconds = chosen.frames / fps;
+      // In the cloud when the export is there and Modal is here: its review
+      // copy, poster and full-quality file made and copied within R2, nothing
+      // through this Mac (the team, Oct 29: "everything should be done on the
+      // cloud"); else here, as before.
+      let made: Reviewed | null = null;
+      await seams.modalExports.ready();
+      if (chosen.cloudKey !== undefined && seams.modalExports.enabled()) {
+        sharing.set(projectId, "making the review copy in the cloud");
         try {
-          pieced = await reviewCopyFromChunks(app.store.cacheDir(), projectId, pick.path, copy);
+          made = await seams.modalExports.review(home, projectId, { source: chosen.cloudKey, video: `${prefix}/video.mp4`, poster: `${prefix}/poster.jpg`, full: fullKey }, posterSecond(live.project, seconds), fps, chosen.frames);
         } catch (error) {
-          diag.warn("review", `${projectId}: the review copy from the export's chunks: ${diag.messageOf(error)}; making it whole`);
+          diag.warn("review", `${projectId}: the review copy in the cloud: ${diag.messageOf(error)}; making it on this Mac`);
         }
-        if (!pieced) await reviewCopy(pick.path, copy);
       }
-      await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(now.project, seconds), 2), "-i", pick.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
-      sharing.set(projectId, "uploading");
-      await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
-      await cloud.uploadFile(poster, `${prefix}/poster.jpg`);
-      // The export itself, untouched, for the page's Download button (`fullKey`).
-      sharing.set(projectId, "uploading the full-quality file");
-      await cloud.uploadFile(pick.path, fullKey, (done, total) => sharing.set(projectId, `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`));
-    }
-    if (latest !== null && latest !== undefined) {
-      const shared = read(home).shared[projectId]!;
-      update(home, (state) => {
-        const one = state.shared[projectId]?.versions.find((version) => version.n === latest.n);
-        if (one !== undefined) Object.assign(one, { path: chosen.path, clips });
-      });
-      fs.rmSync(copy, { force: true });
-      diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
-      return { url: shared.url, version: latest.n };
-    }
-    if (compress) {
-      // Every revision so far becomes this one, v1, on the same link: the
-      // other versions go and their notes move onto v1 (Repack's reviews:compress).
-      sharing.set(projectId, "making it v1");
+      if (made === null) await shareFromHere();
+      // What the page shows beside the video: its transcript, chapters, the
+      // censoring, a waveform and the files' details (Fields), and the clips
+      // under each moment (a note is pinned to its footage as it's written).
+      sharing.set(projectId, "describing it");
+      const extra = await describe(app, live.project, chosen.path, copy, prefix, clips, made);
+      async function shareFromHere(): Promise<void> {
+        const [pick, now] = [chosen!, live!];
+        if (!fs.existsSync(pick.path)) {
+          sharing.set(projectId, "fetching the export back from the cloud");
+          await restoreArchived(pick);
+          sharing.set(projectId, "making the review copy");
+        }
+        if (!fs.existsSync(copy)) {
+          let pieced = false;
+          try {
+            pieced = await reviewCopyFromChunks(app.store.cacheDir(), projectId, pick.path, copy);
+          } catch (error) {
+            diag.warn("review", `${projectId}: the review copy from the export's chunks: ${diag.messageOf(error)}; making it whole`);
+          }
+          if (!pieced) await reviewCopy(pick.path, copy);
+        }
+        await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(now.project, seconds), 2), "-i", pick.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
+        sharing.set(projectId, "uploading");
+        await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
+        await cloud.uploadFile(poster, `${prefix}/poster.jpg`);
+        // The export itself, untouched, for the page's Download button (`fullKey`).
+        sharing.set(projectId, "uploading the full-quality file");
+        await cloud.uploadFile(pick.path, fullKey, (done, total) => sharing.set(projectId, `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`));
+      }
+      if (latest !== null && latest !== undefined) {
+        const shared = read(home).shared[projectId]!;
+        update(home, (state) => {
+          const one = state.shared[projectId]?.versions.find((version) => version.n === latest.n);
+          if (one !== undefined) Object.assign(one, { path: chosen.path, clips });
+        });
+        fs.rmSync(copy, { force: true });
+        diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
+        return { url: shared.url, version: latest.n };
+      }
+      if (compress) {
+        // Every revision so far becomes this one, v1, on the same link: the
+        // other versions go and their notes move onto v1 (Repack's reviews:compress).
+        sharing.set(projectId, "making it v1");
+        const durationMs = Math.round((chosen.frames / fps) * 1000);
+        const answer = (await cloud.mutation("reviews:compress", {
+          sourceId: projectId, key: `${prefix}/video.mp4`, meta: { fps, durationMs, timeline, fullKey, posterKey: `${prefix}/poster.jpg`, ...extra }, by: app.machine,
+        })) as { reviewId: string; url: string; version: number; removed: number[] };
+        update(home, (state) => {
+          state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions: [{ n: 1, timeline, path: chosen.path, fps, durationMs, clips }] };
+          if (state.unshared !== undefined) delete state.unshared[projectId];
+        });
+        fs.rmSync(copy, { force: true });
+        diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
+        return { url: answer.url, version: 1 };
+      }
+      sharing.set(projectId, "publishing");
       const durationMs = Math.round((chosen.frames / fps) * 1000);
-      const answer = (await cloud.mutation("reviews:compress", {
-        sourceId: projectId, key: `${prefix}/video.mp4`, meta: { fps, durationMs, timeline, fullKey, posterKey: `${prefix}/poster.jpg`, ...extra }, by: app.machine,
-      })) as { reviewId: string; url: string; version: number; removed: number[] };
+      const answer = (await cloud.mutation("reviews:publish", {
+        sourceId: projectId,
+        title: live.project.name,
+        kind: "video",
+        key: `${prefix}/video.mp4`,
+        meta: { fps, durationMs, timeline, fullKey, ...extra },
+        posterKey: `${prefix}/poster.jpg`,
+        by: app.machine,
+      })) as { reviewId: string; url: string; version: number };
       update(home, (state) => {
-        state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions: [{ n: 1, timeline, path: chosen.path, fps, durationMs, clips }] };
+        const was = state.shared[projectId];
+        const versions = (was?.reviewId === answer.reviewId ? was.versions : []).filter((one) => one.n !== answer.version);
+        versions.push({ n: answer.version, timeline, path: chosen.path, fps, durationMs, clips });
+        state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions };
         if (state.unshared !== undefined) delete state.unshared[projectId];
       });
       fs.rmSync(copy, { force: true });
-      diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
-      return { url: answer.url, version: 1 };
-    }
-    sharing.set(projectId, "publishing");
-    const durationMs = Math.round((chosen.frames / fps) * 1000);
-    const answer = (await cloud.mutation("reviews:publish", {
-      sourceId: projectId,
-      title: live.project.name,
-      kind: "video",
-      key: `${prefix}/video.mp4`,
-      meta: { fps, durationMs, timeline, fullKey, ...extra },
-      posterKey: `${prefix}/poster.jpg`,
-      by: app.machine,
-    })) as { reviewId: string; url: string; version: number };
-    update(home, (state) => {
-      const was = state.shared[projectId];
-      const versions = (was?.reviewId === answer.reviewId ? was.versions : []).filter((one) => one.n !== answer.version);
-      versions.push({ n: answer.version, timeline, path: chosen.path, fps, durationMs, clips });
-      state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions };
-      if (state.unshared !== undefined) delete state.unshared[projectId];
+      diag.info("review", `${live.project.name}: shared v${answer.version} at ${answer.url}`);
+      return { url: answer.url, version: answer.version };
     });
-    fs.rmSync(copy, { force: true });
-    diag.info("review", `${live.project.name}: shared v${answer.version} at ${answer.url}`);
-    return { url: answer.url, version: answer.version };
   } finally {
-    release();
     sharing.delete(projectId);
   }
 }

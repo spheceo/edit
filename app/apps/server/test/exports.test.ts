@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, stall } from "../src/exports.ts";
+import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -330,5 +330,25 @@ test("five projects export on Modal at the same time, none queued, while this Ma
   } finally {
     release();
     plan.mockRestore(); render.mockRestore(); enabled.mockRestore(); wanted.mockRestore(); cleanup();
+  }
+});
+
+test("a share that fails while it reads an export lets go of it, so an archive that came meanwhile still takes it", async () => {
+  const dir = fs.mkdtempSync(`${os.tmpdir()}/edit-held-`);
+  try {
+    const file = `${dir}/Out.mp4`;
+    fs.writeFileSync(file, Buffer.alloc(50));
+    const io = { enabled: () => true, upload: async () => {}, head: async () => ({ size: 50 }) };
+    const failed = await withExport(file, async () => {
+      expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io, () => 0)).toBe(true);
+      // Archived while it's read: still here.
+      expect(fs.existsSync(file)).toBe(true);
+      throw new Error("the review link refused it");
+    }).catch((error: unknown) => (error as Error).message);
+    expect(failed).toBe("the review link refused it");
+    // Let go on the way out, failure and all: the archive's deletion happened then.
+    expect(fs.existsSync(file)).toBe(false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

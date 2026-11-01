@@ -35,11 +35,14 @@
 import * as accounts from "./accounts.ts";
 import * as fs from "node:fs";
 
+import { Effect, Schedule } from "effect";
+
 import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
 import { ConvexFailure } from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import * as diag from "./diag.ts";
+import { inArea, runtime } from "./effect/runtime.ts";
 import * as researchCloud from "./research_cloud.ts";
 import { readState as readStateFile } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
@@ -1051,12 +1054,20 @@ export function attach(app: App, cloudProjects: Cloud): void {
   keepLooping(app, cloudProjects);
 }
 
-/** The sync loop, started again (and said so) if it ever throws: it stopped for the session without a word (the audit, Oct 23). */
+/**
+ * The sync loop, supervised (round 3): one fiber that runs it and, if it
+ * ever throws, says so and starts it again 5 s later, until it's stopped (it
+ * stopped for the session without a word before the audit, Oct 23).
+ */
 function keepLooping(app: App, cloudProjects: Cloud): void {
-  loop(app, cloudProjects).catch((error: unknown) => {
-    diag.error("cloud", `cloud sync stopped: ${diag.messageOf(error)}; starting it again`);
-    if (!cloudProjects.stopped) setTimeout(() => keepLooping(app, cloudProjects), 5000);
-  });
+  runtime.runFork(
+    Effect.tryPromise(() => loop(app, cloudProjects)).pipe(
+      Effect.tapError((error) => Effect.logError(`cloud sync stopped: ${diag.messageOf(error.cause)}; starting it again`)),
+      Effect.retry(Schedule.spaced("5 seconds").pipe(Schedule.while(() => !cloudProjects.stopped))),
+      Effect.ignore,
+      inArea("cloud"),
+    ),
+  );
 }
 
 /** Stops `cloudProjects`' loop (tests; the server's runs until it exits). */

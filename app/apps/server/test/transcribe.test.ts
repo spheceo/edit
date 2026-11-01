@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import { Effect } from "effect";
 
 import { runtime } from "../src/effect/runtime.ts";
+import { kindOf } from "../src/effect/service.ts";
 import * as tools from "../src/tools.ts";
 import {
   aligned,
@@ -16,6 +17,8 @@ import {
   RELAY_MAX_BYTES,
   RelayBusy,
   RelayMaxBytes,
+  RelayTimedOut,
+  RequestTimeoutMs,
   RelayUnreachable,
   Retries,
   retryable,
@@ -339,3 +342,38 @@ test.skipIf(ffmpeg === null)("a long file over the limit at 32 kbps is heard who
     cleanup();
   }
 }, 30_000);
+
+test.skipIf(ffmpeg === null)("a relay that doesn't answer in time is abandoned and asked again; an answer that isn't Scribe's is said at once", async () => {
+  const { dir, cleanup } = scratch("transcribe-slow");
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    // The first answer comes after the time allowed: abandoned, then asked again.
+    mock.on("POST", "/v1/transcribe", async () => (await Bun.sleep(1500), Response.json(scribeAnswer())), 1);
+    const quick = <E, R>(work: Effect.Effect<void, E, R>) => work.pipe(Effect.provideService(RequestTimeoutMs, 300), Effect.provideService(Retries, Retries.instant));
+    await runtime.runPromise(quick(transcribeFile(source, `${dir}/cache/slow.json`)));
+    expect(mock.calls("/v1/transcribe", "POST").length - before).toBe(2);
+    expect(JSON.parse(fs.readFileSync(`${dir}/cache/slow.json`, "utf8")).words.length).toBeGreaterThan(0);
+
+    // A 200 that isn't Scribe's words: not a transcript of nothing, and not asked again.
+    const from = mock.calls("/v1/transcribe", "POST").length;
+    mock.on("POST", "/v1/transcribe", () => Response.json({ words: "not a list" }), 1);
+    const failed = await runtime.runPromise(quick(transcribeFile(source, `${dir}/cache/odd.json`)).pipe(Effect.flip));
+    expect((failed as { _tag: string })._tag).toBe("AnswerUnreadable");
+    expect(kindOf(failed)).toBe("permanent");
+    expect(mock.calls("/v1/transcribe", "POST").length - from).toBe(1);
+  } finally {
+    cleanup();
+  }
+}, 30_000);
+
+test("each transcription failure has a kind: what Edit asks again, what Try again is offered for", () => {
+  expect(kindOf(new RelayBusy({ message: "" }))).toBe("temporary");
+  expect(kindOf(new RelayTimedOut({ message: "" }))).toBe("temporary");
+  expect(kindOf(new AllowanceUsedUp({ message: "" }))).toBe("later");
+  expect(kindOf(new TooLongForOneRequest({ bytes: 1, message: "" }))).toBe("permanent");
+  expect(kindOf(new TranscriptionRefused({ status: 402, message: "" }))).toBe("later");
+  expect(kindOf(new TranscriptionRefused({ status: 400, message: "" }))).toBe("permanent");
+});

@@ -35,12 +35,13 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
-import { Clock, Context, Duration, Effect, Option, Schedule, Schema } from "effect";
+import { Clock, Context, Duration, Effect, Option, Predicate, Schedule, Schema } from "effect";
 
 import * as cameras from "./cameras.ts";
 import * as diag from "./diag.ts";
 import * as proc from "./effect/proc.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
+import * as service from "./effect/service.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
 import { withExtension } from "./paths.ts";
 import * as relay from "./relay.ts";
@@ -129,6 +130,9 @@ export class GatewayDown extends Schema.TaggedError<GatewayDown>()("GatewayDown"
 /** The relay couldn't be reached (the connection dropped, no network): asked again, as the gateway is. */
 export class RelayUnreachable extends Schema.TaggedError<RelayUnreachable>()("RelayUnreachable", { message: Schema.String }) {}
 
+/** The relay didn't answer within `RequestTimeoutMs`: the request is abandoned and asked again, as the gateway is. */
+export class RelayTimedOut extends Schema.TaggedError<RelayTimedOut>()("RelayTimedOut", { message: Schema.String }) {}
+
 /** The day's transcription allowance is used up: asking again only waits for the same answer. */
 export class AllowanceUsedUp extends Schema.TaggedError<AllowanceUsedUp>()("AllowanceUsedUp", { message: Schema.String }) {}
 
@@ -157,13 +161,29 @@ export class AudioUnreadable extends Schema.TaggedError<AudioUnreadable>()("Audi
 export class TranscriptUnwritable extends Schema.TaggedError<TranscriptUnwritable>()("TranscriptUnwritable", { message: Schema.String }) {}
 
 /** Every way asking the relay can fail. */
-export type AskError = RelayBusy | GatewayDown | RelayUnreachable | AllowanceUsedUp | TooLongForOneRequest | NamesRefused | TranscriptionRefused | AnswerUnreadable;
+export type AskError = RelayBusy | GatewayDown | RelayUnreachable | RelayTimedOut | AllowanceUsedUp | TooLongForOneRequest | NamesRefused | TranscriptionRefused | AnswerUnreadable;
 
 /** Every way hearing a file can fail. */
 export type TranscribeError = Exclude<AskError, NamesRefused> | AudioUnreadable | TranscriptUnwritable;
 
 /** Whether asking again, later, could answer differently (what Retry should be offered for). */
-export const retryable = (error: { readonly _tag: string }): boolean => error._tag === "RelayBusy" || error._tag === "GatewayDown" || error._tag === "RelayUnreachable";
+export const retryable = (error: { readonly _tag: string }): boolean => service.isTemporary(error);
+
+// Each failure's kind (effect/service.ts): what Edit asks again by itself, what Try again is offered for.
+service.kinds({
+  RelayBusy: "temporary",
+  GatewayDown: "temporary",
+  RelayUnreachable: "temporary",
+  RelayTimedOut: "temporary",
+  // The day's allowance comes back tomorrow; a quota or a sign-in is a person's to change.
+  AllowanceUsedUp: "later",
+  TooLongForOneRequest: "permanent",
+  NamesRefused: "permanent",
+  TranscriptionRefused: (error) => service.kindOfStatus(Predicate.hasProperty(error, "status") && typeof error.status === "number" ? error.status : 400),
+  AnswerUnreadable: "permanent",
+  AudioUnreadable: "permanent",
+  TranscriptUnwritable: "later",
+});
 
 // ── When to ask again ───────────────────────────────────────────────────────
 
@@ -271,27 +291,45 @@ function said(body: string): string {
   return typeof object.error === "string" ? object.error : typeof object.detail?.message === "string" ? object.detail.message : body.trim();
 }
 
+/** How long one request may take before it's abandoned and asked again (tests make it short). */
+export const RequestTimeoutMs = Context.Reference<number>("edit/transcribe/RequestTimeoutMs", { defaultValue: () => 30 * 60_000 });
+
+/**
+ * Scribe's answer as the relay passes it on: its words (spacing and sound
+ * events among them, `parseScribe` keeps the words) and the language. Read
+ * through this, an answer that isn't Scribe's is `AnswerUnreadable` at once,
+ * never a transcript of nothing.
+ */
+const ScribeAnswer = Schema.Struct({
+  language_code: Schema.optional(Schema.NullOr(Schema.String)),
+  words: Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      text: Schema.optional(Schema.NullOr(Schema.String)),
+      start: Schema.optional(Schema.NullOr(Schema.Number)),
+      end: Schema.optional(Schema.NullOr(Schema.Number)),
+      speaker_id: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  ),
+});
+
 /** One request: `audio` with the names to listen for. */
 const askOnce = Effect.fn("transcribe.askOnce")(function* (audio: string, names: readonly string[], again: boolean) {
   const query = [...names.map((name) => `keyterm=${encodeURIComponent(name)}`), ...(again ? ["again=1"] : [])].join("&");
-  const auth = relay.authHeaders();
-  const [status, body] = yield* Effect.tryPromise({
-    try: async (signal) => {
-      const response = await fetch(`${relay.url()}/v1/transcribe${query === "" ? "" : `?${query}`}`, {
-        method: "POST",
-        headers: { ...auth, "content-type": "audio/ogg" },
-        body: Bun.file(audio),
-        signal: AbortSignal.any([signal, AbortSignal.timeout(1800 * 1000)]),
-      });
-      return [response.status, await response.text()] as const;
-    },
-    catch: (error) => new RelayUnreachable({ message: `could not reach the transcription relay: ${diag.messageOf(error)}` }),
-  });
+  const timeout = yield* RequestTimeoutMs;
+  const answer = yield* service
+    .request("the transcription relay", `${relay.url()}/v1/transcribe${query === "" ? "" : `?${query}`}`, { method: "POST", headers: { ...relay.authHeaders(), "content-type": "audio/ogg" }, body: Bun.file(audio) }, timeout)
+    .pipe(
+      Effect.catchTags({
+        ServiceUnreachable: (error) => Effect.fail(new RelayUnreachable({ message: error.message })),
+        ServiceTimedOut: (error) => Effect.fail(new RelayTimedOut({ message: error.message })),
+      }),
+    );
+  const status = answer.status;
+  const body = answer.text();
   if (status === 200) {
-    return yield* Effect.try({
-      try: () => parseScribe(serdeParse(body)),
-      catch: (error) => new AnswerUnreadable({ message: diag.messageOf(error) }),
-    });
+    const decoded = yield* service.decodeJson("Scribe", ScribeAnswer, body).pipe(Effect.mapError((error) => new AnswerUnreadable({ message: error.message })));
+    return parseScribe(decoded);
   }
   const message = `transcription failed (${status}): ${said(body)}`;
   if ((status === 400 || status === 422) && names.length > 0) return yield* new NamesRefused({ status, message: `${status}: ${body.trim().slice(0, 200)}` });
@@ -313,7 +351,7 @@ const ask = Effect.fn("transcribe.ask")(function* (audio: string, keyterms: read
   );
   const gateway = policy.gateway.pipe(
     Schedule.setInputType<AskError>(),
-    Schedule.while(({ input }) => input._tag === "GatewayDown" || input._tag === "RelayUnreachable"),
+    Schedule.while(({ input }) => input._tag === "GatewayDown" || input._tag === "RelayUnreachable" || input._tag === "RelayTimedOut"),
     Schedule.tap((meta) =>
       Effect.logWarning(
         meta.input._tag === "GatewayDown"
@@ -498,10 +536,12 @@ export const transcribeFile = Effect.fn("transcribe.file")(function* (source: st
   });
 });
 
+/** `effect` with the retry policy the Promise side's tests asked for (`timing.instant`). */
+export const asConfigured = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => (timing.instant ? effect.pipe(Effect.provideService(Retries, Retries.instant)) : effect);
+
 /** `transcribeFile` for code that isn't Effect yet: rejects with the same words it always has. */
 export function run(source: string, target: string, keyterms: readonly string[] = [], again = false): Promise<void> {
-  const work = transcribeFile(source, target, keyterms, again).pipe(inArea("media"));
-  return runPromise(timing.instant ? work.pipe(Effect.provideService(Retries, Retries.instant)) : work);
+  return runPromise(asConfigured(transcribeFile(source, target, keyterms, again).pipe(inArea("media"))));
 }
 
 const round3 = (value: number) => Math.round(value * 1000) / 1000;

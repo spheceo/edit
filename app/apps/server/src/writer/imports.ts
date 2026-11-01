@@ -8,14 +8,14 @@
 
 import * as fs from "node:fs";
 
-import { Effect, Fiber, Schema } from "effect";
+import { Cause, Effect, Fiber, Schema } from "effect";
 
 import type { Choice, Decision, ImportProgress, Kind, Label, Research, Reuse, Script, VideoCheck } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import { creator } from "../accounts.ts";
 import * as diag from "../diag.ts";
-import { inArea, runPromise } from "../effect/runtime.ts";
+import { inArea, runPromise, runtime } from "../effect/runtime.ts";
 import * as service from "../effect/service.ts";
 import { BUILD } from "../version.ts";
 import { isFile, join } from "../paths.ts";
@@ -75,6 +75,34 @@ function busy(id: string): () => void {
     latest.delete(id);
     started.delete(id);
   };
+}
+
+/**
+ * When an import's request is answered: once its script exists ("started":
+ * the routes; the import carries on as a fiber of the server's runtime), or
+ * once the import has finished ("finished": tests, Edit's own resumes). The
+ * routes answered only when the whole import ended, often 40 minutes and more,
+ * so New project guessed with a 1.5 s timer and a busy Mac's refusal after it
+ * was lost (JJ, Nov 1: a compilation started twice, no row and no error).
+ */
+export type Answer = "started" | "finished";
+
+/**
+ * The rest of an import, on its own: `importScript` records how it ends on the
+ * script (ready, a question, stopped and why), then its first build starts.
+ * Its slot (`done`) is let go however it ends, an interruption included.
+ */
+function carryOnAlone(app: App, data: string, dir: string, script: Script, done: () => void): void {
+  runtime.runFork(
+    importScript(app, dir, script).pipe(
+      Effect.tap((result) => Effect.sync(() => buildWhenReady(app, data, result))),
+      // A stop is already on the script, with its reason, and in the log (importScript says it).
+      Effect.catch(() => Effect.void),
+      Effect.catchCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logError(`${jobs.named(script.id, script.title)}: its import ended unexpectedly: ${diag.messageOf(Cause.squash(cause))}`))),
+      Effect.ensuring(Effect.sync(done)),
+      inArea("writer"),
+    ),
+  );
 }
 
 /**
@@ -156,7 +184,7 @@ function newScript(title: string, sourceKind: string, sourceUrl: string, origina
   };
 }
 
-export async function fromFile(app: App, data: string, source: string, link: string | null, title: string | null, kind: Kind | null): Promise<Script> {
+export async function fromFile(app: App, data: string, source: string, link: string | null, title: string | null, kind: Kind | null, answer: Answer = "finished"): Promise<Script> {
   let path: string;
   try {
     path = fs.realpathSync(source);
@@ -165,19 +193,19 @@ export async function fromFile(app: App, data: string, source: string, link: str
   }
   if (!isFile(path)) throw new Error("That file can't be opened.");
   const name = givenTitle(title) ?? [...(path.split("/").pop() ?? "Untitled").replace(/\.[^.]+$/, "")].slice(0, 180).join("");
-  return start(app, data, newScript(name, "file", path, path), await article(link), kind);
+  return start(app, data, newScript(name, "file", path, path), await article(link), kind, null, answer);
 }
 
 /** A title given is kept in place of the video's own, which is looked up otherwise. */
-export async function fromYoutube(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
+export async function fromYoutube(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null, answer: Answer = "finished"): Promise<Script> {
   youtube.checkUrl(url);
-  return start(app, data, newScript(givenTitle(title) ?? "YouTube video", "youtube", url.trim(), ""), await article(link), kind, then);
+  return start(app, data, newScript(givenTitle(title) ?? "YouTube video", "youtube", url.trim(), ""), await article(link), kind, then, answer);
 }
 
 /** A Drive file, or a folder of recordings joined in name order, as Repack takes them; a title given is kept in place of the folder's name. */
-export async function fromDrive(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
+export async function fromDrive(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null, answer: Answer = "finished"): Promise<Script> {
   drive.parse(url);
-  return start(app, data, newScript(givenTitle(title) ?? "Google Drive footage", "drive", url.trim(), ""), await article(link), kind, then);
+  return start(app, data, newScript(givenTitle(title) ?? "Google Drive footage", "drive", url.trim(), ""), await article(link), kind, then, answer);
 }
 
 /** A compilation's lines: each a video link, or "REUSE" and a link for a case the channel already covered, as Repack takes them. */
@@ -266,8 +294,8 @@ export async function checkVideos(app: App, given: string[]): Promise<VideoCheck
 }
 
 /** Several videos joined in order: a compilation, one case each, or (`oneCase`) one Courtroom case whose hearing runs across them. A link's `t` is a hint to where the case starts in that video. */
-export function fromCompilation(app: App, data: string, title: string, urls: string[], oneCase: boolean, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
-  return compilationWith(app, data, title, urls, oneCase, kind, null, [], then);
+export function fromCompilation(app: App, data: string, title: string, urls: string[], oneCase: boolean, kind: Kind | null, then: Script["firstBuild"] | null = null, answer: Answer = "finished"): Promise<Script> {
+  return compilationWith(app, data, title, urls, oneCase, kind, null, [], then, answer);
 }
 
 /**
@@ -276,7 +304,7 @@ export function fromCompilation(app: App, data: string, title: string, urls: str
  * search runs), its web pages read as articles, and its videos one case: a
  * single video imported as itself, several joined as one Courtroom case.
  */
-export async function fromBrief(app: App, data: string, text: string, kind: Kind | null): Promise<Script> {
+export async function fromBrief(app: App, data: string, text: string, kind: Kind | null, answer: Answer = "finished"): Promise<Script> {
   const parsed = brief.parse(text);
   if (parsed.title === "") throw new Error("Put the script's title on the brief's first line.");
   const videos = brief.videosOf(parsed);
@@ -296,14 +324,14 @@ export async function fromBrief(app: App, data: string, text: string, kind: Kind
   if (videos.length === 1 && only !== undefined) {
     const script = only.url.includes("drive.google.com") ? (drive.parse(only.url), newScript(parsed.title, "drive", only.url, "")) : (youtube.checkUrl(only.url), newScript(parsed.title, "youtube", only.url, ""));
     script.title = [...parsed.title].slice(0, 180).join("");
-    return start(app, data, script, found, kind);
+    return start(app, data, script, found, kind, null, answer);
   }
   if (kind !== null && kind !== "courtroom") throw new Error("A brief with several videos is one Courtroom case. For a compilation, use Compilation.");
   const labels: Label[] = videos.map((link) => ({ label: link.label, role: link.role, ...(link.part !== undefined ? { part: link.part } : {}) }));
-  return compilationWith(app, data, parsed.title, videos.map((link) => link.url), true, "courtroom", found, labels);
+  return compilationWith(app, data, parsed.title, videos.map((link) => link.url), true, "courtroom", found, labels, null, answer);
 }
 
-async function compilationWith(app: App, data: string, title: string, given: string[], oneCase: boolean, kind: Kind | null, found: Research | null, labels: Label[], then: Script["firstBuild"] | null = null): Promise<Script> {
+async function compilationWith(app: App, data: string, title: string, given: string[], oneCase: boolean, kind: Kind | null, found: Research | null, labels: Label[], then: Script["firstBuild"] | null = null, answer: Answer = "finished"): Promise<Script> {
   const name = title.trim();
   if (name === "" || [...name].length > 180) throw new Error("Give it a title (up to 180 characters).");
   const [urls, reuses] = linesFor(given, oneCase);
@@ -312,10 +340,10 @@ async function compilationWith(app: App, data: string, title: string, given: str
   if (oneCase) script.kind = "courtroom";
   script.reuses = reuses;
   script.labels = labels;
-  return start(app, data, script, found, kind, then);
+  return start(app, data, script, found, kind, then, answer);
 }
 
-async function start(app: App, data: string, script: Script, found: Research | null, kind: Kind | null, then: Script["firstBuild"] | null = null): Promise<Script> {
+async function start(app: App, data: string, script: Script, found: Research | null, kind: Kind | null, then: Script["firstBuild"] | null = null, answer: Answer = "finished"): Promise<Script> {
   if (then !== null) script.firstBuild = then;
   // Only kinds of script this person may write, starting as the first format they may.
   if (script.sourceKind === "compilation" && !script.compilation) {
@@ -332,7 +360,17 @@ async function start(app: App, data: string, script: Script, found: Research | n
     store.libraryChanged();
     // The producer's article is the case's research: no search runs.
     if (found !== null) research.keep(dir, found);
-    result = await run(app, dir, script);
+  } catch (error) {
+    done();
+    throw error;
+  }
+  // Answered now: the script exists and shows as importing; the rest runs on its own.
+  if (answer === "started") {
+    carryOnAlone(app, data, store.scriptDir(data, script.id), script, done);
+    return script;
+  }
+  try {
+    result = await run(app, store.scriptDir(data, script.id), script);
   } finally {
     done();
   }
@@ -365,9 +403,10 @@ function buildWhenReady(app: App, data: string, script: Script): void {
 }
 
 /** Answers a paused import, or retries a failed one, then carries on. */
-export async function resume(app: App, data: string, id: string, choice: Choice): Promise<Script> {
+export async function resume(app: App, data: string, id: string, choice: Choice, answer: Answer = "finished"): Promise<Script> {
   const done = busy(id);
   let result: Script;
+  let alone = false;
   try {
     const dir = store.scriptDir(data, id);
     const script = store.read(dir);
@@ -425,9 +464,15 @@ export async function resume(app: App, data: string, id: string, choice: Choice)
     script.error = null;
     script.updatedAt = Date.now();
     store.write(dir, script);
+    // Answered now, as an import's start is: it carries on as importing.
+    if (answer === "started") {
+      alone = true;
+      carryOnAlone(app, data, dir, script, done);
+      return script;
+    }
     result = await run(app, dir, script);
   } finally {
-    done();
+    if (!alone) done();
   }
   buildWhenReady(app, data, result);
   return result;

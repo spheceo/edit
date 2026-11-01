@@ -1878,15 +1878,13 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
               ? writer.importDrive(footage[0]!.url, undefined, title.trim(), WRITER_KIND[kind], extra)
               : writer.importYoutube(footage[0]!.url, undefined, title.trim(), WRITER_KIND[kind], extra)
             : writer.importCompilation(title.trim(), sources!.map((one) => (one.reuse ? ["REUSE", one.url, one.earlier].filter(Boolean).join(" ") : one.url)), false, WRITER_KIND[kind], extra);
-        // A refusal comes at once (a bad link, no access); after that the import runs on Home.
-        const early = await Promise.race([work.then(() => null, (cause: unknown) => cause), new Promise((resolve) => setTimeout(() => resolve("running"), 1500))]);
-        if (early !== null && early !== "running") throw early;
-        // A refusal that comes later (a busy Mac answering slowly) is still said, never dropped: JJ, Nov 1, started a
-        // compilation twice, saw "importing its footage" and then nothing, no row and no error.
-        const named = title.trim();
-        work.catch((cause: unknown) => useEditor.getState().toastError(cause, `start “${named}”`));
+        // The server answers once the script exists, or refuses (a bad link, no access, three imports running);
+        // the import then runs on Home. It used to answer only when the whole import ended, so this guessed with a
+        // 1.5 s timer and a busy Mac's refusal after it was lost (JJ, Nov 1: a compilation started twice, no row and
+        // no error). A refusal now stays in this dialog.
+        await work;
         onClose();
-        toast(`“${named}”: importing its footage, then writing the script`, "info");
+        toast(`“${title.trim()}”: importing its footage, then writing the script`, "info");
         return;
       }
       if (input !== "" && allowed !== null && !allowed.has(kind)) throw new Error("Your account can’t make full edits: an admin can give you an Edit style at accounts.spheceo.com.");

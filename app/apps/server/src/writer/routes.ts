@@ -236,29 +236,29 @@ export function routes(router: Router<App>): void {
     // Imports: each request holds until its import finishes or pauses for a choice; the page follows it in /api/writer/progress meanwhile.
     .post("/api/writer/scripts/file", async (context) => {
       const given = await body<{ path?: string; article?: string; title?: string; kind?: Kind }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromFile(context.app, dataOf(context.app), String(given.path ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null)));
+      return answer(async () => detail(dataOf(context.app), await imports.fromFile(context.app, dataOf(context.app), String(given.path ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, "started")));
     })
     .post("/api/writer/scripts/youtube", async (context) => {
       const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind; build?: string }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromYoutube(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, firstBuild(given.build))));
+      return answer(async () => detail(dataOf(context.app), await imports.fromYoutube(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, firstBuild(given.build), "started")));
     })
     .post("/api/writer/scripts/drive", async (context) => {
       const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind; build?: string }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromDrive(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, firstBuild(given.build))));
+      return answer(async () => detail(dataOf(context.app), await imports.fromDrive(context.app, dataOf(context.app), String(given.url ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, firstBuild(given.build), "started")));
     })
     .post("/api/writer/scripts/compilation", async (context) => {
       const given = await body<{ title?: string; urls?: string[]; case?: boolean; kind?: Kind; build?: string }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromCompilation(context.app, dataOf(context.app), String(given.title ?? ""), Array.isArray(given.urls) ? given.urls.map(String) : [], given.case === true, given.kind ?? null, firstBuild(given.build))));
+      return answer(async () => detail(dataOf(context.app), await imports.fromCompilation(context.app, dataOf(context.app), String(given.title ?? ""), Array.isArray(given.urls) ? given.urls.map(String) : [], given.case === true, given.kind ?? null, firstBuild(given.build), "started")));
     })
     .post("/api/writer/scripts/brief", async (context) => {
       const given = await body<{ text?: string; kind?: Kind }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromBrief(context.app, dataOf(context.app), String(given.text ?? ""), given.kind ?? null)));
+      return answer(async () => detail(dataOf(context.app), await imports.fromBrief(context.app, dataOf(context.app), String(given.text ?? ""), given.kind ?? null, "started")));
     })
     .post("/api/writer/scripts/{id}/resume", async (context) => {
       const choice = await body<Choice>(context);
       return answer(async () => {
         readFor(dataOf(context.app), id(context));
-        return detail(dataOf(context.app), await imports.resume(context.app, dataOf(context.app), id(context), choice));
+        return detail(dataOf(context.app), await imports.resume(context.app, dataOf(context.app), id(context), choice, "started"));
       });
     })
     .post("/api/writer/scripts/{id}/complete-transcription", (context) =>

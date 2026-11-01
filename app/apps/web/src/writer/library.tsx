@@ -443,7 +443,8 @@ export function Library({
         onStarted={onChanged}
         onFinished={(script) => {
           onChanged();
-          toast(<><b>{script.title}</b> is ready.</>, { label: "Open", onClick: () => onOpen(script.id) });
+          // The server answers once the script exists (it imports on its own since Nov 1): ready is said only when it is.
+          if (script.status === "ready") toast(<><b>{script.title}</b> is ready.</>, { label: "Open", onClick: () => onOpen(script.id) });
         }}
         onFailed={(reason) => {
           onChanged();

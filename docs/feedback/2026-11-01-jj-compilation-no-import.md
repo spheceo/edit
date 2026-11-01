@@ -13,6 +13,8 @@ JJ (Discord, 4:11 PM): "For this interrogation compilation video right here, I'v
 
 - A refusal that comes after New project has closed is said as an error toast ("Couldn't start “…”: …"), never dropped. Script mode's own import dialog already waits for the import to show and says its failures.
 
+- **Then, in Effect (Sphe: "have we enforced the fix in Effect?"):** the import routes (a file, YouTube, Drive, a compilation, a brief, Retry) answer once the script exists, or refuse at once, and the import carries on as a fiber of the server's runtime (`writer/imports.ts` `carryOnAlone`: its slot let go however it ends, its first build started when it's ready, a stop already on the script with its reason). New project waits for that answer: no timer, nothing to lose. Tried on dev: a two-video compilation answered in 0.07 s, importing, and became ready on its own; an empty title was refused in 0.01 s. `test/writer/import_stops.test.ts` holds it (answered before the import's through, ready on its own, a stop said on the script, Retry answered the same way).
+
 ## Open
 
 - The real refusal on JJ's Mac isn't known: his Mac couldn't be reached (remote support, now always on, ships with the next nightly). After he updates: try once more; the error now shows, or pull his report with `edit remote diagnostics`.

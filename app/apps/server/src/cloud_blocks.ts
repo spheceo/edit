@@ -72,7 +72,7 @@ function block(root: string, key: string, index: number, url: () => Promise<stri
   if (known !== undefined) return known;
   const read = slot(async () => {
     const start = index * BLOCK;
-    const answer = await fetch(await url(), { headers: { range: `bytes=${start}-${start + BLOCK - 1}` } });
+    const answer = await fetch(await url(), { headers: { range: `bytes=${start}-${start + BLOCK - 1}` }, signal: AbortSignal.timeout(30_000) });
     if (answer.status !== 206) {
       void answer.body?.cancel();
       throw new Error(`R2 answered ${answer.status} to a block read`);

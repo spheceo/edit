@@ -145,7 +145,11 @@ export function ScriptMode() {
     fetched.current = route.id;
     const id = route.id;
     void getScript(id)
-      .then((fresh) => acceptScript(fresh))
+      .then((fresh) => {
+        // A slow answer for a script since left must not overwrite the one now open.
+        if (fetched.current !== id) return;
+        acceptScript(fresh);
+      })
       .catch((cause) => {
         if (fetched.current === id) fetched.current = null;
         if (ready) setError(message(cause));

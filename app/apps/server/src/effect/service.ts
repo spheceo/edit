@@ -142,7 +142,13 @@ export const request = Effect.fn("service.request")(function* (service: string, 
       const body = await response.bytes();
       return { status: response.status, headers: response.headers, body, text: () => new TextDecoder().decode(body) };
     },
-    catch: (error) => new ServiceUnreachable({ service, message: `could not reach ${service}: ${diag.scrub(diag.messageOf(error))}` }),
+    catch: (error) => {
+      // A stopped caller (its signal fired) is not a service failure:
+      // rethrowing keeps it a defect/interruption, so retries never re-ask it.
+      const name = (error as { name?: unknown } | null)?.name;
+      if (name === "AbortError" || name === "TimeoutError") throw error;
+      return new ServiceUnreachable({ service, message: `could not reach ${service}: ${diag.scrub(diag.messageOf(error))}` });
+    },
   }).pipe(
     Effect.timeoutOrElse({
       duration: timeoutMs,

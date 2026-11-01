@@ -54,7 +54,8 @@ export function extraGuides(format: Format): [string, string][] {
     if (isCourtCompilation(format)) guides.push(["PRODUCER'S COURTROOM GUIDE", COURTROOM_GUIDE]);
   }
   if (isFoia(format) || (format.compilation && !isCourtCompilation(format))) guides.push(["WRITER'S HOUSE RULES", HOUSE_GUIDE]);
-  return guides;
+  // The guides name Repack's editor tools too: said plainly, as the shapes are.
+  return guides.map(([label, guide]): [string, string] => [label, plain(guide)]);
 }
 
 /** Repack's editor tools, said as what Script mode does instead (in this order: the longer phrases first). */
@@ -71,6 +72,16 @@ const PLAIN: [string, string][] = [
   ["after assembling, read pages, and if", "after assembling, estimate the pages, and if"],
   ["build_script then reports the exact pages;", "The app then counts the exact pages;"],
   ["build_script", "the plan"],
+  // The guides' own wordings for the same dead tools (single names, last).
+  ["read_script names the purpose of every cut-in", "Each cut-in's purpose follows from where it sits"],
+  ["with the link saved on that transition as a comment (set_reuse_link)", "with the link saved on that cut-in as its reuseLink"],
+  ["write_cut_ins", "the plan"],
+  ["insert_cut_in", "add a cut-in in the plan"],
+  ["read_script", "the script given here"],
+  ["read_assets", "read the sources given"],
+  ["curate_assets", "choose from the sources given"],
+  ["inspect_frames", "look at the frames given"],
+  ["set_reuse_link", "give it its reuseLink"],
 ];
 
 export function plain(text: string): string {

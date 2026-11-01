@@ -134,7 +134,9 @@ export function resume(home: string, resumers: Resumers): Promise<void> {
           Effect.andThen(Effect.tryPromise(async () => run(job))),
           Effect.timeoutOrElse({ duration: RESUME_MS.value, orElse: () => Effect.logWarning(`${job.key} is still starting after ${Math.round(RESUME_MS.value / 1000)} s; the others go on`) }),
           Effect.catch((error) =>
-            Effect.sync(() => carried.get(home)?.delete(job.key)).pipe(Effect.andThen(Effect.logWarning(`couldn't start ${job.key} again: ${diag.messageOf(error.cause)}`))),
+            Effect.sync(() => carried.get(home)?.delete(job.key)).pipe(
+              Effect.andThen(Effect.logWarning(`couldn't start ${job.key} again: ${diag.messageOf(error instanceof Error ? error : ((error as { cause?: unknown })?.cause ?? error))}`)),
+            ),
           ),
         );
       },

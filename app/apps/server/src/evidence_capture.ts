@@ -31,7 +31,13 @@ export async function capture(url: string, path: string, phrase = "", selector =
       socket!.onerror = () => { clearTimeout(timer); reject(new Error("Chrome capture connection failed")); };
     });
     socket.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as { id?: number; method?: string; result?: Record<string, unknown>; error?: { message?: string } };
+      // One malformed frame must not throw out of the handler and strand its request.
+      let message: { id?: number; method?: string; result?: Record<string, unknown>; error?: { message?: string } };
+      try {
+        message = JSON.parse(String(event.data)) as typeof message;
+      } catch {
+        return;
+      }
       if (message.method === "Page.loadEventFired") pageLoaded?.();
       if (message.id === undefined) return;
       const own = pending.get(message.id); if (own === undefined) return;

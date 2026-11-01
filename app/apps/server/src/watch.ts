@@ -534,7 +534,14 @@ async function cutAt(source: string, preview: [string, string] | null, window: W
     let code: number;
     try {
       const child = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-      [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+      // A hung ffmpeg would hold a CUTS slot forever: kill it after 2 min.
+      const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
+      timer.unref?.();
+      try {
+        [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+      } finally {
+        clearTimeout(timer);
+      }
     } catch (error) {
       throw new Error(`ffmpeg: ${diag.messageOf(error)}`);
     }
@@ -625,18 +632,26 @@ export const SHEET = { every: 2, columns: 4, rows: 3 };
  * sheets of frames, one every 2 s, and hears it only through the transcript's
  * voice labels. The same question and the same answer as Gemini's.
  */
-export async function askClaude(clip: string, text: string, lines: number, model: string, label = `Claude ${model} watching a window`): Promise<Answer> {
+export async function askClaude(clip: string, text: string, lines: number, model: string, label = `Claude ${model} watching a window`, signal?: AbortSignal): Promise<Answer> {
   const folder = fs.mkdtempSync(join(os.tmpdir(), "edit-sheets-"));
   try {
     const { every, columns, rows } = SHEET;
     const child = Bun.spawn([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", clip, "-vf", `fps=1/${every},scale=320:-2,tile=${columns}x${rows}`, "-q:v", "4", join(folder, "sheet-%02d.jpg")], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-    const [said, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    // Stopped or timed out: the ffmpeg child dies with the ask, not after it.
+    const kill = () => child.kill("SIGKILL");
+    const timer = setTimeout(kill, 120_000);
+    timer.unref?.();
+    signal?.addEventListener("abort", kill, { once: true });
+    const [said, code] = await Promise.all([new Response(child.stderr).text(), child.exited]).finally(() => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", kill);
+    });
     if (code !== 0) throw new Error(`the frames couldn't be taken: ${trim(said).split("\n").pop() ?? code}`);
     const sheets = fs.readdirSync(folder).filter((name) => name.endsWith(".jpg")).sort();
     const per = columns * rows;
     const shown = sheets.map((name, index) => `Sheet ${index + 1} (${join(folder, name)}): seconds ${index * per * every} to ${((index + 1) * per - 1) * every} of the clip`).join("\n");
     const prompt = `${text}\n\nThe clip as contact sheets (read every one, in order). Each holds ${per} frames, one every ${every} seconds, left to right then top to bottom: its first frame is at the second given, the next ${every} s later.\n${shown}`;
-    const answer = await claudeAsk.askPatiently({ model, system: CLAUDE_WATCH_SYSTEM, prompt, schema: schema() as Record<string, unknown>, read: folder, label });
+    const answer = await claudeAsk.askPatiently({ model, system: CLAUDE_WATCH_SYSTEM, prompt, schema: schema() as Record<string, unknown>, read: folder, label, ...(signal ? { signal } : {}) });
     const given = answer.structured ?? claudeAsk.planOf(answer);
     if (given === null) throw new Error("the model gave no answer");
     const read = readAnswer(given);
@@ -652,14 +667,18 @@ export async function askClaude(clip: string, text: string, lines: number, model
 /** Gemini's instructions, for a model that sees frames and can't hear. */
 const CLAUDE_WATCH_SYSTEM = `You can't hear this clip and see it only as frames, one every few seconds, on contact sheets. Wherever the instructions below say to listen or to judge a voice, judge instead by who is in the picture while a line is said (who faces the camera, who the camera points at, who holds the phone or radio), by the conversation (questions and answers, "I" and "you", names used, who is addressed) and by each line's label, which marks the voices a speech system heard.\n\n${WATCH_SYSTEM}`;
 
-/** `work`, or "the model took too long" after `ms`. */
-async function within<T>(ms: number, work: Promise<T>): Promise<T> {
+/** `work`, or "the model took too long" after `ms`: the loser is aborted, not orphaned. */
+async function within<T>(ms: number, work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const stop = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("the model took too long")), ms);
+    timer = setTimeout(() => {
+      stop.abort(new Error("the model took too long"));
+      reject(new Error("the model took too long"));
+    }, ms);
   });
   try {
-    return await Promise.race([work, late]);
+    return await Promise.race([work(stop.signal), late]);
   } finally {
     clearTimeout(timer);
   }
@@ -717,8 +736,8 @@ export async function watchWindow(
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
       const [answer, cost] = aiClaude.standIn.post !== null
-        ? await within(timing.askLimitMs, askStandIn(clip, text, lines.length, join(dir, `${key}.request.json`)))
-        : [await within(timing.askLimitMs, askClaude(clip, text, lines.length, MODEL, "Claude opus watching footage")), 0.0];
+        ? await within(timing.askLimitMs, () => askStandIn(clip, text, lines.length, join(dir, `${key}.request.json`)))
+        : [await within(timing.askLimitMs, (signal) => askClaude(clip, text, lines.length, MODEL, "Claude opus watching footage", signal)), 0.0];
       spent += cost;
       fs.rmSync(clip, { force: true });
       const saved = { model: MODEL, start: window.start, end: window.end, cost, answer: written(answer) };

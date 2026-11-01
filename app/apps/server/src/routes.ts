@@ -797,6 +797,10 @@ async function receive(request: Request, path: string, size: number | null, limi
       let next: Awaited<ReturnType<typeof reader.read>>;
       try {
         next = await Promise.race([reader.read(), idle]);
+      } catch (error) {
+        // Give the body up: a pending read otherwise holds the connection.
+        await reader.cancel().catch(() => undefined);
+        throw error;
       } finally {
         clearTimeout(timer);
       }
@@ -1064,8 +1068,15 @@ async function pictureBox(still: string): Promise<[number, number, number, numbe
 /** FFmpeg with `args` (stdin closed), without blocking the server: its exit code and what it said. */
 async function ffmpegRun(args: string[]): Promise<{ code: number; stderr: string }> {
   const child = Bun.spawn([tools.ffmpeg(), ...args], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-  const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
-  return { code, stderr };
+  // A hung ffmpeg must not hang the handler forever.
+  const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
+  timer.unref?.();
+  try {
+    const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    return { code, stderr };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function startExport(context: Context): Promise<Response> {

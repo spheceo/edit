@@ -300,6 +300,16 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       const fields = { ...(given as Args) };
       const id = str(fields.id) ?? freshId(project, "c");
       if (clipOf(project, id) !== undefined) throw new Error(`clip ${id} already exists; use update`);
+      // Ids are unique across every collection (Project::fresh_id): a clip
+      // named after a track/media/link/person breaks later lookups by id.
+      if (
+        project.tracks.some((track) => track.id === id) ||
+        project.media.some((media) => media.id === id) ||
+        project.clips.some((clip) => clip.link === id) ||
+        (project.people ?? []).some((person) => person.id === id)
+      ) {
+        throw new Error(`id ${id} is already used by a track, media, link or person; pick another id`);
+      }
       fields.id = id;
       const kind = fields.type === "audio" ? "audio" : "video";
       // No silent defaults: a clip at frame 0 for one frame is never meant.
@@ -341,7 +351,12 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       });
       const partners: string[] = [];
       if (args.unlinked !== true) {
+        // One shift per link: with 2+ selected clips in one link group the
+        // partner must move once, not once per selected clip.
+        const shifted = new Set<string>();
         for (const [link, shift, before, after] of moved) {
+          if (shifted.has(link)) continue;
+          shifted.add(link);
           for (const clip of project.clips) {
             if (clip.link !== link || ids.includes(clip.id)) continue;
             clip.start += shift;
@@ -644,7 +659,7 @@ function transition(project: Project, args: Args): Json {
 function dissolve(project: Project, args: Args): Json {
   const at = int(args.at);
   if (at === null) throw new Error("a dissolve needs at (the cut's frame)");
-  const fps = project.settings.fps;
+  const fps = fpsOf(project);
   const index = (track: string) => project.tracks.findIndex((one) => one.id === track);
   const incoming = project.clips.filter((clip) => clip.type === "video" && clip.start === at && trackOf(project, clip.track)?.hidden !== true)
     .sort((a, b) => index(b.track) - index(a.track))[0];

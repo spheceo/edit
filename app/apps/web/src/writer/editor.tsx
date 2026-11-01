@@ -390,6 +390,11 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
         window.setTimeout(poll, 5000);
         return;
       }
+      // Gone while asking: don't write into a screen that has left.
+      if (!alive.current) {
+        watching.current = false;
+        return;
+      }
       if (job?.running) {
         setStage(job.stage);
         setLiveTurn(job.turn ?? null);
@@ -411,6 +416,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
       try {
         const before = latest.current;
         const fresh = await getScript(script.id);
+        if (!alive.current) return;
         onChange(fresh);
         // Undo brings back what the job changed; bringing in footage changes no clip.
         if (before.length && JSON.stringify(before) !== JSON.stringify(fresh.clips)) remember(before);

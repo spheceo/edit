@@ -34,12 +34,16 @@ export interface ScriptContext {
 }
 export type Op = Record<string, unknown>;
 
-/** "1:23.4", "83.4" or 83.4 → seconds. */
+/** "1:23.4", "83.4" or 83.4 → seconds. Empty, negative or gappy times are errors, never 0. */
 export function seconds(t: Time): number {
-  if (typeof t === "number" && Number.isFinite(t)) return t;
-  if (typeof t === "string") {
-    const parts = t.trim().split(":").map(Number);
-    if (parts.length >= 1 && parts.length <= 3 && parts.every((v) => Number.isFinite(v))) return parts.reduce((total, v) => total * 60 + v, 0);
+  if (typeof t === "number" && Number.isFinite(t) && t >= 0) return t;
+  if (typeof t === "string" && t.trim() !== "") {
+    const parts = t.trim().split(":");
+    // Each part must be digits (only the last may carry a fraction): this
+    // rejects "", " ", ":", "1:" and "-5", which Number() turned into 0/-5.
+    if (parts.length >= 1 && parts.length <= 3 && parts.every((part, i) => (i === parts.length - 1 ? /^\d+(\.\d+)?$/ : /^\d+$/).test(part))) {
+      return parts.map(Number).reduce((total, v) => total * 60 + v, 0);
+    }
   }
   throw new Error(`not a time: ${JSON.stringify(t)} (seconds, or "m:ss.s")`);
 }

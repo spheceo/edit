@@ -1,0 +1,44 @@
+name: Check
+
+# Every change is checked before it can ship: `just check` (fmt, clippy,
+# Rust and TypeScript tests, typecheck, lint, generated-types drift) on the
+# platform Edit ships for. Until Nov 1 2026 nothing ran this in CI — `just
+# publish` ran it locally and `just nightly` ran nothing — so a broken main
+# could reach every install on the Nightly channel.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  check:
+    # The native engine is macOS-only (AVFoundation), so checks run where
+    # releases are built.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-apple-darwin, wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: app
+      # Pinned, as in release.yml: what Edit is built and checked with.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      - name: Tools (just, FFmpeg)
+        run: brew install just ffmpeg
+      - name: Dependencies
+        run: bun install --frozen-lockfile
+      - name: Check
+        run: just check

@@ -75,7 +75,9 @@ export const capture = Effect.fn("proc.capture")(function* (command: string, arg
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   return yield* Effect.scoped(
     Effect.gen(function* () {
-      const handle = yield* spawner.spawn(ChildProcess.make(command, [...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe", forceKillAfter: FORCE_KILL_AFTER }));
+      const handle = yield* spawner.spawn(ChildProcess.make(command, [...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe", forceKillAfter: FORCE_KILL_AFTER })).pipe(
+        Effect.mapError((cause) => new ProcessNotStarted({ command: name(command), message: `${name(command)} could not be started: ${cause.message}` })),
+      );
       const [chunks, stderr, exitCode] = yield* Effect.all([Stream.runCollect(handle.stdout), Stream.mkString(Stream.decodeText(handle.stderr)), handle.exitCode], { concurrency: "unbounded" });
       const parts = [...chunks];
       const stdout = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -87,10 +89,22 @@ export const capture = Effect.fn("proc.capture")(function* (command: string, arg
       return { stdout, stderr, exitCode: Number(exitCode) } satisfies Captured;
     }),
   ).pipe(
-    Effect.mapError((cause) => new ProcessNotStarted({ command: name(command), message: `${name(command)} could not be started: ${cause.message}` })),
+    // Only starting is ProcessNotStarted; a failure while running is a failed run.
+    Effect.mapError((cause) =>
+      cause instanceof ProcessNotStarted
+        ? cause
+        : new ProcessFailed({ command: name(command), exitCode: -1, stderr: cause.message, message: `${name(command)} failed while running: ${cause.message}` }),
+    ),
     Effect.timeoutOrElse({
       duration: timeoutMs,
-      orElse: () => Effect.fail(new ProcessTimedOut({ command: name(command), afterMs: timeoutMs, message: `${name(command)} ran for more than ${Math.round(timeoutMs / 60_000)} min and was stopped` })),
+      orElse: () =>
+        Effect.fail(
+          new ProcessTimedOut({
+            command: name(command),
+            afterMs: timeoutMs,
+            message: `${name(command)} ran for more than ${timeoutMs >= 60_000 ? `${Math.round(timeoutMs / 60_000)} min` : `${Math.round(timeoutMs / 1000)} s`} and was stopped`,
+          }),
+        ),
     }),
   );
 });
@@ -106,21 +120,27 @@ export const output = Effect.fn("proc.output")(function* (
   command: string,
   args: readonly string[],
   options: { readonly stdout?: "pipe" | "ignore" } = {},
-): Effect.fn.Return<Output, ProcessNotStarted, ChildProcessSpawner.ChildProcessSpawner> {
+): Effect.fn.Return<Output, ProcessNotStarted | ProcessFailed, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const piped = (options.stdout ?? "pipe") === "pipe";
   return yield* Effect.scoped(
     Effect.gen(function* () {
       const handle = yield* spawner.spawn(
         ChildProcess.make(command, [...args], { stdin: "ignore", stdout: piped ? "pipe" : "ignore", stderr: "pipe", forceKillAfter: FORCE_KILL_AFTER }),
-      );
+      ).pipe(Effect.mapError((cause) => new ProcessNotStarted({ command: name(command), message: `${name(command)} could not be started: ${cause.message}` })));
       const [stdout, stderr, exitCode] = yield* Effect.all(
         [piped ? Stream.mkString(Stream.decodeText(handle.stdout)) : Effect.succeed(""), Stream.mkString(Stream.decodeText(handle.stderr)), handle.exitCode],
         { concurrency: "unbounded" },
       );
       return { stdout, stderr, exitCode: Number(exitCode) };
     }),
-  ).pipe(Effect.mapError((cause) => new ProcessNotStarted({ command: name(command), message: `${name(command)} could not be started: ${cause.message}` })));
+  ).pipe(
+    Effect.mapError((cause) =>
+      cause instanceof ProcessNotStarted
+        ? cause
+        : new ProcessFailed({ command: name(command), exitCode: -1, stderr: cause.message, message: `${name(command)} failed while running: ${cause.message}` }),
+    ),
+  );
 });
 
 /** `output`, failing with `ProcessFailed` (its stderr in the message) unless the program exits 0. */

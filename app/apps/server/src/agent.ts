@@ -2060,6 +2060,8 @@ export class Codex {
     try {
       for await (const chunk of stdout) {
         buffered += decoder.decode(chunk, { stream: true });
+        // A line that never ends must not grow memory without bound.
+        if (buffered.length > 1_000_000 && buffered.indexOf("\n") < 0) throw new Error("Codex sent a line over 1 MB without ending it");
         let at = buffered.indexOf("\n");
         while (at >= 0) {
           const line = buffered.slice(0, at);

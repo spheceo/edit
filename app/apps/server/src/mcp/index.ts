@@ -153,7 +153,16 @@ type Flight = { promise: Promise<Content[]>; started: number; waiting: number; d
 
 const flights = new Map<string, Flight>();
 
+/** Drops finished flights nobody collected within keepMs (distinct keys otherwise leak for the process's life). */
+function sweepFlights(): void {
+  const now = Date.now();
+  for (const [key, flight] of flights) {
+    if (flight.done !== null && now - flight.done.at >= longTiming.keepMs) flights.delete(key);
+  }
+}
+
 export async function once(key: string, name: string, work: () => Promise<Content[]>): Promise<Content[]> {
+  sweepFlights();
   let flight = flights.get(key);
   if (flight?.done !== null && flight?.done !== undefined) {
     // Finished while nobody was waiting: this call collects it.

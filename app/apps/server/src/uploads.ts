@@ -59,8 +59,15 @@ export type Plan = { media: string; from?: string } | { file: true };
 
 async function run(command: string[]): Promise<{ code: number; out: string }> {
   const child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { code, out: code === 0 ? out : err.trim().split("\n").slice(-3).join(" ") };
+  // A hung ffprobe/ffmpeg/sips must not hang the upload route forever.
+  const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
+  timer.unref?.();
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    return { code, out: code === 0 ? out : err.trim().split("\n").slice(-3).join(" ") };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Which streams a file has, as FFmpeg reads it (none when it can't). */

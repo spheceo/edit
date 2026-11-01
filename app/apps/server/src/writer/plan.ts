@@ -37,7 +37,7 @@ export function systemPrompt(script: Script, format: Format): string {
     : formats.isFoia(format)
       ? 'A full script starts with footage, has footage before each cut-in, and ends with a written outro; include at least two cut-ins. Also give opening: "one-run" or "two-split".'
       : "A full script starts with footage, has footage before each cut-in, and ends with a written outro; include at least an intro and an outro.";
-  let prompt = `${EDITOR_HEAD}\n${shape}\n${length}\n${sequence} ${EDITOR_WRITING.replace("{document}", formats.documentOf(format))}\n${EDITOR_FOOT.replace("{shape_rule}", shapeRule)}\nProject title: ${script.title}\nSource duration: ${script.durationMs}ms\n\nPRODUCER'S CUT-IN GUIDE\n${formats.CUT_IN_GUIDE}\n\nPRODUCER'S JUDGMENT CALLS\n${formats.JUDGMENT_GUIDE}`;
+  let prompt = `${EDITOR_HEAD}\n${shape}\n${length}\n${sequence} ${EDITOR_WRITING.replace("{document}", formats.documentOf(format))}\n${EDITOR_FOOT.replace("{shape_rule}", shapeRule)}\nProject title: ${script.title}\nSource duration: ${script.durationMs}ms\n\nPRODUCER'S CUT-IN GUIDE\n${formats.plain(formats.CUT_IN_GUIDE)}\n\nPRODUCER'S JUDGMENT CALLS\n${formats.plain(formats.JUDGMENT_GUIDE)}`;
   for (const [label, guide] of formats.extraGuides(format)) prompt += `\n\n${label}\n${guide}`;
   return prompt;
 }

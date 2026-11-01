@@ -190,8 +190,10 @@ publish: check
 
 # CI builds the tag and publishes it as a pre-release; installs on the Nightly
 # channel (the default) offer it at the top of the editor.
-# Ship a nightly: tag main's head nightly-<N> (the next number) and push
-nightly:
+# Ship a nightly: tag main's head nightly-<N> (the next number) and push.
+# Checked first, like publish: a nightly reaches every install on the
+# default channel, so it never ships on an unchecked tree.
+nightly: check
     #!/usr/bin/env bash
     set -euo pipefail
     [ "$(git branch --show-current)" = "main" ] || { echo "publish from main"; exit 1; }

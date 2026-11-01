@@ -279,7 +279,7 @@ async function upload(script: string, name: string, path: string, key: string): 
   const size = fs.statSync(path).size;
   const shown = (done: number) => (status.transfer = { script, name, up: true, done, total: size });
   if (size <= MULTIPART_OVER) {
-    const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: Bun.file(path), headers: { "content-length": String(size) } }).catch((error: unknown) => {
+    const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: Bun.file(path), headers: { "content-length": String(size) }, signal: AbortSignal.timeout(600_000) }).catch((error: unknown) => {
       throw transferProblem(error, name);
     });
     if (!answer.ok) throw new Problem(`The cloud refused ${name} (${answer.status}).`);
@@ -298,7 +298,7 @@ async function upload(script: string, name: string, path: string, key: string): 
       for (const number of numbers) {
         const from = (number - 1) * PART_SIZE;
         const chunk = Bun.file(path).slice(from, Math.min(from + PART_SIZE, size));
-        const answer = await fetch(urls[String(number)]!, { method: "PUT", body: chunk }).catch((error: unknown) => {
+        const answer = await fetch(urls[String(number)]!, { method: "PUT", body: chunk, signal: AbortSignal.timeout(600_000) }).catch((error: unknown) => {
           throw transferProblem(error, name);
         });
         if (!answer.ok) throw new Problem(`The cloud refused ${name} (${answer.status}).`);
@@ -315,7 +315,7 @@ async function upload(script: string, name: string, path: string, key: string): 
 }
 
 async function uploadBytes(key: string, bytes: Uint8Array | string): Promise<void> {
-  const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: bytes, headers: { "content-type": "application/json" } }).catch((error: unknown) => {
+  const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: bytes, headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(60_000) }).catch((error: unknown) => {
     throw transferProblem(error, "script.json");
   });
   if (!answer.ok) throw new Problem(`The cloud refused script.json (${answer.status}).`);
@@ -323,7 +323,7 @@ async function uploadBytes(key: string, bytes: Uint8Array | string): Promise<voi
 
 /** What's at a key, or null when nothing is. */
 async function fetchBytes(key: string): Promise<Uint8Array | null> {
-  const answer = await fetch(await presign(key, "GET")).catch((error: unknown) => {
+  const answer = await fetch(await presign(key, "GET"), { signal: AbortSignal.timeout(60_000) }).catch((error: unknown) => {
     throw transferProblem(error, key.split("/").pop() ?? "file");
   });
   if (answer.status === 404) return null;
@@ -333,17 +333,35 @@ async function fetchBytes(key: string): Promise<Uint8Array | null> {
 
 /** Downloads a file beside its place, then moves it in whole. */
 async function download(script: string, name: string, key: string, size: number, path: string): Promise<void> {
-  const answer = await fetch(await presign(key, "GET")).catch((error: unknown) => {
+  // A body that stops arriving must not wedge the sync forever: 60 s
+  // without a chunk aborts it (a total deadline would kill slow big files).
+  const stall = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => stall.abort(new Error("no data for a minute")), 60_000);
+    timer.unref?.();
+  };
+  arm();
+  const answer = await fetch(await presign(key, "GET"), { signal: stall.signal }).catch((error: unknown) => {
+    clearTimeout(timer);
     throw transferProblem(error, name);
   });
-  if (answer.status === 404) throw new Gone(`${name} isn't in the cloud.`);
-  if (!answer.ok || answer.body === null) throw new Problem(`The cloud refused ${name} (${answer.status}).`);
+  if (answer.status === 404) {
+    clearTimeout(timer);
+    throw new Gone(`${name} isn't in the cloud.`);
+  }
+  if (!answer.ok || answer.body === null) {
+    clearTimeout(timer);
+    throw new Problem(`The cloud refused ${name} (${answer.status}).`);
+  }
   fs.mkdirSync(parent(path) ?? ".", { recursive: true });
   const partial = `${path}.partial`;
   const out = fs.openSync(partial, "w");
   let done = 0;
   try {
     for await (const chunk of answer.body) {
+      arm();
       fs.writeSync(out, chunk);
       done += chunk.length;
       status.transfer = { script, name, up: false, done, total: size };
@@ -351,6 +369,7 @@ async function download(script: string, name: string, key: string, size: number,
   } catch (error) {
     throw new Problem(`${name} stopped coming down (${diag.messageOf(error)}).`, true);
   } finally {
+    clearTimeout(timer);
     fs.closeSync(out);
   }
   fs.renameSync(partial, path);
@@ -358,7 +377,7 @@ async function download(script: string, name: string, key: string, size: number,
 
 /** Puts bytes at a key Script mode may write (its own, or Edit's shared prefixes). */
 export async function putBytes(key: string, bytes: Uint8Array | string, contentType = "application/json"): Promise<void> {
-  const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: bytes, headers: { "content-type": contentType } }).catch((error: unknown) => {
+  const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: bytes, headers: { "content-type": contentType }, signal: AbortSignal.timeout(60_000) }).catch((error: unknown) => {
     throw transferProblem(error, key.split("/").pop() ?? "file");
   });
   if (!answer.ok) throw new Problem(`The cloud refused ${key.split("/").pop()} (${answer.status}).`);

@@ -100,6 +100,21 @@ test("linked_halves_move_and_go_together_and_add_needs_times", () => {
   expect(() => apply(p, [{ op: "add", clip: { type: "solid", fill: [0, 0, 0, 1] } }])).toThrow("clip.start is required");
 });
 
+test("three_linked_clips_move_their_partner_once_and_ids_are_unique_across_collections", () => {
+  const p = project("plan");
+  apply(p, [
+    { op: "add", as: "a", clip: { type: "solid", track: "v1", start: 0, duration: 30, fill: [0, 0, 0, 1], link: "l1" } },
+    { op: "add", as: "b", clip: { type: "solid", track: "new", start: 0, duration: 30, fill: [1, 1, 1, 1], link: "l1" } },
+    { op: "add", as: "c", clip: { type: "solid", track: "new", start: 0, duration: 30, fill: [1, 0, 0, 1], link: "l1" } },
+  ]);
+  const [a, b] = p.clips.map((one) => one.id);
+  apply(p, [{ op: "update", select: { ids: [a!, b!] }, patch: { start: 10 } }]);
+  // The unselected partner follows once, not once per selected clip.
+  expect(p.clips.map((one) => one.start)).toEqual([10, 10, 10]);
+  // A clip may not take a track's (or any other collection's) id.
+  expect(() => apply(project("plan"), [{ op: "add", clip: { id: "v1", type: "solid", track: "v2", start: 0, duration: 30, fill: [0, 0, 0, 1] } }])).toThrow("already used");
+});
+
 test("update_can_move_clips_to_a_new_track", () => {
   const p = project("plan");
   apply(p, [

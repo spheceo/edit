@@ -11,6 +11,7 @@ import type { Adding, Cite, Commentary, Draft, NoteMark, Pacing, Paragraph, Piec
 
 import { writerGuide } from "../agent_text.ts";
 import * as diag from "../diag.ts";
+import { safeFetch } from "../net_guard.ts";
 import { decodeEntities } from "../research.ts";
 import { isAlphanumeric, splitWhitespace } from "../rust.ts";
 import * as can from "./can.ts";
@@ -290,9 +291,14 @@ interface Fetched {
 async function getText(url: string): Promise<Fetched> {
   let response: Response;
   try {
-    response = await fetch(url, { headers: { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" }, signal: AbortSignal.timeout(30_000) });
+    // Through net_guard: a link to this Mac or its network is refused, and
+    // every redirect is checked the same way (plain fetch followed any).
+    response = await safeFetch(url, { headers: { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36" }, signal: AbortSignal.timeout(30_000) });
   } catch (error) {
-    throw new Error(`Could not reach it (${error instanceof Error ? error.message : String(error)}).`);
+    const said = error instanceof Error ? error.message : String(error);
+    // The guard's own refusals are the answer; only reaching failures are wrapped.
+    if (/this Mac|usual ports|carries a sign-in|redirects too many|web address/.test(said)) throw error;
+    throw new Error(`Could not reach it (${said}).`);
   }
   if (response.status === 401 || response.status === 403) throw new Error("That link isn't shared publicly.");
   if (response.status === 404) throw new Error("Nothing is at that link.");

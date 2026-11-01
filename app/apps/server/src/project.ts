@@ -576,7 +576,8 @@ export interface Inserted {
 export function insertTime(project: Project, at: number, frames: number, lengthen: Set<string>, early: Set<string>): Inserted {
   const done: Inserted = { moved: 0, lengthened: 0 };
   if (frames <= 0) return done;
-  const fps = project.settings.fps;
+  // Real rate (×1000/1001 on NTSC), as fps() above: raw settings.fps drifts.
+  const fps = project.settings.ntsc === true ? (Math.max(project.settings.fps, 1) * 1000) / 1001 : Math.max(project.settings.fps, 1);
   const cutMoves = lengthen.size > 0;
   const subtitles = new Set(project.tracks.filter((track) => track.subtitles === true).map((track) => track.id));
   const short = Math.round(2 * fps);

@@ -42,11 +42,28 @@ function run(args: string[], input: string | null): Promise<{ code: number; out:
   return new Promise((resolve, reject) => {
     const child = spawn("/usr/bin/security", args, { stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
+    let settled = false;
+    // A hung `security` must not wedge sign-in forever.
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new Error("security took too long"));
+    }, 15_000);
+    timer.unref?.();
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => (out += chunk));
     child.stderr.resume();
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 1, out }));
+    child.on("error", (error) => done(() => reject(error)));
+    child.on("close", (code) => done(() => resolve({ code: code ?? 1, out })));
+    // Writing to a dead child's stdin raises EPIPE: that is its exit, not a crash.
+    child.stdin.on("error", () => undefined);
     child.stdin.end(input ?? "");
   });
 }

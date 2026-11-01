@@ -579,7 +579,14 @@ export function connectEvents() {
     dropped = false;
   };
   socket.onmessage = (message) => {
-    const event = JSON.parse(message.data);
+    // One malformed frame must not throw out of the handler and drop the rest.
+    let event;
+    try {
+      event = JSON.parse(message.data);
+    } catch {
+      return;
+    }
+    if (event === null || typeof event !== "object") return;
     const state = useEditor.getState();
     const project = state.project;
     if (event.type === "project" && project && event.id === project.id) {

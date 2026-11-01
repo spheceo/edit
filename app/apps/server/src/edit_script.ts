@@ -26,7 +26,7 @@ import { handlerFor, registerTool, text, type Content } from "./mcp/registry.ts"
 import type { Clip, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { join, parent } from "./paths.ts";
-import { clipEnd, mediaOf, trackOf } from "./project.ts";
+import { clipEnd, fps as fpsOf, mediaOf, trackOf } from "./project.ts";
 import { READY } from "./script_eval.ts";
 import { REFERENCE, type Op, type ScriptContext } from "./script_runtime.ts";
 import * as seams from "./seams.ts";
@@ -69,7 +69,7 @@ function liveProject(app: App, projectId: string): { project: Project; rev: numb
   return { project: live.project, rev: live.rev };
 }
 function spanOf(p: Project, args: Args): [number, number] {
-  const fps = p.settings.fps;
+  const fps = fpsOf(p);
   const total = Math.max(0, ...p.clips.map(clipEnd)) / fps;
   const from = typeof args.start === "number" ? Math.max(0, args.start) : 0;
   const to = typeof args.end === "number" ? Math.min(args.end, total) : Math.min(total, from + 120);
@@ -79,7 +79,7 @@ function spanOf(p: Project, args: Args): [number, number] {
 }
 /** The narration's words on the timeline, from the voice-overs' transcripts. */
 function narration(app: App, p: Project, from: number, to: number): { text: string; at: number }[] {
-  const fps = p.settings.fps;
+  const fps = fpsOf(p);
   const voices = new Set((p.script?.blocks ?? []).flatMap((b) => (b.kind === "narration" && b.voiceover ? [b.voiceover] : [])));
   const out: { text: string; at: number }[] = [];
   for (const clip of p.clips) {
@@ -99,7 +99,7 @@ function narration(app: App, p: Project, from: number, to: number): { text: stri
 }
 export function context(app: App, projectId: string, from: number, to: number): ScriptContext {
   const { project: p, rev } = liveProject(app, projectId);
-  const fps = p.settings.fps;
+  const fps = fpsOf(p);
   const r = (frames: number) => Math.round((frames / fps) * 100) / 100;
   const facts = readFacts(app, projectId);
   const inSpan = (c: Clip) => clipEnd(c) / fps > from && c.start / fps < to && trackOf(p, c.track)?.hidden !== true;
@@ -280,8 +280,20 @@ export async function evaluate(code: string, ctx: ScriptContext, lib: { name: st
     if (late === "run") return { ops: [], notes: [], error: `the script ran for more than ${ms / 1000} s (a loop that never ends?)` };
     if (late === "start") return { ops: [], notes: [], error: `the script's sandbox didn't start within ${START_MS / 1000} s (this Mac is very busy): nothing was run; run it again` };
     if (exit !== 0) return { ops: [], notes: [], error: (err.trim().split("\n").slice(-3).join(" ") || `the script's process exited ${exit}`) };
-    return JSON.parse(out) as { ops: Op[]; notes: string[]; error?: string };
-  } finally { clearTimeout(timer); }
+    try {
+      return JSON.parse(out) as { ops: Op[]; notes: string[]; error?: string };
+    } catch {
+      return { ops: [], notes: [], error: "the script's sandbox answered in a shape Edit can't read; nothing was run" };
+    }
+  } finally {
+    clearTimeout(timer);
+    // If reading its output failed early, don't leave the sandbox running.
+    try {
+      child.kill();
+    } catch {
+      // Already gone.
+    }
+  }
 }
 
 /** The compiler's own checks after a run: what describe_shots said doesn't fit, or shows nothing. */
@@ -296,11 +308,11 @@ export function lints(ctx: ScriptContext, p?: Project): string[] {
   }
   // A photo shown bare, smaller than the frame: black around it ("I only saw that because I rendered the frame").
   if (p !== undefined) for (const c of p.clips) {
-    if (c.type !== "video" || /^Janitor|^Dissolve|evidence|Mark blur/u.test(c.name ?? "") || clipEnd(c) / p.settings.fps <= ctx.project.span[0] || c.start / p.settings.fps >= ctx.project.span[1]) continue;
+    if (c.type !== "video" || /^Janitor|^Dissolve|evidence|Mark blur/u.test(c.name ?? "") || clipEnd(c) / fpsOf(p) <= ctx.project.span[0] || c.start / fpsOf(p) >= ctx.project.span[1]) continue;
     const m = mediaOf(p, c.media); if (m === undefined || m.kind !== "image" || trackOf(p, c.track)?.hidden) continue;
     const fit = Math.min(p.settings.width / Math.max(m.width, 1), p.settings.height / Math.max(m.height, 1));
     const cover = Math.max(p.settings.width / (m.width * fit), p.settings.height / (m.height * fit));
-    if (c.transform.scale < cover * 0.98 && c.frame === undefined) out.push(`error ${c.id} @${(c.start / p.settings.fps).toFixed(2)}: a photo shown bare without filling the frame (black around it): shot({id, fill: true}) or a card`);
+    if (c.transform.scale < cover * 0.98 && c.frame === undefined) out.push(`error ${c.id} @${(c.start / fpsOf(p)).toFixed(2)}: a photo shown bare without filling the frame (black around it): shot({id, fill: true}) or a card`);
   }
   const undescribed = ctx.shots.filter((s) => !s.facts).length;
   if (undescribed) out.push(`info: ${undescribed} shot(s) here aren't described; describe_shots checks each picture against its words`);
@@ -370,7 +382,7 @@ registerTool("run_edit", async ({ app, args, projectId }) => {
     catch (error) { after.push({ tool: op.tool, error: diag.messageOf(error) }); }
   }
   // The plan's audit, only where this script worked.
-  const fps = p.settings.fps;
+  const fps = fpsOf(p);
   const audit = (applied.audit as Args | undefined) ?? {};
   const issues = Array.isArray(audit.issues) ? (audit.issues as Args[]).filter((i) => {
     const at = typeof i.start === "number" ? i.start : typeof i.at === "number" ? i.at : null;
@@ -400,7 +412,7 @@ registerTool("describe_shots", async ({ app, args, projectId }) => {
 async function describe(app: App, projectId: string, from: number, to: number, refresh: boolean, limit: number): Promise<string[] | null> {
   const { project: p } = liveProject(app, projectId);
   const ctx = context(app, projectId, from, to);
-  const fps = p.settings.fps;
+  const fps = fpsOf(p);
   const facts = readFacts(app, projectId);
   const seen = observations(app, projectId);
   const todo = ctx.shots.filter((s) => (refresh || s.facts === undefined) && s.to - s.from >= 0.15).slice(0, limit);

@@ -2,7 +2,6 @@
 // commands beside them. `main.ts` runs it; this file only defines it, so
 // tests can call its parts.
 
-import { main as scriptEval } from "./script_eval.ts";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
 import { runCli as mediaCli } from "./media_drive/move.ts";
@@ -133,10 +132,6 @@ export async function main(args: string[]): Promise<void> {
       } catch (error) { fail(diag.messageOf(error)); }
       return;
     }
-    case "script-eval":
-      // One e-code script (formerly Edit Script), run apart from the server (run_edit starts it).
-      void scriptEval().then(() => process.exit(0), (error: unknown) => { console.error(error); process.exit(1); });
-      return;
     case "media": {
       const where = home();
       initNative({

@@ -52,9 +52,13 @@ export async function evalScript(input: Input): Promise<{ ops: Op[]; notes: stri
   }
 }
 
+/** Written on stderr once the script has its input and starts: run_edit's time limit counts from here, not from the process starting. */
+export const READY = "\u0001e-code ready\n";
+
 /** The `script-eval` command: stdin to stdout. */
 export async function main(): Promise<void> {
   const input = JSON.parse(await new Response(Bun.stdin.stream()).text()) as Input;
+  process.stderr.write(READY);
   const out = await evalScript(input);
   process.stdout.write(JSON.stringify(out));
 }

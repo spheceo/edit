@@ -2,7 +2,7 @@
 
 import { expect, test } from "bun:test";
 import { evalScript } from "../src/script_eval.ts";
-import { forTests } from "../src/edit_script.ts";
+import { evaluate, forTests } from "../src/edit_script.ts";
 import type { ScriptContext } from "../src/script_runtime.ts";
 
 const ctx = (): ScriptContext => ({
@@ -99,4 +99,13 @@ test("a clip a script makes is named by the id its call returns: a label on a ne
   expect(out.ops[3]).toMatchObject({ op: "add", clip: { id: "xt1", type: "adjustment", start: 0, duration: 600, grade: { vignette: 0.7 }, name: "Opening look" } });
   expect(out.ops[4]).toMatchObject({ op: "keyframes", select: { ids: ["c1"] }, keyframes: [{ frame: 30 }, { frame: 90, value: 40 }] });
   expect(out.notes).toEqual(["xt1"]);
+});
+
+test("run_edit's time limit counts the script, not its sandbox starting; a loop that never ends is still stopped", async () => {
+  // E2, Oct 31: `note("hi")` timed out three times on a busy Mac while the sandbox loaded the whole server.
+  const quick = await evaluate(`note("hi")`, ctx(), [], 150);
+  expect(quick.error).toBeUndefined();
+  expect(quick.notes).toEqual(["hi"]);
+  const forever = await evaluate(`while (true) {}`, ctx(), [], 500);
+  expect(forever.error).toContain("ran for more than 0.5 s");
 });

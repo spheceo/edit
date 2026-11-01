@@ -27,6 +27,7 @@ import type { Clip, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { join, parent } from "./paths.ts";
 import { clipEnd, mediaOf, trackOf } from "./project.ts";
+import { READY } from "./script_eval.ts";
 import { REFERENCE, type Op, type ScriptContext } from "./script_runtime.ts";
 import * as seams from "./seams.ts";
 import * as seats from "./seats.ts";
@@ -248,17 +249,36 @@ function signatures(lib: { name: string; code: string }[]): string[] {
 /** The evaluator: this same binary (or bun on main.ts in dev) as `script-eval`. */
 function evaluator(): string[] {
   const compiled = Bun.main.startsWith("/$bunfs/") || Bun.main.startsWith("B:\\~BUN\\");
-  return compiled ? [process.execPath, "script-eval"] : [process.execPath, Bun.main, "script-eval"];
+  return compiled ? [process.execPath, "script-eval"] : [process.execPath, join(import.meta.dir, "main.ts"), "script-eval"];
 }
+/** How long an e-code sandbox may take to start (a busy Mac), apart from the script's own time. */
+const START_MS = 90_000;
+
 export async function evaluate(code: string, ctx: ScriptContext, lib: { name: string; code: string }[], ms = 20_000): Promise<{ ops: Op[]; notes: string[]; lines?: (number | null)[]; error?: string }> {
   const child = Bun.spawn(evaluator(), { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, EDIT_SCRIPT_EVAL: "1" } });
   void child.stdin.write(JSON.stringify({ code, library: lib, context: ctx, run: Date.now().toString(36).slice(-4) }));
   void child.stdin.end();
-  let late = false;
-  const timer = setTimeout(() => { late = true; child.kill(); }, ms);
+  // The script's time counts from when the sandbox says it has started it
+  // (READY on stderr): a slow start on a busy Mac isn't the script's loop.
+  let late: "start" | "run" | null = null;
+  let timer = setTimeout(() => { late = "start"; child.kill(); }, START_MS);
+  const stderr = (async () => {
+    const decoder = new TextDecoder();
+    let all = "";
+    for await (const chunk of child.stderr) {
+      all += decoder.decode(chunk, { stream: true });
+      if (late === null && all.includes(READY)) {
+        all = all.replace(READY, "");
+        clearTimeout(timer);
+        timer = setTimeout(() => { late = "run"; child.kill(); }, ms);
+      }
+    }
+    return all;
+  })();
   try {
-    const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    if (late) return { ops: [], notes: [], error: `the script ran for more than ${ms / 1000} s (a loop that never ends?)` };
+    const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), stderr, child.exited]);
+    if (late === "run") return { ops: [], notes: [], error: `the script ran for more than ${ms / 1000} s (a loop that never ends?)` };
+    if (late === "start") return { ops: [], notes: [], error: `the script's sandbox didn't start within ${START_MS / 1000} s (this Mac is very busy): nothing was run; run it again` };
     if (exit !== 0) return { ops: [], notes: [], error: (err.trim().split("\n").slice(-3).join(" ") || `the script's process exited ${exit}`) };
     return JSON.parse(out) as { ops: Op[]; notes: string[]; error?: string };
   } finally { clearTimeout(timer); }

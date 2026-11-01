@@ -18,7 +18,8 @@ const GRACE_DAYS = 14;
 /** Temporary pieces older than this go without a grace period (a review's, an old cloud export's result). */
 const TEMP_DAYS = 2;
 const FOOTAGE = ["edit/originals/", "edit/excerpts/", "edit/proxies/"];
-const TEMP = ["edit/reviews/tmp/", "edit/proxies/jobs/", "edit/exports/results/"];
+// edit/transcribe/: a recording heard by link (the relay deletes it once heard; one whose job was abandoned stays) and Scribe's failures.
+const TEMP = ["edit/reviews/tmp/", "edit/proxies/jobs/", "edit/exports/results/", "edit/transcribe/"];
 const NOTED = "edit/sweep/unreferenced.json";
 
 const remove = process.argv.includes("--delete");

@@ -12,6 +12,7 @@ import {
   AllowanceUsedUp,
   GatewayDown,
   join,
+  Jobs,
   parseScribe,
   plan,
   RELAY_MAX_BYTES,
@@ -359,6 +360,98 @@ test.skipIf(ffmpeg === null)("a whole hearing whose connection keeps dropping co
     expect(written.words.every((word) => word.speaker === undefined)).toBe(true);
     // Nothing kept for the whole, so a later run asks for it again.
     expect(fs.existsSync(`${dir}/cache/transcript.whole.json`)).toBe(false);
+  } finally {
+    cleanup();
+  }
+}, 30_000);
+
+/** A 100 s tone, its cache folder and what a job-hearing run needs: the uploads seen, a quick poll. */
+function jobRun(dir: string) {
+  const source = `${dir}/tone.wav`;
+  expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=100", source]).exitCode).toBe(0);
+  fs.mkdirSync(`${dir}/cache`, { recursive: true });
+  const uploads: string[] = [];
+  const target = `${dir}/cache/transcript.json`;
+  const hear = () =>
+    runtime.runPromise(
+      transcribeFile(source, target).pipe(
+        Effect.provideService(Retries, Retries.instant),
+        Effect.provideService(Jobs, { upload: (_path, key) => Effect.sync(() => void uploads.push(key)), pollEvery: 5, deadline: "10 seconds" }),
+      ),
+    );
+  const sentWhole = (before: number) => mock.calls("/v1/transcribe", "POST").slice(before).filter((call) => call.body.length > 400_000).length;
+  return { source, target, uploads, hear, sentWhole };
+}
+
+test.skipIf(ffmpeg === null)("a long file's whole hearing goes by link: uploaded, started, asked for until Scribe has it, its voices kept (Nov 1)", async () => {
+  const { dir, cleanup } = scratch("transcribe-job");
+  try {
+    const run1 = jobRun(dir);
+    mock.on("GET", "/health", () => Response.json({ ok: true, jobs: true }), 1);
+    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Hello", "there."], "speaker_0")));
+    mock.on("POST", "/v1/transcribe/jobs", () => Response.json({ id: "tx1", request: "rq1" }, { status: 202 }), 1);
+    let looks = 0;
+    mock.on("GET", /^\/v1\/transcribe\/jobs\/tx1$/, () => (++looks < 3 ? Response.json({ pending: true }, { status: 202 }) : Response.json(scribeAnswer(["Hello", "there."], "speaker_3"))));
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    await run1.hear();
+    expect(run1.uploads).toHaveLength(1);
+    expect(run1.uploads[0]).toMatch(/^edit\/transcribe\/[0-9a-f-]+\.ogg$/);
+    const started = mock.calls("/v1/transcribe/jobs", "POST").at(-1)!;
+    expect(started.json<{ key: string }>().key).toBe(run1.uploads[0]!);
+    // Asked for until it came, with its request id and audio key for the relay.
+    expect(looks).toBe(3);
+    const asked = mock.calls("/v1/transcribe/jobs/tx1", "GET").at(-1)!;
+    expect(asked.query.get("request")).toBe("rq1");
+    expect(asked.query.get("key")).toBe(run1.uploads[0]!);
+    // The pieces went as before; the whole never went through the open connection.
+    expect(run1.sentWhole(before)).toBe(0);
+    const written = JSON.parse(fs.readFileSync(run1.target, "utf8")) as { words: Word[] };
+    expect(written.words.some((word) => word.speaker === "speaker_3")).toBe(true);
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.job.json`)).toBe(false);
+  } finally {
+    cleanup();
+  }
+}, 30_000);
+
+test.skipIf(ffmpeg === null)("a job a restart cut off is asked for again, never paid for twice; one Scribe failed costs the voices, never the import", async () => {
+  const { dir, cleanup } = scratch("transcribe-job-again");
+  try {
+    const run1 = jobRun(dir);
+    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Hello", "there."], "speaker_0")));
+    // Kept by the run a restart cut off: the same length, an hour old.
+    fs.writeFileSync(`${dir}/cache/transcript.whole.job.json`, JSON.stringify({ id: "tx2", request: "rq2", key: "edit/transcribe/kept-1234.ogg", tag: "100", at: Date.now() - 3600_000 }));
+    const startsBefore = mock.calls("/v1/transcribe/jobs", "POST").length;
+    mock.on("GET", /^\/v1\/transcribe\/jobs\/tx2$/, () => Response.json(scribeAnswer(["Hello", "there."], "speaker_5")), 1);
+    await run1.hear();
+    expect(run1.uploads).toHaveLength(0);
+    expect(mock.calls("/v1/transcribe/jobs", "POST").length).toBe(startsBefore);
+    expect((JSON.parse(fs.readFileSync(run1.target, "utf8")) as { words: Word[] }).words.some((word) => word.speaker === "speaker_5")).toBe(true);
+
+    // Scribe failing it: the words stand from the pieces, no voices, nothing kept for the whole.
+    fs.rmSync(`${dir}/cache/transcript.whole.json`, { force: true });
+    mock.on("GET", "/health", () => Response.json({ ok: true, jobs: true }), 1);
+    mock.on("POST", "/v1/transcribe/jobs", () => Response.json({ id: "tx3", request: "rq3" }, { status: 202 }), 1);
+    mock.on("GET", /^\/v1\/transcribe\/jobs\/tx3$/, () => Response.json({ error: "Scribe couldn't hear it: audio too quiet" }, { status: 502 }), 1);
+    await run1.hear();
+    const written = JSON.parse(fs.readFileSync(run1.target, "utf8")) as { words: Word[] };
+    expect(written.words.length).toBeGreaterThan(0);
+    expect(written.words.every((word) => word.speaker === undefined)).toBe(true);
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.job.json`)).toBe(false);
+  } finally {
+    cleanup();
+  }
+}, 30_000);
+
+test.skipIf(ffmpeg === null)("a relay without jobs hears it the old way, nothing uploaded", async () => {
+  const { dir, cleanup } = scratch("transcribe-no-jobs");
+  try {
+    const run1 = jobRun(dir);
+    mock.on("GET", "/health", () => Response.json({ ok: true, transcription: true }), 1);
+    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Hello", "there."], "speaker_3")));
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    await run1.hear();
+    expect(run1.uploads).toHaveLength(0);
+    expect(run1.sentWhole(before)).toBe(1);
   } finally {
     cleanup();
   }

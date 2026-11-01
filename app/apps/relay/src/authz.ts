@@ -90,6 +90,8 @@ export function ideaRefused(found: Caller, key: string): string | null {
 export const WRITABLE = [
   "edit/originals/", "edit/proxies/", "edit/excerpts/", "edit/analysis/", "edit/sound/",
   "edit/covers/", "edit/reviews/", "edit/exports/assets/", "edit/exports/manifests/",
+  // A long recording to be heard by link (transcribe_jobs.ts); the relay deletes it once heard.
+  "edit/transcribe/",
   REPORTS, IDEAS,
 ];
 

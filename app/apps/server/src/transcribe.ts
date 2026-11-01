@@ -35,7 +35,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
-import { Clock, Context, Duration, Effect, Option, Predicate, Schedule, Schema } from "effect";
+import { Cause, Clock, Context, Duration, Effect, Option, Predicate, Schedule, Schema } from "effect";
 
 import * as cameras from "./cameras.ts";
 import * as diag from "./diag.ts";
@@ -160,8 +160,16 @@ export class AudioUnreadable extends Schema.TaggedError<AudioUnreadable>()("Audi
 /** The transcript couldn't be written (a full disk, a folder gone). */
 export class TranscriptUnwritable extends Schema.TaggedError<TranscriptUnwritable>()("TranscriptUnwritable", { message: Schema.String }) {}
 
+/** The relay can't hear a recording by link (an older relay, or not set up there): heard the old way. */
+export class JobsUnavailable extends Schema.TaggedError<JobsUnavailable>()("JobsUnavailable", { message: Schema.String }) {}
+
+/** Scribe said a recording heard by link failed. */
+export class JobFailed extends Schema.TaggedError<JobFailed>()("JobFailed", { message: Schema.String }) {}
+
 /** Every way asking the relay can fail. */
 export type AskError = RelayBusy | GatewayDown | RelayUnreachable | RelayTimedOut | AllowanceUsedUp | TooLongForOneRequest | NamesRefused | TranscriptionRefused | AnswerUnreadable;
+/** And hearing one by link. */
+export type JobError = AskError | JobsUnavailable | JobFailed;
 
 /** Every way hearing a file can fail. */
 export type TranscribeError = Exclude<AskError, NamesRefused> | AudioUnreadable | TranscriptUnwritable;
@@ -183,6 +191,9 @@ service.kinds({
   AnswerUnreadable: "permanent",
   AudioUnreadable: "permanent",
   TranscriptUnwritable: "later",
+  JobsUnavailable: "permanent",
+  // Scribe failing one hearing: another try may hear it.
+  JobFailed: "temporary",
 });
 
 // ── When to ask again ───────────────────────────────────────────────────────
@@ -331,13 +342,18 @@ const askOnce = Effect.fn("transcribe.askOnce")(function* (audio: string, names:
     const decoded = yield* service.decodeJson("Scribe", ScribeAnswer, body).pipe(Effect.mapError((error) => new AnswerUnreadable({ message: error.message })));
     return parseScribe(decoded);
   }
-  const message = `transcription failed (${status}): ${said(body)}`;
-  if ((status === 400 || status === 422) && names.length > 0) return yield* new NamesRefused({ status, message: `${status}: ${body.trim().slice(0, 200)}` });
-  if (GATEWAY.has(status)) return yield* new GatewayDown({ status, message });
-  if (status === 429) return yield* /allowance/i.test(body) ? new AllowanceUsedUp({ message }) : new RelayBusy({ message });
-  if (status === 413) return yield* new TooLongForOneRequest({ bytes: Bun.file(audio).size, message });
-  return yield* new TranscriptionRefused({ status, message });
+  return yield* refusalOf(status, body, Bun.file(audio).size, names.length > 0);
 });
+
+/** What a status that isn't an answer means, as a typed failure. */
+function refusalOf(status: number, body: string, bytes: number, withNames: boolean): Effect.Effect<never, AskError> {
+  const message = `transcription failed (${status}): ${said(body)}`;
+  if ((status === 400 || status === 422) && withNames) return Effect.fail(new NamesRefused({ status, message: `${status}: ${body.trim().slice(0, 200)}` }));
+  if (GATEWAY.has(status)) return Effect.fail(new GatewayDown({ status, message }));
+  if (status === 429) return Effect.fail(/allowance/i.test(body) ? new AllowanceUsedUp({ message }) : new RelayBusy({ message }));
+  if (status === 413) return Effect.fail(new TooLongForOneRequest({ bytes, message }));
+  return Effect.fail(new TranscriptionRefused({ status, message }));
+}
 
 /** `audio` heard with the case's names (`keyterms`), asked again as `Retries` says; names Scribe refuses are dropped and it's asked once without them. */
 const ask = Effect.fn("transcribe.ask")(function* (audio: string, keyterms: readonly string[], again: boolean) {
@@ -398,6 +414,137 @@ const saved = <E, R>(file: string, tag: string, hear: Effect.Effect<Transcript, 
     return transcript;
   });
 
+// ── Heard by link ───────────────────────────────────────────────────────────
+//
+// A long recording's whole hearing as a job on the relay (apps/relay/src/
+// transcribe_jobs.ts): the audio put in R2, Scribe fetching it itself and the
+// result asked for on a schedule, so no connection is held open while Scribe
+// works (Nov 1: Mathias's 6 h 20 min and 7 h 43 min recordings, sent whole,
+// lost their connection three times each and both imports stopped). It's sent
+// at the usual rate (no 45 MB cap), so voices are told apart as well as in a
+// short file. The job is kept beside the transcript, so an import a restart
+// cut off asks for the same job again instead of paying for a new one.
+
+export interface JobsService {
+  /** Puts the recording at `path` in R2 at `key`. */
+  readonly upload: (path: string, key: string) => Effect.Effect<void, RelayUnreachable>;
+  /** How often the result is asked for. */
+  readonly pollEvery: Duration.Input;
+  /** How long a job may take before it's given up (Scribe takes up to 10 h of audio). */
+  readonly deadline: Duration.Input;
+}
+
+/** How a recording is heard by link; tests give their own. */
+export class Jobs extends Context.Reference<JobsService>("edit/transcribe/Jobs", {
+  defaultValue: () => ({
+    upload: (path, key) =>
+      Effect.tryPromise({
+        try: async () => (await import("./cloud.ts")).uploadFile(path, key),
+        catch: (error) => new RelayUnreachable({ message: `putting the recording in the cloud: ${diag.messageOf(error)}` }),
+      }),
+    pollEvery: "15 seconds",
+    deadline: "4 hours",
+  }),
+}) {}
+
+/** A job as kept beside the transcript: Scribe's ids, the audio's key, the file's length it's for and when it began. */
+const KeptJob = Schema.Struct({ id: Schema.String, request: Schema.String, key: Schema.String, tag: Schema.String, at: Schema.Number });
+type KeptJob = typeof KeptJob.Type;
+const JobStarted = Schema.Struct({ id: Schema.String, request: Schema.String });
+/** A job older than this isn't asked about again: a new one is started. */
+const JOB_KEPT_MS = 24 * 3600_000;
+
+const startJob = Effect.fn("transcribe.startJob")(function* (key: string, again: boolean) {
+  const answer = yield* service
+    .request("the transcription relay", `${relay.url()}/v1/transcribe/jobs`, { method: "POST", headers: { ...relay.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ key, again }) }, 120_000)
+    .pipe(
+      Effect.catchTags({
+        ServiceUnreachable: (error) => Effect.fail(new RelayUnreachable({ message: error.message })),
+        ServiceTimedOut: (error) => Effect.fail(new RelayTimedOut({ message: error.message })),
+      }),
+    );
+  // An older relay (no such route) or one not set up for it.
+  if (answer.status === 404 || answer.status === 405 || answer.status === 503) return yield* new JobsUnavailable({ message: said(answer.text()) });
+  if (answer.status !== 202 && answer.status !== 200) return yield* refusalOf(answer.status, answer.text(), 0, false);
+  return yield* service.decodeJson("the transcription relay", JobStarted, answer.text()).pipe(Effect.mapError((error) => new AnswerUnreadable({ message: error.message })));
+});
+
+/** The job's transcript once Scribe has it; none while it's still hearing. */
+const pollJob = Effect.fn("transcribe.pollJob")(function* (job: KeptJob) {
+  const query = new URLSearchParams({ request: job.request, key: job.key });
+  const answer = yield* service
+    .request("the transcription relay", `${relay.url()}/v1/transcribe/jobs/${encodeURIComponent(job.id)}?${query}`, { headers: relay.authHeaders() }, 120_000)
+    .pipe(
+      Effect.catchTags({
+        ServiceUnreachable: (error) => Effect.fail(new RelayUnreachable({ message: error.message })),
+        ServiceTimedOut: (error) => Effect.fail(new RelayTimedOut({ message: error.message })),
+      }),
+    );
+  if (answer.status === 202) return Option.none<Transcript>();
+  if (answer.status === 502 && /couldn't hear/i.test(answer.text())) return yield* new JobFailed({ message: said(answer.text()) });
+  if (answer.status !== 200) return yield* refusalOf(answer.status, answer.text(), 0, false);
+  const decoded = yield* service.decodeJson("Scribe", ScribeAnswer, answer.text()).pipe(Effect.mapError((error) => new AnswerUnreadable({ message: error.message })));
+  return Option.some(parseScribe(decoded));
+});
+
+/** Whether the relay hears recordings by link (its /health says `jobs`), asked before any upload. */
+const jobsAvailable = Effect.fn("transcribe.jobsAvailable")(function* () {
+  const answer = yield* service.request("the transcription relay", `${relay.url()}/health`, {}, 20_000).pipe(Effect.orElseSucceed(() => null));
+  if (answer === null || answer.status !== 200) return false;
+  return yield* service.decodeJson("the transcription relay", Schema.Struct({ jobs: Schema.optional(Schema.Boolean) }), answer.text()).pipe(
+    Effect.map((health) => health.jobs === true),
+    Effect.orElseSucceed(() => false),
+  );
+});
+
+/** `audio` (the whole file, `seconds` long) heard by link for its voices; `JobsUnavailable` when the relay can't. */
+const jobHearing = Effect.fn("transcribe.jobHearing")(function* (source: string, audio: string, seconds: number, target: string, again: boolean) {
+  const jobs = yield* Jobs;
+  const file = withExtension(target, "whole.job.json");
+  // The file it's for, by its whole seconds (its audio is made again on a restart, a few ms either way).
+  const tag = String(Math.round(seconds));
+  const now = yield* Clock.currentTimeMillis;
+  const kept = yield* Effect.sync(() => {
+    try {
+      return Schema.decodeUnknownOption(KeptJob)(JSON.parse(fs.readFileSync(file, "utf8")));
+    } catch {
+      return Option.none<KeptJob>();
+    }
+  });
+  let job: KeptJob;
+  if (Option.isSome(kept) && kept.value.tag === tag && now - kept.value.at < JOB_KEPT_MS) {
+    job = kept.value;
+    yield* Effect.logInfo(`${source}: carrying on its whole hearing by link (job ${job.id})`);
+  } else {
+    if (!(yield* jobsAvailable())) return yield* new JobsUnavailable({ message: "its /health has no jobs" });
+    const key = `edit/transcribe/${crypto.randomUUID()}.ogg`;
+    yield* jobs.upload(audio, key);
+    const started = yield* startJob(key, again);
+    job = { ...started, key, tag, at: now };
+    yield* Effect.try(() => writeAtomic(file, JSON.stringify(job))).pipe(Effect.catch((error) => Effect.logWarning(`keeping its job in ${file}: ${ioMessage(error.cause)}`)));
+    yield* Effect.logInfo(`${source}: heard whole by link for its voices (${hours(seconds)}, job ${job.id})`);
+  }
+  const forget = Effect.sync(() => fs.rmSync(file, { force: true }));
+  // A look that fails for a moment (offline, the gateway) is waited out; the job goes on in the cloud.
+  const look = pollJob(job).pipe(
+    Effect.catchIf(service.isTemporary, (failed) =>
+      failed._tag === "JobFailed" ? Effect.fail(failed) : Effect.logWarning(`${source}: asking for its whole hearing: ${failed.message}; asking again`).pipe(Effect.as(Option.none<Transcript>())),
+    ),
+  );
+  const heard = yield* look.pipe(
+    Effect.repeat({ schedule: Schedule.spaced(jobs.pollEvery), until: Option.isSome }),
+    Effect.timeoutOrElse({
+      duration: jobs.deadline,
+      orElse: () => Effect.fail(new RelayTimedOut({ message: `its whole hearing by link didn't finish within ${Math.round(Duration.toMinutes(Duration.fromInputUnsafe(jobs.deadline)))} min` })),
+    }),
+    // However it ends but stopped, the job is done with: a new run starts afresh.
+    Effect.onError((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : forget)),
+  );
+  yield* forget;
+  if (Option.isNone(heard)) return yield* new JobFailed({ message: "its whole hearing came back empty" });
+  return heard.value;
+});
+
 // ── Hearing a file ──────────────────────────────────────────────────────────
 
 /** Times into the file, not the piece. */
@@ -424,6 +571,12 @@ const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, aud
   // so it's asked without the names (which cost a fifth more: the audit, Oct
   // 23); the pieces spell them. Sent at the rate that fits one request.
   const wholeHearing = Effect.gen(function* () {
+    // By link first: no connection held open, no cap on its size. An older relay hears it the old way.
+    const byLink = yield* jobHearing(source, audio, seconds, target, again).pipe(
+      Effect.map(Option.some),
+      Effect.catchTag("JobsUnavailable", (unavailable) => Effect.logInfo(`${source}: the relay can't hear it by link (${unavailable.message}); sending it whole`).pipe(Effect.as(Option.none<Transcript>()))),
+    );
+    if (Option.isSome(byLink)) return byLink.value;
     const maxBytes = yield* RelayMaxBytes;
     const kbps = wholeBitrate(seconds, maxBytes);
     if (kbps === null) {

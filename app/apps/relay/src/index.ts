@@ -4,6 +4,7 @@ import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
+import { transcribeJobs, type JobsEnv } from "./transcribe_jobs";
 
 export { DriveToR2 } from "./jobs";
 export { ExportJobs } from "./exports";
@@ -15,6 +16,9 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  *
  *   POST /v1/transcribe   body: audio (e.g. audio/ogg Opus), Content-Length required
  *                          → ElevenLabs Scribe v2 JSON (words with timings + speaker ids)
+ *   POST /v1/transcribe/jobs, GET /v1/transcribe/jobs/<id>, POST /v1/transcribe/webhook
+ *                          a long recording heard from R2 without holding a connection open
+ *                          (transcribe_jobs.ts)
  *   GET  /v1/3dtiles/…     Google Photorealistic 3D Tiles (map stills)
  *   GET  /v1/geocode?address=… | ?latlng=… | ?place_id=…  Google Geocoding
  *   GET  /v1/outline?lat=…&lon=…  the building there (Google Geocoding v4 destinations)
@@ -34,7 +38,7 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  * Worker never buffers or parses either (keeps CPU tiny on any plan).
  */
 
-export interface Env extends CloudEnv, AuthEnv {
+export interface Env extends CloudEnv, AuthEnv, JobsEnv {
   /** Transcription and the existing house voice. */
   ELEVENLABS_MAIN_KEY?: string;
   /** Only the voices named in ELEVENLABS_VOICES_IDS use this account. */
@@ -81,7 +85,7 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
@@ -131,6 +135,7 @@ export default {
       const used = await (await budget.fetch(new Request("https://budget/usage", { method: "POST", body: JSON.stringify({ client }) }))).json() as Record<string, number>;
       return json(200, { day, ...used, limits: { connection: Number(env.DAILY_BYTES_PER_IP), total: Number(env.DAILY_BYTES_TOTAL), again: Number(env.DAILY_REHEAR_BYTES ?? env.DAILY_BYTES_TOTAL) } });
     }
+    if (url.pathname.startsWith("/v1/transcribe/jobs") || url.pathname === "/v1/transcribe/webhook") return transcribeJobs(request, url, env);
     if (url.pathname !== "/v1/transcribe") return json(404, { error: "not found" });
     if (request.method !== "POST") return json(405, { error: "POST audio to /v1/transcribe" });
 

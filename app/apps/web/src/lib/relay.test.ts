@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { readCutOffsWith, useKeys } from "../../../relay/src/auth";
 import { presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
 import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
+import { signed } from "../../../relay/src/transcribe_jobs";
 
 /** A signed-in person's token (every permission), checked against a key of the test's own. */
 let PERSON = "";
@@ -609,6 +610,100 @@ describe("relay transcription", () => {
   });
 });
 
+
+describe("relay transcription by link (Nov 1)", () => {
+  const env = {
+    ELEVENLABS_MAIN_KEY: "xi-key", ELEVENLABS_WEBHOOK_ID: "wh1", ELEVENLABS_WEBHOOK_SECRET: "whsec",
+    R2_ACCOUNT_ID: "account", R2_ACCESS_KEY_ID: "key", R2_SECRET_ACCESS_KEY: "secret", R2_BUCKET: "bucket",
+    MAX_UPLOAD_BYTES: "1000", DAILY_BYTES_PER_IP: "1000000000", DAILY_BYTES_TOTAL: "1000000000",
+    BURST: { limit: async () => ({ success: true }) },
+    TRANSCRIBE_BURST: { limit: async () => ({ success: true }) },
+    BUDGET: { idFromName: (name: string) => name, get: () => ({ fetch: async () => new Response("{}") }) },
+  } as unknown as Env;
+  const ask = (path: string, init: RequestInit = {}, given: Env = env) =>
+    relay.fetch(new Request(`https://relay.test${path}`, { ...init, headers: { authorization: `Bearer ${PERSON}`, "content-type": "application/json", ...(init.headers as Record<string, string> | undefined) } }), given);
+  const key = "edit/transcribe/0f1e2d3c-4b5a.ogg";
+  /** R2 holds `stored`; Scribe answers `scribe`; every call is seen. */
+  const world = (scribe: (url: string, init: RequestInit) => Response | Promise<Response>, stored = new Map<string, string>([[key, "x".repeat(500_000)]])) => {
+    const seen: { url: string; method: string; body?: BodyInit | null }[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init: RequestInit = {}) => {
+      const url = String(input);
+      const method = init.method ?? "GET";
+      seen.push({ url, method, body: init.body });
+      if (url.includes("r2.cloudflarestorage.com")) {
+        const object = decodeURIComponent(new URL(url).pathname.replace(/^\/bucket\//, ""));
+        if (method === "PUT") { stored.set(object, String(init.body)); return new Response(null, { status: 200 }); }
+        if (method === "DELETE") { stored.delete(object); return new Response(null, { status: 204 }); }
+        const found = stored.get(object);
+        if (found === undefined) return new Response(null, { status: 404 });
+        return method === "HEAD" ? new Response(null, { status: 200, headers: { "content-length": String(found.length) } }) : new Response(found, { status: 200 });
+      }
+      return scribe(url, init);
+    });
+    return { seen, stored };
+  };
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("starts a job with Scribe fetching the audio from R2 by a presigned link, our webhook told, its ids answered", async () => {
+    let form: FormData | null = null;
+    world(async (url, init) => {
+      expect(url).toBe("https://api.elevenlabs.io/v1/speech-to-text");
+      form = init.body as FormData;
+      return Response.json({ message: "ok", request_id: "rq1abcd", transcription_id: "tx1abcd" }, { status: 202 });
+    });
+    const started = await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key, keyterms: ["John Ruetten"] }) });
+    expect(started.status).toBe(202);
+    expect(await started.json()).toEqual({ id: "tx1abcd", request: "rq1abcd" });
+    const sent = form as unknown as FormData;
+    expect(sent.get("cloud_storage_url")).toMatch(/^https:\/\/account\.r2\.cloudflarestorage\.com\/bucket\/edit\/transcribe\/.*X-Amz-Signature=/);
+    expect([sent.get("webhook"), sent.get("webhook_id"), sent.get("diarize"), sent.get("model_id")]).toEqual(["true", "wh1", "true", "scribe_v2"]);
+    expect(sent.getAll("keyterms")).toEqual(["John Ruetten"]);
+    expect(JSON.parse(String(sent.get("webhook_metadata")))).toEqual({ key });
+    // Only Edit's own place for it, an upload that's there, and a set-up relay.
+    expect((await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key: "edit/originals/a.mp4" }) })).status).toBe(400);
+    world(() => Response.json({}), new Map());
+    expect((await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key }) })).status).toBe(400);
+    const bare = await ask("/v1/transcribe/jobs", { method: "POST", body: JSON.stringify({ key }) }, { ...env, ELEVENLABS_WEBHOOK_ID: undefined } as Env);
+    expect([bare.status, ((await bare.json()) as { jobs: boolean }).jobs]).toEqual([503, false]);
+    expect((await relay.fetch(new Request("https://relay.test/v1/transcribe/jobs", { method: "POST", body: "{}" }), env)).status).toBe(401);
+  });
+
+  it("answers pending until Scribe has it, then its transcript, deleting the audio", async () => {
+    let ready = false;
+    const { stored } = world((url) => {
+      expect(url).toBe("https://api.elevenlabs.io/v1/speech-to-text/transcripts/tx1abcd");
+      return ready ? Response.json({ language_code: "eng", words: [{ type: "word", text: "Hi", start: 0, end: 1, speaker_id: "speaker_0" }] }) : Response.json({ detail: "not found" }, { status: 404 });
+    });
+    const look = () => ask(`/v1/transcribe/jobs/tx1abcd?request=rq1abcd&key=${encodeURIComponent(key)}`);
+    const pending = await look();
+    expect([pending.status, await pending.json()]).toEqual([202, { pending: true }]);
+    expect(stored.has(key)).toBe(true);
+    ready = true;
+    const done = await look();
+    expect(done.status).toBe(200);
+    expect(((await done.json()) as { words: unknown[] }).words).toHaveLength(1);
+    expect(stored.has(key)).toBe(false);
+  });
+
+  it("takes only ElevenLabs' signed callbacks, and a failure it reports is said to the next look", async () => {
+    const { stored } = world(() => Response.json({ detail: "not found" }, { status: 404 }));
+    const event = JSON.stringify({ type: "webhook_error", request_id: "rq9abcd", error_message: "audio too quiet", webhook_metadata: { key } });
+    const now = Math.floor(Date.now() / 1000);
+    const mac = await crypto.subtle.importKey("raw", new TextEncoder().encode("whsec"), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const hex = [...new Uint8Array(await crypto.subtle.sign("HMAC", mac, new TextEncoder().encode(`${now}.${event}`)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const callback = (signature: string) => relay.fetch(new Request("https://relay.test/v1/transcribe/webhook", { method: "POST", headers: { "elevenlabs-signature": signature }, body: event }), env);
+    expect((await callback(`t=${now},v0=${"0".repeat(64)}`)).status).toBe(401);
+    expect((await callback(`t=${now - 3600},v0=${hex}`)).status).toBe(401);
+    expect((await callback(`t=${now},v0=${hex}`)).status).toBe(200);
+    expect(stored.has("edit/transcribe/failed/rq9abcd.json")).toBe(true);
+    expect(stored.has(key)).toBe(false);
+    const failed = await ask("/v1/transcribe/jobs/tx9abcd?request=rq9abcd");
+    expect(failed.status).toBe(502);
+    expect(((await failed.json()) as { error: string }).error).toContain("couldn't hear it: audio too quiet");
+    expect(await signed(event, `t=${now},v0=${hex}`, "whsec")).toBe(true);
+    expect(await signed(event, `t=${now},v0=${hex}`, "other")).toBe(false);
+  });
+});
 
 describe("relay ElevenLabs accounts", () => {
   const house = "gUABw7pXQjhjt0kNFBTF";

@@ -618,7 +618,8 @@ async function reviewCopyFromChunks(cache: string, project: string, source: stri
         const piece = pieceOf(chunk.key);
         if (fs.existsSync(piece)) return;
         const partial = `${piece}.partial.mp4`;
-        const common = ["-v", "error", "-nostdin", "-y", "-ss", (chunk.at / last.fps).toFixed(6), "-i", source, "-frames:v", String(chunk.frames), "-an", "-vf", "scale=-2:720"];
+        // No chapters: the export's run to its end and would count in the piece's length (review_runtime.py).
+        const common = ["-v", "error", "-nostdin", "-y", "-ss", (chunk.at / last.fps).toFixed(6), "-i", source, "-frames:v", String(chunk.frames), "-an", "-map_chapters", "-1", "-vf", "scale=-2:720"];
         try {
           await tools.run([tools.ffmpeg(), ...common, "-c:v", "h264_videotoolbox", "-b:v", "3M", partial]);
         } catch {

@@ -56,8 +56,12 @@ def piece(source, start, frames, upload):
     """Frames [start, start + frames) of `source` (seconds, then a count) at 720p, picture only."""
     with tempfile.TemporaryDirectory() as folder:
         out = Path(folder) / "piece.mp4"
+        # No chapters: the export's run to its end, and Debian's ffmpeg (5.1)
+        # counts them in the piece's length, so the join held each piece's last
+        # frame until the export's end (Nov 1: an 82-minute edit's review copy
+        # came out 17 hours long).
         common = ["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", f"{start:.6f}", "-i", source, "-frames:v", str(frames), "-an",
-                  "-vf", "scale=-2:720"]
+                  "-map_chapters", "-1", "-vf", "scale=-2:720"]
         try:
             run(common + ["-c:v", "h264_nvenc", "-b:v", "3M", "-g", "60", str(out)])
         except RuntimeError:

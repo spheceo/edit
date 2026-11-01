@@ -689,7 +689,56 @@ export function withCreator(body: Uint8Array, createdBy: unknown): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(value, null, 2));
 }
 
-/** Brings one script from the cloud when it's newer than this Mac's. */
+// ── Which copy wins (docs/plans/2026-11-01-effect.md, round 3) ──
+//
+// The rules a pull follows were fixed five times in three days (02c455de,
+// 352e9d0a, 83e97e64, 0385252c and the body that went missing), each one a
+// case nobody had thought of. They're one pure function now, `decidePull`,
+// so its promises are tested over every case at once (test/writer/merge.test.ts):
+// work changed here is never lost, a built script is never replaced by an
+// unbuilt one, at most one conflicted copy is kept per revision, an older or
+// equal revision is never taken, and a script deleted elsewhere after it
+// changed here is kept as a restored copy.
+
+/** What a pull knows before it acts: the cloud's row, this Mac's ledger and body, and (once fetched) the cloud's body. */
+export interface PullSeen {
+  /** Deleted on another Mac. */
+  readonly deleted: boolean;
+  /** The rev this Mac last synced, or null when it never did. */
+  readonly knownRev: number | null;
+  /** The cloud's rev. */
+  readonly rev: number;
+  /** This Mac's body, or null when there's none. `same`: it's the cloud's body; `changed`: it changed here since the last sync. */
+  readonly here: { readonly same: boolean; readonly changed: boolean; readonly built: boolean; readonly unfinished: boolean } | null;
+  /** The cloud's body: not fetched yet (undefined), missing from the cloud (null), or what it is. */
+  readonly theirs: { readonly built: boolean } | null | undefined;
+  /** The rev a conflicted copy was already kept for. */
+  readonly copiedRev: number | null;
+}
+
+export type PullDecision =
+  | { readonly do: "delete"; readonly keepCopy: boolean }
+  | { readonly do: "skip" }
+  | { readonly do: "fetch" }
+  | { readonly do: "keep-ours"; readonly why: "theirs-missing" | "ours-built" }
+  | { readonly do: "fail"; readonly why: "theirs-missing" }
+  | { readonly do: "take"; readonly keepCopy: boolean; readonly why: "plain" | "ours-unfinished" | "copy-kept-already" | "conflict" };
+
+/** What a pull does with what it knows. */
+export function decidePull(seen: PullSeen): PullDecision {
+  if (seen.deleted) return { do: "delete", keepCopy: seen.here !== null && seen.here.changed };
+  if (seen.knownRev !== null && seen.knownRev >= seen.rev) return { do: "skip" };
+  if (seen.theirs === undefined) return { do: "fetch" };
+  if (seen.theirs === null) return seen.here !== null ? { do: "keep-ours", why: "theirs-missing" } : { do: "fail", why: "theirs-missing" };
+  const here = seen.here;
+  if (here === null || here.same || !here.changed) return { do: "take", keepCopy: false, why: "plain" };
+  if (here.built && !seen.theirs.built) return { do: "keep-ours", why: "ours-built" };
+  if (here.unfinished) return { do: "take", keepCopy: false, why: "ours-unfinished" };
+  if (seen.copiedRev === seen.rev) return { do: "take", keepCopy: false, why: "copy-kept-already" };
+  return { do: "take", keepCopy: true, why: "conflict" };
+}
+
+/** Brings one script from the cloud when it's newer than this Mac's, as `decidePull` says. */
 async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown>): Promise<void> {
   const id = String(row.scriptId ?? "");
   if (!store.idOk(id) || busy(id) || deleting(data).includes(id)) return;
@@ -697,10 +746,21 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   const dir = store.scriptDir(data, id);
   const known = ledger.scripts[id];
   const title = String(row.title ?? "");
-  if (row.deletedAt != null) {
+  const bodyPath = join(dir, "script.json");
+  const ours = isFile(bodyPath) ? fs.readFileSync(bodyPath) : null;
+  const seen = (theirs: Uint8Array | null | undefined): PullSeen => ({
+    deleted: row.deletedAt != null,
+    knownRev: known === undefined ? null : known.rev,
+    rev,
+    here: ours === null ? (fs.existsSync(dir) && row.deletedAt != null ? { same: false, changed: changedHere(dir, known), built: false, unfinished: false } : null) : { same: theirs != null && hash(ours) === hash(theirs), changed: changedHere(dir, known), built: builtIn(ours), unfinished: unfinished(ours) },
+    theirs: theirs === undefined ? undefined : theirs === null ? null : { built: builtIn(theirs) },
+    copiedRev: ledger.copied?.[id] ?? null,
+  });
+  let decision = decidePull(seen(undefined));
+  if (decision.do === "delete") {
     // Deleted on another Mac: gone here too. Changed here since, it's kept as a copy under a new id.
     if (fs.existsSync(dir)) {
-      if (changedHere(dir, known)) {
+      if (decision.keepCopy) {
         keepCopy(data, dir, "restored copy");
         diag.info("writer", `${jobs.named(id, title)}: deleted on another Mac after it changed here, so this Mac's version is kept as a restored copy`);
       } else diag.info("writer", `${jobs.named(id, title)}: deleted on another Mac, so here too`);
@@ -710,44 +770,37 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
     delete ledger.scripts[id];
     return;
   }
-  if (known !== undefined && known.rev >= rev) return;
+  if (decision.do === "skip") return;
   const body = await fetchBytes(String(row.bodyKey ?? ""));
-  if (body === null) {
-    // The newest revision lost its body (two Macs once pushed the same body under one key, and the
-    // loser's clean-up deleted it): no Mac can take it, so a Mac holding the script saves its copy as
-    // the next revision rather than asking for the missing one for ever.
-    if (!isFile(join(dir, "script.json"))) throw new Problem("Its body isn't in the cloud.");
-    diag.warn("writer", `${jobs.named(id, title)}: rev ${rev}'s body isn't in the cloud, so this Mac's copy is saved as the next revision`);
+  decision = decidePull(seen(body));
+  if (decision.do === "fail") throw new Problem("Its body isn't in the cloud.");
+  if (decision.do === "keep-ours") {
+    // theirs-missing: the newest revision lost its body (two Macs once pushed the same body under one key, and the
+    // loser's clean-up deleted it): no Mac can take it, so a Mac holding the script saves its copy as the next revision
+    // rather than asking for the missing one for ever. ours-built: a built script is never replaced by an unbuilt copy
+    // of it (Oct 31, M's CORRUPT Cops: his build came back unbuilt from another Mac's older copy, the build only in a
+    // "conflicted copy", so Start the edit stayed greyed out).
+    diag.warn(
+      "writer",
+      decision.why === "theirs-missing"
+        ? `${jobs.named(id, title)}: rev ${rev}'s body isn't in the cloud, so this Mac's copy is saved as the next revision`
+        : `${jobs.named(id, title)}: rev ${rev} from another Mac isn't built and this Mac's is, so this Mac's is saved as the next revision`,
+    );
     ledger.scripts[id] = { rev, body: "", files: known?.files ?? {}, summary: 0 };
     syncSoon();
     return;
   }
-  const bodyPath = join(dir, "script.json");
-  const atStart = isFile(bodyPath) ? hash(fs.readFileSync(bodyPath)) : null;
-  if (atStart !== null && atStart !== hash(body) && changedHere(dir, known)) {
-    // A built script is never replaced by an unbuilt copy of it: this Mac's
-    // stays the script, saved as the next revision, and theirs adds nothing
-    // (Oct 31, M's CORRUPT Cops: his build came back unbuilt from another
-    // Mac's older copy, the build only in a "conflicted copy", so Start the
-    // edit stayed greyed out).
-    if (builtIn(fs.readFileSync(bodyPath)) && !builtIn(body)) {
-      diag.warn("writer", `${jobs.named(id, title)}: rev ${rev} from another Mac isn't built and this Mac's is, so this Mac's is saved as the next revision`);
-      ledger.scripts[id] = { rev, body: "", files: known?.files ?? {}, summary: 0 };
-      syncSoon();
-      return;
-    }
-    // An import that never finished here (or Writer's copy of one, brought in
-    // by Edit) has nothing to keep: theirs replaces it (Oct 31, M's Mac: four
-    // stale imports became conflicted copies that showed as stopped imports).
-    // A copy is kept once per rev: a pull that failed after keeping one and
-    // was tried again kept another every minute (Oct 31, Predator Tutor: 294
-    // copies from Mathias's Mac, rev 7 naming a file no longer in the cloud).
-    if (unfinished(fs.readFileSync(bodyPath))) diag.warn("writer", `${jobs.named(id, title)}: this Mac's copy is an import that never finished, so rev ${rev} replaces it`);
-    else if (ledger.copied?.[id] !== rev) {
-      keepCopy(data, dir, "conflicted copy");
-      ledger.copied = { ...ledger.copied, [id]: rev };
-      writeJson(ledgerPath(data), ledger);
-    }
+  if (body === null || decision.do !== "take") return;
+  const atStart = ours === null ? null : hash(ours);
+  // An import that never finished here (or Writer's copy of one, brought in by Edit) has nothing to keep: theirs
+  // replaces it (Oct 31, M's Mac: four stale imports became conflicted copies that showed as stopped imports). A copy
+  // is kept once per rev: a pull that failed after keeping one and was tried again kept another every minute (Oct 31,
+  // Predator Tutor: 294 copies from Mathias's Mac, rev 7 naming a file no longer in the cloud).
+  if (decision.why === "ours-unfinished") diag.warn("writer", `${jobs.named(id, title)}: this Mac's copy is an import that never finished, so rev ${rev} replaces it`);
+  if (decision.keepCopy) {
+    keepCopy(data, dir, "conflicted copy");
+    ledger.copied = { ...ledger.copied, [id]: rev };
+    writeJson(ledgerPath(data), ledger);
   }
   fs.mkdirSync(dir, { recursive: true });
   const files: Record<string, Kept> = {};

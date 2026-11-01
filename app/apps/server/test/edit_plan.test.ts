@@ -427,6 +427,21 @@ test("a_desktop_opens_from_the_footage_types_its_notes_and_ends_back_in_that_pla
     expect(halfW - Math.abs(at("x"))).toBeGreaterThanOrEqual(W / 2 - 1);
     expect(halfH - Math.abs(at("y"))).toBeGreaterThanOrEqual(H / 2 - 1);
   }
+  // The notes stay put in their Notepad on every frame, the camera zooming out of the footage and back into the next
+  // (the team: "the text flies out when we zoom in or out or move around"): never off by a fraction of a pixel.
+  const pad = p.clips.find((own) => own.name === "Desktop · Notepad")!;
+  const at = (own: (typeof p.clips)[number], key: "x" | "y" | "scale", frame: number) => sample(own.keyframes?.[key] ?? [], frame - own.start) ?? (own as TextClip).transform[key];
+  let drift = 0;
+  for (const note of notes) {
+    let first: [number, number] | null = null;
+    for (let frame = note.start; frame < note.start + note.duration; frame++) {
+      const scale = at(pad, "scale", frame);
+      const local: [number, number] = [(at(note, "x", frame) - at(pad, "x", frame)) / scale, (at(note, "y", frame) - at(pad, "y", frame)) / scale];
+      first ??= local;
+      drift = Math.max(drift, Math.hypot(local[0] - first[0], local[1] - first[1]) * scale);
+    }
+  }
+  expect(drift).toBeLessThan(0.1);
   // Only the keys the camera's curve needs.
   const keys = p.clips.filter((own) => own.name?.startsWith("Desktop ·") === true).reduce((sum, own) => sum + Object.values(own.keyframes ?? {}).reduce((n, list) => n + list.length, 0), 0);
   expect(keys).toBeLessThan(900);

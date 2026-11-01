@@ -24,7 +24,7 @@
 
 import { clipFrom } from "./clips.ts";
 import * as markers from "./markers.ts";
-import type { Media, Project } from "./model.ts";
+import type { Clip, Media, Project } from "./model.ts";
 import type { Mark } from "./watermarks.ts";
 import { native } from "./native/index.ts";
 import { addTrack, clipEnd, fps as fpsOf, freshId, mediaOf } from "./project.ts";
@@ -551,22 +551,43 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     }
     project.clips.push(clip);
     made.push(id);
+    const from = typeof fields.keyframes === "object" && fields.keyframes !== null ? keyedFrom.get(fields.keyframes) : undefined;
+    if (from !== undefined) keyedClips.push({ clip, ...from });
     return id;
   };
+  const keyedClips: { clip: Clip; px: number; py: number; base: number; index: number | null; from: number; until: number; kept: Record<"x" | "y" | "scale", number[]> }[] = [];
   const HANDLE = 1 / 3;
   // Keys for an element centred at (px, py) on the desktop with `base` scale,
   // in window `index` (null: the wallpaper), on screen from `from`: sampled
   // every other frame with exact speeds, then thinned.
+  // Where an element centred at (px, py) on the desktop with `base` scale, in window `index` (null: the wallpaper), is on screen at a frame.
+  const poseAt = (px: number, py: number, base: number, index: number | null, frame: number) => {
+    const window = index === null ? null : laid[index]!;
+    const pose = camera(frame);
+    if (window === null) return { x: (px - pose.x) * pose.z, y: (py - pose.y) * pose.z, scale: base * pose.z, o: 1 };
+    const own = motion(window, index!, frame);
+    const wx = window.cx + (px - window.cx) * own.s;
+    const wy = window.cy + (py - window.cy) * own.s;
+    return { x: (wx - pose.x) * pose.z, y: (wy - pose.y) * pose.z, scale: base * own.s * pose.z, o: own.o };
+  };
+  // Keys at the given frames (desktop frames; the keys relative to `from`), each with its exact speed.
+  const keyed = (px: number, py: number, base: number, index: number | null, from: number, frames: Record<"x" | "y" | "scale", number[]>) => {
+    const lists: Record<"x" | "y" | "scale", Args[]> = { x: [], y: [], scale: [] };
+    for (const key of ["x", "y", "scale"] as const) {
+      for (const frame of frames[key]) {
+        const here = poseAt(px, py, base, index, frame);
+        const [before, after] = [poseAt(px, py, base, index, frame - 0.5), poseAt(px, py, base, index, frame + 0.5)];
+        const handle = { speed: after[key] - before[key], influence: HANDLE };
+        lists[key].push({ frame: frame - from, value: here[key], ease: "linear", handle_in: { ...handle }, handle_out: handle });
+      }
+    }
+    return lists;
+  };
+  // What each keyed element was made from, by its keyframes, so a window's elements can share their key frames at the end.
+  const keyedFrom = new WeakMap<object, { px: number; py: number; base: number; index: number | null; from: number; until: number; kept: Record<"x" | "y" | "scale", number[]> }>();
   const keysFor = (px: number, py: number, base: number, index: number | null, from: number, until = total) => {
     const window = index === null ? null : laid[index]!;
-    const at = (frame: number) => {
-      const pose = camera(frame);
-      if (window === null) return { x: (px - pose.x) * pose.z, y: (py - pose.y) * pose.z, scale: base * pose.z, o: 1 };
-      const own = motion(window, index!, frame);
-      const wx = window.cx + (px - window.cx) * own.s;
-      const wy = window.cy + (py - window.cy) * own.s;
-      return { x: (wx - pose.x) * pose.z, y: (wy - pose.y) * pose.z, scale: base * own.s * pose.z, o: own.o };
-    };
+    const at = (frame: number) => poseAt(px, py, base, index, frame);
     const opens = window === null || index === openIndex ? null : rel(window.spec.at);
     const lists: Record<"x" | "y" | "scale", Args[]> = { x: [], y: [], scale: [] };
     const opacity: Args[] = [];
@@ -584,10 +605,10 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     }
     const first = at(from);
     const thinned = { x: thinKeys(lists.x, 0.3), y: thinKeys(lists.y, 0.3), scale: thinKeys(lists.scale, 0.3 / Math.max(W, 1)) };
-    return {
-      transform: { x: first.x, y: first.y, scale: first.scale },
-      keyframes: opacity.length > 0 ? { ...thinned, opacity } : thinned,
-    };
+    const keyframes = opacity.length > 0 ? { ...thinned, opacity } : thinned;
+    const kept = { x: thinned.x.map((key) => (key.frame as number) + from), y: thinned.y.map((key) => (key.frame as number) + from), scale: thinned.scale.map((key) => (key.frame as number) + from) };
+    keyedFrom.set(keyframes, { px, py, base, index, from, until, kept });
+    return { transform: { x: first.x, y: first.y, scale: first.scale }, keyframes };
   };
   // A picture's scale so it's `width` desktop pixels wide (the renderer fits media to the frame at scale 1).
   const scaleFor = (media: Media, width: number) => width / (Math.max(media.width, 1) * Math.min(W / Math.max(media.width, 1), H / Math.max(media.height, 1)));
@@ -764,6 +785,22 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
         style: { font: "Geist", weight: 500, size, color: [1, 1, 1, 1], align: "left", glow: { enabled: false }, background: { color: [0, 0, 0, 1], opacity: 0.6, pad_x: 8 * k, pad_y: 4 * k } },
         ...keysFor(x + 14 * k + lw / 2, y + h - 12 * k - lh / 2, 1, index, from),
       });
+    }
+  }
+  // A window and everything in it keyed at the same frames, each of x, y and scale at every frame any of them needs
+  // for it (and each one's first and last): their positions then move as exact multiples of one another, so a note
+  // never moves against its Notepad as the camera zooms (the team: "the text flies out when we zoom in or out or move
+  // around"; thinned apart, a line drifted 1.6 px on a fast zoom out of the footage).
+  const byWindow = new Map<number, typeof keyedClips>();
+  for (const one of keyedClips) if (one.index !== null) byWindow.set(one.index, [...(byWindow.get(one.index) ?? []), one]);
+  for (const group of byWindow.values()) {
+    if (group.length < 2) continue;
+    const union = (key: "x" | "y" | "scale") => [...new Set(group.flatMap((one) => [...one.kept[key], one.from, one.until - 1]))].sort((a, b) => a - b);
+    const shared = { x: union("x"), y: union("y"), scale: union("scale") };
+    for (const one of group) {
+      const inside = (frames: number[]) => frames.filter((frame) => frame >= one.from && frame <= one.until - 1);
+      const lists = keyed(one.px, one.py, one.base, one.index, one.from, { x: inside(shared.x), y: inside(shared.y), scale: inside(shared.scale) });
+      one.clip.keyframes = { ...(one.clip.keyframes ?? {}), ...(lists as unknown as NonNullable<Clip["keyframes"]>) };
     }
   }
   // A light look over the whole screen.

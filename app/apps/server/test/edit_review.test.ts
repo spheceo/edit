@@ -323,6 +323,13 @@ test("footage cut inside a word is flagged, with where the word ends; a cut the 
   expect(cutMidWord(p, new Map([["m7", TEASER]]))).toEqual([]);
   p.clips.push(sound("vo1", sound25.track, "vo", 76, 60, { name: "Voice-over" }));
   expect((cutMidWord(p, new Map([["m7", TEASER]])) as Record<string, unknown>[]).map((issue) => [issue.clip, issue.side, issue.word])).toEqual([["c25", "out", "baby."]]);
+  // Footage coming back after a narration in the middle of a word: trimmed past it, never extended into the room (R4V).
+  p.clips.pop();
+  sound25.duration = 80;
+  Object.assign(sound25, { source_in: 274.6, start: 200 });
+  p.clips.push(sound("vo2", sound25.track, "vo", 140, 52, { name: "Voice-over" }));
+  const [back] = cutMidWord(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
+  expect(back).toMatchObject({ clip: "c25", side: "in", word: "baby.", fix: expect.stringContaining("trim its start to after the word (to 274.9 s") });
 });
 
 test("a desktop profile's lines are timed to the narration that says them, and flagged when they're off it", () => {

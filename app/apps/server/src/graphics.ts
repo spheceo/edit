@@ -501,6 +501,8 @@ export function bareStills(project: Project): Record<string, unknown>[] {
     const media = mediaOf(project, clip.media);
     // A moving map's stand-in (its first frame, or the dark frame before it) is footage on its way, never pushed into.
     if (media === undefined || media.kind !== "image" || /^map-\w+(-wait)?-first\.jpg$/u.test(media.name)) continue;
+    // A dissolve's copy of a shot is judged as that shot (R4V, Nov 1: every still's dissolve twin flagged too).
+    if ((clip.name ?? "").startsWith("Dissolve ·")) continue;
     const track = trackOf(project, clip.track);
     if (track === undefined || track.hidden || designedOver(project, clip)) continue;
     const [w, h] = [Math.max(media.width, 1), Math.max(media.height, 1)];
@@ -515,6 +517,9 @@ export function bareStills(project: Project): Record<string, unknown>[] {
     const letterboxed =
       Math.abs(Math.fround(transform.x ?? 0)) + width / 2 > halfW + 1 ||
       Math.abs(Math.fround(transform.y ?? 0)) + height / 2 > halfH + 1;
+    // A frame of the project's own footage (still_frame's "<label> 12.70s.png") filling the frame is the tape's
+    // picture held, not a found photo: R4V's patrol-car stills under a 911 call.
+    if (!letterboxed && / \d+\.\d{2}s\.png$/u.test(media.name)) continue;
     out.push({ kind: "bare_still", clip: clip.id, start: clip.start, media: media.id, letterboxed });
   }
   return out;

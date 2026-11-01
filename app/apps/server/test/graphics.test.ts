@@ -106,6 +106,17 @@ test("a_label_on_a_map_still_waiting_for_its_first_frame_sits_over_the_middle_th
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("a_frame_of_the_footage_held_full_frame_and_a_dissolves_copy_are_not_bare_stills_a_found_photo_is", () => {
+  // R4V, Nov 1: patrol-car frames from the tapes under a 911 call, and each one's dissolve twin, were 26 flags.
+  const p = project();
+  p.media.push(media({ id: "held", name: "Patrol SUV front 48.00s.png", path: "/u/Patrol SUV front 48.00s.png", kind: "image", duration: 0, width: 1920, height: 1080 }));
+  p.media.push(media({ id: "news", name: "news photo.jpg", path: "/u/news photo.jpg", kind: "image", duration: 0, width: 1920, height: 1080 }));
+  p.clips.push(clip({ id: "a", track: "v2", start: 0, duration: 90, type: "video", media: "held" }));
+  p.clips.push(clip({ id: "b", track: "v2", start: 90, duration: 20, type: "video", media: "held", name: "Dissolve · xyz" }));
+  p.clips.push(clip({ id: "c", track: "v2", start: 200, duration: 90, type: "video", media: "news" }));
+  expect(bareStills(p).map((one) => one.clip)).toEqual(["c"]);
+});
+
 test("a_boxed_or_glowing_date_is_flagged", () => {
   const p = project();
   const made = dateTitle(p, { text: "July 22, 2023", start: 0, duration: 81 });

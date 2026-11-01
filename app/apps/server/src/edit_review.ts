@@ -347,7 +347,9 @@ export function cutMidWord(project: Project, transcripts: Map<string, Transcript
         issues.push({ kind: "cut_mid_word", clip: clip.id, at: clipEnd(clip), side: "out", word: trim(word.text), word_ends: round(ends * 100) / 100, fix: EXTEND });
       }
       if (word.start < from - margin && word.end > from + inMargin && !carried(from, clip.start)) {
-        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clip.start, side: "in", word: trim(word.text), word_starts: round(word.start * 100) / 100, fix: EXTEND });
+        // Right after a narration, an earlier start would eat its room: start after the word instead (R4V, Nov 1).
+        const fix = inMargin === 0 ? `trim its start to after the word (to ${round((word.end + 0.1) * 100) / 100} s in the source): an earlier start would run into the narration's room` : EXTEND;
+        issues.push({ kind: "cut_mid_word", clip: clip.id, at: clip.start, side: "in", word: trim(word.text), word_starts: round(word.start * 100) / 100, fix });
       }
     }
   }

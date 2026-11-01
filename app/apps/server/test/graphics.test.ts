@@ -1,4 +1,7 @@
 import { beforeAll, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import { join } from "node:path";
 
 import * as cutin from "../src/cutin.ts";
 import { frameKey } from "../src/desktop_screen.ts";
@@ -56,6 +59,29 @@ test("the_place_label_is_the_references_monospace_label_pinned_above_the_buildin
   expect(xs[0]!.frame).toBe(0);
   expect(xs[1]!.frame).toBe(9);
   valid(p);
+});
+
+test("a_place_label_given_no_track_takes_its_maps_own_from_beside_the_footage_or_the_first_frame", () => {
+  // E2, Oct 31: from e-code, make("place_label", {map}) was refused for want of the track map_view had answered with.
+  const dir = fs.mkdtempSync(join(os.tmpdir(), "edit-label-"));
+  // The page's boxes: [left, top, right, bottom] in canvas pixels, one a frame.
+  const measured = { track: Array.from({ length: 31 }, (_, i) => [1000 + i, 400, 1100 + i, 600]) };
+  for (const name of ["map.mp4", "map-k-first.jpg"]) {
+    fs.writeFileSync(join(dir, name.replace(/\.\w+$/u, ".json")), JSON.stringify(measured));
+    const p = project();
+    p.media.push(media({ id: "map", name, path: join(dir, name), kind: "video", duration: 9, width: 1920, height: 1080 }));
+    p.clips.push(clip({ id: "m", track: "v2", start: 0, duration: 267, type: "video", media: "map" }));
+    const label = clipById(p, placeLabel(p, { text: "Bremerton Police Department", start: 0, end: 200, map: "m" })) as TextClip;
+    // The building's top middle, 1050 px across, is 90 px right of centre; the label sits above its top.
+    expect(Math.abs(label.transform.x - 90)).toBeLessThan(1.01);
+    expect(label.transform.y).toBeLessThan(400 - 540 - 30);
+    valid(p);
+  }
+  const bare = project();
+  bare.media.push(media({ id: "map", name: "gone.mp4", path: join(dir, "gone.mp4"), kind: "video", duration: 9, width: 1920, height: 1080 }));
+  bare.clips.push(clip({ id: "m", track: "v2", start: 0, duration: 267, type: "video", media: "map" }));
+  expect(() => placeLabel(bare, { text: "X Street", start: 0, end: 200, map: "m" })).toThrow("give building_track");
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test("a_boxed_or_glowing_date_is_flagged", () => {

@@ -13,10 +13,12 @@
 //   above and a row below, the title in big glowing capitals between them,
 //   over a darkened courtroom.
 
+import * as fs from "node:fs";
 import { clipFrom } from "./clips.ts";
 import type { Clip, Project } from "./model.ts";
 import { addTrack, CAPTION_PREFIX, clipEnd, clipOf, fps as fpsOf, freshId, mediaOf, trackOf } from "./project.ts";
-import { charCount, display, idiv, round, trim } from "./rust.ts";
+import { withExtension } from "./paths.ts";
+import { charCount, display, idiv, round, serdeParse, trim } from "./rust.ts";
 
 type Args = Record<string, unknown>;
 
@@ -151,6 +153,55 @@ export function dateTitle(project: Project, args: Args): Record<string, unknown>
 }
 
 /**
+ * Where a map's marked building is, from what its page measured: `building`
+ * on the first frame and `track` every half second (frame = frames into the
+ * footage), in timeline coordinates (pixels from the frame's centre, y down).
+ * map_view's `building` and `building_track`.
+ */
+export function measuredTrack(info: unknown, width: number, height: number, fps: number): { building: Record<string, number> | null; track: Record<string, number>[] } {
+  const record = (typeof info === "object" && info !== null ? info : {}) as Record<string, unknown>;
+  const placeBox = (bounds: unknown): Record<string, number> | null => {
+    if (!Array.isArray(bounds)) return null;
+    const [left, top, right, bottom] = [0, 1, 2, 3].map((i) => num(bounds[i])) as (number | null)[];
+    if (left == null || top == null || right == null || bottom == null) return null;
+    const [halfW, halfH] = [width / 2.0, height / 2.0];
+    return {
+      x: round((left + right) / 2.0 - halfW),
+      top: round(top - halfH),
+      bottom: round(bottom - halfH),
+      left: round(left - halfW),
+      right: round(right - halfW),
+    };
+  };
+  const track: Record<string, number>[] = [];
+  if (Array.isArray(record.track)) {
+    // Every half second, and the last frame.
+    const step = Math.max(Math.floor(fps / 2), 1);
+    const last = Math.max(record.track.length - 1, 0);
+    (record.track as unknown[]).forEach((bounds, frame) => {
+      if (frame % step !== 0 && frame !== last) return;
+      const at = placeBox(bounds);
+      if (at !== null) track.push({ ...at, frame });
+    });
+  }
+  return { building: track[0] ?? placeBox(record.building), track };
+}
+
+/** A map clip's measured track, from the JSON its render keeps beside its footage (or beside its first frame while it renders); null when this Mac has neither. */
+function mapMeasured(project: Project, mediaId: string | undefined): Record<string, number>[] | null {
+  const media = mediaId === undefined ? undefined : mediaOf(project, mediaId);
+  if (media === undefined || typeof media.path !== "string" || media.path === "") return null;
+  let info: unknown;
+  try {
+    info = serdeParse(fs.readFileSync(withExtension(media.path, "json"), "utf8"));
+  } catch {
+    return null;
+  }
+  const { building, track } = measuredTrack(info, project.settings.width, project.settings.height, media.fps ?? fpsOf(project));
+  return track.length > 0 ? track : building !== null ? [building] : null;
+}
+
+/**
  * The map's place label, from `{"op":"place_label","text":"1091 Capitol
  * Avenue","start":F,"end":F,"map":"<the map's clip id>","building_track":[…]}`
  * (map_view's `building_track`, or `building` for a still): the house label
@@ -170,7 +221,8 @@ export function placeLabel(project: Project, args: Args): string {
   const k = project.settings.height / 1080;
   const [width, height] = [project.settings.width, project.settings.height];
   const trackGiven = Array.isArray(args.building_track) ? (args.building_track as unknown[]) : [];
-  const points: unknown[] = trackGiven.length > 0 ? trackGiven : [args.building];
+  // Given none, the map's own: what its render measured (E2, Oct 31: a label from e-code was refused for want of the track map_view had answered with).
+  const points: unknown[] = trackGiven.length > 0 ? trackGiven : args.building !== undefined ? [args.building] : (mapMeasured(project, map.media) ?? []);
   // The box: one line of 36 px monospace (0.6 em a character), 7 px padding above and below.
   const boxW = charCount(text) * 36 * k * 0.6 + 28 * k;
   const boxH = 36 * k * 1.15 + 14 * k;
@@ -188,7 +240,7 @@ export function placeLabel(project: Project, args: Args): string {
     const clamped = clamp(x, -width / 2 + margin + boxW / 2, width / 2 - margin - boxW / 2);
     keys.push([at, clamped, y]);
   }
-  if (keys.length === 0) throw new Error("place_label needs building_track (or building) from map_view");
+  if (keys.length === 0) throw new Error("place_label: this map's building track isn't on this Mac; give building_track (or building) from map_view");
   keys.sort((a, b) => a[0] - b[0]);
   const last = end - start - 1;
   // Where it is on its first frame (between the tracked points around it).

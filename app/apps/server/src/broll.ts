@@ -20,6 +20,7 @@ import { importPaths } from "./import.ts";
 import { probe as probeFile, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project, VideoClip } from "./model.ts";
 import { canonical, fileName, fileStem, isFile, join, withExtension } from "./paths.ts";
+import { measuredTrack } from "./graphics.ts";
 import { clipMedia, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import * as relay from "./relay.ts";
 import { compareStrings, display, fixed, round, serdeParse, toI64, trim } from "./rust.ts";
@@ -1291,33 +1292,7 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
   } else {
     [info, media, rendering] = await movingMap(app, projectId, job);
   }
-  const record = (typeof info === "object" && info !== null ? info : {}) as Record<string, unknown>;
-  // The building's box in timeline coordinates (pixels from the frame's centre, y down).
-  const placeBox = (bounds: unknown): Record<string, number> | null => {
-    if (!Array.isArray(bounds)) return null;
-    const [left, top, right, bottom] = [0, 1, 2, 3].map((i) => num(bounds[i])) as (number | null)[];
-    if (left == null || top == null || right == null || bottom == null) return null;
-    const [halfW, halfH] = [width / 2.0, height / 2.0];
-    return {
-      x: round((left + right) / 2.0 - halfW),
-      top: round(top - halfH),
-      bottom: round(bottom - halfH),
-      left: round(left - halfW),
-      right: round(right - halfW),
-    };
-  };
-  const track: Record<string, number>[] = [];
-  if (Array.isArray(record.track)) {
-    // Every half second, and the last frame.
-    const step = Math.max(Math.floor(fps / 2), 1);
-    const last = Math.max(record.track.length - 1, 0);
-    (record.track as unknown[]).forEach((bounds, frame) => {
-      if (frame % step !== 0 && frame !== last) return;
-      const at = placeBox(bounds);
-      if (at !== null) track.push({ ...at, frame });
-    });
-  }
-  const building = track[0] ?? placeBox(record.building);
+  const { building, track } = measuredTrack(info, width, height, fps);
   let note =
     frames > 0
       ? "A moving shot (frames/fps seconds): the camera circles the building and closes in at a constant speed by itself, so place it as a video clip at scale 1 from source_in 0 with no scale keyframes. `building` is where the marked building sits on the first frame and `building_track` where it is every half second (frame = frames into the footage), in timeline transform coordinates: keyframe a label's x and y at those frames (ease linear) to keep it pinned. The marker can reveal after a date title using `highlight_after` and `highlight_fade` in source seconds; tracking remains available throughout."
@@ -1538,6 +1513,12 @@ async function renderMoving(app: App, job: MapShotJob, render: MapRender): Promi
           } catch (error) {
             throw new Error(`the map's first frame: ${ioMessage(error)}`);
           }
+        }
+        // What the page measured so far, beside the stand-in as it is beside the footage: place_label reads the track from either.
+        try {
+          fs.writeFileSync(withExtension(firstFrame, "json"), stableStringify(withLook(measured)));
+        } catch {
+          // Only for reuse.
         }
         render.ready.send({ ok: measured });
       };

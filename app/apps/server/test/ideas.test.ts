@@ -254,6 +254,16 @@ test("a fresh run keeps what the person wrote, and a chat turn adds, removes and
   expect(now.main).toBe("Mom Has No Idea Detectives Found The Dress");
   expect(now.chat.at(-1)).toMatchObject({ role: "claude", text: "Removed it and made the dress title the main one." });
   expect(now.run).toMatchObject({ what: "chat", state: "done" });
+  const answers = claudeCalls([
+    { name: "rename_title", arguments: { title: "mom has no idea detectives found the dress", to: "Mom Has No Idea Police Found The Dress" } },
+    { name: "rename_title", arguments: { title: "Mom Has No Idea Police Found The Dress", to: "Mom Thinks Nobody Noticed The Dress" } },
+  ], "Reworded it.");
+  await run.chat(context(), "i5-test", "say police, not detectives");
+  now = await settled("i5-test");
+  expect(now.titles.map((one) => one.text)).toContain("Mom Has No Idea Police Found The Dress");
+  expect(now.titles.map((one) => one.text)).not.toContain("Mom Has No Idea Detectives Found The Dress");
+  expect(now.main).toBe("Mom Has No Idea Police Found The Dress");
+  expect(answers.answers[1]).toContain("already saved");
 });
 
 test("a video already on the board is the person's decision, not a run; no captions skip the case; a run that stops short says what's missing", async () => {

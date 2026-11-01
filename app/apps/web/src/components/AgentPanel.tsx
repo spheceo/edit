@@ -28,6 +28,7 @@ import {
   Type,
   Wrench,
   ScanEye,
+  Pencil,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -311,6 +312,7 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   // The idea page's run (ideas/run.ts).
   save_titles: Type,
   remove_titles: Trash2,
+  rename_title: Pencil,
   set_main_title: Star,
   save_thumbnail_guide: Image,
   save_summary: FileText,

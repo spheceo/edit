@@ -76,6 +76,7 @@ const plural = (count: number, one: string, many = `${one}s`) => `${count === 1 
 const IDEA_TOOLS: Record<string, string> = {
   save_titles: "Saved titles",
   remove_titles: "Removed titles",
+  rename_title: "Renamed a title",
   set_main_title: "Chose the main title",
   save_thumbnail_guide: "Wrote the thumbnail guide",
   save_summary: "Wrote the summary",
@@ -88,6 +89,7 @@ export function callTitle(entry: AgentEntry): string {
     // The idea page's run (ideas/run.ts): the tool's own first sentence says what it did.
     case "save_titles":
     case "remove_titles":
+    case "rename_title":
     case "set_main_title":
     case "save_thumbnail_guide":
     case "save_summary":
@@ -155,6 +157,7 @@ export function groupSummary(calls: AgentEntry[]): string {
       transcribe: "started transcribing",
       save_titles: "saved titles",
       remove_titles: "removed titles",
+      rename_title: "renamed a title",
       set_main_title: "chose the main title",
       save_thumbnail_guide: "wrote the thumbnail guide",
       save_summary: "wrote the summary",

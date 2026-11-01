@@ -111,6 +111,11 @@ export const TOOLS = [
     inputSchema: { type: "object", additionalProperties: false, properties: { titles: TITLES }, required: ["titles"] },
   },
   {
+    name: "rename_title",
+    description: "Reword one saved title in place, by its words: it keeps its place, and stays the main title if it was. The new words are checked as save_titles checks them.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, to: { type: "string" } }, required: ["title", "to"] },
+  },
+  {
     name: "set_main_title",
     description: "Make one of the saved titles the main one: it names the card.",
     inputSchema: { type: "object", additionalProperties: false, properties: { title: { type: "string" } }, required: ["title"] },
@@ -174,6 +179,26 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       });
       if (removed === 0) throw new Error("None of those titles is saved: name them by their words.");
       return `Removed ${removed} ${removed === 1 ? "title" : "titles"}.`;
+    }
+    case "rename_title": {
+      const wanted = identity(words(args.title, "title"));
+      const to = cleanTitle(words(args.to, "The new title"));
+      const problem = titleProblem(to, session.style);
+      if (problem !== null) throw new Error(`“${to}” ${problem}.`);
+      let from: string | null = null;
+      let clash = false;
+      await cloud.change(session.id, session.by, (idea) => {
+        const found = idea.titles.find((one) => identity(one.text) === wanted);
+        from = found?.text ?? null;
+        clash = idea.titles.some((one) => one !== found && identity(one.text) === identity(to));
+        if (found === undefined || clash || found.text === to) return false;
+        if (idea.main === found.text) idea.main = to;
+        found.text = to;
+        found.at = Date.now();
+      });
+      if (from === null) throw new Error("That title isn't saved: name a saved one by its words.");
+      if (clash) throw new Error(`“${to}” is already saved: remove one instead.`);
+      return `Renamed “${from}” to “${to}”.`;
     }
     case "set_main_title": {
       const wanted = identity(words(args.title, "title"));

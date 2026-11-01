@@ -603,6 +603,9 @@ test("excerpts_of_dvd_and_webm_files_are_mp4", () => {
   expect(excerptExtension("webm")).toBe("mp4");
   expect(excerptExtension("mov")).toBe("mov");
   expect(excerptExtension("mp4")).toBe("mp4");
+  // Sound alone: the cut's AAC goes in an M4A, never a container that can't hold it (a 911 call's .wav, Nov 1).
+  for (const ext of ["wav", "WAV", "aiff", "flac", "mp3", "ogg"]) expect(excerptExtension(ext)).toBe("m4a");
+  expect(excerptExtension("m4a")).toBe("m4a");
 });
 
 test("a_reused_finished_video_gets_no_subtitles_whatever_the_segments_say", () => {

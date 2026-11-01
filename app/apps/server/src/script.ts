@@ -1668,10 +1668,18 @@ let nextCut = 0;
 /**
  * The extension of an excerpt cut from a file with `ext`: its own, unless its
  * container can't hold copied picture with AAC sound (a DVD's VOB or another
- * MPEG program stream, WebM), then MP4, which takes their picture as it is.
+ * MPEG program stream, WebM), then MP4, which takes their picture as it is;
+ * or sound alone in a container that can't hold AAC (a WAV, AIFF, FLAC, MP3,
+ * Ogg), then M4A. The cut always encodes the sound as AAC, and AAC written
+ * into a .wav reads back as garbage (Nov 1: a µ-law 911 call's 0–55 s excerpt
+ * came out a 27.6 s .wav no proxy could decode, so that import waited all day
+ * on "1 of 12 files couldn't be downloaded").
  */
 export function excerptExtension(ext: string): string {
-  return ["vob", "mpg", "mpeg", "m2p", "ps", "dat", "webm", "ogv"].includes(ext.toLowerCase()) ? "mp4" : ext;
+  const lower = ext.toLowerCase();
+  if (["vob", "mpg", "mpeg", "m2p", "ps", "dat", "webm", "ogv"].includes(lower)) return "mp4";
+  if (["wav", "wave", "aif", "aiff", "aifc", "flac", "mp3", "ogg", "oga", "opus", "wma", "amr", "au", "snd", "ac3", "dts"].includes(lower)) return "m4a";
+  return ext;
 }
 
 /**

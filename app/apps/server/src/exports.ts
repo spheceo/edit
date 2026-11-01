@@ -15,7 +15,9 @@ import * as diag from "./diag.ts";
 import { runPromise } from "./effect/runtime.ts";
 import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
+import { subtitleVideo } from "./drive.ts";
 import { catchBugsAsync } from "./guard.ts";
+import type { MacSpeed } from "./modal_exports.ts";
 import type { ExportOptions, Plan, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { canonical, fileName, join, parent } from "./paths.ts";
@@ -97,6 +99,13 @@ export interface ExportRecord {
   /** The first frame exported: an opening (0) can be shared as a preview. */
   start?: number;
   format: string;
+  /**
+   * Frames a second this Mac rendered it at when every frame was new (a first
+   * export on this Mac, H.264, no restart), and whether it was a subtitle
+   * video: what `macSpeed` learns this Mac's speed from.
+   */
+  fresh_fps?: number;
+  subtitles?: boolean;
   /** The exported timeline's fingerprint (`timelineHash`): an edit since makes the project "not exported". */
   timeline?: string;
   /** R2 key of the verified cloud copy, when the local file was deleted after upload. */
@@ -365,6 +374,41 @@ function remember(home: string, id: string, record: ExportRecord): void {
   writeRecords(home, records);
 }
 
+/** The fewest frames a speed sample has: a short export is mostly its fixed start and finish. */
+const SPEED_FRAMES = 1800;
+/** The newest samples a kind's speed is the median of. */
+const SPEED_SAMPLES = 5;
+
+/**
+ * This Mac's own speed for the house export, by kind: the median of its
+ * newest fresh exports (`fresh_fps`), where Modal's 25-minute rule reads it
+ * (`cloudBetter`). A fixed 45 frames/s had a Mac keeping an edit it took twice
+ * as long over (the 16-Year-Old, 26.7 min: 22 frames/s on an M1, Nov 1).
+ */
+export function macSpeed(home: string): MacSpeed {
+  const samples = Object.values(readRecords(home)).flat()
+    .filter((record) => typeof record.fresh_fps === "number" && record.fresh_fps > 0)
+    .sort((a, b) => b.finished_ms - a.finished_ms);
+  const median = (subtitles: boolean): number | undefined => {
+    const rates = samples.filter((record) => (record.subtitles === true) === subtitles).slice(0, SPEED_SAMPLES).map((record) => record.fresh_fps!).sort((a, b) => a - b);
+    if (rates.length === 0) return undefined;
+    const middle = Math.floor(rates.length / 2);
+    return rates.length % 2 === 1 ? rates[middle]! : (rates[middle - 1]! + rates[middle]!) / 2;
+  };
+  const edit = median(false);
+  const subtitles = median(true);
+  return { ...(edit === undefined ? {} : { edit }), ...(subtitles === undefined ? {} : { subtitles }) };
+}
+
+/** Whether nothing of `project`'s earlier exports is kept to reuse: an export now renders every frame. */
+function nothingToReuse(cache: string, project: string): boolean {
+  try {
+    return fs.readdirSync(chunkFolder(cache, project)).length === 0;
+  } catch {
+    return true;
+  }
+}
+
 /** Whether `path` is one of the listed exports (of any project). */
 export function listed(home: string, path: string): boolean {
   return Object.values(readRecords(home)).some((own) => own.some((record) => record.path === path));
@@ -506,12 +550,23 @@ export class ExportRegistry implements seams.Exports {
     if (extra.backend !== undefined) {
       backend = extra.backend;
     } else if ((await seams.modalExports.ready(), seams.modalExports.enabled())) {
-      // Modal whenever it can take the export, each on its own GPUs so any
-      // number run at once; this Mac only for what Modal can't do, or when
-      // Modal fails (the team, Oct 29: card 1's export took 43 minutes here).
+      // Modal only when the Mac really can't (the user, Oct 31: ~$1 an export,
+      // the same videos four to six times a day, the month's limit reached):
+      // it's already exporting, it's busy, or it would take over 25 minutes at
+      // its own measured speed (`cloudBetter`, `macSpeed`). Until Nov 1 that
+      // rule was written but never asked, so every export Modal could take
+      // went there. Modal can't do some (`unsuitable`): those stay here too.
       const why = seams.modalExports.unsuitable(project, options, plan);
-      diag.info("export", why === null ? `${project.id}: exporting on Modal` : `${project.id}: exporting on this Mac: ${why}`);
-      backend = why === null ? "modal" : seams.cloudExports.enabled() ? "cloud" : "local";
+      const busy = why === null
+        ? seams.modalExports.cloudBetter(project, plan, this.localActive || this.localQueue.length > 0, undefined, macSpeed(this.home ?? store.home))
+        : null;
+      if (why === null && busy !== null) {
+        diag.info("export", `${project.id}: exporting on Modal: ${busy}`);
+        backend = "modal";
+      } else {
+        diag.info("export", `${project.id}: exporting on this Mac: ${why ?? "it's free here and would finish within 25 minutes"}`);
+        backend = why === null || !seams.cloudExports.enabled() ? "local" : "cloud";
+      }
     } else {
       backend = seams.cloudExports.enabled() ? "cloud" : "local";
     }
@@ -598,6 +653,8 @@ export class ExportRegistry implements seams.Exports {
     const emit = (state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}) => this.publish(store, project, running, state, progress, extra);
     emit("running", 0);
     const started = performance.now();
+    // A speed sample (`fresh_fps`): rendered here from the start, every frame new, never restarted.
+    let fresh = running.backend === "local" && options.format === "h264" && nothingToReuse(store.cacheDir(), id);
     let result: { ok: true } | { ok: false; error: string };
     try {
       await catchBugsAsync("the export", async () => {
@@ -613,6 +670,7 @@ export class ExportRegistry implements seams.Exports {
             // Something wrong on Modal (out of credit, down): exported here instead.
             diag.warn("export", `${project.name}: Modal couldn't export it (${diag.messageOf(error)}); exporting on this Mac`);
             running.backend = "local";
+            fresh = false;
             emit("running", 0);
           }
         }
@@ -689,6 +747,7 @@ export class ExportRegistry implements seams.Exports {
             } finally {
               originals?.release();
             }
+            fresh = false;
             if (attempt >= stall.tries) throw new Error(`the export stopped moving ${stall.tries} times (nothing new for ${Math.round(stall.ms / 60_000)} minutes each)`);
             diag.warn("export", `${project.name}: nothing new for ${Math.round(stall.ms / 60_000)} minutes; starting it again (the chunks made are kept)`);
           }
@@ -732,6 +791,9 @@ export class ExportRegistry implements seams.Exports {
           whole: plan.start === 0 && plan.end >= duration(project),
           start: plan.start,
           format: options.format,
+          ...(fresh && frames >= SPEED_FRAMES
+            ? { fresh_fps: Math.round((frames / (took / 1000)) * 10) / 10, subtitles: subtitleVideo(project) }
+            : {}),
           timeline: running.timeline,
           ...(running.inCloud === undefined ? {} : { cloudKey: running.inCloud.key }),
         });

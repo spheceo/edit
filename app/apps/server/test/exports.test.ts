@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
+import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, macSpeed, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -209,6 +209,62 @@ test("a free Mac keeps an export it can finish in 25 minutes; a busy one or a ve
   expect(seams.modalExports.cloudBetter(project([footage]), plan(4_600), false, 0.3)).toBeNull();
 });
 
+test("a free Mac keeps an export Modal could take, and its first export teaches it its speed", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("mac-first-exports");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const enabled = spyOn(seams.modalExports, "enabled").mockReturnValue(true);
+  const suitable = spyOn(seams.modalExports, "unsuitable").mockReturnValue(null);
+  const better = spyOn(seams.modalExports, "cloudBetter").mockReturnValue(null);
+  const modal = spyOn(seams.modalExports, "run");
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 1800, width: 64, height: 36, audio: true }, fps: 30 });
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job) => ({
+    cancel: () => {},
+    wait: async () => { await Bun.sleep(20); fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; },
+  }));
+  try {
+    const project = store.create("free", { width: 64, height: 36, fps: 30 }).project;
+    await store.update(project.id, "test", p => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 1800, type: "solid" })));
+    // Until Nov 1 the 25-minute rule was never asked: every export Modal could take went there.
+    await registry.start(store, app.library, store.get(project.id)!.project, native.exportDefaults(), `${dir}/free.mp4`);
+    expect(better).toHaveBeenCalledTimes(1);
+    expect(better.mock.calls[0]![2]).toBe(false);
+    for (let tries = 0; registry.running() && tries < 200; tries++) await Bun.sleep(5);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(modal).not.toHaveBeenCalled();
+    // Every frame new on this Mac: a speed sample, which the next choice reads.
+    const [record] = listExports(home, project.id);
+    expect(record!.fresh_fps).toBeGreaterThan(0);
+    expect(record!.subtitles).toBe(false);
+    expect(macSpeed(home).edit).toBe(record!.fresh_fps);
+    expect(macSpeed(home).subtitles).toBeUndefined();
+  } finally {
+    render.mockRestore(); plan.mockRestore(); archive.mockRestore(); modal.mockRestore(); better.mockRestore(); suitable.mockRestore(); enabled.mockRestore(); cleanup();
+  }
+});
+
+test("a Mac's speed is the median of its newest fresh exports of that kind, and the 25 minutes go by it", () => {
+  const home = fs.mkdtempSync(`${os.tmpdir()}/edit-speed-`);
+  try {
+    const record = (fps: number, finished: number, subtitles = false) => ({ path: `/x/${finished}.mp4`, name: "x.mp4", finished_ms: finished, seconds: 1, bytes: 1, frames: 1800, whole: true, format: "h264", fresh_fps: fps, subtitles });
+    expect(macSpeed(home)).toEqual({});
+    fs.writeFileSync(`${home}/exports.json`, JSON.stringify({
+      a: [record(500, 1), record(40, 2), record(22, 3)],
+      b: [record(30, 4), record(25, 5), record(60, 6), record(180, 7, true), { ...record(0, 8), fresh_fps: undefined }],
+    }));
+    // The newest five edits (500 is the sixth): 22, 25, 30, 40, 60.
+    expect(macSpeed(home)).toEqual({ edit: 30, subtitles: 180 });
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+  const project = { settings: { width: 1920, height: 1080, fps: 30, ntsc: false }, media: [], clips: [{ id: "v", type: "video", media: "m", start: 0, duration: 48_060 }], script: null } as unknown as Parameters<typeof seams.modalExports.cloudBetter>[0];
+  const plan = { start: 0, end: 48_060, width: 1920, height: 1080, audio: true };
+  // The 16-Year-Old (26.7 min): ~18 min at the old guess of 45 frames/s, 36 at the 22 an M1 measured.
+  expect(seams.modalExports.cloudBetter(project, plan, false, 0.3)).toBeNull();
+  expect(seams.modalExports.cloudBetter(project, plan, false, 0.3, { edit: 22 })).toContain("36 min");
+});
+
 test("archiveExportFile deletes locally only after a size-verified upload", async () => {
   const dir = fs.mkdtempSync(`${os.tmpdir()}/edit-archive-`);
   try {
@@ -293,7 +349,7 @@ test("an export that stops moving is started again by itself", async () => {
   }
 });
 
-test("five projects export on Modal at the same time, none queued, while this Mac stays free", async () => {
+test("five projects the Mac can't take export on Modal at the same time, none queued, while this Mac stays free", async () => {
   const registry = new ExportRegistry();
   const { dir, store, app, native, cleanup } = fixtureHome("modal-five", { services: { exports: registry } });
   let release!: () => void;
@@ -301,6 +357,7 @@ test("five projects export on Modal at the same time, none queued, while this Ma
   let atOnce = 0;
   let most = 0;
   const enabled = spyOn(seams.modalExports, "enabled").mockReturnValue(true);
+  const better = spyOn(seams.modalExports, "cloudBetter").mockReturnValue("this Mac is busy (load 2.00 a core)");
   const render = spyOn(seams.modalExports, "run").mockImplementation(async (_home, _project, _options, output) => {
     most = Math.max(most, ++atOnce);
     await wait;
@@ -329,7 +386,7 @@ test("five projects export on Modal at the same time, none queued, while this Ma
     expect(ids.every(id => registry.exported(`${fs.realpathSync(dir)}/${id}.mp4`))).toBe(true);
   } finally {
     release();
-    plan.mockRestore(); render.mockRestore(); enabled.mockRestore(); wanted.mockRestore(); cleanup();
+    plan.mockRestore(); render.mockRestore(); better.mockRestore(); enabled.mockRestore(); wanted.mockRestore(); cleanup();
   }
 });
 

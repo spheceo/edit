@@ -163,9 +163,11 @@ export function unsuitable(project: Project, options: ExportOptions, plan: Plan)
   return null;
 }
 
-// How fast this Mac renders the house export, from its log: a subtitle video
-// (one source and its text) 150–200 frames/s, an edit 45–75 (Corrupt Cop 44,
-// 13 min). A cloud export spends 2–3 min before and after its frames
+// How fast a Mac renders the house export until it has measured itself
+// (`macSpeed` in exports.ts: its own first exports, every frame new), from the
+// log: a subtitle video (one source and its text) 150–200 frames/s, an edit
+// 45–75 (Corrupt Cop 44, 13 min); the 16-Year-Old's 913 captions, 22 on an M1
+// (Nov 1). A cloud export spends 2–3 min before and after its frames
 // (planning, decoding every frame to check it, copying it back), so Cop
 // Father's subtitles took 5:05 there and 3:29 here (Oct 19).
 const MAC_FPS = { subtitles: 150, edit: 45 };
@@ -180,16 +182,24 @@ const MAC_SECONDS = 25 * 60;
 // (0.75 was passed by an import's preview encode alone).
 const MAC_LOAD = 1.25;
 
+/** This Mac's measured frames a second for the house export, by kind; a kind not measured yet takes `MAC_FPS`'s. */
+export interface MacSpeed {
+  edit?: number;
+  subtitles?: number;
+}
+
 /**
  * Why an export Modal can take should go there rather than this Mac, or
  * null to keep it here for free: the Mac isn't exporting, isn't overloaded and
- * would finish within about 25 minutes.
+ * would finish within about 25 minutes at `speed` (its own, once measured).
  */
 export function cloudBetter(project: Project, plan: Plan, macExporting: boolean,
-  load = os.loadavg()[0]! / os.availableParallelism()): string | null {
+  load = os.loadavg()[0]! / os.availableParallelism(), speed: MacSpeed = {}): string | null {
   if (macExporting) return "this Mac is already exporting";
   if (load > MAC_LOAD) return `this Mac is busy (load ${load.toFixed(2)} a core)`;
-  const seconds = (plan.end - plan.start) / (subtitleVideo(project) ? MAC_FPS.subtitles : MAC_FPS.edit);
+  const subtitles = subtitleVideo(project);
+  const fps = (subtitles ? speed.subtitles : speed.edit) ?? (subtitles ? MAC_FPS.subtitles : MAC_FPS.edit);
+  const seconds = (plan.end - plan.start) / fps;
   if (seconds > MAC_SECONDS) return `it would take about ${Math.round(seconds / 60)} min on this Mac`;
   return null;
 }

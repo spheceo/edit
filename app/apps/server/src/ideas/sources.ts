@@ -157,7 +157,12 @@ export async function article(url: string): Promise<{ source: Extract<IdeaSource
 }
 
 /** A picture's bytes into `path`: a YouTube thumbnail (its CDN), or a Trello attachment (through the relay, which holds the key). */
-export async function picture(url: string, path: string): Promise<boolean> {
+export const picture = (url: string, path: string): Promise<boolean> => pictures.fetch(url, path);
+
+/** How a picture is fetched (tests give their own, as with `captions`). */
+export const pictures = { fetch: fetchPicture };
+
+async function fetchPicture(url: string, path: string): Promise<boolean> {
   try {
     let bytes: Uint8Array;
     if (/^https:\/\/i\.ytimg\.com\//.test(url)) {

@@ -4,12 +4,13 @@
 // details, the board) with a stand-in Claude that calls the real tools.
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import * as fs from "node:fs";
 
 import type { Idea } from "@edit/types/ideas";
 
 import * as board from "../src/ideas/board.ts";
 import * as cloud from "../src/ideas/cloud.ts";
-import { cleanGuide, cleanTitle, closest, guideProblem, lengthStyle, summaryProblem, titleProblem } from "../src/ideas/policy.ts";
+import { cleanGuide, cleanTitle, closest, guideProblem, lengthStyle, sourceProblem, summaryProblem, titleProblem } from "../src/ideas/policy.ts";
 import { applyPatch, linksIn, mayIdeas, mayWorkspace, readiness, workspacesOf } from "../src/ideas/routes.ts";
 import * as run from "../src/ideas/run.ts";
 import * as sources from "../src/ideas/sources.ts";
@@ -93,6 +94,12 @@ test("a guide is Repack's lowercase edits to the base with its caption in quotes
   expect(guideProblem("make her look like Dina Thetford")).toContain("Dina");
   expect(guideProblem("make the man older. use a close-up camera angle.")).toContain("camera");
   expect(guideProblem("x".repeat(601))).toContain("600");
+  // Where the subject's picture comes from, as the tool was told (the user, Nov 1).
+  expect(guideProblem("find an image of the woman. make the woman a heavyset woman. keep her seated on the porch. change the current “He abused me” text to “HE USED A BELT”.")).toBeNull();
+  expect(sourceProblem("find an image of the woman. make her older.", "find")).toBeNull();
+  expect(sourceProblem("take the woman from the original thumbnail. make her older.", "case_thumbnail")).toBeNull();
+  expect(sourceProblem("make the woman older.", "find")).toContain("find an image");
+  expect(sourceProblem("find an image of the woman.", "case_thumbnail")).toContain("original thumbnail");
   expect(summaryProblem("A mother drowned her 4-year-old daughter in the bathtub. Her 16-year-old son escaped and called police. She told detectives the drowning was an accident, but she later admitted it.")).toBeNull();
   expect(summaryProblem("One. Two. Three. Four.")).toContain("three sentences");
   expect(summaryProblem(Array(66).fill("word").join(" "))).toContain("66 words");
@@ -110,6 +117,9 @@ test("a card is written as the board writes one, and read back from the shapes p
   idea.titles = [{ id: "1", text: "First Title", by: "claude", at: 0 }, { id: "2", text: "Main Title", by: "claude", at: 0 }];
   idea.main = "Main Title";
   idea.thumbnailGuide = "we use the interrogation room and have the mom in the middle";
+  // The video's thumbnail isn't put on by itself (the user, Nov 1: "just automatically passed through").
+  expect(idea.images).toEqual([]);
+  idea.images = [{ id: "t", name: "thumbnail", url: "https://i.ytimg.com/vi/JcAHmNKiHic/maxresdefault.jpg", from: "video" }];
   expect(board.cardText(idea)).toBe("Titles:\n- Main Title\n- First Title\n\nThumbnail Guide:\nwe use the interrogation room and have the mom in the middle\n[image]\n\nCase:\nhttps://www.youtube.com/watch?v=JcAHmNKiHic\n\nFootage:\nhttps://drive.google.com/drive/folders/abc");
   expect(board.cardImages(idea)).toEqual([{ name: "thumbnail", url: "https://i.ytimg.com/vi/JcAHmNKiHic/maxresdefault.jpg" }]);
   // Sphe Research's own cards.
@@ -203,7 +213,10 @@ test("a repackaging reads the case in code, and Claude's titles, guide and summa
   const seen = claudeCalls([
     { name: "save_titles", arguments: { niche: "child-related", titles: ["Mom Accidentally Admits Drowning Her Daughter Wasn't An Accident", "Dad Realizes What The Dress Really Meant", "Mom Blames Her Pills — Detectives Don't Buy It", "Mom Realizes Her Made Up Story Isn't Making Sense"] } },
     { name: "save_titles", arguments: { mode: "add", titles: ["Mom Has No Idea Detectives Found The Dress"] } },
+    { name: "save_thumbnail_guide", arguments: { guide: "we use the interrogation room and have the mom in the middle", subject_from: "find" } },
+    { name: "save_thumbnail_guide", arguments: { guide: "take the mom from the original thumbnail. we use the interrogation room and have the mom in the middle", subject_from: "case_thumbnail" } },
     { name: "save_thumbnail_guide", arguments: { guide: "We use the interrogation room and have the mom in the middle" } },
+    { name: "save_thumbnail_guide", arguments: { guide: "Find an image of the mom. we use the interrogation room and have the mom in the middle", subject_from: "find" } },
     { name: "save_summary", arguments: { summary: "A mother drowned her 6-year-old daughter and her 16-year-old escaped." } },
   ]);
   await run.repackage(context(), "i4-test");
@@ -219,11 +232,41 @@ test("a repackaging reads the case in code, and Claude's titles, guide and summa
   expect(idea.titles.map((one) => one.text)).toEqual(["Mom Accidentally Admits Drowning Her Daughter Wasn't An Accident", "Dad Realizes What The Dress Really Meant", "Mom Realizes Her Made Up Story Isn't Making Sense", "Mom Has No Idea Detectives Found The Dress"]);
   expect(idea.main).toBe("Mom Accidentally Admits Drowning Her Daughter Wasn't An Accident");
   expect(idea.niche).toBe("child-related");
-  expect(idea.thumbnailGuide).toBe("we use the interrogation room and have the mom in the middle");
+  expect(seen.answers[2]).toContain("find an image of the subject");
+  expect(seen.answers[3]).toContain("no YouTube thumbnail");
+  expect(seen.answers[4]).toContain("subject_from");
+  expect(idea.thumbnailGuide).toBe("find an image of the mom. we use the interrogation room and have the mom in the middle");
+  expect(idea.images).toEqual([]);
   expect(idea.summary).toBe("A mother drowned her 6-year-old daughter and her 16-year-old escaped.");
   expect(idea.run).toMatchObject({ what: "repackage", state: "done", holder: "test-mac" });
   expect(idea.chat.map((turn) => [turn.role, turn.text])).toEqual([["you", "Repackage this case. Angle: the dress"], ["claude", "Done."]]);
-  expect(idea.chat[1]!.tools?.map((one) => `${one.name}:${one.state}`)).toEqual(["save_titles:done", "save_titles:done", "save_thumbnail_guide:done", "save_summary:done"]);
+  expect(idea.chat[1]!.tools?.map((one) => `${one.name}:${one.state}`)).toEqual(["save_titles:done", "save_titles:done", "save_thumbnail_guide:error", "save_thumbnail_guide:error", "save_thumbnail_guide:error", "save_thumbnail_guide:done", "save_summary:done"]);
+});
+
+test("the case's thumbnail goes on the card only when the guide takes the subject from it, after the base", async () => {
+  const before = sources.pictures.fetch;
+  sources.pictures.fetch = async (_url, path) => (fs.writeFileSync(path, "jpg"), true);
+  try {
+    const idea = videoIdea("i9-test");
+    (idea.sources[0] as { thumbnail: string | null }).thumbnail = "https://i.ytimg.com/vi/JcAHmNKiHic/maxresdefault.jpg";
+    idea.images = [{ id: "u", name: "mugshot", key: "edit/ideas/i9-test/u.jpg", from: "upload" }];
+    await cloud.commit(idea, 0, "Sphe");
+    mock.on("GET", "/v1/ideas/trello/approved", () => Response.json({ titles: [{ id: "a1", title: "Mom Realizes Her Made Up Story Isn't Making Sense", list: "Uploaded (SI", url: "https://trello.com/c/a1", cover: "https://trello.com/1/cards/a1/attachments/c/download/cover.jpg" }] }), 1);
+    board.forget();
+    claudeCalls([
+      { name: "save_titles", arguments: { titles: ["Mom Realizes Her Made Up Story Isn't Making Sense Again", "Dad Realizes What The Dress Really Meant", "Mom Has No Idea Detectives Found The Dress"] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "take the mom from the original thumbnail. have her in the middle.", subject_from: "case_thumbnail", base_card: "https://trello.com/c/a1" } },
+    ]);
+    await run.repackage(context(), "i9-test");
+    let now = await settled("i9-test");
+    expect(now.images.map((one) => one.from)).toEqual(["base", "video", "upload"]);
+    claudeCalls([{ name: "save_thumbnail_guide", arguments: { guide: "find an image of the mom. have her in the middle.", subject_from: "find" } }], "Changed it.");
+    await run.chat(context(), "i9-test", "she isn't in the thumbnail, find one");
+    now = await settled("i9-test");
+    expect(now.images.map((one) => one.from)).toEqual(["base", "upload"]);
+  } finally {
+    sources.pictures.fetch = before;
+  }
 });
 
 test("a fresh run keeps what the person wrote, and a chat turn adds, removes and picks the main title", async () => {
@@ -235,7 +278,7 @@ test("a fresh run keeps what the person wrote, and a chat turn adds, removes and
   await cloud.commit(idea, 0, "Sphe");
   const seen = claudeCalls([
     { name: "save_titles", arguments: { titles: ["Dad Realizes What The Dress Really Meant", "Mom Realizes Her Made Up Story Isn't Making Sense", "Mom Has No Idea Detectives Found The Dress"] } },
-    { name: "save_thumbnail_guide", arguments: { guide: "we use the interrogation room and have the mom in the middle" } },
+    { name: "save_thumbnail_guide", arguments: { guide: "find an image of the mom. we use the interrogation room and have the mom in the middle", subject_from: "find" } },
   ]);
   await run.repackage(context(), "i5-test");
   let now = await settled("i5-test");

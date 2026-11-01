@@ -18,7 +18,7 @@ import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
 import * as board from "./board.ts";
 import * as cloud from "./cloud.ts";
-import { cleanGuide, cleanTitle, closest, guideProblem, identity, lengthStyle, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
+import { cleanGuide, cleanTitle, closest, guideProblem, identity, lengthStyle, sourceProblem, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
 import * as sources from "./sources.ts";
 
 /** Runs at once on one Mac. */
@@ -89,6 +89,8 @@ type Session = {
   style: LengthStyle | null;
   /** The approved thumbnails Claude may take as the base, by card link. */
   bases: Map<string, { title: string; image: string }>;
+  /** The case's own YouTube thumbnail, put on the card only when the guide takes the subject from it. */
+  caseThumbnail: string | null;
   skipped: string | null;
   saved: { titles: boolean; guide: boolean; summary: boolean };
   calls: number;
@@ -122,8 +124,9 @@ export const TOOLS = [
   },
   {
     name: "save_thumbnail_guide",
-    description: "Save the thumbnail guide for the main title: in lowercase, the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). base_card: the link of the approved card whose thumbnail is the base, from the list in the message.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { guide: { type: "string" }, base_card: { type: "string" } }, required: ["guide"] },
+    description:
+      "Save the thumbnail guide for the main title: in lowercase, where the editor gets the subject's picture (“take the woman from the original thumbnail.” or “find an image of the woman.”), then the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). subject_from: \"case_thumbnail\" when the case's subject is clearly in the case's own YouTube thumbnail (it goes on the card), \"find\" when they aren't. base_card: the link of the approved card whose thumbnail is the base, from the list in the message.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { guide: { type: "string" }, subject_from: { type: "string", enum: ["case_thumbnail", "find"] }, base_card: { type: "string" } }, required: ["guide", "subject_from"] },
   },
   {
     name: "save_summary",
@@ -215,6 +218,14 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       const guide = cleanGuide(words(args.guide, "guide"));
       const problem = guideProblem(guide);
       if (problem !== null) throw new Error(`The guide ${problem}. Save it again.`);
+      // Where the subject's picture comes from, said on purpose (the user, Nov 1: the original video's thumbnail was
+      // "just automatically passed through"; "let's try to find an image of the woman", or "we take the woman from
+      // the original thumbnail here").
+      const from = args.subject_from;
+      if (from !== "case_thumbnail" && from !== "find") throw new Error('subject_from is "case_thumbnail" (the subject is in the case\'s own thumbnail) or "find" (they aren\'t).');
+      if (from === "case_thumbnail" && session.caseThumbnail === null) throw new Error('This case has no YouTube thumbnail to take the subject from: use subject_from "find".');
+      const said = sourceProblem(guide, from);
+      if (said !== null) throw new Error(`The guide ${said}. Save it again.`);
       const baseLink = typeof args.base_card === "string" && args.base_card.trim() !== "" ? args.base_card.trim() : null;
       const base = baseLink === null ? undefined : session.bases.get(baseLink);
       if (baseLink !== null && base === undefined) throw new Error("That base isn't one of the approved thumbnails in the message: name one of their links, or leave base_card out.");
@@ -227,10 +238,15 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
         }
         idea.thumbnailGuide = guide;
         idea.guideBy = "claude";
-        if (base !== undefined && baseLink !== null) {
-          idea.base = { title: base.title, cardUrl: baseLink, image: base.image };
-          idea.images = [...idea.images.filter((one) => one.from !== "base"), { id: newId(), name: "base", url: base.image, from: "base" }];
-        }
+        if (base !== undefined && baseLink !== null) idea.base = { title: base.title, cardUrl: baseLink, image: base.image };
+        // The base first (the card's cover), the case's thumbnail only when the subject comes from it, then the person's pictures.
+        const baseImage = idea.images.find((one) => one.from === "base") ?? null;
+        const pictures = idea.images.filter((one) => one.from !== "base" && one.from !== "video");
+        idea.images = [
+          ...(base !== undefined ? [{ id: newId(), name: "base", url: base.image, from: "base" as const }] : baseImage !== null ? [baseImage] : []),
+          ...(from === "case_thumbnail" && session.caseThumbnail !== null ? [{ id: newId(), name: "original thumbnail", url: session.caseThumbnail, from: "video" as const }] : []),
+          ...pictures,
+        ];
       });
       session.saved.guide = true;
       return kept ? "The person wrote this idea's guide by hand, so theirs stays. Carry on." : `Thumbnail guide saved${base !== undefined ? `, on the base from “${base.title}”` : ""}.`;
@@ -303,7 +319,7 @@ const clock = (seconds: number | null) => {
   return hours > 0 ? `${hours} h ${minutes} min` : `${minutes} min`;
 };
 
-type Prepared = { caseText: string; examples: string[]; style: LengthStyle | null; folder: string; bases: Map<string, { title: string; image: string }>; pictures: string };
+type Prepared = { caseText: string; examples: string[]; style: LengthStyle | null; folder: string; bases: Map<string, { title: string; image: string }>; caseThumbnail: string | null; pictures: string };
 
 /** What Claude reads of the case: its source, the transcript or article, the team's approved titles, the thumbnails. */
 async function prepare(context: Context, idea: Idea, step: (text: string) => Promise<void>, signal: AbortSignal): Promise<Prepared | string> {
@@ -347,8 +363,10 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
   const folder = join(context.home, "cache", "ideas", `run-${idea.id}-${Date.now()}`);
   fs.mkdirSync(folder, { recursive: true });
   const pictures: string[] = [];
-  const thumbnail = idea.images.find((one) => one.from === "video")?.url;
-  if (thumbnail !== undefined && (await sources.picture(thumbnail, join(folder, "case-thumbnail.jpg")))) pictures.push(`The case's own YouTube thumbnail: ${join(folder, "case-thumbnail.jpg")}`);
+  const youtube = idea.sources.find((one) => one.kind === "youtube");
+  const thumbnail = youtube?.kind === "youtube" ? youtube.thumbnail : null;
+  const caseThumbnail = thumbnail !== null && (await sources.picture(thumbnail, join(folder, "case-thumbnail.jpg"))) ? thumbnail : null;
+  if (caseThumbnail !== null) pictures.push(`The case's own YouTube thumbnail (on the card only with subject_from "case_thumbnail"): ${join(folder, "case-thumbnail.jpg")}`);
   const bases = new Map<string, { title: string; image: string }>();
   const covered = approved.filter((one) => one.cover !== null && near.includes(one.title)).slice(0, 4);
   for (const [index, one] of covered.entries()) {
@@ -367,7 +385,7 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
     lengths,
   ].filter((line) => line !== "");
   const pictureText = pictures.length > 0 ? ["# Thumbnails (Read them)", ...pictures.map((one) => `- ${one}`)].join("\n") : "";
-  return { caseText: ["# The case", ...parts].join("\n"), examples: approvedText, style, folder, bases, pictures: pictureText };
+  return { caseText: ["# The case", ...parts].join("\n"), examples: approvedText, style, folder, bases, caseThumbnail, pictures: pictureText };
 }
 
 /** The idea as it stands, for a chat turn or changes: its titles (who wrote each), the main one, the guide, the summary. */
@@ -474,7 +492,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
       }
       folder = prepared.folder;
       await step(what === "chat" ? "Claude is working" : "Writing titles");
-      const session: Session = { id, mode: what, by: context.by, style: prepared.style, bases: prepared.bases, skipped: null, saved: { titles: false, guide: false, summary: false }, calls: 0 };
+      const session: Session = { id, mode: what, by: context.by, style: prepared.style, bases: prepared.bases, caseThumbnail: prepared.caseThumbnail, skipped: null, saved: { titles: false, guide: false, summary: false }, calls: 0 };
       const token = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
       sessions.set(token, session);
       const recent = idea.chat.slice(-SENT_TURNS - 1, -1).map((turn) => `${turn.role === "you" ? `${turn.by ?? "Producer"}` : "You (Claude)"}: ${turn.text}`);
@@ -573,8 +591,8 @@ export async function answerTo(token: string, message: unknown): Promise<unknown
 
 /** A fresh idea for these sources. */
 export function fresh(id: string, by: string, given: Pick<Idea, "sources" | "steer" | "wantsSummary"> & Partial<Pick<Idea, "images" | "footage" | "workspace">>): Idea {
-  const thumbnail = given.sources.find((one) => one.kind === "youtube");
-  const images: IdeaImage[] = given.images ?? (thumbnail?.kind === "youtube" && thumbnail.thumbnail !== null ? [{ id: newId(), name: "thumbnail", url: thumbnail.thumbnail, from: "video" }] : []);
+  // No picture by itself: the case's thumbnail goes on only when the guide takes the subject from it (save_thumbnail_guide).
+  const images: IdeaImage[] = given.images ?? [];
   return {
     id,
     workspace: given.workspace ?? "interrogation",

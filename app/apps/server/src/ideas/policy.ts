@@ -86,12 +86,23 @@ export function guideProblem(guide: string): string | null {
   if (text.length > 600) return "is over 600 characters: write the editor's instructions, not a brief";
   // The caption ("change the current “CAUGHT” text to “HE KNEW”") is in quotes, its own capitals.
   const outside = text.replace(/[“"][^”"]*[”"]/g, "");
-  if (outside.split(/(?<=[.!?])\s+(?=\S)/).filter((one) => one.trim() !== "").length > 3) return "is more than the subject, the scene and the caption";
+  if (outside.split(/(?<=[.!?])\s+(?=\S)/).filter((one) => one.trim() !== "").length > 4) return "is more than where the subject's picture comes from, the subject, the scene and the caption";
   // Acronyms (POV, CCTV, GPS) are fine; a capitalized word is a name or a sentence's start.
   const named = outside.match(/\b[A-Z][a-z]+\b/g);
   if (named !== null) return `has ${named.slice(0, 3).join(", ")} in capitals: write it in lowercase (only the caption, in quotes, keeps its own)`;
   if (/\b(?:crop|close-?up|camera angle|lighting|lens|zoom)\b/i.test(outside)) return "gives camera, crop or lighting directions, which a guide never does";
   return null;
+}
+
+/**
+ * Whether the guide says where the editor gets the subject's picture, as the
+ * tool was told: "take the woman from the original thumbnail" or "find an
+ * image of the woman" (the user, Nov 1).
+ */
+export function sourceProblem(guide: string, from: "case_thumbnail" | "find"): string | null {
+  const text = guide.toLowerCase();
+  if (from === "case_thumbnail") return /\bfrom the original thumbnail\b/.test(text) ? null : "doesn't say to take the subject from the original thumbnail (“take the woman from the original thumbnail.”)";
+  return /\bfind (?:an? )?(?:image|picture|photo) of\b/.test(text) ? null : "doesn't say to find an image of the subject (“find an image of the woman.”)";
 }
 
 /** What's wrong with a summary, or null (Repack's: one compact paragraph of 35–55 words, at most three sentences). */

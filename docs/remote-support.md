@@ -4,11 +4,12 @@
 
 Every signed-in Edit can be reached, always (Sphe, Nov 1: "ALL MACHINES SHOULD
 HAVE IT ON BY DEFAULT ALWAYS"). Each start registers the Mac again, on, as the
-person signed in: a device the cloud lost (remote support moved to mamagi on
-Oct 30 without its devices, so every Mac that had enrolled was told "Device
-unavailable" and was never reached again) is made again, a disable saved by an
-older build is turned back on, and another account's device gets a new
-identity. There is no off switch: `edit remote disable` is refused, and
+person signed in: a device the cloud doesn't know is made again, a disable
+saved by an older build is turned back on, and another account's device gets
+a new identity. `edit remote` asks the Edit running on this Mac (its port,
+7700 by default): on a Mac running `just dev` that's the dev server, which
+answers from dev's list, not the team's (Nov 1: it made the team's Macs look
+unreachable when prod had them all; ask a server on `~/.edit` instead). There is no off switch: `edit remote disable` is refused, and
 `edit remote enable` registers this Mac again now. No terminal setup is
 needed: install the nightly, open Edit and sign in. The app must stay running. An admin on
 another running, signed-in Edit can run `edit remote devices`, then

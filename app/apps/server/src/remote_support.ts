@@ -1,9 +1,11 @@
 // Every signed-in Edit can be reached by an admin, always: it registers itself
 // at every start, as the person signed in, and there is no switch to turn it
-// off (Sphe, Nov 1: "ALL MACHINES SHOULD HAVE IT ON BY DEFAULT ALWAYS": since
-// remote support moved to mamagi on Oct 30, every Mac that had enrolled before
-// only checked in, was told "Device unavailable" and never registered again,
-// so no team Mac could be reached). Commands arrive over Convex's live query
+// off (Sphe, Nov 1: "ALL MACHINES SHOULD HAVE IT ON BY DEFAULT ALWAYS"). A
+// device the cloud doesn't know is made again, a disable an older build saved
+// is turned back on, and another account's device gets a new identity. (The
+// day it was written, the team's Macs looked unreachable only because the
+// `edit remote` CLI asked the dev server on :7700, so dev's list; prod's had
+// them all.) Commands arrive over Convex's live query
 // as this Edit's signed-in person, never the relay key.
 import * as fs from "node:fs";
 import { join } from "node:path";

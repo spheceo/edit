@@ -97,3 +97,13 @@ speaker attribution, script fidelity in intros. Most were fixed by the agent in 
 ## Teaching loop 6
 Answer key and rounds under `~/edit-experiments/loop6/` (bases: 16-Year-Old interrogation, Welfare Check bodycam;
 holdout Concerned Sergeant). Results are added below when it finishes.
+
+## Fixed on the way (Nov 1, loop 6's e-code trials on the trial server)
+- **e-code scripts timing out on a busy Mac** (E2, the editing workflow's cut-ins): `note("hi")` failed "ran for more than 20 s" three times. Cause: the clock started before the sandbox process had loaded, and it loaded the whole server. Fix a007be45: the sandbox loads its own two files and says when it starts; the 20 s count from there. Verified: a test runs a script at a 150 ms limit and stops a loop.
+- **Map labels refused from e-code** (E2, the date cut-in): place_label wanted the building track map_view had answered with; E1's agent dropped the label. Fix 85a03a53, then 61b69765 for cloud projects (the map's media points at its cloud copy once it's up): the track is read from what the map's render measured, by its file name. Verified: tests, and E3's labels went in after a restart on the fixed build.
+- **An hour of turns asking for maps again** (E2): maps queued behind each other on a busy Mac and the agent was told to call again. Fix 86bc09d1: after a minute map_view answers with a dark stand-in, which the first frame and then the footage replace by themselves, labels re-pinned. Verified on the trial server: two maps at once answered in 65 s each and swapped in.
+- **Notepad lines moving against their window as the camera zooms** (the team's Notepad notes): each clip's keys were thinned apart, 1.6 px on a fast zoom in R1. Fix 1e6b33ac: a window and everything in it keyed at the same frames. Verified: the desktop test measures every frame, under 0.1 px.
+- **Smooth playback made on Modal lost its record** in a fresh data folder (never copied down, a restart would pay to make it again). Fix 65cb9797. Verified on the trial server.
+- **red_quote refused without a face** (E2, E3; the agent guessed one). Fix 081b5c95: the face found in the footage under it.
+
+Checked, nothing to change: the Windows screen in the user's screenshot (Predator Masseur, Cut-in 1) draws full frame with its Notepad lines inside the window in the current build's preview: the black border and hanging text were the older build JJ had (nightly-39 and later have the fixes, also for projects made before). R1's three desktops: no black at their widest, in the export or the preview. Smooth playback of R1's 26 minutes: made on Modal in about 5 minutes, plays at 30 fps, seeks show in 25–180 ms, no "Loading frame".

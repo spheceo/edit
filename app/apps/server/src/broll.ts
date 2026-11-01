@@ -1030,6 +1030,8 @@ interface MapRender {
 }
 
 const mapRenders = new Map<string, MapRender>();
+/** Background renders already given their one retry after running out of time. */
+const retriedMaps = new Set<string>();
 
 /** A map shot's stand-in in a project: its media, and why its render failed (null while it's still being made). */
 interface MapPending {
@@ -1457,6 +1459,18 @@ function startRender(app: App, job: MapShotJob, projectId: string): MapRender {
       }
       mapRenders.delete(job.key);
       for (const project of made.projects) jobs.end(app.store.home, jobs.keyOf("map", project, job.key));
+      // A render that only ran out of time (tiles slow to come on a busy Mac)
+      // goes again once by itself, a minute later, from the frames it has: the
+      // agent can't, without map_view's arguments (loop 7 R1: "I don't have them
+      // any more, and guessing would start a new paid map session").
+      if (made.failed !== null && /took too long|stopped rendering/u.test(made.failed) && !retriedMaps.has(job.key)) {
+        retriedMaps.add(job.key);
+        await timing.sleep(60_000);
+        for (const project of made.projects) {
+          const first = jobFirst(job);
+          if (resumeMap(app, project, first)) diag.info("agent", `map ${job.key} for ${project}: its render ran out of time; going again by itself`);
+        }
+      }
     })();
   }
   if (!render.projects.has(projectId)) {

@@ -1672,6 +1672,23 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       const runsOn = music.find((clip) => clip.start < tape && clipEnd(clip) > tape + idiv(second, 2));
       if (runsOn !== undefined) missing.push(`the prologue's music (${runsOn.id}) cut on the tape's first frame`);
       if (missing.length > 0) issues.push({ kind: "tape_start_unmarked", at: tape, missing });
+      // It counts down from the date to the tape (Jones JJ, 20-Year-Old and
+      // Kroger, Oct 31–Nov 1: "It should start from the point where we say the
+      // date, and then it should roll until the interrogation starts, and it
+      // should say 'interrogation starts in'"; "as soon as we get to the screen").
+      const first = Math.min(...counts.map((clip) => clip.start));
+      const date = project.clips.find((clip) => clip.type === "text" && clip.name === "Date" && visible(clip.track) && clip.start < tape);
+      const off = counts.find((clip) => clip.type === "text" && !/STARTS IN/u.test(clip.text));
+      const words = off !== undefined && off.type === "text" ? off.text : "";
+      if ((date !== undefined && first > date.start + idiv(second, 2)) || off !== undefined) {
+        issues.push({
+          kind: "countdown_late",
+          at: first,
+          ...(date !== undefined ? { date_at: date.start } : {}),
+          reads: words,
+          fix: "one countdown, \"INTERROGATION STARTS IN\" (the default label), from the date's first frame (the map coming on) to the tape's first frame",
+        });
+      }
     }
   }
   // A found photo or still as plain B-roll (letterboxed, often): pictures go

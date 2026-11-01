@@ -168,6 +168,30 @@ test("a_persons_photo_in_cut_in_after_cut_in_is_flagged", () => {
   expect(kinds(p, "face_overused").length).toBe(0);
 });
 
+test("an_interrogation_countdown_runs_from_the_date", () => {
+  // Jones JJ, 20-Year-Old (Oct 31): "It should start from the point where we say the date… and it should say 'interrogation starts in'".
+  const late = project("plan");
+  late.style = "interrogation";
+  late.media.push(footage());
+  apply(late, [
+    { op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 0, start: 0, duration: 900 } },
+    { op: "date_title", text: "March 16, 2024", place: "Austin, Texas", start: 60, end: 200 },
+    { op: "countdown", start: 450, end: 600 },
+  ]);
+  expect(kinds(late, "countdown_late").length).toBe(1);
+  const right = project("plan");
+  right.style = "interrogation";
+  right.media.push(footage());
+  apply(right, [
+    { op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 0, start: 0, duration: 900 } },
+    { op: "date_title", text: "March 16, 2024", place: "Austin, Texas", start: 60, end: 200 },
+    { op: "countdown", start: 60, end: 600 },
+  ]);
+  expect(kinds(right, "countdown_late").length).toBe(0);
+  apply(right, [{ op: "countdown", start: 60, end: 600, label: "Interrogation resumes in" }]);
+  expect(kinds(right, "countdown_late").length).toBe(1);
+});
+
 test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {
   const p = project("plan");
   p.media.push(footage(), media({ id: "m2", name: "g", path: "/g.mp4", kind: "video", duration: 600, width: 1920, height: 1080 }));

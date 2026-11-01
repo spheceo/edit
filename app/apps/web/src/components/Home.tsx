@@ -1881,9 +1881,12 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
         // A refusal comes at once (a bad link, no access); after that the import runs on Home.
         const early = await Promise.race([work.then(() => null, (cause: unknown) => cause), new Promise((resolve) => setTimeout(() => resolve("running"), 1500))]);
         if (early !== null && early !== "running") throw early;
-        work.catch(() => {});
+        // A refusal that comes later (a busy Mac answering slowly) is still said, never dropped: JJ, Nov 1, started a
+        // compilation twice, saw "importing its footage" and then nothing, no row and no error.
+        const named = title.trim();
+        work.catch((cause: unknown) => useEditor.getState().toastError(cause, `start “${named}”`));
         onClose();
-        toast(`“${title.trim()}”: importing its footage, then writing the script`, "info");
+        toast(`“${named}”: importing its footage, then writing the script`, "info");
         return;
       }
       if (input !== "" && allowed !== null && !allowed.has(kind)) throw new Error("Your account can’t make full edits: an admin can give you an Edit style at accounts.spheceo.com.");

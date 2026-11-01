@@ -352,3 +352,19 @@ test("a share that fails while it reads an export lets go of it, so an archive t
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a local export the disks can't hold is refused up front, saying what it needs and what's free", async () => {
+  // TODO.md, Oct 18: a 2h35m export needed ~8 GB of chunks and file with 2.8 GB free, and failed halfway.
+  const { exportBytes, roomFor } = await import("../src/exports.ts");
+  const options = { format: "h264", quality: "high", target_mb: null } as unknown as Parameters<typeof exportBytes>[0];
+  // 26 minutes at 1080p30, high: about 8.96 Mbit/s, so ~1.75 GB.
+  const bytes = exportBytes(options, { start: 0, end: 26 * 60 * 30, width: 1920, height: 1080, audio: true }, 30);
+  expect(Math.abs(bytes / 1e9 - 1.747)).toBeLessThan(0.01);
+  expect(exportBytes({ ...options, format: "mp3" } as never, { start: 0, end: 900, width: 0, height: 0, audio: true }, 30)).toBe(0);
+  // One disk holds the chunks and then the file: twice the size and a gigabyte's margin.
+  const oneDisk = () => 1;
+  expect(roomFor(bytes, "/cache", "/out", () => 5e9, oneDisk)).toBeNull();
+  expect(roomFor(bytes, "/cache", "/out", () => 3e9, oneDisk)).toContain("needs about 4.5 GB");
+  // Two disks: each holds one of them.
+  expect(roomFor(bytes, "/cache", "/out", () => 3e9, (path) => (path === "/cache" ? 1 : 2))).toBeNull();
+});

@@ -16,7 +16,7 @@ import { runPromise } from "./effect/runtime.ts";
 import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
 import { catchBugsAsync } from "./guard.ts";
-import type { ExportOptions, Project } from "./model.ts";
+import type { ExportOptions, Plan, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { canonical, fileName, join, parent } from "./paths.ts";
 import { duration } from "./project.ts";
@@ -476,7 +476,7 @@ export class ExportRegistry implements seams.Exports {
     const cloudRequest = extra.cloudRequest ?? crypto.randomUUID();
     const cloudJob = extra.cloudJob;
     const addon = native();
-    const { plan } = addon.exportPlan({ json: jsonForSerde(project) }, options);
+    const { plan, fps } = addon.exportPlan({ json: jsonForSerde(project) }, options);
     let path = addon.withExtension(output, options.format);
     // Never into an unplugged media drive's folder (or the empty mount point it leaves behind).
     store.layout().writable(path);
@@ -518,6 +518,12 @@ export class ExportRegistry implements seams.Exports {
     if (backend === "modal") {
       const why = seams.modalExports.unsuitable(project, options, plan);
       if (why !== null) throw new Error(`this export can't render in the cloud: ${why}`);
+    }
+    // Rendered here: refused up front when the disks can't hold it, never halfway (TODO, Oct 18: a 2h35m export
+    // needed ~8 GB with 2.8 GB free).
+    if (backend === "local") {
+      const short = roomFor(exportBytes(options, plan, options.fps ?? fps), store.cacheDir(), folder);
+      if (short !== null) throw new Error(short);
     }
     const whole = ["h264", "hevc", "prores"].includes(options.format) && plan.start === 0 && plan.end >= duration(project) && plan.end > 0;
     if (extra.drive === true && !whole) throw new Error("only a whole video export (MP4 or MOV) uploads to Drive");
@@ -771,5 +777,65 @@ export class ExportRegistry implements seams.Exports {
         diag.warn("drive", `${project.name}: ${diag.messageOf(error)}`);
       }
     }
+  }
+}
+
+
+/**
+ * About how many bytes an export's file is, by the engine's own rate
+ * (export.rs `video_bitrate`: pixels × fps × bits a pixel for the quality,
+ * HEVC 60%, a target size as given; ProRes ~2.5 bits a pixel) and its sound.
+ * Audio and stills are small: 0.
+ */
+export function exportBytes(options: ExportOptions, plan: Plan, fps: number): number {
+  if (!["h264", "hevc", "prores"].includes(options.format)) return 0;
+  const seconds = Math.max((plan.end - plan.start) / Math.max(fps, 1), 0);
+  const pixels = plan.width * plan.height * fps;
+  const bits = { high: 0.14, balanced: 0.08, small: 0.045 }[options.quality];
+  const video =
+    options.format === "prores" ? pixels * 2.5 : options.target_mb != null ? (options.target_mb * 8_000_000) / Math.max(seconds, 1) : pixels * bits * (options.format === "hevc" ? 0.6 : 1);
+  const audio = plan.audio ? 256_000 : 0;
+  return Math.ceil(((video + audio) / 8) * seconds);
+}
+
+const GB = 1e9;
+
+/**
+ * Why the disks can't hold an export of `bytes`, or null: its chunks go in
+ * `cacheDir`, then are joined into a file in `outputDir` (both on one disk:
+ * twice the room), with a margin of a tenth or a gigabyte.
+ */
+export function roomFor(bytes: number, cacheDir: string, outputDir: string, free: (path: string) => number = freeAt, device: (path: string) => number = deviceOf): string | null {
+  if (bytes <= 0) return null;
+  const margin = Math.max(bytes * 0.1, GB);
+  const need = new Map<number, { path: string; bytes: number }>();
+  for (const path of [cacheDir, outputDir]) {
+    const disk = device(path);
+    const had = need.get(disk);
+    need.set(disk, { path: had?.path ?? path, bytes: (had?.bytes ?? margin) + bytes });
+  }
+  for (const { path, bytes: wanted } of need.values()) {
+    const has = free(path);
+    if (has < wanted) {
+      return `not enough disk space for this export: it needs about ${(wanted / GB).toFixed(1)} GB on the disk with ${path}, and ${(has / GB).toFixed(1)} GB is free (free some space, or export a shorter span, a smaller size or a lower quality)`;
+    }
+  }
+  return null;
+}
+
+function freeAt(path: string): number {
+  try {
+    const stats = fs.statfsSync(path);
+    return stats.bavail * stats.bsize;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+}
+
+function deviceOf(path: string): number {
+  try {
+    return fs.statSync(path).dev;
+  } catch {
+    return -1;
   }
 }

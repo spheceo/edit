@@ -14,12 +14,13 @@
 
 import * as fs from "node:fs";
 
-import { Option, Predicate, Schema } from "effect";
+import { Effect, Option, Predicate, Schema } from "effect";
 import { createHash } from "node:crypto";
 
 import type { Script } from "@edit/types/writer";
 
 import * as diag from "../diag.ts";
+import { idle, inArea, runtime } from "../effect/runtime.ts";
 import * as service from "../effect/service.ts";
 import { ConvexAnswer } from "../cloud.ts";
 import * as archive from "./archive.ts";
@@ -422,38 +423,46 @@ export async function stream(request: Request, data: string, id: string): Promis
 /** Who this Mac is, as commits name it. */
 const holder = (): string => machine.name().slice(0, 120);
 
+/**
+ * The sync, one fiber for as long as Edit runs (round 3): a round every
+ * TICK_MS, pulling every PULL_EVERY_MS or when asked (`syncSoon`); a round
+ * never overlaps the last, and a round that throws, or a bug in one, is said
+ * and the next round goes on (a loop that died silently was 81aa84cb's).
+ * Offline and errors are said once each, when they change.
+ */
+const syncing = (data: string) =>
+  Effect.gen(function* () {
+    let lastPull = 0;
+    for (;;) {
+      yield* idle(TICK_MS);
+      if (!relay.cloudEnabled()) {
+        Object.assign(status, { enabled: false, state: "off", error: null, transfer: null });
+        continue;
+      }
+      status.enabled = true;
+      const pull = pullNow || Date.now() - lastPull >= PULL_EVERY_MS;
+      const was = status.state;
+      const ran = yield* Effect.tryPromise(() => tick(data, pull)).pipe(Effect.result);
+      if (ran._tag === "Success") {
+        if (was === "offline" || was === "error") yield* Effect.logInfo("the cloud: back in sync");
+        Object.assign(status, { pending: ran.success, state: ran.success > 0 ? "syncing" : "synced", error: null, transfer: null, lastSync: Date.now() });
+      } else {
+        const cause = ran.failure.cause;
+        const problem = cause instanceof Problem ? cause : new Problem(diag.messageOf(cause));
+        if (status.error !== problem.message) yield* (problem.offline ? Effect.logWarning : Effect.logError)(`the cloud: ${problem.offline ? "offline" : "sync stopped"}: ${problem.message}`);
+        Object.assign(status, { state: problem.offline ? "offline" : "error", error: problem.message, transfer: null });
+      }
+      if (pull) {
+        lastPull = Date.now();
+        pullNow = false;
+      }
+    }
+  }).pipe(inArea("writer"));
+
 /** Starts syncing in the background, for as long as Edit runs. */
 export function start(data: string): void {
   lessonHooks.changed = syncSoon;
-  let lastPull = 0;
-  let running = false;
-  setInterval(() => {
-    if (running) return;
-    running = true;
-    const pull = pullNow || Date.now() - lastPull >= PULL_EVERY_MS;
-    void (async () => {
-      if (!relay.cloudEnabled()) {
-        Object.assign(status, { enabled: false, state: "off", error: null, transfer: null });
-        return;
-      }
-      status.enabled = true;
-      const was = status.state;
-      try {
-        const pending = await tick(data, pull);
-        if (was === "offline" || was === "error") diag.info("writer", "the cloud: back in sync");
-        Object.assign(status, { pending, state: pending > 0 ? "syncing" : "synced", error: null, transfer: null, lastSync: Date.now() });
-      } catch (error) {
-        const problem = error instanceof Problem ? error : new Problem(diag.messageOf(error));
-        if (status.error !== problem.message) (problem.offline ? diag.warn : diag.error)("writer", `the cloud: ${problem.offline ? "offline" : "sync stopped"}: ${problem.message}`);
-        Object.assign(status, { state: problem.offline ? "offline" : "error", error: problem.message, transfer: null });
-      } finally {
-        if (pull) {
-          lastPull = Date.now();
-          pullNow = false;
-        }
-      }
-    })().finally(() => (running = false));
-  }, TICK_MS);
+  runtime.runFork(syncing(data));
 }
 
 /** A script Edit is working on now: importing or being written. */

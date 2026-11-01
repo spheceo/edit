@@ -1353,6 +1353,9 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
   const broll: [Clip, string, number, number][] = [];
   for (const clip of project.clips) {
     if (clip.track === base || clip.type !== "video") continue;
+    // Footage only: a still has no moment (repeated_picture is its check), and a Windows screen's wallpaper and
+    // window frames are drawn once and reused on every screen (R3V, Nov 1: seven flags no tool could clear).
+    if (mediaOf(project, clip.media)?.kind !== "video") continue;
     const from = clip.source_in ?? 0;
     broll.push([clip, clip.media, from, from + (clip.duration / fps) * (clip.speed ?? 1)]);
   }

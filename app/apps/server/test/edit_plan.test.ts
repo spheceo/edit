@@ -125,6 +125,13 @@ test("the_same_broll_moment_twice_is_flagged", () => {
     { op: "add", clip: { type: "video", track: "v2", media: "m1", source_in: 10.5, start: 600, duration: 90 } },
   ]);
   expect(kinds(p, "repeated_broll").length).toBe(2);
+  // A drawn still on two screens (a Windows screen's wallpaper, a window frame) is no moment of footage.
+  p.media.push(media({ id: "wall", name: "wallpaper", path: "/wall.png", kind: "image", duration: 30, width: 1920, height: 1080 }));
+  apply(p, [
+    { op: "add", clip: { type: "video", track: "new", media: "wall", source_in: 0, start: 200, duration: 90, name: "Desktop · wallpaper" } },
+    { op: "add", clip: { type: "video", track: "new", media: "wall", source_in: 0, start: 700, duration: 90, name: "Desktop · wallpaper" } },
+  ]);
+  expect(kinds(p, "repeated_broll").length).toBe(2);
 });
 
 test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {

@@ -10,7 +10,12 @@ Mathias's Mac, project p1793492055193-220550, started ~02:14 SAST. Reported (scr
 - **Verified:** a unit test (script.test.ts). On the real file, the old excerpt gives Mathias's exact error, and the fixed cut is 55.0 s with its proxy made cleanly.
 - **Still to do:** Mathias's Mac is on nightly-43. After the next nightly: `edit remote update fd1604bf-23bc-499a-9ef3-16803137a712`, then `edit remote resume fd1604bf-23bc-499a-9ef3-16803137a712 p1793492055193-220550`.
 
-## Also found (Mathias's diagnostics, not fixed here)
+## Also fixed, from the same diagnostics
 
-- Script "Mom Secretly Has a Baby With Her Daughter's Boyfriend": NOT IN THE CLOUD ("The summary is too large"), and its import stopped on a corrupt source (`aac channel element duplicate`, `h264 Invalid NAL unit size`).
-- Thousands of "its footage stays here: That script is missing" warnings (512× for one script), every few seconds.
+- **"Mom Secretly Has a Baby With Her Daughter's Boyfriend": NOT IN THE CLOUD ("The summary is too large").** Root cause: its import's "could not extract audio" kept all 545 KB of FFmpeg's stderr as the script's error. The summary carries the error, and mamagi refuses a summary over 64 KB, so every sync failed. Fix f71fa1d8: `diag.gist` keeps each message once, ≤ 600 characters; transcribe's encode uses it, and `store.summary` caps any error at its gist. Verified with tests on a 20,000-line flood (the summary stays under 4 KB).
+- **The same script's half-encoded preview piece (498 MB) was synced to the cloud.** The sync skipped only names ending `.partial`, and preview pieces encode as `<name>.partial.mp4`. The same test chose which local footage could be deleted once the cloud had it. Fix 7650bf1e: one rule, `store.inTheMaking`, for both; the sync skips `pieces/`. Tested.
+- **The flood of "its footage stays here: That script is missing" warnings** was already fixed in 175fd794 (nightly-42). None since his Mac restarted on nightly-43; the report's two-day tally still counts the old ones.
+
+## Still open
+
+- **Why that script's sound couldn't be extracted.** Not the recording: the cloud original (Drive 1jKGSJSlkSEnHaQYmxUMW7vVvbJ1PjLif, 5.3 GB, 83 min) extracts whole with no errors (4,978 s of sound in 4.4 min). So the import read a damaged copy on Mathias's Mac, most likely its local download of the Drive file. After the nightly, retry the import (`edit remote resume` with the script's id) and pull diagnostics. If it fails the same way, that local copy is still being read: delete it so the cloud copy is used, and look at how Drive downloads resume (a resumed download with bytes in the wrong place gives exactly these "Invalid NAL unit size" errors).

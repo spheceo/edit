@@ -71,7 +71,7 @@ let restore: () => void;
 beforeAll(() => {
   mock = MockServer.start();
   restore = mock.useEnv({ EDIT_RELAY_TOKEN: undefined });
-  transcribeTiming.sleep = async () => {};
+  transcribeTiming.instant = true;
   // Short real waits: the transcription runs on the event loop meanwhile.
   voiceoverTiming.sleep = () => Bun.sleep(5);
   tools.forget();

@@ -2,8 +2,33 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
+import { Effect } from "effect";
+
+import { runtime } from "../src/effect/runtime.ts";
 import * as tools from "../src/tools.ts";
-import { aligned, join, parseScribe, plan, run, serialize, timing, voicesFrom, type Word } from "../src/transcribe.ts";
+import {
+  aligned,
+  AllowanceUsedUp,
+  GatewayDown,
+  join,
+  parseScribe,
+  plan,
+  RELAY_MAX_BYTES,
+  RelayBusy,
+  RelayMaxBytes,
+  RelayUnreachable,
+  Retries,
+  retryable,
+  run,
+  serialize,
+  timing,
+  TooLongForOneRequest,
+  transcribeFile,
+  TranscriptionRefused,
+  voicesFrom,
+  wholeBitrate,
+  type Word,
+} from "../src/transcribe.ts";
 import { scratch } from "./helpers/home.ts";
 import { MockServer, scribeAnswer } from "./mocks/server.ts";
 
@@ -50,7 +75,7 @@ let restore: () => void;
 beforeAll(() => {
   mock = MockServer.start();
   restore = mock.useEnv({ EDIT_RELAY_TOKEN: "relay-token" });
-  timing.sleep = async () => {};
+  timing.instant = true;
   tools.forget();
 });
 
@@ -215,3 +240,102 @@ test.skipIf(ffmpeg === null)("a gateway timeout (524) is asked again twice, then
     cleanup();
   }
 });
+
+test("the whole hearing's limit is the relay's, in every environment", () => {
+  const toml = fs.readFileSync(`${import.meta.dir}/../../relay/wrangler.toml`, "utf8");
+  const limits = [...toml.matchAll(/^MAX_UPLOAD_BYTES = "(\d+)"/gm)].map((found) => Number(found[1]));
+  expect(limits.length).toBeGreaterThan(0);
+  for (const limit of limits) expect(limit).toBe(RELAY_MAX_BYTES);
+});
+
+test("a whole hearing is sent at a rate that fits one request, and none fits past ~10 hours", () => {
+  // Nov 1: Mathias's interviews, 4 h 39 min and 5 h 1 min, sent at 32 kbps, were 413 every time.
+  for (const seconds of [60, 2 * 3600, 3 * 3600, 4 * 3600 + 39 * 60, 5 * 3600 + 60, 7 * 3600 + 43 * 60, 10 * 3600]) {
+    const kbps = wholeBitrate(seconds);
+    expect(kbps).not.toBeNull();
+    expect(kbps!).toBeLessThanOrEqual(32);
+    expect(kbps!).toBeGreaterThanOrEqual(8);
+    // What Opus at that rate makes, with room to spare.
+    expect((seconds * kbps! * 1000) / 8).toBeLessThan(RELAY_MAX_BYTES * 0.9);
+  }
+  expect(wholeBitrate(3600)).toBe(32);
+  expect(wholeBitrate(11 * 3600)).toBeNull();
+});
+
+test("only a busy relay, the gateway and a dropped connection are worth asking again", () => {
+  expect(retryable(new RelayBusy({ message: "" }))).toBe(true);
+  expect(retryable(new GatewayDown({ status: 524, message: "" }))).toBe(true);
+  expect(retryable(new RelayUnreachable({ message: "" }))).toBe(true);
+  expect(retryable(new TooLongForOneRequest({ bytes: 1, message: "" }))).toBe(false);
+  expect(retryable(new AllowanceUsedUp({ message: "" }))).toBe(false);
+  expect(retryable(new TranscriptionRefused({ status: 402, message: "" }))).toBe(false);
+});
+
+test.skipIf(ffmpeg === null)("a recording too big for one request is said at once, never asked again", async () => {
+  const { dir, cleanup } = scratch("transcribe-413");
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    mock.on("POST", "/v1/transcribe", () => Response.json({ error: "That recording is too long for one request." }, { status: 413 }), 1);
+    await expect(run(source, `${dir}/cache/transcript.json`)).rejects.toThrow("transcription failed (413): That recording is too long for one request.");
+    expect(mock.calls("/v1/transcribe", "POST").length - before).toBe(1);
+  } finally {
+    cleanup();
+  }
+});
+
+test.skipIf(ffmpeg === null)("a long file the relay won't take whole keeps its words from the pieces, without voices, instead of stopping", async () => {
+  const { dir, cleanup } = scratch("transcribe-whole-413");
+  let refusing = true;
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=100", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    // A 100 s tone at "32k" is ~550 kB whole and ~230 kB a piece: the relay refuses only the whole.
+    mock.on("POST", "/v1/transcribe", (request) =>
+      refusing && request.body.length > 400_000 ? Response.json({ error: "That recording is too long for one request." }, { status: 413 }) : Response.json(scribeAnswer()),
+    );
+    const target = `${dir}/cache/transcript.json`;
+    await run(source, target);
+    const written = JSON.parse(fs.readFileSync(target, "utf8")) as { words: Word[] };
+    expect(written.words.length).toBeGreaterThan(0);
+    expect(written.words.every((word) => word.speaker === undefined)).toBe(true);
+    // Nothing kept for the whole, so a later run asks for it again (the relay's limit may have grown).
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.json`)).toBe(false);
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.ogg`)).toBe(false);
+  } finally {
+    refusing = false;
+    cleanup();
+  }
+}, 30_000);
+
+test.skipIf(ffmpeg === null)("a long file over the limit at 32 kbps is heard whole at a rate that fits, and keeps its voices", async () => {
+  const { dir, cleanup } = scratch("transcribe-whole-smaller");
+  const limit = 300_000;
+  let refusing = true;
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=100", source]).exitCode).toBe(0);
+    fs.mkdirSync(`${dir}/cache`);
+    // As the relay does: a request over its limit is a 413. A 100 s tone at "32k" is ~550 kB whole and ~230 kB a piece; the limit sits between.
+    mock.on("POST", "/v1/transcribe", (request) =>
+      refusing && request.body.length > limit ? Response.json({ error: "That recording is too long for one request." }, { status: 413 }) : Response.json(scribeAnswer(["Hello", "there."], "speaker_3")),
+    );
+    const before = mock.calls("/v1/transcribe", "POST").length;
+    const target = `${dir}/cache/transcript.json`;
+    await runtime.runPromise(transcribeFile(source, target).pipe(Effect.provideService(RelayMaxBytes, limit), Effect.provideService(Retries, Retries.instant)));
+    const sent = mock.calls("/v1/transcribe", "POST").slice(before);
+    // Three pieces and the whole, every one of them under the limit: nothing was refused.
+    expect(sent.length).toBe(4);
+    expect(sent.every((call) => call.body.length <= limit)).toBe(true);
+    const written = JSON.parse(fs.readFileSync(target, "utf8")) as { words: Word[] };
+    expect(written.words.some((word) => word.speaker === "speaker_3")).toBe(true);
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.json`)).toBe(true);
+    expect(fs.existsSync(`${dir}/cache/transcript.whole.ogg`)).toBe(false);
+  } finally {
+    refusing = false;
+    cleanup();
+  }
+}, 30_000);

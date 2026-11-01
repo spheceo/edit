@@ -19,7 +19,7 @@ let restore: () => void;
 beforeAll(() => {
   mock = MockServer.start();
   restore = mock.useEnv();
-  timing.sleep = async () => {};
+  timing.instant = true;
   waits.sleep = (ms: number) => Bun.sleep(Math.min(ms, 20));
   tools.forget();
 });

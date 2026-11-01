@@ -21,7 +21,7 @@ beforeAll(() => {
   mock = MockServer.start();
   // Cloud off (no relay token) unless a test turns it on.
   restore = mock.useEnv({ EDIT_RELAY_TOKEN: undefined });
-  timing.sleep = async () => {};
+  timing.instant = true;
   tools.forget();
 });
 

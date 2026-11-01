@@ -17,7 +17,7 @@ let restore: () => void;
 beforeAll(() => {
   mock = MockServer.start();
   restore = mock.useEnv();
-  timing.sleep = async () => {};
+  timing.instant = true;
   tools.forget();
 });
 

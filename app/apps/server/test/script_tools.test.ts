@@ -39,7 +39,7 @@ function make(args: string[]): Uint8Array {
 beforeAll(() => {
   mock = MockServer.start();
   restore = mock.useEnv({ EDIT_RELAY_TOKEN: undefined });
-  transcribeTiming.sleep = async () => {};
+  transcribeTiming.instant = true;
   voiceoverTiming.sleep = () => Bun.sleep(5);
   scriptTiming.sleep = () => Bun.sleep(5);
   tools.forget();

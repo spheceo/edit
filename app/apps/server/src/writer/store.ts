@@ -95,6 +95,14 @@ export function runFailed(dir: string): { at: number; error: string } | null {
   return last?.failed === true ? { at: last.at, error: last.text } : null;
 }
 
+/**
+ * A file still being made (a download, an encode): never synced, and never
+ * left to the cloud. A preview piece is encoded as "<name>.partial.mp4"
+ * (imports.ts encodePiece), which the old ".partial" test missed: Nov 1, a
+ * 498 MB half-encoded piece of an 83-minute recording went up with its script.
+ */
+export const inTheMaking = (name: string): boolean => name.startsWith(".") || /\.(tmp|partial)$/iu.test(name) || /\.partial\.[^./]+$/iu.test(name);
+
 /** A script's row in the lists; with its folder, also whether Claude's last run on it failed. */
 export function summary(script: Script, dir?: string): Summary {
   const cutIns = script.clips.filter(isCutIn).length;

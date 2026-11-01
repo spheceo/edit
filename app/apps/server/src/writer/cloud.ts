@@ -554,8 +554,10 @@ function localFiles(dir: string, script: Script): Record<string, Kept> {
     }
     for (const entry of entries) {
       const path = join(at, entry.name);
-      if (entry.name.startsWith(".") || entry.name.endsWith(".tmp") || entry.name.endsWith(".partial")) continue;
+      if (store.inTheMaking(entry.name)) continue;
       if (entry.isDirectory()) {
+        // A recording's preview pieces, joined into the preview and deleted: the preview is what's kept.
+        if (at === dir && entry.name === "pieces") continue;
         stack.push(path);
         continue;
       }

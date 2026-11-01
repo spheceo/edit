@@ -52,7 +52,7 @@ function footageFiles(dir: string, all = false): string[] {
       const path = join(at, entry.name);
       if (entry.isDirectory()) {
         if (all || (!entry.name.startsWith(".") && path !== join(dir, "footage"))) stack.push(path);
-      } else if (isFootage(entry.name) && !entry.name.endsWith(".partial")) out.push(path.slice(dir.length + 1));
+      } else if (isFootage(entry.name) && !store.inTheMaking(entry.name)) out.push(path.slice(dir.length + 1));
     }
   }
   return out;

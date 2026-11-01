@@ -254,7 +254,9 @@ export function subKey(project: string, name: string): string {
  * didn't make it watches it through as the team would and fixes what it'd flag
  * (loop 6, Nov 1: 2–7 minutes, it closed what every trial's edit had left).
  */
-export const FRESH_EYES = "Do the final pass on this edit with fresh eyes: watch it through as the team would (every cut, sound, subtitle and Windows screen), then fix everything you'd flag.";
+export const FRESH_EYES =
+  "Do the final pass on this edit with fresh eyes: watch it through as the team would (every cut, sound, subtitle and Windows screen), then fix everything you'd flag. " +
+  "What the team catches most: narration or the room's voice starting before the picture changes; a glimpse or a half-second clip; a cover (an audio section, a pause, an overlay) fading to show what's under it; a zoom that jumps at a cut; the same photo in cut-in after cut-in; a picture before the words that name it; the date title (the date first) and the countdown (from the date to the tape); a click off its pop-up; music too loud under the intro or changing mid-line; the ending (the last page held and faded, nothing after it).";
 
 
 /** The turn that carries on one a restart cut short. */

@@ -149,6 +149,25 @@ test("the_same_broll_moment_twice_is_flagged", () => {
   expect(kinds(p, "repeated_broll").length).toBe(2);
 });
 
+test("a_persons_photo_in_cut_in_after_cut_in_is_flagged", () => {
+  // Jones JJ, Helpful Son (Oct 31): "why do we show this image in simply every cut in?"
+  const p = project("plan");
+  p.media.push(footage(), media({ id: "vo", name: "vo", path: "/vo.wav", kind: "audio", duration: 600 }));
+  p.media.push(media({ id: "face", name: "face", path: "/face.png", kind: "image", duration: 30, width: 800, height: 800 }));
+  const ops: Record<string, unknown>[] = [{ op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 0, start: 0, duration: 3000 } }];
+  for (let i = 0; i < 5; i++) {
+    ops.push({ op: "add", clip: { type: "audio", track: "new", media: "vo", source_in: i * 10, start: 300 + i * 500, duration: 200, name: "Voice-over" } });
+    if (i < 4) ops.push({ op: "add", clip: { type: "video", track: "new", media: "face", source_in: 0, start: 330 + i * 500, duration: 90, name: "File Viewer · Chandler" } });
+  }
+  apply(p, ops);
+  const found = kinds(p, "face_overused");
+  expect(found.length).toBe(1);
+  expect(found[0]!.cut_ins).toBe(4);
+  // In two cut-ins it's where they're named and where the story turns: no flag.
+  apply(p, [{ op: "delete", select: { ids: p.clips.filter((c) => c.name === "File Viewer · Chandler").slice(2).map((c) => c.id) } }]);
+  expect(kinds(p, "face_overused").length).toBe(0);
+});
+
 test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {
   const p = project("plan");
   p.media.push(footage(), media({ id: "m2", name: "g", path: "/g.mp4", kind: "video", duration: 600, width: 1920, height: 1080 }));

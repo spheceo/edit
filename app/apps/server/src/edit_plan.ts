@@ -1331,6 +1331,35 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
     }
     if (places.length > 1) issues.push({ kind: "repeated_picture", media: mediaId, at: places.map(([from]) => from) });
   }
+  // A person's one photo is kept (faces, above), but not shown in narration
+  // after narration (Jones JJ, Helpful Son, Oct 31: "why do we show this
+  // image in simply every cut in? Doesn't really make a lot of sense. We need
+  // to be a bit more creative with our visuals"; the fix kept it where the
+  // person is first named and where the story turns on them).
+  const voiced = project.clips
+    .filter((clip) => clip.type === "audio" && clip.name === "Voice-over" && visible(clip.track))
+    .map((clip) => [clip.start - fps, clipEnd(clip)] as const);
+  if (voiced.length >= 4) {
+    const inNarrations = new Map<string, Set<number>>();
+    for (const clip of project.clips) {
+      if (clip.type !== "video" || !faces.has(clip.media) || !visible(clip.track)) continue;
+      const index = voiced.findIndex(([from, to]) => clip.start >= from && clip.start < to);
+      if (index < 0) continue;
+      const set = inNarrations.get(clip.media) ?? new Set<number>();
+      set.add(index);
+      inNarrations.set(clip.media, set);
+    }
+    for (const [mediaId, set] of inNarrations) {
+      if (set.size > 2) {
+        issues.push({
+          kind: "face_overused",
+          media: mediaId,
+          cut_ins: set.size,
+          fix: "keep this photo where the person is first named and where the story turns on them (two cut-ins at most); elsewhere show what the words say: the room, the place, a record, a Notepad line, a red quote",
+        });
+      }
+    }
+  }
   // The Windows screen on most cut-ins (the team: "every single cut-in is
   // now doing this. This is not good"): about half at most, footage first.
   const cutIns = (project.script?.blocks ?? []).filter((block) => block.kind === "narration").length;

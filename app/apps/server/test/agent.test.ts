@@ -349,3 +349,32 @@ test("a one-off question fails as soon as codex goes away", async () => {
     fixture.cleanup();
   }
 });
+
+test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in the main chat that opens its own chat", async () => {
+  // The user, Nov 1: "launch it as a sub agent, that just has this message… click into the sub agent to view it and go back".
+  const fixture = new Fixture();
+  try {
+    const started = fixture.start();
+    const request = await fixture.request("turn/start");
+    fixture.reply(request, { turn: { id: "test-turn" } });
+    await started;
+    fixture.agents.onMessage({ method: "item/started", params: { threadId: "test-thread", item: { id: "s1", type: "mcpToolCall", tool: "skill", arguments: { name: "edit-workflow" } } } });
+    fixture.complete();
+    const main = fixture.agents.chat(fixture.project) as { entries: { kind: string; text: string; status?: string; detail?: string }[] };
+    const card = main.entries.find((item) => item.kind === "subagent")!;
+    expect(card).toMatchObject({ text: "Fresh-eyes final pass", status: "running", detail: `${fixture.project}~review` });
+    // Its own turn, with just the message, in its own chat.
+    const turn = await fixture.request("turn/start");
+    expect(JSON.stringify(turn)).toContain("with fresh eyes");
+    fixture.reply(turn, { turn: { id: "test-turn" } });
+    const sub = fixture.agents.chat(`${fixture.project}~review`) as { entries: { kind: string; text: string }[]; running: boolean };
+    expect(sub.entries.map((item) => item.kind)).toEqual(["user"]);
+    expect(sub.running).toBe(true);
+    fixture.complete();
+    const after = fixture.agents.chat(fixture.project) as { entries: { kind: string; status?: string }[] };
+    expect(after.entries.find((item) => item.kind === "subagent")!.status).toBe("done");
+    expect(fixture.agents.runningProjects()).toEqual([]);
+  } finally {
+    fixture.cleanup();
+  }
+});

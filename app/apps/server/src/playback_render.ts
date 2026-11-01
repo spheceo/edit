@@ -386,7 +386,8 @@ export function start(app: App): void {
   const turns = new Map<string, number>();
   app.store.subscribe((event) => {
     if (event.type === "agent" && event.event === "status" && typeof event.project === "string" && process.env.EDIT_TRIALS !== "1") {
-      const project = event.project;
+      // A sub-agent's turns (the fresh-eyes pass, `<project>~review`) are the project's: it's rendered after them.
+      const project = event.project.split("~")[0]!;
       const turn = (turns.get(project) ?? 0) + 1;
       turns.set(project, turn);
       if (event.running !== false) return;

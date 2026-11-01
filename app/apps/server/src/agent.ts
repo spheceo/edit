@@ -228,10 +228,33 @@ export const RESUME_WITHIN_MS = 10 * 60_000;
  */
 export const agentHooks = {
   unfinished: (_project: string): { note: string; count: number } | null => null,
+  /** The fresh-eyes final pass after a whole edit (off on a trial server: the teaching loop runs it as its own step). */
+  freshEyes: process.env.EDIT_FRESH_EYES === "1" || process.env.EDIT_TRIALS !== "1",
 };
 
 /** Follow-ups Edit sends after one message at most, each only while the last cut the flags by a fifth or more. */
 export const MAX_FOLLOW_UPS = 3;
+
+/**
+ * A sub-agent's chat is keyed by its project and its name (`<project>~review`):
+ * its own conversation and session on the same project, shown in the main chat
+ * as a card that opens it (the user, Nov 1: "launch it as a sub agent… we can
+ * click into the sub agent to view it and go back to the main thread").
+ */
+export const SUB = "~";
+/** The project a chat key belongs to. */
+export const projectOf = (key: string): string => key.split(SUB)[0]!;
+/** A sub-agent's chat key, `name` lowercase letters. */
+export function subKey(project: string, name: string): string {
+  if (!/^[a-z]+$/u.test(name)) throw new Error("a sub-agent's name is lowercase letters");
+  return `${project}${SUB}${name}`;
+}
+/**
+ * The fresh-eyes final pass: once a whole edit is done, a new agent that
+ * didn't make it watches it through as the team would and fixes what it'd flag
+ * (loop 6, Nov 1: 2–7 minutes, it closed what every trial's edit had left).
+ */
+export const FRESH_EYES = "Do the final pass on this edit with fresh eyes: watch it through as the team would (every cut, sound, subtitle and Windows screen), then fix everything you'd flag.";
 
 
 /** The turn that carries on one a restart cut short. */
@@ -282,7 +305,7 @@ export class Agents implements seams.AgentPanel {
 
   /** The projects whose agent turn is running now. */
   runningProjects(): string[] {
-    return [...this.chats.entries()].flatMap(([project, chat]) => (chat.running ? [project] : []));
+    return [...new Set([...this.chats.entries()].flatMap(([project, chat]) => (chat.running ? [projectOf(project)] : [])))];
   }
   readonly claudeSupport: ClaudeSupport;
   /** Failed messages survive app restarts, but never Stop, New Chat or a newer message. */
@@ -298,6 +321,10 @@ export class Agents implements seams.AgentPanel {
   private codexProcess: Codex | null = null;
   private codexLock = new Lock();
   private chats = new Map<string, Chat>();
+  /** Each project's message already given a fresh-eyes pass (by generation). */
+  private reviewed = new Map<string, number>();
+  /** A sub-agent's chat key: its parent's chat and the card there. */
+  private subCards = new Map<string, { parent: string; card: string }>();
   private sending = new Map<string, Lock>();
   private nextGeneration = 1;
   /** Codex thread id → Edit project id. */
@@ -422,7 +449,7 @@ export class Agents implements seams.AgentPanel {
   /** POST from the open conversation only. The expected user id and saved
    * receipt make concurrent refreshes and repeated requests harmless. */
   async retryClaude(project: string, userId: string): Promise<boolean> {
-    if (this.store.get(project) === null) throw new Error("no such project");
+    if (this.store.get(projectOf(project)) === null) throw new Error("no such project");
     await this.store.mayWrite(project);
     if (this.legacyClaudeRetry(project) !== userId) return false;
     const chat = this.withChat(project);
@@ -461,7 +488,7 @@ export class Agents implements seams.AgentPanel {
       if (chat.running) continue;
       this.authPending.delete(project);
       this.saveAuthPending();
-      if (chat.halted || this.store.get(project) === null || chat.entries.findLast((item) => item.kind === "user")?.id !== pending.user) continue;
+      if (chat.halted || this.store.get(projectOf(project)) === null || chat.entries.findLast((item) => item.kind === "user")?.id !== pending.user) continue;
       try {
         // A cloud lock may have moved while the browser was open.
         await this.store.mayWrite(project);
@@ -760,7 +787,7 @@ export class Agents implements seams.AgentPanel {
     replay = false,
     context = "",
   ): Promise<void> {
-    if (this.store.get(project) === null) throw new Error("no such project");
+    if (this.store.get(projectOf(project)) === null) throw new Error("no such project");
     let sending = this.sending.get(project);
     if (sending === undefined) {
       sending = new Lock();
@@ -823,7 +850,7 @@ export class Agents implements seams.AgentPanel {
     replay = false,
     context = "",
   ): Promise<void> {
-    const live = this.store.get(project);
+    const live = this.store.get(projectOf(project));
     if (live === null) throw new Error("no such project");
     if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation, replay, context);
     const codex = await this.codex();
@@ -843,7 +870,7 @@ export class Agents implements seams.AgentPanel {
       model_auto_compact_token_limit: 150_000,
       mcp_servers: {
         edit: {
-          url: `http://127.0.0.1:${this.port}/mcp?project=${project}`,
+          url: `http://127.0.0.1:${this.port}/mcp?project=${projectOf(project)}`,
           default_tools_approval_mode: "approve",
           startup_timeout_sec: 15,
           // caption_speakers watches footage with a model: minutes, not seconds.
@@ -931,7 +958,7 @@ export class Agents implements seams.AgentPanel {
    * mapped onto the chat as they stream in.
    */
   private async claudeTurn(project: string, text: string, model: string | null, effort: string | null, generation: number, replay = false, context = ""): Promise<void> {
-    const live = this.store.get(project);
+    const live = this.store.get(projectOf(project));
     if (live === null) throw new Error("no such project");
     const chat = this.withChat(project);
     if (chat.provider !== "claude") {
@@ -969,7 +996,7 @@ export class Agents implements seams.AgentPanel {
       tools: [],
       allowedTools: ["mcp__edit"],
       permissionMode: "dontAsk",
-      mcpServers: { edit: { type: "http", url: `http://127.0.0.1:${this.port}/mcp?project=${project}` } },
+      mcpServers: { edit: { type: "http", url: `http://127.0.0.1:${this.port}/mcp?project=${projectOf(project)}` } },
       systemPrompt: agentInstructions(live.project, "claude"),
       includePartialMessages: true,
       // A stop for a runaway turn (a whole edit is a few hundred tool calls); a turn
@@ -1499,7 +1526,7 @@ export class Agents implements seams.AgentPanel {
     }
     if (typeof noted.at !== "number" || !Array.isArray(noted.projects) || nowMs() - noted.at > RESUME_WITHIN_MS) return;
     for (const project of noted.projects) {
-      if (typeof project !== "string" || this.store.get(project) === null) continue;
+      if (typeof project !== "string" || this.store.get(projectOf(project)) === null) continue;
       diag.info("agent", `${project}: carrying on the turn the restart cut short`);
       // The "Edit was closed" note is answered now: no longer a problem to show.
       const chat = this.withChat(project);
@@ -1540,11 +1567,13 @@ export class Agents implements seams.AgentPanel {
     if (last !== undefined) last.updated = Math.max(last.updated, now);
     // A turn that ended mid-tool leaves it unresolved; mark it.
     for (const item of chat.entries) {
-      if (item.status === "running") item.status = "stopped";
+      if (item.status === "running" && item.kind !== "subagent") item.status = "stopped";
     }
     this.save(project);
     if (!this.quitting) this.noteRunning();
     this.emit(project, { event: "status", running: false });
+    // A sub-agent's turn over: its card in the main chat says how it ended.
+    if (project.includes(SUB)) this.subFinished(project, error);
   }
 
   /** A turn ended (`error` null when it finished): a busy model's turn is picked up again a few times, else the chat is done. */
@@ -1590,9 +1619,10 @@ export class Agents implements seams.AgentPanel {
    * pictures, and said so, rather than fixing them.
    */
   private followUp(project: string, generation: number): void {
+    if (project.includes(SUB)) return;
     const before = this.followedUp.get(project);
     const mine = before !== undefined && before.generation === generation ? before : null;
-    if (mine !== null && mine.sent >= MAX_FOLLOW_UPS) return;
+    if (mine !== null && mine.sent >= MAX_FOLLOW_UPS) return void this.freshEyes(project, generation);
     const chat = this.withChat(project);
     // A whole edit or its final pass, in this message's turns (the user's last
     // message and Edit's follow-ups after it).
@@ -1611,9 +1641,9 @@ export class Agents implements seams.AgentPanel {
       diag.warn("agent", `checking what ${project}'s edit left: ${diag.messageOf(error)}`);
       return;
     }
-    if (left === null) return;
+    if (left === null) return void this.freshEyes(project, generation);
     // Another pass only while the last one got somewhere.
-    if (mine !== null && left.count > mine.count * 0.8) return;
+    if (mine !== null && left.count > mine.count * 0.8) return void this.freshEyes(project, generation);
     this.followedUp.set(project, { generation, sent: (mine?.sent ?? 0) + 1, count: left.count });
     diag.info("agent", `${project}: the edit left ${left.count} flags; asking for them (${(mine?.sent ?? 0) + 1} of ${MAX_FOLLOW_UPS})`);
     const note = left.note;
@@ -1627,6 +1657,51 @@ export class Agents implements seams.AgentPanel {
         diag.warn("agent", `following up ${project}: ${diag.messageOf(thrown)}`);
       }
     })();
+  }
+
+  /**
+   * Starts the fresh-eyes final pass as a sub-agent once a whole edit (and
+   * Edit's follow-ups to it) is done: a new chat of its own on the project,
+   * shown in the main chat as a card that opens it. Once per message.
+   */
+  private freshEyes(project: string, generation: number): void {
+    if (agentHooks.freshEyes === false || this.reviewed.get(project) === generation) return;
+    const chat = this.withChat(project);
+    // Only after a whole edit or its final pass (as the follow-ups judge it).
+    let asked = -1;
+    chat.entries.forEach((item, index) => {
+      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
+    });
+    const whole = chat.entries.slice(asked + 1).some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
+    if (!whole) return;
+    this.reviewed.set(project, generation);
+    const key = subKey(project, "review");
+    if (this.withChat(key).running) return;
+    this.reset(key);
+    const card = newId("subagent");
+    this.subCards.set(key, { parent: project, card });
+    this.upsert(project, entry({ id: card, kind: "subagent", text: "Fresh-eyes final pass", status: "running", detail: key }));
+    this.save(project);
+    diag.info("agent", `${project}: the edit is done; a fresh-eyes final pass starts as a sub-agent`);
+    void (async () => {
+      await timing.sleep(1000);
+      try {
+        await this.sendTurn(key, FRESH_EYES, null, null, null);
+      } catch (thrown) {
+        this.subFinished(key, diag.messageOf(thrown));
+      }
+    })();
+  }
+
+  /** A sub-agent's turn ended: its card says so (done, or why not). */
+  private subFinished(key: string, error: string | null): void {
+    const card = this.subCards.get(key);
+    if (card === undefined) return;
+    const parent = this.withChat(card.parent);
+    const found = parent.entries.find((item) => item.id === card.card);
+    if (found === undefined) return;
+    this.upsert(card.parent, { ...found, status: error === null ? "done" : error === "Stopped." ? "stopped" : "failed", ...(error !== null && error !== "Stopped." ? { text: `Fresh-eyes final pass: ${error}` } : {}) });
+    this.save(card.parent);
   }
 
   /** Codex notifications, mapped onto the chat of the project their thread belongs to. */

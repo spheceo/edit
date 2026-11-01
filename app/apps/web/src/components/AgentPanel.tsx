@@ -1,5 +1,6 @@
 import { explain } from "@edit/types/problems";
 import {
+  ArrowLeft,
   ArrowUp,
   AudioLines,
   Check,
@@ -26,6 +27,7 @@ import {
   Trash2,
   Type,
   Wrench,
+  ScanEye,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
@@ -34,8 +36,11 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
+  closeSub,
   openAgent,
+  openSub,
   sendToAgent,
+  stopSub,
   useClaudeSupport,
   stopAgent,
   useAgent,
@@ -76,6 +81,64 @@ export function OpenAIMark({ size = 16 }: { size?: number }) {
 }
 
 export function AgentPanel() {
+  const sub = useAgent((state) => state.sub);
+  return sub !== null ? <SubAgentPanel /> : <MainAgentPanel />;
+}
+
+/**
+ * A sub-agent's own chat (the fresh-eyes final pass), opened from its card:
+ * read as the main chat reads, Back to the main thread, Stop while it works.
+ */
+function SubAgentPanel() {
+  const sub = useAgent((state) => state.sub)!;
+  const list = useRef<HTMLDivElement>(null);
+  const turns = buildTurns(sub.entries, sub.running);
+  const known = useRef(new Set(sub.entries.map((entry) => entry.id)));
+  useLayoutEffect(() => {
+    const node = list.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  });
+  return (
+    <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-2">
+        <Button variant="ghost" onClick={closeSub} aria-label="Back to the main thread" className="h-7 gap-1 px-2 text-[12px]">
+          <ArrowLeft size={14} strokeWidth={2} /> Main thread
+        </Button>
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{sub.title}</span>
+        {sub.running && (
+          <Button variant="ghost" onClick={stopSub} className="h-7 gap-1 px-2 text-[12px]">
+            <Square size={11} strokeWidth={2.4} /> Stop
+          </Button>
+        )}
+      </div>
+      <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {!sub.loaded ? <ChatLoading /> : sub.entries.length === 0 ? <Empty title="Starting" detail="A new agent is opening the edit to watch it through." /> : <ChatTurns turns={turns} known={known.current} />}
+      </div>
+    </section>
+  );
+}
+
+/** A sub-agent's card in the main chat: what it is, how it's going, and the way into its own chat. */
+function SubAgentCard({ entry }: { entry: AgentEntry }) {
+  const state = entry.status === "running" ? "Watching the edit through…" : entry.status === "done" ? "Done" : entry.status === "stopped" ? "Stopped" : "Didn't finish";
+  return (
+    <button
+      onClick={() => void openSub(entry)}
+      className="group flex w-full items-center gap-2.5 rounded-lg border border-line bg-raised px-3 py-2 text-left transition-colors hover:bg-active"
+    >
+      <ScanEye size={15} strokeWidth={2} className="shrink-0 text-muted" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12.5px] font-medium text-fg">{entry.text.split(":")[0]}</span>
+        <span className={cx("block truncate text-[11.5px]", entry.status === "failed" ? "text-danger" : "text-muted")}>
+          {entry.status === "failed" ? entry.text.slice(entry.text.indexOf(":") + 1).trim() : state}
+        </span>
+      </span>
+      <ChevronRight size={14} className="shrink-0 text-faint group-hover:text-muted" />
+    </button>
+  );
+}
+
+function MainAgentPanel() {
   const projectId = useEditor((state) => state.project?.id);
   const { status, entries, running, loaded } = useAgent();
   const list = useRef<HTMLDivElement>(null);
@@ -411,6 +474,7 @@ export function Empty({ title, detail, children }: { title: string; detail: stri
 }
 
 function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean; fresh?: boolean }) {
+  if (entry.kind === "subagent") return <SubAgentCard entry={entry} />;
   if (entry.kind === "error") {
     const resolved = entry.status === "done";
     return (

@@ -7,7 +7,8 @@ import { readSetting, writeSetting } from "./storage";
 
 export interface AgentEntry {
   id: string;
-  kind: "user" | "assistant" | "tool" | "error";
+  /** "subagent": a sub-agent's card (its chat key in `detail`), opened to view its own chat. */
+  kind: "user" | "assistant" | "tool" | "error" | "subagent";
   text: string;
   tool?: string;
   status?: "running" | "done" | "failed" | "stopped";
@@ -110,6 +111,18 @@ interface AgentState {
   activityAt: number;
   /** The model Edit runs the agent on ("Opus 5.5"), shown in the composer; it isn't chosen there. */
   modelName: string | null;
+  /** A sub-agent's chat being viewed in place of the main one (the fresh-eyes pass): Back returns. */
+  sub: SubChat | null;
+}
+
+/** A sub-agent's chat: its key (`<project>~<name>`), title and conversation. */
+export interface SubChat {
+  key: string;
+  name: string;
+  title: string;
+  entries: AgentEntry[];
+  running: boolean;
+  loaded: boolean;
 }
 
 export const useAgent = create<AgentState>(() => ({
@@ -120,7 +133,33 @@ export const useAgent = create<AgentState>(() => ({
   running: false,
   activityAt: 0,
   modelName: readSetting("edit.agent.modelName"),
+  sub: null,
 }));
+
+/** Opens a sub-agent's chat from its card in the main chat. */
+export async function openSub(card: AgentEntry) {
+  const project = useAgent.getState().project;
+  const key = card.detail ?? "";
+  const name = key.split("~")[1] ?? "";
+  if (!project || !key.startsWith(`${project}~`) || !/^[a-z]+$/.test(name)) return;
+  useAgent.setState({ sub: { key, name, title: card.text, entries: [], running: card.status === "running", loaded: false } });
+  try {
+    const chat = await json<{ entries: AgentEntry[]; running: boolean }>(await fetchRetrying(`/api/projects/${project}/agent?chat=${name}`));
+    if (useAgent.getState().sub?.key !== key) return;
+    useAgent.setState((state) => ({ sub: state.sub && { ...state.sub, entries: chat.entries, running: chat.running, loaded: true } }));
+  } catch (error) {
+    useAgent.setState((state) => ({ sub: state.sub && { ...state.sub, loaded: true, entries: [{ id: "load", kind: "error", text: (error as Error).message }] } }));
+  }
+}
+
+/** Back to the main chat. */
+export const closeSub = () => useAgent.setState({ sub: null });
+
+/** Stops the sub-agent being viewed. */
+export const stopSub = () => {
+  const { project, sub } = useAgent.getState();
+  if (project && sub) void fetchRetrying(`/api/projects/${project}/agent/stop?chat=${sub.name}`, { method: "POST" });
+};
 
 /** The name of the model Edit runs turns on (the server's default: the panel sends none). */
 async function loadModelName() {
@@ -152,7 +191,7 @@ export async function openAgent(project: string) {
   const state = useAgent.getState();
   if (state.project !== project) {
     const cached = chats.get(project);
-    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false });
+    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false, sub: null });
   }
   const [status, chat] = await Promise.all([
     fetchRetrying("/api/agent").then((response) => json<AgentStatus>(response)),
@@ -231,6 +270,22 @@ export function applyAgentEvent(event: { project: string; event: string; [key: s
     return;
   }
   const state = useAgent.getState();
+  // The sub-agent being viewed has its own chat (the main one's card follows its own events).
+  if (state.sub !== null && event.project === state.sub.key) {
+    const sub = state.sub;
+    if (event.event === "entry") {
+      const entry = event.entry as AgentEntry;
+      const entries = sub.entries.some((existing) => existing.id === entry.id) ? sub.entries.map((existing) => (existing.id === entry.id ? { ...entry, text: entry.text || existing.text } : existing)) : [...sub.entries, entry];
+      useAgent.setState({ sub: { ...sub, entries }, activityAt: Date.now() });
+    } else if (event.event === "delta") {
+      useAgent.setState({ sub: { ...sub, entries: sub.entries.map((entry) => (entry.id === event.id ? { ...entry, text: entry.text + String(event.text) } : entry)) }, activityAt: Date.now() });
+    } else if (event.event === "status") {
+      useAgent.setState({ sub: { ...sub, running: Boolean(event.running) }, activityAt: Date.now() });
+    } else if (event.event === "reset") {
+      useAgent.setState({ sub: { ...sub, entries: [], running: false } });
+    }
+    return;
+  }
   if (event.project !== state.project) return;
   const now = Date.now();
   switch (event.event) {

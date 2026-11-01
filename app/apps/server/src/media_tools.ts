@@ -6,6 +6,7 @@
 
 import type { App } from "./app.ts";
 import * as broll from "./broll.ts";
+import { subKey } from "./agent.ts";
 import * as diag from "./diag.ts";
 import * as drive from "./drive.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
@@ -435,10 +436,22 @@ async function agentProviderRoute(context: RouteContext<App>): Promise<Response>
   return agentStatusRoute(context);
 }
 
+/** The chat a request names: the project's own, or one of its sub-agents' (`?chat=review`). */
+function chatKey(context: RouteContext<App>): string {
+  const id = context.params.id ?? "";
+  const sub = context.query.get("chat");
+  if (sub === null || sub === "") return id;
+  try {
+    return subKey(id, sub);
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
+}
+
 function agentChatRoute(context: RouteContext<App>): Response {
   const id = context.params.id ?? "";
   if (context.app.store.get(id) === null) throw notFound("no such project");
-  return sortedJson(seams.agentPanel(context.app).chat(id));
+  return sortedJson(seams.agentPanel(context.app).chat(chatKey(context)));
 }
 
 async function agentRetryClaudeRoute(context: RouteContext<App>): Promise<Response> {
@@ -477,7 +490,7 @@ async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
 
 async function agentStopRoute(context: RouteContext<App>): Promise<Response> {
   try {
-    await seams.agentPanel(context.app).stop(context.params.id ?? "");
+    await seams.agentPanel(context.app).stop(chatKey(context));
   } catch (error) {
     failed(error);
   }

@@ -8,8 +8,7 @@
 #
 # Bumping the version: take the new release's folder and the .sha256 beside
 # each zip from https://ffmpeg.martin-riedl.de (macOS, release), and check
-# codecs.txt still lists h264_videotoolbox, prores_videotoolbox (ProRes
-# exports, ~5x prores_ks), libx264, libx265, prores_ks,
+# codecs.txt still lists h264_videotoolbox, libx264, libx265, prores_ks,
 # libmp3lame and libopus.
 
 set -eu

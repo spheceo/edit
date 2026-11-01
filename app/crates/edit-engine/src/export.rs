@@ -270,9 +270,7 @@ pub fn video_graph(options: &ExportOptions, source: (u32, u32), output: (u32, u3
     };
     let tail = match options.format {
         Format::Prores => {
-            // 10-bit 4:2:2 either way, in the layout each encoder takes.
-            let layout = if prores_hardware(options) { "p210le" } else { "yuv422p10le" };
-            format!("[c]{rate}scale=out_color_matrix=bt709:out_range=tv,format={layout}[vout]")
+            format!("[c]{rate}scale=out_color_matrix=bt709:out_range=tv,format=yuv422p10le[vout]")
         }
         Format::Gif => {
             "[c]fps=15,split[g0][g1];[g0]palettegen=stats_mode=diff[gp];[g1][gp]paletteuse=dither=bayer:bayer_scale=4[vout]"
@@ -467,29 +465,6 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
                 "bt709",
             ]);
         }
-        Format::Prores if prores_hardware(options) => {
-            // Apple's own ProRes encoder: on the ProRes engine of an M1
-            // Pro/Max/Ultra or any M2 and later, in Apple's software on a
-            // plain M1 (allow_sw), and ~5x faster even there: a 60 s 1080p
-            // edit exported in 66 s against prores_ks's 344 s (Nov 1, M1;
-            // the same HQ file, PSNR 59 dB between the two, 2% bigger).
-            push(&[
-                "-c:v",
-                "prores_videotoolbox",
-                "-profile:v",
-                "hq",
-                "-allow_sw",
-                "1",
-            ]);
-            push(&[
-                "-colorspace",
-                "bt709",
-                "-color_primaries",
-                "bt709",
-                "-color_trc",
-                "bt709",
-            ]);
-        }
         Format::Prores => {
             push(&["-c:v", "prores_ks", "-profile:v", "3", "-vendor", "apl0"]);
             push(&[
@@ -566,18 +541,6 @@ pub struct Encoders {
     pub hevc: bool,
     pub prores: bool,
     pub mp3: bool,
-    /// Apple's ProRes encoder (VideoToolbox), which ProRes exports use when there.
-    #[serde(skip)]
-    #[cfg_attr(feature = "ts", ts(skip))]
-    pub prores_videotoolbox: bool,
-}
-
-/// A ProRes export goes to Apple's encoder: hardware encoding on, and this
-/// FFmpeg has it (a Mac's; never a cloud worker's).
-fn prores_hardware(options: &ExportOptions) -> bool {
-    options.hardware
-        && std::env::var("EDIT_NVENC").as_deref() != Ok("1")
-        && encoders().prores_videotoolbox
 }
 
 pub fn encoders() -> Encoders {
@@ -596,9 +559,8 @@ pub fn encoders() -> Encoders {
         Encoders {
             videotoolbox: has("h264_videotoolbox") && has("hevc_videotoolbox"),
             hevc: has("libx265"),
-            prores: has("prores_ks") || has("prores_videotoolbox"),
+            prores: has("prores_ks"),
             mp3: has("libmp3lame"),
-            prores_videotoolbox: has("prores_videotoolbox"),
         }
     })
 }
@@ -680,33 +642,6 @@ mod tests {
             ..plan
         };
         assert!(codec_args(&small, &long, 30.0).is_err());
-    }
-
-    #[test]
-    fn prores_goes_to_apples_encoder_when_there() {
-        let plan = Plan {
-            start: 0,
-            end: 30,
-            width: 1920,
-            height: 1080,
-            audio: false,
-        };
-        let mut prores = options(Format::Prores);
-        for hardware in [true, false] {
-            prores.hardware = hardware;
-            let args = video_args(&prores, &plan, 30.0).unwrap();
-            let graph = video_graph(&prores, (1920, 1080), (1920, 1080));
-            let apple = hardware && encoders().prores_videotoolbox;
-            let codec = &args[args.iter().position(|arg| arg == "-c:v").unwrap() + 1];
-            // The graph hands each encoder the 10-bit 4:2:2 layout it takes.
-            if apple {
-                assert_eq!(codec, "prores_videotoolbox");
-                assert!(graph.ends_with("format=p210le[vout]"), "{graph}");
-            } else {
-                assert_eq!(codec, "prores_ks");
-                assert!(graph.ends_with("format=yuv422p10le[vout]"), "{graph}");
-            }
-        }
     }
 
     #[test]

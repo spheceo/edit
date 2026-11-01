@@ -44,3 +44,21 @@ Sphe: "let's build this, test it … do not ship a nightly yet."
 - **Tried live on dev:** a 2 min 7 s two-voice recording imported in Script mode. The first try found two things, both fixed: a job Scribe refused stopped the import (now heard the old way), and the audio of a refused start was left in R2 (now deleted). Retried: "heard whole by link for its voices (job Nh7zZCNr0yKc5rMrc4Bo)", one pending look then the transcript, the callback answered 200 (signature good), 387 words, 2 voices, ready in 47 s; nothing left under `edit/transcribe/`.
 - **Tests:** `test/transcribe.test.ts` (by link with its voices kept; a restart's job asked for again, never started twice; Scribe failing it costs the voices, never the import; a refused job heard the old way; a relay without jobs uploads nothing), the relay's (`relay.test.ts`: the presigned link and webhook fields, pending then the transcript with the audio deleted, a refused start's audio deleted, only signed callbacks, a reported failure said to the next look).
 - **Open:** not yet tried on a real multi-hour recording (Scribe's time on 6–8 h, ~$0.40 an hour heard, twice with the pieces); the first real one will be Mathias's on the next nightly.
+
+## Night of Nov 1: nightly-45 and -46 onto his Mac
+
+Sphe: "when i wake up i want to have EVERYTHING we complained about today resolved ON mathias's machine … dont restart the app while mathias is using it, wait for idle." Then: "if there is some remote functionality you want … build it out before you ship the nightly."
+
+### Fixed on the way
+
+- **Jobs refused in prod** (nightly-44, his Mac: "the relay can't hear it by link (400: Invalid budget reservation)"): the relay's budget held every reservation to one request's 45 MB, so every 5–8 h job was refused and heard the old way (which lost its connection; the fallback kept the words). A job may now reserve up to the 2 GB Scribe fetches; the day's caps hold (6f377df9). The relay's tests had stood the budget in. Tried on dev: a 3 h 20 min two-voice recording heard whole by link in 87 s, 2 voices.
+- **Mom Secretly**: the recording is fine (the cloud's copy decodes clean, here, with Edit's exact command); his streamed import reads its sound from its **480p preview**, which held damaged packets at the right length (probe: 6,326 decode errors), so every retry stopped in minutes. Drive's MD5 check couldn't catch it (it's the preview, not the download; and a failed MD5 lookup counts the size as proof). Now footage Edit made or fetched whose sound can't be read is taken away and made again once before the import stops (25797292). On his Mac (nightly-45) the retry re-encoded the preview from the cloud's copy.
+- **Remote abilities** (b1428407): `edit remote update-when-idle` (installs once nobody has used the window for 20 min and nothing's running, kept across restarts) and `edit remote probe <id>` (the import's whole error, its files' streams, a decode of their sound, as a report). The probe found Mom Secretly's damaged preview from here.
+- **Modal exports from a source-run prod Edit** (b092a690, from the export-routing thread): such an Edit drove Modal with Infisical's dev keys (Kroger 404ed three times, edit-dev holding 22 of its 114 originals); on the team's relay it now always goes through the relay, as installed Edits do. Tried: Kroger exported on prod Modal through the relay in 14 min 35 s.
+- **Tests**: the preview-stops import test ran past its time in the full suite (8 min of sound now, d65fdaae).
+
+### On his Mac
+
+- nightly-45 installed remotely while idle (nobody at the window for 2 h 19 min, nothing running); nightly-46 asked for "when idle" (it waits for the Mom Secretly import).
+- 8-Year-Old: imported (7 h 43 min, 24 voices), script written. Predator Cop: imported (6 h 20 min, 20 voices), script written. Roblox: imported, editing. Kroger: JJ's 5 notes fixed and shared as v2 by this Mac (the fixing computer), copy checked (1 h 22 min). Every review copy checked: 28 reviews, 0 faulty.
+- JJ's "Republican Chairman" compilation imported twice (both of his starts went through once his Edit answered): two scripts, left for him.

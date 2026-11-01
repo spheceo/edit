@@ -8,11 +8,15 @@
 //! - No `--url`: Edit.app (`just bundle`), opened from Finder. The server is
 //!   `Resources/edit serve`, started here unless something already answers on
 //!   the port, and stopped (Ctrl-C, so its cloud projects are let go) when the
-//!   window closes.
+//!   window closes. A server that goes while the window is open (an update's
+//!   restart that didn't come back: Nov 1, the window sat at "Restarting…"
+//!   with nothing behind it) is started again: the new build, after an update.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tauri::webview::NewWindowResponse;
@@ -43,15 +47,26 @@ fn main() {
                 })
                 .unwrap_or(DEFAULT_PORT);
             let server = start_server(port);
-            run(&format!("http://127.0.0.1:{port}/"), server, false);
+            run(
+                &format!("http://127.0.0.1:{port}/"),
+                server.map(|child| (child, port)),
+                false,
+            );
         }
     }
 }
 
 /// Opens the editor at `url` and runs until the window closes (or, with
 /// `watch_stdin`, until stdin closes).
-fn run(url: &str, server: Option<Child>, watch_stdin: bool) -> ! {
+fn run(url: &str, server: Option<(Child, u16)>, watch_stdin: bool) -> ! {
     let url: Url = url.parse().unwrap_or_else(|_| fail("bad URL"));
+    let closing = Arc::new(AtomicBool::new(false));
+    let port = server.as_ref().map(|(_, port)| *port);
+    let server = Arc::new(Mutex::new(server.map(|(child, _)| child)));
+    if let Some(port) = port {
+        let (server, closing) = (Arc::clone(&server), Arc::clone(&closing));
+        std::thread::spawn(move || keep_serving(&server, &closing, port));
+    }
     let local = url.clone();
     let app = tauri::Builder::default()
         .setup(move |app| {
@@ -102,15 +117,66 @@ fn run(url: &str, server: Option<Child>, watch_stdin: bool) -> ! {
         })
         .build(tauri::generate_context!())
         .unwrap_or_else(|error| fail(&format!("could not open the window: {error}")));
-    let mut server = server;
     app.run(move |_, event| {
         if let RunEvent::Exit = event {
-            if let Some(child) = server.take() {
+            closing.store(true, Ordering::SeqCst);
+            let child = server.lock().ok().and_then(|mut server| server.take());
+            if let Some(child) = child {
                 stop(child);
             }
         }
     });
     std::process::exit(0);
+}
+
+/// Watches Edit.app's server and starts it again when it has gone while the
+/// window is open. An update execs the server into the new build in place; if
+/// that never answers (the exec failed, or it died starting), the page waited
+/// on "Restarting…" with nothing behind it. Starting `Resources/edit` again
+/// runs whatever build is there now, and the page reloads once it answers. A
+/// build that keeps dying within a minute of starting is tried three times.
+fn keep_serving(server: &Mutex<Option<Child>>, closing: &AtomicBool, port: u16) {
+    let mut started = Instant::now();
+    let mut quick_deaths = 0;
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        if closing.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(mut guard) = server.lock() else { return };
+        let gone = match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(Some(_)) | Err(_)),
+            None => return,
+        };
+        if !gone || closing.load(Ordering::SeqCst) {
+            continue;
+        }
+        if started.elapsed() < Duration::from_secs(60) {
+            quick_deaths += 1;
+        } else {
+            quick_deaths = 0;
+        }
+        if quick_deaths >= 3 {
+            eprintln!("edit: the server keeps stopping; quit Edit and open it again");
+            *guard = None;
+            return;
+        }
+        eprintln!("edit: the server stopped; starting it again");
+        *guard = None;
+        drop(guard);
+        // None when something else answers on the port now: the window carries on with that one.
+        let Some(child) = start_server(port) else {
+            return;
+        };
+        started = Instant::now();
+        let Ok(mut guard) = server.lock() else { return };
+        if closing.load(Ordering::SeqCst) {
+            drop(guard);
+            stop(child);
+            return;
+        }
+        *guard = Some(child);
+    }
 }
 
 /// Asks the server, again and again, whether the window should come to the

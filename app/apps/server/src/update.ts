@@ -184,7 +184,7 @@ export class Updater implements UpdaterSeam {
           }),
         );
         this.phase = "restarting";
-        console.log(`edit: updated to ${release.tag}; restarting`);
+        diag.info("update", `updated to ${release.tag}; restarting`);
         // Let the request that started this (and a status poll) answer first.
         await Bun.sleep(500);
         // A remote request may have been accepted while idle, then downloaded
@@ -655,6 +655,8 @@ function restart(exe: string): never {
   try {
     native().reexec(exe, startArgs());
   } catch (error) {
+    // Edit.app's console goes nowhere: the log says why (its window then starts the server again).
+    diag.error("update", `could not restart into ${exe}: ${diag.messageOf(error)}`);
     console.error(`edit: could not restart (${diag.messageOf(error)}); start \`edit serve\` again`);
   }
   process.exit(1);

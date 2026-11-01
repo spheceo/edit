@@ -36,8 +36,13 @@ const BUSY_POLL_MS = 500;
 /** How long to wait for the new version before giving up on it. */
 const RESTART_PATIENCE_MS = 120_000;
 
+/** A status ask that takes longer counts as no answer: a server stuck starting held the page on "Restarting…" for good. */
+const ASK_TIMEOUT_MS = 5_000;
+
 let timer: ReturnType<typeof setTimeout> | undefined;
 let startedAt = 0;
+/** The build this page was loaded from: a server answering as another (an update, however late) reloads it. */
+let loadedBuild: string | null = null;
 
 function schedule(ms: number) {
   clearTimeout(timer);
@@ -47,11 +52,12 @@ function schedule(ms: number) {
 async function poll() {
   const { from } = useUpdate.getState();
   try {
-    const response = await fetch("/api/update");
+    const response = await fetch("/api/update", { signal: AbortSignal.timeout(ASK_TIMEOUT_MS) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const status = (await response.json()) as UpdateStatus;
-    if (from && status.current !== from) {
-      // The new version is up; load its UI.
+    loadedBuild ??= from ?? status.current;
+    if (status.current !== loadedBuild) {
+      // The new version is up (even after the wait below gave up on it); load its UI.
       location.reload();
       return;
     }
@@ -63,7 +69,9 @@ async function poll() {
   } catch {
     // Down while it restarts.
     if (from && Date.now() - startedAt > RESTART_PATIENCE_MS) {
-      useUpdate.setState({ from: null });
+      // Not "Restarting…" for good (Nov 1): the button offers the update again, and the page still reloads if the new version turns up.
+      const status = useUpdate.getState().status;
+      useUpdate.setState({ from: null, status: status && { ...status, phase: "idle", progress: 0 } });
       useEditor.getState().toast("Edit didn't come back after updating. Quit Edit and open it again.", "error");
     }
   }
@@ -85,6 +93,7 @@ export async function installUpdate() {
   const { status, from } = useUpdate.getState();
   if (!status?.latest || from) return;
   startedAt = Date.now();
+  loadedBuild ??= status.current;
   useUpdate.setState({ from: status.current, status: { ...status, phase: "downloading", progress: 0, error: null } });
   try {
     const response = await fetch("/api/update", { method: "POST" });

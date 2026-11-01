@@ -37,6 +37,7 @@ import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
 import { join } from "./paths.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
+import { asLengths, copyProblem, lengthsOf } from "./review_check.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
 import { Semaphore } from "./media.ts";
 import type { Reviewed } from "./modal_exports.ts";
@@ -230,7 +231,12 @@ export async function share(app: App, projectId: string, path: string | null, re
       if (chosen.cloudKey !== undefined && seams.modalExports.enabled()) {
         sharing.set(projectId, "making the review copy in the cloud");
         try {
-          made = await seams.modalExports.review(home, projectId, { source: chosen.cloudKey, video: `${prefix}/video.mp4`, poster: `${prefix}/poster.jpg`, full: fullKey }, posterSecond(live.project, seconds), fps, chosen.frames);
+          const answer = await seams.modalExports.review(home, projectId, { source: chosen.cloudKey, video: `${prefix}/video.mp4`, poster: `${prefix}/poster.jpg`, full: fullKey }, posterSecond(live.project, seconds), fps, chosen.frames);
+          // The worker refuses a copy that doesn't match before it goes up; its measurements are checked here too, against this Mac's rule.
+          const [copyLengths, exportLengths] = [asLengths(answer.lengths?.review), asLengths(answer.lengths?.export)];
+          const problem = copyLengths && exportLengths ? copyProblem(copyLengths, exportLengths, fps) : null;
+          if (problem !== null) throw new Error(`it doesn't match its export (${problem})`);
+          made = answer;
         } catch (error) {
           diag.warn("review", `${projectId}: the review copy in the cloud: ${diag.messageOf(error)}; making it on this Mac`);
         }
@@ -256,6 +262,21 @@ export async function share(app: App, projectId: string, path: string | null, re
             diag.warn("review", `${projectId}: the review copy from the export's chunks: ${diag.messageOf(error)}; making it whole`);
           }
           if (!pieced) await reviewCopy(pick.path, copy);
+        }
+        // Never shared unless it plays as the export (review_check.ts): one
+        // that doesn't (from pieces, or kept from before) is made whole again,
+        // and if that's wrong too the share stops and says why.
+        const exportedLengths = await lengthsOf(pick.path);
+        let problem = copyProblem(await lengthsOf(copy), exportedLengths, fps);
+        if (problem !== null) {
+          diag.warn("review", `${projectId}: the review copy doesn't match its export (${problem}); making it whole`);
+          fs.rmSync(copy, { force: true });
+          await reviewCopy(pick.path, copy);
+          problem = copyProblem(await lengthsOf(copy), exportedLengths, fps);
+          if (problem !== null) {
+            fs.rmSync(copy, { force: true });
+            throw new Error(`the review copy came out wrong (${problem}), so nothing was shared`);
+          }
         }
         await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(now.project, seconds), 2), "-i", pick.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
         sharing.set(projectId, "uploading");

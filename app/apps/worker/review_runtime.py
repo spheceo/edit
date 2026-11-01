@@ -88,6 +88,40 @@ def probe(path):
     return out
 
 
+def lengths(path):
+    """A file's picture (seconds and frames) and sound (seconds), as its streams declare them; None for what it lacks."""
+    try:
+        found = json.loads(run(["ffprobe", "-v", "error", "-print_format", "json", "-show_streams", str(path)]))
+    except (RuntimeError, ValueError):
+        return {"video": None, "frames": None, "audio": None}
+    def stream(kind):
+        return next((one for one in found.get("streams", []) if one.get("codec_type") == kind), None)
+    def number(value, cast=float):
+        try:
+            return cast(value)
+        except (TypeError, ValueError):
+            return None
+    video, audio = stream("video"), stream("audio")
+    return {"video": number(video.get("duration")) if video else None, "frames": number(video.get("nb_frames"), int) if video else None,
+            "audio": number(audio.get("duration")) if audio else None}
+
+
+def copy_problem(copy, export, fps):
+    """Why a review copy (`lengths`) can't stand for its export, or None. Its picture plays as long as the export's, frame for
+    frame, and its sound as long as its picture (Nov 1: four review copies went up with each piece's last frame held to the
+    export's end, Kroger's 82.5 minutes as 17 hours, and nothing said so). The edit's own length isn't asked: an export can
+    differ from it, and the copy stands for the export."""
+    if copy["video"] is None:
+        return "it has no picture"
+    if export["video"] is not None and abs(copy["video"] - export["video"]) > max(2 / fps, 0.1):
+        return f"its picture runs {copy['video']:.1f} s, the export's {export['video']:.1f} s"
+    if copy["frames"] is not None and export["frames"] is not None and abs(copy["frames"] - export["frames"]) > 1:
+        return f"it has {copy['frames']} frames, the export {export['frames']}"
+    if copy["audio"] is not None and abs(copy["audio"] - copy["video"]) > 0.5:
+        return f"its sound runs {copy['audio']:.1f} s and its picture {copy['video']:.1f} s"
+    return None
+
+
 def join(job, make_piece):
     """The pieces made at once, joined with the sound into the review copy; its poster and waveform."""
     took = {}
@@ -129,6 +163,13 @@ def join(job, make_piece):
         except RuntimeError:
             run(joined + ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(review)])
         lap("join")
+        # Checked before it goes up: a copy that doesn't match its export is
+        # refused here, and the Mac makes it instead (reviews.ts).
+        measured = {"review": lengths(review), "export": lengths(job["source"])}
+        problem = copy_problem(measured["review"], measured["export"], float(job.get("fps") or 30))
+        if problem is not None:
+            raise RuntimeError(f"the review copy doesn't match its export: {problem}")
+        lap("check")
         # In parts: one request for a 2 GB copy was refused (502).
         parts = put_parts(job["video_parts"], review) if job.get("video_parts") else None
         if parts is None:
@@ -144,4 +185,4 @@ def join(job, make_piece):
         samples = memoryview(pcm).cast("h")
         peaks = [round(max((abs(x) for x in samples[at:at + 800]), default=0) / 32768 * 100) for at in range(0, len(samples), 800)]
         lap("waveform")
-        return {"review": probe(review), "export": probe(job["source"]), "peaks": peaks, "took": took, **({"parts": parts} if parts else {})}
+        return {"review": probe(review), "export": probe(job["source"]), "lengths": measured, "peaks": peaks, "took": took, **({"parts": parts} if parts else {})}

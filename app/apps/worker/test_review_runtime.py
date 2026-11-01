@@ -35,5 +35,31 @@ class ReviewPieceTests(unittest.TestCase):
             self.assertIn("format|duration=1.000000", found)
 
 
+class CopyCheckTests(unittest.TestCase):
+    def test_a_copy_is_refused_unless_it_plays_as_its_export(self):
+        export = {"video": 4948.77, "frames": 148463, "audio": 4948.77}
+        self.assertIsNone(review_runtime.copy_problem({"video": 4948.77, "frames": 148463, "audio": 4948.80}, export, 30))
+        # Kroger's (Nov 1): every frame there, each piece's last held to the export's end.
+        self.assertIn("picture runs 61860.0 s", review_runtime.copy_problem({"video": 61860.0, "frames": 148463, "audio": 4948.77}, export, 30))
+        self.assertIn("frames", review_runtime.copy_problem({"video": 4948.77, "frames": 148000, "audio": 4948.77}, export, 30))
+        self.assertIn("sound runs", review_runtime.copy_problem({"video": 4948.77, "frames": 148463, "audio": 1590.0}, export, 30))
+        self.assertIn("no picture", review_runtime.copy_problem({"video": None, "frames": None, "audio": 4948.77}, export, 30))
+        # An export longer than its edit (Off-Duty Officer, Oct 29) still passes: the copy stands for the export.
+        long = {"video": 7344.0, "frames": 220320, "audio": 7344.0}
+        self.assertIsNone(review_runtime.copy_problem(dict(long), long, 30))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "needs ffmpeg")
+    def test_lengths_reads_a_real_files_streams(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "a.mp4"
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30", "-f", "lavfi", "-i",
+                            "sine=r=48000", "-t", "2", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", str(out)], check=True)
+            found = review_runtime.lengths(out)
+            self.assertEqual(found["frames"], 60)
+            self.assertAlmostEqual(found["video"], 2.0, places=1)
+            self.assertAlmostEqual(found["audio"], 2.0, delta=0.1)
+            self.assertEqual(review_runtime.lengths(Path(folder) / "missing.mp4"), {"video": None, "frames": None, "audio": None})
+
+
 if __name__ == "__main__":
     unittest.main()

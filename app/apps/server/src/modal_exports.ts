@@ -249,6 +249,8 @@ export interface Reviewed {
   review: Record<string, unknown>;
   export: Record<string, unknown>;
   peaks: number[];
+  /** The copy's and the export's picture and sound lengths, as the worker measured them (review_check.ts); absent from older workers. */
+  lengths?: { review?: unknown; export?: unknown };
 }
 
 /**
@@ -262,7 +264,8 @@ export async function review(home: string, project: string, keys: { source: stri
   const job = { id, source_key: keys.source, review_key: keys.video, poster_key: keys.poster, full_key: keys.full, poster_second: posterSecond, fps, frames };
   const done = !here() ? await throughRelay("review", job, () => false, onProgress) : await drive(home, id, { review: true, source_key: keys.source, review_key: keys.video, poster_key: keys.poster, full_key: keys.full, poster_second: posterSecond, fps, frames }, () => false, onProgress);
   diag.info("review", `${project}: review copy made in the cloud from ${done.pieces} pieces in ${Math.round(Number(done.seconds ?? 0))} s (${JSON.stringify(done.took ?? {})})`);
-  return { review: (done.review ?? {}) as Record<string, unknown>, export: (done.export ?? {}) as Record<string, unknown>, peaks: Array.isArray(done.peaks) ? (done.peaks as number[]) : [] };
+  const lengths = typeof done.lengths === "object" && done.lengths !== null ? (done.lengths as Reviewed["lengths"]) : undefined;
+  return { review: (done.review ?? {}) as Record<string, unknown>, export: (done.export ?? {}) as Record<string, unknown>, peaks: Array.isArray(done.peaks) ? (done.peaks as number[]) : [], ...(lengths ? { lengths } : {}) };
 }
 
 /** A line the driver writes (JSON): an error, the done answer, or progress. */

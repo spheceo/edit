@@ -84,7 +84,7 @@ def review(job, make):
     try:
         parts = [s3.generate_presigned_url("upload_part", Params={**upload, "PartNumber": i}, ExpiresIn=6 * 3600) for i in range(1, 161)]
         result = make({"source": sign("get_object", job["source_key"]), "pieces": pieces, "video_put": sign("put_object", job["review_key"]),
-                       "video_parts": parts, "poster_put": sign("put_object", job["poster_key"]), "poster_second": float(job["poster_second"])})
+                       "video_parts": parts, "poster_put": sign("put_object", job["poster_key"]), "poster_second": float(job["poster_second"]), "fps": fps})
         s3.complete_multipart_upload(**upload, MultipartUpload={"Parts": result.pop("parts")})
     except BaseException:
         try:

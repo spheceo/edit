@@ -81,6 +81,10 @@ test("titles keep the channel's rules: no suicide, no dash split, no quoted line
   expect(titleProblem("A Very Long Title That Goes On And On Past Every Approved Title The Team Has", STYLE)).toMatch(/the team's approved titles run to \d+/);
   expect(cleanTitle('- "Killer Realizes His Story Collapsed"')).toBe("Killer Realizes His Story Collapsed");
   expect(cleanTitle("2) Mom   Thinks She Got Away")).toBe("Mom Thinks She Got Away");
+  // A quoted word at its start or end stays whole (Nov 1: `"Chill" 16-Year-Old…` had lost its first quote).
+  expect(cleanTitle('"Chill" 16-Year-Old Stabs Girl Who Showed Up At Her Door')).toBe('"Chill" 16-Year-Old Stabs Girl Who Showed Up At Her Door');
+  expect(cleanTitle("“Perfect” Mom Has No Idea Police Are About To Arrest Her")).toBe("“Perfect” Mom Has No Idea Police Are About To Arrest Her");
+  expect(cleanTitle("Cops Find Mom 'Caring For' Grandma")).toBe("Cops Find Mom 'Caring For' Grandma");
 });
 
 test("a guide is Repack's lowercase edits to the base with its caption in quotes, and a summary one compact paragraph", () => {

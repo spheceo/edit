@@ -16,6 +16,7 @@ import { StartedBy } from "../components/StartedBy";
 import { Button, cx, Modal, Spinner } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
 import { buildTurns } from "../lib/agentTurns";
+import { WORKSPACE_NAMES } from "@edit/types/ideas";
 import { ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
@@ -322,17 +323,20 @@ function MenuItem({ icon, children, onClick, danger, disabled }: { icon: ReactNo
 
 // ---------------------------------------------------------------- above the form
 
-/** The case under the title: the niche, and the video or article it's from. */
+/** The case under the title: its kind (and a niche an older run gave), and the video or article it's from. */
 function Meta({ idea }: { idea: Idea }) {
   const niche = idea.niche ? NICHE[idea.niche] : null;
   return (
     <div className="mt-3 flex flex-col gap-2">
-      {niche !== null && (
-        <span className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-white/[0.04] px-2 py-1 text-[12px] text-white/55">
-          <span className={cx("size-1.5 rounded-full", niche.dot)} />
-          {niche.label}
-        </span>
-      )}
+      <span className="flex flex-wrap gap-1.5">
+        <span className="inline-flex w-fit items-center rounded-lg bg-white/[0.04] px-2 py-1 text-[12px] text-white/55">{WORKSPACE_NAMES[idea.workspace]}</span>
+        {niche !== null && (
+          <span className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-white/[0.04] px-2 py-1 text-[12px] text-white/55">
+            <span className={cx("size-1.5 rounded-full", niche.dot)} />
+            {niche.label}
+          </span>
+        )}
+      </span>
       {idea.sources.map((source) => (
         <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="group flex items-center gap-3 rounded-xl px-1 py-1 transition-colors hover:bg-white/[0.03]">
           {source.kind === "youtube" && source.thumbnail !== null && <img src={source.thumbnail} alt="" className="h-9 w-16 shrink-0 rounded-md object-cover" />}

@@ -11,6 +11,7 @@ import { Fragment, useState } from "react";
 
 import { Button, cx, Spinner } from "../components/ui";
 import { StartedBy } from "../components/StartedBy";
+import { WORKSPACE_NAMES } from "@edit/types/ideas";
 import { ideasApi, viewsLabel, type ChangeCard, type IdeaRow, type IdeasHome } from "../lib/ideas";
 import {  } from "../lib/kept";
 import { navigate } from "../lib/route";
@@ -160,7 +161,7 @@ function Status({ row }: { row: IdeaRow }) {
 
 function Row({ row }: { row: IdeaRow }) {
   const { summary } = row;
-  const details = [viewsLabel(summary.views), summary.outlier && summary.outlier !== "unknown" ? `${summary.outlier} outlier` : "", summary.sources > 1 ? `${summary.sources} sources` : ""].filter(Boolean).join(" · ");
+  const details = [WORKSPACE_NAMES[row.workspace ?? "interrogation"], viewsLabel(summary.views), summary.outlier && summary.outlier !== "unknown" ? `${summary.outlier} outlier` : "", summary.sources > 1 ? `${summary.sources} sources` : ""].filter(Boolean).join(" · ");
   return (
     <div role="row" onClick={() => navigate(`/ideas/${row.id}`)} className="group flex min-h-14 cursor-pointer items-center gap-3 border-t border-line px-4 py-2.5 transition-colors hover:bg-panel">
       <Thumb src={summary.thumbnail} />

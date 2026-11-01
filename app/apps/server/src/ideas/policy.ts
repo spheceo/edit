@@ -40,14 +40,20 @@ export function lengthStyle(examples: string[]): LengthStyle | null {
   };
 }
 
-/** A title as written: no bullet or number before it, no quotes or backticks around it, one space between words. */
+/**
+ * A title as written: no bullet or number before it, no quotes or backticks
+ * around the whole of it (a quoted word in it stays: "“Perfect” Mom Has No
+ * Idea…"; Nov 1, `"Chill" 16-Year-Old…` lost its first quote), one space
+ * between words.
+ */
 export function cleanTitle(title: string): string {
-  return title
-    .trim()
-    .replace(/^(?:[-*•]|\d+[.)])\s+/, "")
-    .replace(/^[`"“”]+|[`"“”]+$/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  let text = title.trim().replace(/^(?:[-*•]|\d+[.)])\s+/, "").trim();
+  for (;;) {
+    const wrapped = /^([`"“”'])(.*)([`"“”'])$/su.exec(text);
+    if (wrapped === null || /[`"“”]/u.test(wrapped[2]!)) break;
+    text = wrapped[2]!.trim();
+  }
+  return text.replace(/\s+/g, " ").trim();
 }
 
 /** What's wrong with a title, or null. */

@@ -28,3 +28,11 @@ Mathias's Mac, project p1793492055193-220550, started ~02:14 SAST. Reported (scr
 - Diagnostics say when the window was last used, and how many of each problem came since Edit started (9273ccfc).
 - The rule is written in app/AGENTS.md ("Checked before it's used").
 - Not mine to change: Off-Duty Officer's export running 29 min past its edit (the review-repair session found it).
+
+## On the fixed build (nightly-44, Nov 1 evening)
+
+Mathias's Mac was updated remotely (`edit remote update`, idle: nothing running), then each import was resumed:
+- **Roblox:** file 6, the 911 call, came through ("file 6 of 12 ready … 26-00446_911_Call.wav"); import done in 13 min 18 s, voice-over made, the editing workflow started by itself.
+- **Mom Secretly:** in the cloud at last (rev 2: the summary fix), importing again from Drive; its download is checked against Drive's MD5 before use.
+- Two scripts that had stopped on a dropped connection to the transcription relay (hidden in the earlier reports under Mom Secretly's 545 KB error) were resumed and are transcribing 6:20 and 7:43 of footage.
+- Diagnostics now show "Needs attention: nothing found", plus the new "last used" line.

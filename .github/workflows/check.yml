@@ -32,6 +32,15 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: app
+      # The web typecheck needs the WASM preview engine (gitignored, built
+      # from Rust): engine-cache.yml's copy when there is one, else built.
+      - id: wasm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: app/apps/web/src/engine/pkg
+          key: wasm-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**', 'app/scripts/build-wasm.sh') }}
+      - if: steps.wasm.outputs.cache-hit != 'true'
+        run: scripts/build-wasm.sh
       # Pinned, as in release.yml: what Edit is built and checked with.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:

@@ -241,3 +241,18 @@ class DecodeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PoolTests(unittest.TestCase):
+    def test_the_deployed_pool_fits_the_workspace_gpu_limit(self):
+        # Modal, Nov 1: "Workspace sphealt has reached the limit of 10 GPUs" with
+        # a pool sized for 32 section and 32 review GPUs. Both GPU functions full
+        # must fit, or Modal queues sections against the coordinator's deadline.
+        import re
+        folder = Path(__file__).parent
+        deploy = (folder / "export_v3.py").read_text()
+        pool = int(re.search(r'"EDIT_SECTIONS_POOL": "(\d+)"', deploy).group(1))
+        coordinators = int(re.search(r'"EDIT_SECTIONS_COORDINATORS": "(\d+)"', deploy).group(1))
+        limit = int(re.search(r'EDIT_MODAL_GPU_LIMIT", "(\d+)"', (folder / "sections_v3.py").read_text()).group(1))
+        self.assertLessEqual(2 * pool, limit)
+        self.assertLessEqual(coordinators, 2)

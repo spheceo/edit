@@ -1,5 +1,5 @@
 /**
- * Exports on Modal's v3 sections pool: eight L40S GPUs render a whole edit
+ * Exports on Modal's v3 sections pool: four L40S GPUs render a whole edit
  * in eight pieces, every frame of the joined file is decoded in the cloud,
  * and the checked file is copied here (`apps/worker/export_v3.py`, one
  * process per export, so several run at once). Unchanged pieces, the sound

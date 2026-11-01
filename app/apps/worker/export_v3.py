@@ -299,8 +299,13 @@ def deploy(build, check, progress):
         except (OSError, ValueError, KeyError):
             pass
         progress("deploying", .01)
+        # The sphealt workspace runs 10 GPUs at once (Modal, Nov 1: "reached the
+        # limit of 10 GPUs… section: 8"); the pool was sized for the old account
+        # (32 section + 32 review GPUs, 6 jobs). Sphe chose to fit the limit: 4
+        # section GPUs and 4 review GPUs, two jobs (exports and playback renders)
+        # at once, the rest queued. sections_v3.py refuses a pool over the limit.
         env = {**os.environ, "EDIT_MODAL_GPU": "L40S", "EDIT_SECTIONS_APP": APP, "EDIT_SECTIONS_VOLUME": VOLUME,
-               "EDIT_SECTIONS_POOL": "32", "EDIT_VERIFIERS_POOL": "64", "EDIT_SECTIONS_COORDINATORS": "6"}
+               "EDIT_SECTIONS_POOL": "4", "EDIT_VERIFIERS_POOL": "64", "EDIT_SECTIONS_COORDINATORS": "2"}
         # The image build's log is long: to a file, not a pipe that could fill.
         log = STATE / f"{APP}-deploy.log"
         # The pool, then the small app the relay calls it through (api_v3.py).

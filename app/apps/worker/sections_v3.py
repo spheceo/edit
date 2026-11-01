@@ -10,13 +10,19 @@ from app import image, BUILD, GPU
 from build import engine_id
 
 APP = os.environ.get("EDIT_SECTIONS_APP", "edit-exports-sections-v3-benchmark")
-POOL = int(os.environ.get("EDIT_SECTIONS_POOL", "8"))
+POOL = int(os.environ.get("EDIT_SECTIONS_POOL", "4"))
 CPU_POOL = int(os.environ.get("EDIT_VERIFIERS_POOL", "16"))
 # Exports at once (each has its own coordinator; their sections share the pool).
 COORDINATORS = int(os.environ.get("EDIT_SECTIONS_COORDINATORS", "2"))
 ENGINE = engine_id()
 if POOL not in {4, 8, 16, 32} or CPU_POOL not in {8, 16, 32, 64} or GPU != "L40S" or not 1 <= COORDINATORS <= 8:
     raise ValueError("Use 4, 8, 16 or 32 L40S workers, 8 to 64 CPU verifiers and one to eight coordinators")
+# The workspace's GPUs at once (sphealt's plan: 10). `section` and
+# `review_piece` each take up to POOL, so both full must fit, or Modal queues
+# the rest and a coordinator's 1700 s can run out waiting.
+GPU_LIMIT = int(os.environ.get("EDIT_MODAL_GPU_LIMIT", "10"))
+if 2 * POOL > GPU_LIMIT:
+    raise ValueError(f"{POOL} section and {POOL} review GPUs exceed the workspace's {GPU_LIMIT}; lower EDIT_SECTIONS_POOL")
 if not re.fullmatch(r"edit-exports-(sections-v3-benchmark|v3)", APP):
     raise ValueError("Use the benchmark's or the app's own v3 Modal app")
 VOLUME = os.environ["EDIT_SECTIONS_VOLUME"]

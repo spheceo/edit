@@ -659,3 +659,21 @@ test("a File Viewer under 4 s and an outro charges screen under 5 s are flagged"
   expect(short.map((issue) => [issue.start, issue.seconds, issue.at_least])).toEqual([[100, 3, 4], [1000, 4, 5]]);
   expect(graphicsShort(p, null).length).toBe(1);
 });
+
+test("a cut-in covered again keeps its span from the footage either side, not its voice-over's", async () => {
+  // E3, Nov 1: the second cover read the span from the voice-over (its card gone), 8 frames late at each end.
+  const { app, id, fixture } = setUp("tools-cutin-again");
+  await fixture.store.update(id, "test", (project) => {
+    project.media.push({ id: "m1", name: "b.mp4", path: "/x/b.mp4", kind: "video", duration: 600, width: 1920, height: 1080, fps: 30, has_audio: true });
+    project.media.push({ id: "vo", name: "vo.wav", path: "/x/vo.wav", kind: "audio", duration: 20, width: 0, height: 0, fps: 0, has_audio: true });
+    // The footage either side, the card with a breath (8 frames) round its voice-over.
+    project.clips.push(clip({ id: "before", track: "v1", start: 0, duration: 300, type: "video", media: "m1", link: "f1" }));
+    project.clips.push(clip({ id: "after", track: "v1", start: 600, duration: 300, type: "video", media: "m1", source_in: 200, link: "f2" }));
+    project.clips.push(clip({ id: "card", track: "v1", start: 300, duration: 300, type: "solid", fill: [0, 0, 0, 1], link: "l9" }));
+    project.clips.push(clip({ id: "voice", track: "a5", start: 308, duration: 284, type: "audio", media: "vo", name: "Voice-over" }));
+    project.script = { blocks: [{ kind: "narration", text: "The building.", clip: "card", voiceover: "voice" }] };
+  });
+  const shots = [{ media: "m1", source_in: 10 }, { media: "m1", source_in: 100, at: 15 }];
+  expect(JSON.parse(await said(app, "cover_cut_in", { cut_in: 1, shots }))).toMatchObject({ span: [10, 20] });
+  expect(JSON.parse(await said(app, "cover_cut_in", { cut_in: 1, shots: [{ media: "m1", source_in: 30, at: 10 }, { media: "m1", source_in: 120, at: 15 }] }))).toMatchObject({ span: [10, 20] });
+});

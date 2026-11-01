@@ -12,6 +12,7 @@ import * as framing from "./framing.ts";
 import type { Project } from "./model.ts";
 import { addTrack, clipEnd, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import { display, fixed, round } from "./rust.ts";
+import { NARRATION_ROOM } from "./voiceover.ts";
 import { field, optional, readStruct, required, SerdeError, type Struct } from "./serde.ts";
 
 interface Shot {
@@ -119,7 +120,21 @@ export function findCutIn(project: Project, which: unknown): CutIn {
   if ((card ?? voiceover) === null || spanning === undefined) {
     throw new Error(`cut-in ${index + 1} has neither a card nor a voice-over on the timeline`);
   }
-  return { number: index + 1, card, voiceover, start: spanning.start, end: clipEnd(spanning) };
+  if (card !== null) return { number: index + 1, card, voiceover, start: spanning.start, end: clipEnd(spanning) };
+  // Covered before (its card went): the cut-in is the voice-over and the room the footage leaves either side of it
+  // (NARRATION_ROOM), not the voice-over alone (E3, Nov 1: covered again, its shots began 8 frames late, the
+  // narration with them).
+  const room = Math.round(NARRATION_ROOM * fpsOf(project)) + 1;
+  const footage = project.clips.filter((clip) => clip.type === "video" && typeof clip.link === "string" && !(clip.name ?? "").includes("B-roll"));
+  const before = footage.map(clipEnd).filter((end) => end <= spanning.start && end >= spanning.start - room);
+  const after = footage.map((clip) => clip.start).filter((start) => start >= clipEnd(spanning) && start <= clipEnd(spanning) + room);
+  return {
+    number: index + 1,
+    card,
+    voiceover,
+    start: before.length > 0 ? Math.max(...before) : spanning.start,
+    end: after.length > 0 ? Math.min(...after) : clipEnd(spanning),
+  };
 }
 
 function videoTracks(project: Project): string[] {

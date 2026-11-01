@@ -16,13 +16,19 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 
+import { Effect, Fiber, Option, Schema, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
+import { inArea, runPromise } from "./effect/runtime.ts";
+import * as service from "./effect/service.ts";
 import { subtitleVideo } from "./drive.ts";
 import { writeAtomic } from "./files.ts";
 import type { ExportOptions, Plan, Project } from "./model.ts";
 import { join } from "./paths.ts";
 import { duration } from "./project.ts";
+import * as relay from "./relay.ts";
 import { jsonForSerde } from "./rust.ts";
 
 /** The checkout's app/ folder, whose worker runs the cloud exports: EDIT_WORKER_ROOT, else this server's own checkout (none in a release build). */
@@ -67,31 +73,82 @@ export async function ready(): Promise<void> {
   }
 }
 
+// ── Modal's answers (in Effect since Nov 1: docs/plans/2026-11-01-effect.md, round 2, area 7) ──
+//
+// A job's start and status answers are read through Schemas; the status is
+// asked every `timing.pollMs` until done, failed, cancelled, or past
+// `timing.deadlineMs` (cancelled in the cloud then: it polled for ever). A
+// status that fails for a moment (offline, a 5xx, a 429) is asked again
+// until it has gone unanswered for `timing.statusLostMs`; any other failure
+// (a refusal, an answer that isn't the relay's) ends it at once. A
+// cancel, or the export being interrupted, cancels the job in the cloud.
+
+/** The job ended in the cloud without its result (Modal's own error, or the driver's). */
+export class ModalJobFailed extends Schema.TaggedError<ModalJobFailed>()("ModalJobFailed", { message: Schema.String }) {}
+/** Nobody could say how the job was going for too long, or it ran past its deadline. */
+export class ModalUnanswered extends Schema.TaggedError<ModalUnanswered>()("ModalUnanswered", { message: Schema.String }) {}
+/** Cancelled from here (the words exports.ts has always read). */
+export class ExportCancelled extends Schema.TaggedError<ExportCancelled>()("ExportCancelled", { message: Schema.Literal("cancelled") }) {}
+
+service.kinds({ ModalJobFailed: "later", ModalUnanswered: "temporary", ExportCancelled: "later" });
+
+/** How often a job is asked how it's going, how long its status may go unanswered, and the longest a job may take (tests make them short). */
+export const timing = { pollMs: 3000, statusLostMs: 10 * 60_000, deadlineMs: 3 * 3600_000 };
+
+const Started = Schema.Struct({ call: Schema.optional(Schema.String), error: Schema.optional(Schema.NullOr(Schema.String)) });
+const Status = Schema.Struct({
+  state: Schema.optional(Schema.String),
+  result: Schema.optional(Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown))),
+  error: Schema.optional(Schema.NullOr(Schema.String)),
+  progress: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+
+const askCloud = <S extends Schema.Top>(route: string, body: unknown, schema: S) => relay.askJson("POST", `/v1/cloud/${route}`, body, "cloud storage", 120_000, schema);
+
 /**
  * A job run on the v3 pool through the relay (`start_export` / `start_review`),
  * polled until it's done, reporting progress; cancelled when `cancelled()`.
  */
-async function throughRelay(kind: "export" | "review", job: Record<string, unknown>, cancelled: () => boolean, onProgress: (progress: number) => void): Promise<Record<string, unknown>> {
-  const started = await cloud.relayJson(`v3/start_${kind}`, { job });
+const throughRelayEffect = Effect.fn("modal.throughRelay")(function* (kind: "export" | "review", job: Record<string, unknown>, cancelled: () => boolean, onProgress: (progress: number) => void) {
+  const started = yield* askCloud(`v3/start_${kind}`, { job }, Started);
   const call = started.call;
-  if (typeof call !== "string") throw new Error(typeof started.error === "string" ? started.error : "the cloud didn't start it");
-  for (;;) {
-    await Bun.sleep(3000);
-    if (cancelled()) {
-      await cloud.relayJson("v3/cancel", { call }).catch(() => ({}));
-      throw new Error("cancelled");
+  if (call === undefined) return yield* new ModalJobFailed({ message: started.error ?? "the cloud didn't start it" });
+  const cancel = askCloud("v3/cancel", { call }, Schema.Unknown).pipe(Effect.ignore);
+  const began = Date.now();
+  let heard = Date.now();
+  const polling = Effect.gen(function* () {
+    for (;;) {
+      yield* Effect.sleep(timing.pollMs);
+      if (cancelled()) {
+        yield* cancel;
+        return yield* new ExportCancelled({ message: "cancelled" });
+      }
+      if (Date.now() - began > timing.deadlineMs) {
+        yield* cancel;
+        return yield* new ModalUnanswered({ message: `the cloud job ran for more than ${Math.round(timing.deadlineMs / 60_000)} min and was cancelled` });
+      }
+      const asked = yield* askCloud("v3/status", { call, id: job.id }, Status).pipe(Effect.result);
+      if (asked._tag === "Failure") {
+        // Only a failure that may pass (offline, a 5xx, a 429) is waited out: a refusal won't change by asking.
+        if (!service.isTemporary(asked.failure)) return yield* asked.failure;
+        if (Date.now() - heard > timing.statusLostMs) return yield* new ModalUnanswered({ message: `nobody could say how the cloud job was going for ${Math.round(timing.statusLostMs / 60_000)} min: ${asked.failure.message}` });
+        yield* Effect.logWarning(`${String(job.id)}: asking the cloud how it's going: ${asked.failure.message}`);
+        continue;
+      }
+      heard = Date.now();
+      const said = asked.success;
+      if (said.state === "done" && said.result !== undefined && said.result !== null) return said.result;
+      if (said.state === "failed" || typeof said.error === "string") return yield* new ModalJobFailed({ message: said.error ?? "the cloud job failed" });
+      if (typeof said.progress === "number") onProgress(Math.min(0.99, said.progress));
     }
-    let said: Record<string, unknown>;
-    try {
-      said = await cloud.relayJson("v3/status", { call, id: job.id });
-    } catch (error) {
-      diag.warn("export", `${job.id}: asking the cloud how it's going: ${diag.messageOf(error)}`);
-      continue;
-    }
-    if (said.state === "done" && typeof said.result === "object" && said.result !== null) return said.result as Record<string, unknown>;
-    if (said.state === "failed" || typeof said.error === "string") throw new Error(String(said.error ?? "the cloud job failed"));
-    if (typeof said.progress === "number") onProgress(Math.min(0.99, said.progress));
-  }
+  });
+  // The export interrupted from here (Edit quitting, a stop): the cloud's work is stopped too.
+  return yield* polling.pipe(Effect.onInterrupt(() => cancel));
+});
+
+/** `throughRelayEffect` for the Promise side (exported for tests). */
+export function throughRelay(kind: "export" | "review", job: Record<string, unknown>, cancelled: () => boolean, onProgress: (progress: number) => void): Promise<Record<string, unknown>> {
+  return runPromise(throughRelayEffect(kind, job, cancelled, onProgress).pipe(inArea("export")));
 }
 
 /** Why `project` can't export on Modal as `options` ask (it exports here), or null when it can. */
@@ -208,6 +265,79 @@ export async function review(home: string, project: string, keys: { source: stri
   return { review: (done.review ?? {}) as Record<string, unknown>, export: (done.export ?? {}) as Record<string, unknown>, peaks: Array.isArray(done.peaks) ? (done.peaks as number[]) : [] };
 }
 
+/** A line the driver writes (JSON): an error, the done answer, or progress. */
+const DriverLine = Schema.Struct({
+  error: Schema.optional(Schema.String),
+  done: Schema.optional(Schema.Boolean),
+  progress: Schema.optional(Schema.Number),
+  phase: Schema.optional(Schema.String),
+});
+
+/**
+ * Runs `cmd` (the cloud driver, in `cwd`) on `file` until it says it's done
+ * (its last line), reporting progress. Infisical, uv and the Python driver
+ * are one process group the run owns: a cancel (polled every 500 ms, which
+ * also leaves the driver its cancel file), a failure or `timing.deadlineMs`
+ * ends all of them; a SIGTERM to Infisical alone may not have reached the
+ * driver.
+ */
+export const driving = Effect.fn("modal.drive")(function* (cmd: readonly string[], cwd: string, file: string, stop: string, id: string, cancelled: () => boolean, onProgress: (progress: number) => void) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  let error: string | null = null;
+  let done: Record<string, unknown> | null = null;
+  const line = (text: string) => {
+    if (!text.startsWith("{")) return;
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return;
+    }
+    const said = Schema.decodeUnknownOption(DriverLine)(value);
+    if (Option.isNone(said)) return;
+    if (typeof said.value.error === "string") error = said.value.error;
+    else if (said.value.done === true) done = value as Record<string, unknown>;
+    else if (typeof said.value.progress === "number") {
+      if (said.value.phase === "deploying") diag.info("export", `${id}: deploying the cloud exporter (a new build)`);
+      onProgress(Math.min(0.99, said.value.progress));
+    }
+  };
+  const run = Effect.gen(function* () {
+    const [program = "", ...args] = cmd;
+    const handle = yield* spawner
+      .spawn(ChildProcess.make(program, [...args, file], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", forceKillAfter: "10 seconds" }))
+      .pipe(Effect.mapError((cause) => new ModalJobFailed({ message: `the cloud driver couldn't start: ${cause.message}` })));
+    const stderr = yield* Stream.mkString(Stream.decodeText(handle.stderr)).pipe(Effect.orElseSucceed(() => ""), Effect.forkScoped);
+    let pending = "";
+    yield* Stream.runForEach(Stream.decodeText(handle.stdout), (text) =>
+      Effect.sync(() => {
+        pending += text;
+        let newline: number;
+        while ((newline = pending.indexOf("\n")) >= 0) {
+          line(pending.slice(0, newline).trim());
+          pending = pending.slice(newline + 1);
+        }
+      }),
+    ).pipe(Effect.ignore);
+    const code = Number(yield* handle.exitCode.pipe(Effect.orElseSucceed(() => -1)));
+    const said: Record<string, unknown> | null = done;
+    if (said === null) return yield* new ModalJobFailed({ message: error ?? `the cloud export stopped (exit ${code}): ${(yield* Fiber.join(stderr)).trim().split("\n").slice(-3).join(" ")}` });
+    return said;
+  }).pipe(Effect.scoped);
+  const watch = Effect.gen(function* () {
+    for (;;) {
+      yield* Effect.sleep(500);
+      if (cancelled()) {
+        fs.writeFileSync(stop, "");
+        return yield* new ExportCancelled({ message: "cancelled" });
+      }
+    }
+  });
+  return yield* Effect.raceFirst(run, watch).pipe(
+    Effect.timeoutOrElse({ duration: timing.deadlineMs, orElse: () => Effect.fail(new ModalUnanswered({ message: `the cloud export ran for more than ${Math.round(timing.deadlineMs / 60_000)} min and was stopped` })) }),
+  );
+});
+
 /** Runs the cloud driver on `job` until it says it's done (its last line), reporting progress. */
 async function drive(home: string, id: string, job: Record<string, unknown>, cancelled: () => boolean, onProgress: (progress: number) => void): Promise<Record<string, unknown>> {
   const { cwd, cmd } = command();
@@ -217,49 +347,9 @@ async function drive(home: string, id: string, job: Record<string, unknown>, can
   // A SIGTERM may not get through Infisical and uv: the driver also looks for this file.
   const stop = `${file}.cancel`;
   writeAtomic(file, JSON.stringify({ id, ...job, host: process.pid, cancel: stop }));
-  const child = Bun.spawn([...cmd, file], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const stderr = new Response(child.stderr).text();
-  let stopped = false;
-  const watch = setInterval(() => {
-    if (cancelled() && !stopped) {
-      stopped = true;
-      fs.writeFileSync(stop, "");
-      child.kill("SIGTERM");
-    }
-  }, 500);
-  let error: string | null = null;
-  let done: Record<string, unknown> | null = null;
   try {
-    const decoder = new TextDecoder();
-    let pending = "";
-    for await (const chunk of child.stdout) {
-      pending += decoder.decode(chunk, { stream: true });
-      let newline: number;
-      while ((newline = pending.indexOf("\n")) >= 0) {
-        const line = pending.slice(0, newline).trim();
-        pending = pending.slice(newline + 1);
-        if (!line.startsWith("{")) continue;
-        let said: Record<string, unknown>;
-        try {
-          said = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          continue;
-        }
-        if (typeof said.error === "string") error = said.error;
-        else if (said.done === true) done = said;
-        else if (typeof said.progress === "number") {
-          if (said.phase === "deploying") diag.info("export", `${id}: deploying the cloud exporter (a new build)`);
-          onProgress(Math.min(0.99, said.progress));
-        }
-      }
-    }
-    const code = await child.exited;
-    if (cancelled()) throw new Error("cancelled");
-    if (done === null) throw new Error(error ?? `the cloud export stopped (exit ${code}): ${(await stderr).trim().split("\n").slice(-3).join(" ")}`);
-    return done;
+    return await runPromise(driving(cmd, cwd, file, stop, id, cancelled, onProgress).pipe(inArea("export")));
   } finally {
-    clearInterval(watch);
-    if (child.exitCode === null) child.kill("SIGTERM");
     fs.rmSync(file, { force: true });
     fs.rmSync(stop, { force: true });
   }

@@ -8,6 +8,25 @@ import * as seams from "./seams.ts";
 import * as diag from "./diag.ts";
 import { jsonForSerde } from "./rust.ts";
 import { WORKER_STARTUP_SECONDS, WORKER_SECONDS, type WorkerManifest } from "@edit/types/worker";
+import { Option, Schema } from "effect";
+import * as service from "./effect/service.ts";
+
+/** What the relay answers about a cloud export (start and status): read through this, never taken on trust (docs/plans/2026-11-01-effect.md, round 2, area 7). */
+const ExportStatus = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  status: Schema.optional(Schema.String),
+  reservedUsd: Schema.optional(Schema.Number),
+  progress: Schema.optional(Schema.NullOr(Schema.Number)),
+  error: Schema.optional(Schema.NullOr(Schema.String)),
+  output: Schema.optional(Schema.NullOr(Schema.Struct({ key: Schema.optional(Schema.String) }))),
+});
+
+/** `answer` as a cloud export's status, or an error saying it isn't one. */
+function statusOf(answer: unknown): typeof ExportStatus.Type {
+  const read = Schema.decodeUnknownOption(ExportStatus)(answer);
+  if (Option.isNone(read)) throw new service.AnswerInvalid({ service: "Edit's relay", message: "the relay's answer about the cloud export wasn't one" });
+  return read.value;
+}
 
 export const enabled = () => process.env.EDIT_CLOUD_EXPORTS === "1";
 export const timing = { poll: 3000, sleep: (ms: number) => Bun.sleep(ms) };
@@ -17,10 +36,10 @@ export async function run(project: Project, options: ExportOptions, plan: Plan, 
   receipt: { id?: string; accepted?: (id: string) => void } = {},
 ): Promise<void> {
   if (!["h264", "hevc"].includes(options.format)) throw new Error("Cloud exports currently support H.264 and HEVC; use a local export for this format");
-  let started: Record<string, unknown>;
+  let started: typeof ExportStatus.Type;
   if (receipt.id !== undefined) {
     if (!/^export-[a-f0-9]{64}$/.test(receipt.id)) throw new Error("Invalid saved cloud export id");
-    started = await cloud.relayJson("exports/status", { id: receipt.id });
+    started = statusOf(await cloud.relayJson("exports/status", { id: receipt.id }));
   } else {
     const config = await cloud.relayJson("exports/config", {});
     if (config.enabled !== true) throw new Error("Cloud exports are disabled on the Relay; configure its worker and daily compute budget first");
@@ -32,7 +51,7 @@ export async function run(project: Project, options: ExportOptions, plan: Plan, 
     const key = `edit/exports/manifests/${digest}.json`;
     if (await cloud.head(key) === null) await cloud.uploadStream(cloud.bytesSource(new TextEncoder().encode(text)), key, new TextEncoder().encode(text).byteLength);
     if (cancelled()) throw new Error("cancelled");
-    started = await cloud.relayJson("exports/start", { manifest: key, digest, request });
+    started = statusOf(await cloud.relayJson("exports/start", { manifest: key, digest, request }));
   }
   if (typeof started.id !== "string" || !/^export-[a-f0-9]{64}$/.test(started.id)) throw new Error("Relay returned no cloud export id");
   if (receipt.id !== undefined && started.id !== receipt.id) throw new Error("Relay returned a different cloud export id");
@@ -51,7 +70,7 @@ export async function run(project: Project, options: ExportOptions, plan: Plan, 
     }
     if (status.status === "done") {
       if (cancelled()) throw new Error("cancelled");
-      const result = status.output as { key?: unknown } | undefined;
+      const result = status.output;
       if (typeof result?.key !== "string" || result.key !== `edit/exports/results/${id}.mp4`) throw new Error("Invalid cloud export result");
       await cloud.download(result.key, output, (sent, total) => onProgress(0.95 + 0.05 * sent / Math.max(1, total)));
       return;
@@ -60,8 +79,10 @@ export async function run(project: Project, options: ExportOptions, plan: Plan, 
     onProgress(typeof status.progress === "number" ? Math.min(0.94, status.progress * 0.94) : 0);
     await timing.sleep(timing.poll);
     try {
-      status = await cloud.relayJson("exports/status", { id });
+      status = statusOf(await cloud.relayJson("exports/status", { id }));
     } catch (error) {
+      // A refusal or an answer that isn't the relay's won't change by asking: said at once.
+      if (service.kindOf(error) === "permanent") throw error;
       // Losing the Mac's connection never starts a replacement render.
       diag.warn("export", `cloud export status temporarily unavailable: ${diag.messageOf(error)}`);
     }

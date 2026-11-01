@@ -17,12 +17,15 @@
 
 import * as fs from "node:fs";
 
+import { Deferred, Effect, Exit } from "effect";
+
 import type { App } from "./app.ts";
 import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
+import { inArea, runPromise } from "./effect/runtime.ts";
 import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
@@ -362,6 +365,12 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
 /** How long a share waits on an export already running for its project (a different one) before it gives up. */
 const BUSY_EXPORT_MS = 3 * 60 * 60_000;
 
+/** How often a share waiting on an export looks that it's still running, and how many ends without a word it takes before it gives up (tests make the look quick). */
+export const exportWatch = { everyMs: 30_000, silentEnds: 2 };
+
+/** How an export a share waited on ended: its file, a failure it said, or gone without a word. */
+type Ended = { readonly file: string } | { readonly failed: string } | { readonly silent: true };
+
 /**
  * Exports `project` for a share; the file it made. An export of the same
  * picture with the same settings already running (one a restart carried on,
@@ -369,59 +378,94 @@ const BUSY_EXPORT_MS = 3 * 60 * 60_000;
  * export running" while that export finished 90 s later, and was never
  * shared) is followed to its file; a different one is waited out, then this
  * one starts.
+ *
+ * In Effect (round 3): each wait listens for the export's end in a scope (the
+ * listener let go however it ends) and looks every `exportWatch.everyMs` that
+ * the export is still running. One gone without an end (its process died,
+ * the event lost) used to leave the share waiting for ever, the project
+ * "already being shared" until Edit restarted; now it's exported again, and
+ * after `exportWatch.silentEnds` such ends the share says so.
  */
-async function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions): Promise<string> {
+const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, projectId: string, project: Project, options: ExportOptions) {
   const timeline = timelineHash(project);
   const wanted = optionsKey(options);
   const began = Date.now();
   let followed = false;
+  let silent = 0;
   for (;;) {
-    // Listening before looking, so its end can't be missed.
-    let stop = () => {};
-    const ended = new Promise<string>((resolve, reject) => {
-      stop = app.store.subscribe((event) => {
-        const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string };
-        if (one.type !== "export" || one.id !== projectId) return;
-        if (one.state === "queued") sharing.set(projectId, "queued for export");
-        else if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
-        else if (one.state === "done" && one.path !== undefined) resolve(one.path);
-        else if (one.state === "failed" || one.state === "cancelled") reject(new Error(one.state === "cancelled" ? "the export was cancelled" : `the export failed: ${one.error ?? "see the log"}`));
-      });
-    });
-    try {
-      const busy = app.exports.runningFor?.(projectId) ?? null;
-      if (busy !== null) {
-        const same = !followed && busy.timeline === timeline && busy.options === wanted;
-        if (same) {
-          followed = true;
-          diag.info("review", `${project.name}: sharing the export already running for this picture`);
-          try {
-            return await ended;
-          } catch (error) {
-            diag.warn("review", `${project.name}: the export it followed ended without a file (${diag.messageOf(error)}); exporting again`);
-            continue;
+    const turn = yield* Effect.scoped(
+      Effect.gen(function* () {
+        // Listening before looking, so its end can't be missed.
+        const end = yield* Deferred.make<Ended>();
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            app.store.subscribe((event) => {
+              const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string };
+              if (one.type !== "export" || one.id !== projectId) return;
+              if (one.state === "queued") sharing.set(projectId, "queued for export");
+              else if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
+              else if (one.state === "done" && one.path !== undefined) Deferred.doneUnsafe(end, Exit.succeed({ file: one.path }));
+              else if (one.state === "failed" || one.state === "cancelled") Deferred.doneUnsafe(end, Exit.succeed({ failed: one.state === "cancelled" ? "the export was cancelled" : `the export failed: ${one.error ?? "see the log"}` }));
+            }),
+          ),
+          (stop) => Effect.sync(stop),
+        );
+        // The export's end, or its going without one: nothing running for this project any more and no end heard.
+        const gone = Effect.gen(function* () {
+          for (;;) {
+            yield* Effect.sleep(exportWatch.everyMs);
+            if ((app.exports.runningFor?.(projectId) ?? null) === null) {
+              // One more look, so an end that's on its way isn't taken for none.
+              yield* Effect.sleep(Math.min(exportWatch.everyMs, 2000));
+              return { silent: true } as const;
+            }
           }
+        });
+        const ended = Deferred.await(end).pipe(Effect.raceFirst(gone));
+        const busy = app.exports.runningFor?.(projectId) ?? null;
+        if (busy !== null) {
+          const same = !followed && busy.timeline === timeline && busy.options === wanted;
+          if (same) {
+            followed = true;
+            yield* Effect.logInfo(`${project.name}: sharing the export already running for this picture`);
+            return { kind: "followed", ended: yield* ended } as const;
+          }
+          if (Date.now() - began > BUSY_EXPORT_MS) return yield* Effect.fail(new Error("this project's other export ran for three hours without ending"));
+          sharing.set(projectId, "waiting for this project's other export");
+          const left = BUSY_EXPORT_MS - (Date.now() - began);
+          yield* ended.pipe(Effect.timeoutOrElse({ duration: Math.max(left, 0), orElse: () => Effect.succeed({ silent: true } as const) }));
+          return { kind: "again" } as const;
         }
-        if (Date.now() - began > BUSY_EXPORT_MS) throw new Error("this project's other export ran for three hours without ending");
-        sharing.set(projectId, "waiting for this project's other export");
-        await ended.catch(() => undefined);
+        // On Modal the export stays in the cloud and the share is made there; on
+        // this Mac the share holds the file while it reads it (withExport), so
+        // the archive never takes it away underneath.
+        const started = yield* Effect.tryPromise({
+          try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), {}),
+          catch: (error) => error as Error,
+        }).pipe(Effect.result);
+        // Another export began between the look and the start: wait for it, as above.
+        if (started._tag === "Failure") return app.exports.runningFor?.(projectId) != null ? ({ kind: "again" } as const) : yield* Effect.fail(started.failure);
+        return { kind: "own", ended: yield* ended } as const;
+      }),
+    );
+    if (turn.kind === "again") continue;
+    const outcome: Ended = turn.ended;
+    if ("file" in outcome) return outcome.file;
+    if ("failed" in outcome) {
+      if (turn.kind === "followed") {
+        yield* Effect.logWarning(`${project.name}: the export it followed ended without a file (${outcome.failed}); exporting again`);
         continue;
       }
-      try {
-        // On Modal the export stays in the cloud and the share is made there; on
-        // this Mac the share holds the file while it reads it (holdExport), so
-        // the archive never takes it away underneath.
-        await app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), {});
-      } catch (error) {
-        // Another export began between the look and the start: wait for it, as above.
-        if (app.exports.runningFor?.(projectId) != null) continue;
-        throw error;
-      }
-      return await ended;
-    } finally {
-      stop();
+      return yield* Effect.fail(new Error(outcome.failed));
     }
+    silent += 1;
+    if (silent >= exportWatch.silentEnds) return yield* Effect.fail(new Error("the export stopped without saying how, twice; share again"));
+    yield* Effect.logWarning(`${project.name}: the export ended without saying how; exporting again`);
   }
+});
+
+function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions): Promise<string> {
+  return runPromise(exportOnceEffect(app, projectId, project, options).pipe(inArea("review")));
 }
 
 /**

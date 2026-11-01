@@ -177,3 +177,38 @@ test("a share follows the export already running for the same picture, and waits
     cleanup();
   }
 });
+
+test("a share whose export goes without a word (its process died, the event lost) exports again once, then says so, never waiting for ever", async () => {
+  const { app, cleanup } = fixtureHome("ready-silent-export");
+  const live = app.store.createAs("Helpful Son", "bodycam", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  const house = native().exportDefaults();
+  let busy: { output: string; timeline: string; options: string } | null = null;
+  const started: string[] = [];
+  (app as unknown as { exports: unknown }).exports = {
+    runningFor: () => busy,
+    running: () => busy !== null,
+    cancel: () => false,
+    exported: () => false,
+    start: async (_store: unknown, _library: unknown, _project: unknown, _options: unknown, path: string) => {
+      started.push(path);
+      busy = { output: path, timeline: timelineHash(live.project), options: optionsKey(house) };
+      // Gone 30 ms later, with no end said.
+      setTimeout(() => (busy = null), 30);
+      return path;
+    },
+  };
+  const before = { ...reviews.exportWatch };
+  reviews.exportWatch.everyMs = 20;
+  try {
+    const shared = await reviews.exportAndShare(app, id, {}).catch((error: Error) => error.message);
+    expect(shared).toContain("the export stopped without saying how, twice");
+    expect(started).toHaveLength(2);
+    // Not left "being shared": another share can start.
+    const again = await reviews.exportAndShare(app, id, {}).catch((error: Error) => error.message);
+    expect(again).not.toContain("already being shared");
+  } finally {
+    Object.assign(reviews.exportWatch, before);
+    cleanup();
+  }
+}, 30_000);

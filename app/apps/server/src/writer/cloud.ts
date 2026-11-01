@@ -13,11 +13,15 @@
 // downloaded: a script another Mac made plays its preview from the cloud.
 
 import * as fs from "node:fs";
+
+import { Option, Predicate, Schema } from "effect";
 import { createHash } from "node:crypto";
 
 import type { Script } from "@edit/types/writer";
 
 import * as diag from "../diag.ts";
+import * as service from "../effect/service.ts";
+import { ConvexAnswer } from "../cloud.ts";
 import * as archive from "./archive.ts";
 import * as storage from "./storage.ts";
 import { writeAtomic } from "../files.ts";
@@ -109,6 +113,8 @@ class Problem extends Error {
     message: string,
     /** The connection, not the cloud: waits quietly and tries again. */
     readonly offline = false,
+    /** The cloud there but failing for a moment (a 5xx, 429): this script waits a little and goes again, never kept as a refusal. */
+    readonly temporary = offline,
   ) {
     super(message);
   }
@@ -237,15 +243,18 @@ async function call(route: string, body: Record<string, unknown>): Promise<Recor
       if (read) return relay.json<Record<string, unknown>>("POST", `/v1/cloud/${route}`, body, "Script mode's cloud", 120);
       throw new Problem("Edit's relay doesn't serve Script mode's cloud yet (it needs the update with Writer's cloud).");
     }
-    throw new Problem(message, message.startsWith(relay.UNREACHABLE));
+    throw new Problem(message, message.startsWith(relay.UNREACHABLE), service.isTemporary(error));
   }
 }
 
 /** A `writer:`, `reviews:` or `edit:` function's value; its refusal's code and data. */
 export async function convex(kind: string, path: string, args: Record<string, unknown>): Promise<{ ok: true; value: unknown } | { ok: false; code: string; data: Record<string, unknown> }> {
-  const answer = await call("convex", { kind, path, args });
+  const read = Schema.decodeUnknownOption(ConvexAnswer)(await call("convex", { kind, path, args }));
+  // Not Convex's answer at all: said, never read as an empty value.
+  if (Option.isNone(read)) throw new Problem(`The cloud's answer to ${path} wasn't Convex's.`);
+  const answer = read.value;
   if (answer.status === "success") return { ok: true, value: answer.value ?? null };
-  const data = (answer.errorData ?? {}) as Record<string, unknown>;
+  const data = (Predicate.isObject(answer.errorData) ? answer.errorData : {}) as Record<string, unknown>;
   const code = typeof data.code === "string" ? data.code : "";
   if (code === "") throw new Problem(`The cloud refused ${path}: ${String(data.message ?? answer.errorMessage ?? "unknown error").split("Uncaught ConvexError: ").pop()!.trim()}`);
   return { ok: false, code, data };
@@ -617,6 +626,14 @@ async function tick(data: string, pull: boolean): Promise<number> {
     } catch (error) {
       const problem = error instanceof Problem ? error : new Problem(diag.messageOf(error));
       if (problem.offline) throw problem;
+      // The cloud failing for a moment (a 5xx, 429): this one waits its first backoff and goes again, not kept as a refusal.
+      if (problem.temporary) {
+        backoff.set(id, { until: Date.now() + BACKOFF_FIRST / 2, wait: BACKOFF_FIRST / 2 });
+        diag.warn("writer", `${jobs.named(id, script.title)}: the cloud failed for a moment (${problem.message}); trying again soon`);
+        waiting++;
+        left--;
+        continue;
+      }
       // Refused: this one waits, longer each time, and the rest go on.
       const wait = Math.min((backoff.get(id)?.wait ?? BACKOFF_FIRST / 2) * 2, BACKOFF_MAX);
       backoff.set(id, { until: Date.now() + wait, wait });

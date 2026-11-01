@@ -21,7 +21,11 @@
 
 import * as fs from "node:fs";
 
+import { Effect, Option, Predicate, Schema } from "effect";
+
 import * as diag from "./diag.ts";
+import { inArea, runPromise } from "./effect/runtime.ts";
+import * as service from "./effect/service.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { extension, parent } from "./paths.ts";
@@ -800,22 +804,28 @@ export type ConvexKind = "unreachable" | "relay" | "function";
  * message is what Rust's Display said.
  */
 export class ConvexFailure extends Error {
+  /** Its tag, for `kindOf` (effect/service.ts). */
+  readonly _tag = "ConvexFailure";
   constructor(
     readonly kind: ConvexKind,
     /** The function's own message (unprefixed); the relay's text otherwise. */
     readonly said: string,
     readonly code: string | null = null,
     readonly data: unknown = null,
+    /** The relay's status, when it refused. */
+    readonly status: number | null = null,
+    /** The relay is pausing the database while it moves: offline for minutes, not asked again by the call. */
+    readonly paused = false,
   ) {
     super(kind === "function" ? `Convex: ${said}` : said);
   }
 
-  static unreachable(message: string): ConvexFailure {
-    return new ConvexFailure("unreachable", message);
+  static unreachable(message: string, paused = false): ConvexFailure {
+    return new ConvexFailure("unreachable", message, null, null, null, paused);
   }
 
-  static relay(message: string): ConvexFailure {
-    return new ConvexFailure("relay", message);
+  static relay(message: string, status: number | null = null): ConvexFailure {
+    return new ConvexFailure("relay", message, null, null, status);
   }
 
   static function(message: string, code: string | null, data: unknown): ConvexFailure {
@@ -832,26 +842,60 @@ export function convex(kind: string, path: string, args: unknown): Promise<unkno
   return convexCall(kind, path, args, 120);
 }
 
+// ── Convex as an Effect (docs/plans/2026-11-01-effect.md, round 2, area 3) ──
+//
+// A call's failures are `ConvexFailure`s, as before, now with kinds
+// (effect/service.ts): the relay unreachable or slow is temporary, a
+// conflict or a lock someone holds is the sync's to settle ("later"), any
+// other refusal or function error is permanent. A query, which changes
+// nothing, is asked again after a temporary failure; a mutation is not (its
+// answer may have been lost after it landed: the sync loops look before they
+// save again, 8f67a6cf).
+
+service.kinds({
+  ConvexFailure: (error) => {
+    const failure = error as ConvexFailure;
+    if (failure.kind === "unreachable") return failure.paused ? "later" : "temporary";
+    if (failure.kind === "relay") return failure.status === null ? "permanent" : service.kindOfStatus(failure.status);
+    return failure.code === "conflict" || failure.code === "locked" ? "later" : "permanent";
+  },
+});
+
+/** Convex's answer: a value, or its error with `errorData` (a ConvexError's code and message). */
+export const ConvexAnswer = Schema.Union([
+  Schema.Struct({ status: Schema.Literal("success"), value: Schema.optional(Schema.Unknown) }),
+  Schema.Struct({ status: Schema.Literal("error"), errorMessage: Schema.optional(Schema.String), errorData: Schema.optional(Schema.Unknown) }),
+]);
+
+/** How long a query waits before it's asked again after a temporary failure (tests make it short). */
+export const convexRetry = { baseMs: 500 };
+
+/** A relay failure as the Convex call says it. */
+function asConvexFailure(error: service.ServiceError): ConvexFailure {
+  switch (error._tag) {
+    case "ServiceUnreachable":
+    case "ServiceTimedOut":
+      return ConvexFailure.unreachable(error.message);
+    case "ServiceRefused":
+      // The relay pausing the database while it moves reads as offline: work waits here and is saved after.
+      return error.message.includes("cloud is moving to its new home") ? ConvexFailure.unreachable(error.message, true) : ConvexFailure.relay(error.message, error.status);
+    case "AnswerInvalid":
+      return ConvexFailure.relay(error.message);
+  }
+}
+
+/** One Convex function call through the relay; `timeoutMs` for each request. */
+export const convexEffect = Effect.fn("cloud.convex")(function* (kind: string, path: string, args: unknown, timeoutMs: number) {
+  if (kind !== "query" && kind !== "mutation" && kind !== "action") return yield* Effect.fail(ConvexFailure.relay(`not a Convex function kind: ${kind}`));
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return yield* Effect.fail(ConvexFailure.relay("Convex args must be an object"));
+  const asked = relay.askJson("POST", "/v1/cloud/convex", { kind, path, args }, "cloud storage", timeoutMs).pipe(Effect.mapError(asConvexFailure));
+  const answer = yield* kind === "query" ? asked.pipe(Effect.retry(service.temporaryRetries(`Convex ${path}`, { times: 2, base: convexRetry.baseMs }))) : asked;
+  return yield* Effect.try({ try: () => convexValue(answer), catch: (error) => (error instanceof ConvexFailure ? error : ConvexFailure.relay(diag.messageOf(error))) });
+});
+
 /** [`convex`] with the failure kept apart ([`ConvexFailure`]) and a timeout in seconds. */
 export async function convexCall(kind: string, path: string, args: unknown, timeout: number): Promise<unknown> {
-  if (kind !== "query" && kind !== "mutation" && kind !== "action") {
-    throw ConvexFailure.relay(`not a Convex function kind: ${kind}`);
-  }
-  if (typeof args !== "object" || args === null || Array.isArray(args)) {
-    throw ConvexFailure.relay("Convex args must be an object");
-  }
-  return diag.timeOnAsync("cloud", `cloud: convex ${kind}`, path, async () => {
-    let answer: unknown;
-    try {
-      answer = await relay.json("POST", "/v1/cloud/convex", { kind, path, args }, "cloud storage", timeout);
-    } catch (error) {
-      if (isBug(error)) throw error;
-      const message = diag.messageOf(error);
-      // The relay pausing the database while it moves reads as offline: work waits here and is saved after.
-      throw message.startsWith(relay.UNREACHABLE) || message.includes("cloud is moving to its new home") ? ConvexFailure.unreachable(message) : ConvexFailure.relay(message);
-    }
-    return convexValue(answer);
-  });
+  return diag.timeOnAsync("cloud", `cloud: convex ${kind}`, path, () => runPromise(convexEffect(kind, path, args, timeout * 1000).pipe(inArea("cloud"))));
 }
 
 /** A Convex query (see [`convex`]). */
@@ -870,20 +914,15 @@ export function mutation(path: string, args: unknown): Promise<unknown> {
  * preferred: `errorMessage` wraps it in Convex's "Uncaught ConvexError: …".
  */
 export function convexValue(answer: unknown): unknown {
-  const fields = typeof answer === "object" && answer !== null && !Array.isArray(answer) ? (answer as Record<string, unknown>) : null;
-  const status = fields !== null && typeof fields.status === "string" ? fields.status : null;
-  if (status === "success") return fields!.value === undefined ? null : fields!.value;
-  if (status === "error") {
-    const data = fields!.errorData === undefined ? null : fields!.errorData;
-    const dataFields = typeof data === "object" && data !== null && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
-    const message =
-      (dataFields !== null && typeof dataFields.message === "string" ? dataFields.message : null) ??
-      (typeof fields!.errorMessage === "string" ? fields!.errorMessage : null) ??
-      "unknown error";
-    const code = dataFields !== null && typeof dataFields.code === "string" ? dataFields.code : null;
-    throw ConvexFailure.function(message, code, data);
-  }
-  throw ConvexFailure.relay(`unexpected answer from Convex: ${takeChars(stableStringify(answer), 300)}`);
+  const read = Schema.decodeUnknownOption(ConvexAnswer)(answer);
+  if (Option.isNone(read)) throw ConvexFailure.relay(`unexpected answer from Convex: ${takeChars(stableStringify(answer), 300)}`);
+  const said = read.value;
+  if (said.status === "success") return said.value === undefined ? null : said.value;
+  const data = said.errorData === undefined ? null : said.errorData;
+  const dataFields = Predicate.isObject(data) && !Array.isArray(data) ? (data as Record<string, unknown>) : null;
+  const message = (dataFields !== null && typeof dataFields.message === "string" ? dataFields.message : null) ?? said.errorMessage ?? "unknown error";
+  const code = dataFields !== null && typeof dataFields.code === "string" ? dataFields.code : null;
+  throw ConvexFailure.function(message, code, data);
 }
 
 // ---------------------------------------------------------------------------

@@ -46,22 +46,9 @@ export async function loadAccount(): Promise<Account | null> {
     if (!response.ok) return null;
     const account = (await response.json()) as Account;
     useAccount.setState({ account });
-    // A sign-in already under way that this page didn't start (Edit started it, a code typed at the accounts site):
-    // wait for it here too, or the page shows it waiting until it's reloaded (Nov 1).
-    if (account.signing_in && !account.signed_in && !useAccount.getState().waiting) void followSignIn();
     return account;
   } catch {
     return null;
-  }
-}
-
-/** Waits for a sign-in this page found under way. */
-async function followSignIn(): Promise<void> {
-  useAccount.setState({ waiting: true });
-  try {
-    await waitForSignIn();
-  } finally {
-    useAccount.setState({ waiting: false });
   }
 }
 

@@ -560,11 +560,21 @@ export async function beginDevice(app: App, via: string): Promise<NonNullable<St
       state.problem = "The code ran out before it was used: start again.";
     }
   });
-  polling = runPromise(waiting.pipe(inArea("accounts"))).finally(() => {
+  // However the wait ends (signed in, turned down, run out, stopped), the pages hear it.
+  polling = runPromise(waiting.pipe(Effect.ensuring(announce(app)), inArea("accounts"))).finally(() => {
     polling = null;
   });
   return state.device;
 }
+
+/**
+ * Tells every open page the account as it is now (an `account` event): a
+ * sign-in that landed, was turned down or ran out, wherever it was started (a
+ * page showed a sign-in Edit began itself as waiting until reloaded, Nov 1).
+ */
+export const announce = Effect.fn("accounts.announce")(function* (app: App) {
+  yield* Effect.sync(() => app.store.emit({ type: "account", account: status() }));
+});
 
 /** The device sign-in being waited for, if any (tests wait on it). */
 export function devicePolling(): Promise<void> | null {
@@ -597,10 +607,12 @@ export async function finish(app: App, query: URLSearchParams): Promise<{ ok: bo
     await take(app.store.home, value);
     state.device = null;
     diag.info("accounts", `signed in as ${state.person?.email.split("@")[0] ?? "?"}`);
+    await runPromise(announce(app));
     return { ok: true, message: `Signed in as ${state.person?.email ?? "you"}.` };
   } catch (error) {
     state.problem = `Signing in failed: ${diag.messageOf(error)}`;
     diag.warn("accounts", state.problem);
+    await runPromise(announce(app));
     return { ok: false, message: state.problem };
   }
 }
@@ -633,6 +645,7 @@ export async function signOut(app: App): Promise<void> {
   await keychain.remove(app.store.home);
   forget(null);
   diag.info("accounts", "signed out");
+  await runPromise(announce(app));
 }
 
 /** Opens a URL in the Mac's browser (the sign-in page), never with a secret in it. */

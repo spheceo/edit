@@ -17,7 +17,16 @@ import * as windowFocus from "../src/window_focus.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
 const dir = fs.mkdtempSync(join(os.tmpdir(), "edit-accounts-"));
-const app = { store: { home: join(dir, "home") }, port: 7799 } as unknown as App;
+// The store's events as the server's: what the pages are told (an `account` event when a sign-in lands).
+const listeners = new Set<(event: Record<string, unknown>) => void>();
+const app = {
+  store: {
+    home: join(dir, "home"),
+    emit: (event: Record<string, unknown>) => listeners.forEach((listener) => listener(event)),
+    subscribe: (listener: (event: Record<string, unknown>) => void) => (listeners.add(listener), () => void listeners.delete(listener)),
+  },
+  port: 7799,
+} as unknown as App;
 const challenges = new Map<string, string>();
 const seen: { path: string; body: Record<string, string> }[] = [];
 let refreshes = 0;
@@ -203,8 +212,13 @@ test("a device sign-in (headless, over Tailscale): a code to type, polled throug
   // A second ask while it waits is the same code.
   expect((await accounts.beginDevice(app, "edit serve")).userCode).toBe("BCDF-GHJK");
   expect(devices.length).toBe(1);
+  // Every open page is told when it lands, wherever it was begun (Nov 1: a page left it showing as waiting until reloaded).
+  const told: Record<string, unknown>[] = [];
+  const listen = app.store.subscribe((event) => void (event.type === "account" && told.push(event)));
   await accounts.devicePolling();
+  listen();
   expect(accounts.status()).toMatchObject({ signed_in: true, device: null, person: { email: "someone@gmail.com" } });
+  expect(told).toEqual([{ type: "account", account: expect.objectContaining({ signed_in: true, signing_in: false }) }]);
   expect(Object.values(kept())).toEqual(["refresh-device-aaaaaaaa"]);
 }, 20_000);
 
@@ -213,9 +227,13 @@ test("a device sign-in turned down or run out stops and says so", async () => {
   deviceScript = ["authorization_pending", "access_denied"];
   await accounts.beginDevice(app, "remote");
   expect(devices.at(-1)).toMatch(/; remote\)$/u);
+  const told: Record<string, unknown>[] = [];
+  const listen = app.store.subscribe((event) => void (event.type === "account" && told.push(event)));
   await accounts.devicePolling();
+  listen();
   expect(accounts.status()).toMatchObject({ signed_in: false, device: null, signing_in: false });
   expect(String(accounts.status().problem)).toContain("turned down");
+  expect(told).toEqual([{ type: "account", account: expect.objectContaining({ signed_in: false, signing_in: false, problem: expect.stringContaining("turned down") }) }]);
   accounts.resetForTests();
   deviceScript = ["expired_token"];
   await accounts.beginDevice(app, "remote");

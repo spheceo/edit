@@ -2,6 +2,7 @@ import { explain, type Problem } from "@edit/types/problems";
 import { produce, type Draft } from "immer";
 import { create } from "zustand";
 
+import { useAccount, type Account } from "./account";
 import { applyAgentEvent, openAgent } from "./agent";
 import { api, ApiError, useConnection } from "./api";
 import { readOnly, type CloudStatus } from "./cloud";
@@ -649,6 +650,9 @@ export function connectEvents() {
       window.dispatchEvent(new CustomEvent("edit:transcript", { detail: event.path }));
     } else if (event.type === "agent") {
       applyAgentEvent(event);
+    } else if (event.type === "account") {
+      // The account as the server has it now: a sign-in that landed, was turned down or ran out, wherever it began.
+      useAccount.setState({ account: event.account as Account });
     } else if (event.type === "reset" && project && event.id === project.id) {
       useEditor.setState({ resetAsked: event.state === "asking" });
     } else if (event.type === "resync" && project) {

@@ -193,6 +193,18 @@ export function request(app: App, id: string): Status {
   return status(app, id);
 }
 
+/** Asked in the background (an agent's turn over): queued behind what's asked, never stopping a render or dropping an ask. */
+function requestQuietly(app: App, id: string): void {
+  const live = app.store.get(id);
+  if (live === null) return;
+  const hash = pictureHash(live.project);
+  const done = record(app, id);
+  if (present(app, id, done) && done.hash === hash) return;
+  if (running !== null && running.project === id && running.hash === hash) return;
+  if (!asked.has(id)) asked.set(id, live.rev);
+  if (running === null) void next(app);
+}
+
 /** Stops a render for an export (it carries on once the export is done). */
 export function yieldToExport(app: App): void {
   if (running === null || running.cloud) return;
@@ -359,9 +371,36 @@ function publishSoon(app: App, id: string): void {
   }, 500);
 }
 
-/** Follows exports: a local one stops a render, which carries on once it's done. */
+/** How long an agent's turn has been over before its edit is made smooth (a follow-up turn may start meanwhile); whether it would be made on Modal. Tests change them. */
+export const hooks = { afterTurnMs: 45_000, toCloud: (project: Project) => toCloud(project) };
+
+/**
+ * Follows exports: a local one stops a render, which carries on once it's done.
+ * And the agent: when its turn is over (and no follow-up has started), the
+ * edit is made smooth on Modal by itself, so it plays smoothly when someone
+ * opens it (the user, Oct 31: "too many loading frame issues… the biggest
+ * issue"; a 40-minute edit was only rendered once someone sat watching it).
+ * Never rendered here unasked, nor on a trial server.
+ */
 export function start(app: App): void {
+  const turns = new Map<string, number>();
   app.store.subscribe((event) => {
+    if (event.type === "agent" && event.event === "status" && typeof event.project === "string" && process.env.EDIT_TRIALS !== "1") {
+      const project = event.project;
+      const turn = (turns.get(project) ?? 0) + 1;
+      turns.set(project, turn);
+      if (event.running !== false) return;
+      setTimeout(() => {
+        if (turns.get(project) !== turn) return;
+        const live = app.store.get(project);
+        if (live === null) return;
+        void hooks.toCloud(live.project).then((cloudy) => {
+          if (!cloudy || turns.get(project) !== turn) return;
+          requestQuietly(app, project);
+        });
+      }, hooks.afterTurnMs).unref?.();
+      return;
+    }
     if (event.type !== "export") return;
     if (event.state === "running" && exporting(app)) yieldToExport(app);
     else if (event.state !== "running" && event.state !== "queued") void next(app);

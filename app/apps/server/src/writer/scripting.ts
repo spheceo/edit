@@ -176,8 +176,13 @@ export async function buildOnce(app: App, data: string, id: string, note: string
  * finds, saved narration written straight in. Off with EDIT_SCRIPT_FRESH_EYES=0
  * or a build asked with review: false.
  */
-export const SCRIPT_FRESH_EYES =
-  "Read this script once more with fresh eyes, as the team reviews it before recording, and fix what they would flag. The very first clip: the title's moment, with picture? Every footage block: none past about three minutes (break it where the conversation turns, with a cut-in that adds what the footage can't), no cut-in after less than about a minute of footage, no crumbs, no procedure or sound-only stretch holding the picture back. Every cut-in: does it turn what the viewer just saw rather than describe it again, carry what the footage can't show (the people's life, the motive, what changed), introduce anyone it speaks of? The house rules and the format's shape hold throughout. Change only what needs it; keep what already works, and say in a few lines what you changed and why.";
+export function freshEyesRequest(courtroom: boolean): string {
+  const blocks = courtroom
+    ? "Every footage block: as the courtroom shape paces it (tight early, relaxed later), no cut-in after less than about a minute of footage, no crumbs."
+    : "Every footage block: none past about three minutes (break it where the conversation turns, with a cut-in that adds what the footage can't), no cut-in after less than about a minute of footage, no crumbs, no procedure or sound-only stretch holding the picture back.";
+  const opening = courtroom ? "The intro clips: the moments the title promises?" : "The very first clip: the title's moment, with picture?";
+  return `Read this script once more with fresh eyes, as the team reviews it before recording, and fix what they would flag. ${opening} ${blocks} Every cut-in: does it turn what the viewer just saw rather than describe it again, carry what the footage can't show (the people's life, the motive, what changed), introduce anyone it speaks of? The format's shape and guides hold throughout. Change only what needs it; keep what already works, and say in a few lines what you changed and why.`;
+}
 
 // On by default since loop 7 S2–S3 (four builds with and without: fewer flags, less re-telling, crumbs merged, for about two minutes); EDIT_SCRIPT_FRESH_EYES=0 turns it off, a build may ask with review.
 export const scriptFreshEyes = (asked: boolean | undefined): boolean => asked ?? process.env.EDIT_SCRIPT_FRESH_EYES !== "0";
@@ -213,7 +218,8 @@ export async function buildAndReview(app: App, data: string, id: string, note: s
   checkStopped(job);
   job.stage("Reading it with fresh eyes");
   try {
-    const [again, more] = await reviseWith(data, id, SCRIPT_FRESH_EYES, "Fresh eyes: the final read.", { selected: [], picked: null, playheadMs: null }, true, job);
+    const courtroom = store.read(store.scriptDir(data, id)).kind === "courtroom";
+    const [again, more] = await reviseWith(data, id, freshEyesRequest(courtroom), "Fresh eyes: the final read.", { selected: [], picked: null, playheadMs: null }, true, job);
     return [`${report}\n\nFresh eyes: ${again}`, cost + more];
   } catch (error) {
     checkStopped(job);

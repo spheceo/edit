@@ -491,8 +491,8 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
   }
   const tools = toolsOf(running.turn);
   const workedMs = Date.now() - running.turn.startedAt;
-  runs.delete(id);
   if (folder !== null) fs.rmSync(folder, { recursive: true, force: true });
+  // Still running until its ending is saved: dropped first, a look in between saw it not running with its run still "running".
   try {
     await cloud.change(id, context.by, (idea) => {
       if (idea.run !== null && idea.run.holder !== context.holder) return false;
@@ -502,6 +502,8 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
     });
   } catch (error) {
     diag.warn("ideas", `${id}: saving how the run ended: ${diag.messageOf(error)}`);
+  } finally {
+    runs.delete(id);
   }
 }
 

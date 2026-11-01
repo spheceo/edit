@@ -277,6 +277,36 @@ export function pictureAt(project: Project, at: number): Clip | null {
   return best?.[1] ?? null;
 }
 
+/**
+ * Where the person on screen is at `frame`, for a red quote given no face: a
+ * point on their head (project pixels from the frame's centre), from the faces
+ * already found in the footage there; else why not (none found, or several
+ * of a size, listed so the speaker's can be given).
+ */
+export function speakerFace(project: Project, frame: number): { face: [number, number] } | { error: string } {
+  const clip = pictureAt(project, frame);
+  const media = clip !== null && clip.type === "video" ? mediaOf(project, clip.media) : undefined;
+  if (clip === null || clip.type !== "video" || media === undefined || media.kind !== "video") return { error: "no footage under it to find their face in" };
+  const found = cached(media.path);
+  const fps = fpsOf(project);
+  const index = Math.round(((clip.source_in ?? 0) + ((frame - clip.start) / fps) * (clip.speed ?? 1)) * RATE);
+  let faces: Face[] = [];
+  for (const near of [0, 1, -1, 2, -2]) {
+    faces = found?.get(index + near) ?? [];
+    if (faces.length > 0) break;
+  }
+  const { width: W, height: H } = project.settings;
+  const area = (face: Face) => Math.max(face[2] - face[0], 0) * Math.max(face[3] - face[1], 0);
+  const placed = faces
+    .map((face) => inFrame([media.width, media.height], clip.transform, [W, H], face))
+    .filter((face) => face[2] > -W / 2 && face[0] < W / 2 && face[3] > -H / 2 && face[1] < H / 2)
+    .sort((a, b) => area(b) - area(a));
+  const head = (face: Face): [number, number] => [Math.round((face[0] + face[2]) / 2), Math.round(face[1] + (face[3] - face[1]) * 0.35)];
+  if (placed.length === 0) return { error: "no face found in the footage there" };
+  if (placed.length > 1 && area(placed[1]!) > 0.5 * area(placed[0]!)) return { error: `faces there at ${placed.slice(0, 3).map((face) => `[${head(face).join(", ")}]`).join(" and ")}: give the speaker's` };
+  return { face: head(placed[0]!) };
+}
+
 /** The whole numbers from `from` to `to`, both included. */
 function range(from: number, to: number): number[] {
   const out: number[] = [];

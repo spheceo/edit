@@ -9,6 +9,7 @@ import * as screen from "./desktop_screen.ts";
 import * as framing from "./framing.ts";
 import * as vignettes from "./vignettes.ts";
 import * as looks from "./looks.ts";
+import * as faces from "./faces.ts";
 import * as graphics from "./graphics.ts";
 import * as commentaryGraphics from "./commentary_graphics.ts";
 import * as commentaryAudit from "./commentary_audit.ts";
@@ -420,8 +421,15 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return framing.fillFrame(project, args);
     case "ease_vignettes":
       return vignettes.ease(project, args);
-    case "red_quote":
+    case "red_quote": {
+      // Given no face, the one in the footage under it (E2 and E3: refused for want of one, the agent guessed [0, -230]).
+      if (args.face === undefined) {
+        const found = faces.speakerFace(project, typeof args.start === "number" ? args.start : 0);
+        if ("error" in found) throw new Error(`red_quote needs face: a point on the speaker's head, [x, y] in project pixels from the frame's centre, y down (${found.error})`);
+        return { ...looks.redQuote(project, { ...args, face: found.face }), face_found: found.face };
+      }
       return looks.redQuote(project, args);
+    }
     case "annotate":
       return looks.annotate(project, args);
     case "call":

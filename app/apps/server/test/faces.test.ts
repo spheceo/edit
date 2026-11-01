@@ -218,3 +218,27 @@ test("a caption's rough size wraps at its style's width", () => {
   const [, two] = captionSize("x".repeat(40), style);
   expect(two).toBeCloseTo(2 * 44 * f32(1.15) + 16, 4);
 });
+
+test("a red quote given no face takes the speaker's from the footage under it, or names the faces to choose from", async () => {
+  // E2 and E3 (Nov 1): refused for want of a face, the agent guessed [0, -230].
+  const { applyWith } = await import("../src/edit_plan.ts");
+  const { store, native, cleanup } = fixtureHome("faces-quote");
+  try {
+    const id = store.create("quote", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await store.update(id, "test", (project) => {
+      project.media.push({ id: "m1", name: "room.mp4", path: "/room.mp4", kind: "video", duration: 600, width: 1920, height: 1080, fps: 30, has_audio: true });
+      project.clips.push({ id: "c1", type: "video", media: "m1", track: "v1", start: 0, duration: 600, source_in: 10, speed: 1, color: "blue", fade_in: 0, fade_out: 0, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1, volume_db: 0 } as never);
+    });
+    // 150 frames in is 15 s into the source: sample 30.
+    native.facesCached = () => ({ 30: [[0.6, 0.2, 0.7, 0.4]] });
+    const one = store.checkout(id)!.project;
+    const made = applyWith(one, [{ op: "red_quote", text: "Nobody's seen her", start: 150, end: 260 }], { shutter: null });
+    expect((made.results[0] as Record<string, unknown>).face_found).toEqual([288, -248]);
+    native.facesCached = () => ({ 30: [[0.6, 0.2, 0.7, 0.4], [0.2, 0.25, 0.3, 0.45]] });
+    expect(() => applyWith(store.checkout(id)!.project, [{ op: "red_quote", text: "x", start: 150, end: 260 }], { shutter: null })).toThrow(/faces there at (\[288, -248\] and \[-480, -194\]|\[-480, -194\] and \[288, -248\]): give the speaker's/);
+    native.facesCached = () => null;
+    expect(() => applyWith(store.checkout(id)!.project, [{ op: "red_quote", text: "x", start: 150, end: 260 }], { shutter: null })).toThrow(/red_quote needs face.*no face found/);
+  } finally {
+    cleanup();
+  }
+});

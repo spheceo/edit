@@ -129,3 +129,23 @@ test("a script's research and case names go to the edit made from it, so neither
     cleanup();
   }
 });
+
+test("a script deleted on this Mac leaves Home's list at once, before its delete reaches the cloud (Nov 1: its row stayed until the next sync)", async () => {
+  const { MockServer } = await import("./mocks/server.ts");
+  const writerCloud = await import("../src/writer/cloud.ts");
+  const { list } = await import("../src/writer_handoff.ts");
+  const mock = MockServer.start();
+  const restore = mock.useEnv({ EDIT_RELAY_TOKEN: "cloud-token" });
+  const { app, cleanup } = fixtureHome("handoff-deleted");
+  try {
+    const row = (scriptId: string) => ({ scriptId, title: scriptId, rev: 1, updatedAt: 1, summary: {} });
+    mock.on("POST", "/v1/cloud/convex", () => Response.json({ status: "success", value: [row("kept"), row("gone")] }));
+    const data = writerStore.dataDir(app.store.home);
+    writerCloud.deleted(data, "gone");
+    expect((await list(app)).map((one) => one.id)).toEqual(["kept"]);
+  } finally {
+    cleanup();
+    restore();
+    mock.stop();
+  }
+});

@@ -24,6 +24,7 @@ import * as kinds from "./kinds.ts";
 import * as caseNames from "./names.ts";
 import { withDocuments } from "./writer/casefiles.ts";
 import * as writerResearch from "./writer/research.ts";
+import * as writerCloud from "./writer/cloud.ts";
 import * as writerStore from "./writer/store.ts";
 import type { Router } from "./http/router.ts";
 import type { Creator, ScriptBlock, Style } from "./model.ts";
@@ -250,6 +251,8 @@ export async function list(
   } catch {
     // No scripts here yet.
   }
+  // Deleted here, the cloud not told yet (its sync does it in a moment): gone from the list already.
+  for (const id of writerCloud.beingDeleted(writerStore.dataDir(app.store.home))) sources.add(id);
   return (Array.isArray(rows) ? rows : [])
     .filter((row) => (row.deletedAt === undefined || row.deletedAt === null) && !sources.has(String(row.scriptId ?? "")))
     .map((row) => ({

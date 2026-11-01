@@ -134,9 +134,9 @@ ${from + 4}. Footage blocks and cut-ins through the case in source order, ending
 
 const whenShape = (): string => `${CARD} This is a standard compilation: its title opens with "When", and every case in it is an example of that title. Unless the producer asks for something else, assemble it in this shape:
 The opening, about the whole compilation:
-1. Intro clips: two to four very short clips, 1-8 seconds each, of the most striking moments, taken from different cases. A reused case whose video was imported counts as a case here: its picked moments may open the video too. The first must connect with the title: find the title's keywords (who it is about, what happens, to whom) and open on a moment that shows them. Never open on something far from what the title promises.
+1. Intro clips: two to four very short clips, 1-8 seconds each, of the most striking moments of one case, the one that shows the title best, played in its story order (the crime or the accusation first, then the moment that pays off the title). A reused case whose video was imported counts as a case here: its picked moments may open the video too. The first must connect with the title: find the title's keywords (who it is about, what happens, to whom) and open on a moment that shows them. Never open on something far from what the title promises.
 2. Cut-in (the hook).
-3. Intro clips: two to four more, from cases not yet shown where possible.
+3. Intro clips: two to four more, from one other case, also in its story order (the producers: "Reorganize the order of the clips on the whole opening in a way that the clips from the same case shows in sequence"; "the first clip of every line showing… the crime… and the two next clips showing them thinking they will go home").
 4. Cut-in (the title line, "These were the moments when…").
 Then each case, one per video, in the order of the videos:
 ${caseSteps(5)}

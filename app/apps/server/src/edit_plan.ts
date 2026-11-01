@@ -74,6 +74,8 @@ export interface Assets {
   shutter: Shutter | null;
   /** The Windows screen's wallpaper and window frames (desktop ops, cover_cut_in desktop and picture shots). */
   screen?: screen.Art | null;
+  /** What a map's render measured, by its media (place_label given no track): its JSON is kept by the render's file name, which a cloud copy's path no longer is. */
+  mapMeasured?: (mediaId: string) => graphics.Measured | null;
 }
 
 export interface Shutter {
@@ -488,7 +490,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
     case "title_collage":
       return graphics.titleCollage(project, args);
     case "place_label":
-      return graphics.placeLabel(project, args);
+      return graphics.placeLabel(project, args, assets.mapMeasured);
     case "markers":
       return markers.edit(project, args);
     case "blur_marks":

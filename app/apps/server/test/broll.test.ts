@@ -456,3 +456,36 @@ test("leftover map Chromes: orphans and this process's own, never another Edit's
   ].join("\n");
   expect(broll.leftoverMaps(listing, 500)).toEqual([101, 102]);
 });
+
+test("a place label on a cloud project's map, or its slowed copy, is pinned from the JSON its render keeps by name", async () => {
+  // E3, Nov 1: once the map was up in the cloud its media pointed at the cloud copy, away from the JSON beside the render.
+  const { mapMeasuredHere } = await import("../src/edit_tools.ts");
+  const { applyWith } = await import("../src/edit_plan.ts");
+  const { app, cleanup } = fixtureHome("map-label-cloud");
+  try {
+    const id = app.store.create("map", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const maps = join(app.store.uploadsDir(id), "maps");
+    fs.mkdirSync(maps, { recursive: true });
+    // The building moving right a pixel a frame, over 300 frames.
+    fs.writeFileSync(join(maps, "map-d7db1a229fc4.json"), JSON.stringify({ track: Array.from({ length: 300 }, (_, i) => [1100 + i, 400, 1200 + i, 600]) }));
+    await app.store.update(id, "test", (project) => {
+      project.media.push({ id: "m1", name: "map-d7db1a229fc4.mp4", path: "/cache/cloud/proxies/sha256/ab.mp4", kind: "video", duration: 10, width: 1920, height: 1080, fps: 30, has_audio: false });
+      project.media.push({ id: "m2", name: "map-d7db1a229fc4-0.5x-e51706aaae98.mp4", path: "/cache/cloud/proxies/sha256/cd.mp4", kind: "video", duration: 20, width: 1920, height: 1080, fps: 30, has_audio: false });
+      project.clips.push({ id: "c1", type: "video", media: "m1", track: "v1", start: 0, duration: 300, source_in: 0, speed: 1, color: "blue", fade_in: 0, fade_out: 0, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1, volume_db: 0 } as never);
+      project.clips.push({ id: "c2", type: "video", media: "m2", track: "v1", start: 300, duration: 600, source_in: 0, speed: 1, color: "blue", fade_in: 0, fade_out: 0, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1, volume_db: 0 } as never);
+    });
+    const project = app.store.checkout(id)!.project;
+    expect(mapMeasuredHere(app, project, "m2")!.stretch).toBe(2);
+    const assets = { shutter: null, mapMeasured: (media: string) => mapMeasuredHere(app, project, media) };
+    const applied = applyWith(project, [
+      { op: "place_label", text: "Solie Avenue", start: 100, end: 200, map: "c1" },
+      { op: "place_label", text: "Solie Avenue", start: 500, end: 600, map: "c2" },
+    ], assets);
+    const [onMap, onSlowed] = (applied.results as string[]).map((made) => project.clips.find((one) => one.id === made)!) as VideoClip[];
+    // 100 frames into the map the building's middle is 1250 - 960 = 290 px right; 200 frames into the half-speed copy is the map's frame 100 too.
+    expect(Math.abs(onMap!.transform.x - 290)).toBeLessThan(1.01);
+    expect(Math.abs(onSlowed!.transform.x - 290)).toBeLessThan(1.01);
+  } finally {
+    cleanup();
+  }
+});

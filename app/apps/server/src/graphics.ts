@@ -187,19 +187,32 @@ export function measuredTrack(info: unknown, width: number, height: number, fps:
   return { building: track[0] ?? placeBox(record.building), track };
 }
 
-/** A map clip's measured track, from the JSON its render keeps beside its footage (or beside its first frame while it renders); null when this Mac has neither. */
-function mapMeasured(project: Project, mediaId: string | undefined): Record<string, number>[] | null {
+/** What a map's page measured (its JSON), and how many of the media's frames each of the map's frames is (a slowed copy plays it longer). */
+export interface Measured {
+  info: unknown;
+  stretch: number;
+}
+
+/** A map clip's measured track: from `lookup` (by the render's file name), else the JSON beside its footage (or beside its first frame while it renders); null when this Mac has neither. */
+function mapMeasured(project: Project, mediaId: string | undefined, lookup?: (mediaId: string) => Measured | null): Record<string, number>[] | null {
   const media = mediaId === undefined ? undefined : mediaOf(project, mediaId);
-  if (media === undefined || typeof media.path !== "string" || media.path === "") return null;
+  if (media === undefined) return null;
   let info: unknown;
-  try {
-    info = serdeParse(fs.readFileSync(withExtension(media.path, "json"), "utf8"));
-  } catch {
-    return null;
+  let stretch = 1;
+  const found = lookup?.(media.id) ?? null;
+  if (found !== null) [info, stretch] = [found.info, found.stretch];
+  else {
+    if (typeof media.path !== "string" || media.path === "") return null;
+    try {
+      info = serdeParse(fs.readFileSync(withExtension(media.path, "json"), "utf8"));
+    } catch {
+      return null;
+    }
   }
   // A first frame (a still) has no rate of its own: the map renders at the project's.
   const { building, track } = measuredTrack(info, project.settings.width, project.settings.height, media.fps || fpsOf(project));
-  return track.length > 0 ? track : building !== null ? [building] : null;
+  const stretched = track.map((point) => ({ ...point, frame: Math.round(point.frame! * stretch) }));
+  return stretched.length > 0 ? stretched : building !== null ? [building] : null;
 }
 
 /**
@@ -210,7 +223,7 @@ function mapMeasured(project: Project, mediaId: string | undefined): Record<stri
  * and y keyed at every tracked frame, linear), fading in with the marker's
  * reveal and out 8 frames before `end`.
  */
-export function placeLabel(project: Project, args: Args): string {
+export function placeLabel(project: Project, args: Args, lookup?: (mediaId: string) => Measured | null): string {
   const text = textOf(args);
   if (text === null) throw new Error("place_label needs text (the street or place, no city or state)");
   const [start, end] = span(args, "place_label");
@@ -219,7 +232,7 @@ export function placeLabel(project: Project, args: Args): string {
   if (map.type !== "video") throw new Error("place_label: map must be the map's video clip");
   const trackGiven = Array.isArray(args.building_track) ? (args.building_track as unknown[]) : [];
   // Given none, the map's own: what its render measured (E2, Oct 31: a label from e-code was refused for want of the track map_view had answered with).
-  const points: unknown[] = trackGiven.length > 0 ? trackGiven : args.building !== undefined ? [args.building] : (mapPoints(project, map.media) ?? []);
+  const points: unknown[] = trackGiven.length > 0 ? trackGiven : args.building !== undefined ? [args.building] : (mapPoints(project, map.media, lookup) ?? []);
   const pinned = pin(project, map, start, end, text, points);
   if (pinned === null) throw new Error("place_label: this map's building track isn't on this Mac; give building_track (or building) from map_view");
   const k = project.settings.height / 1080;
@@ -244,8 +257,8 @@ export function placeLabel(project: Project, args: Args): string {
 const WAITING = /-wait-first\.jpg$/u;
 
 /** The points a label on a map is pinned to: its measured track, or the middle while it's still waiting for its first frame; null when this Mac has neither. */
-function mapPoints(project: Project, mediaId: string | undefined): unknown[] | null {
-  const measured = mapMeasured(project, mediaId);
+function mapPoints(project: Project, mediaId: string | undefined, lookup?: (mediaId: string) => Measured | null): unknown[] | null {
+  const measured = mapMeasured(project, mediaId, lookup);
   if (measured !== null) return measured;
   const path = mediaId === undefined ? undefined : mediaOf(project, mediaId)?.path;
   return typeof path === "string" && WAITING.test(path) ? [{ x: 0, top: Math.round(-0.06 * project.settings.height), frame: 0 }] : null;
@@ -309,8 +322,8 @@ function pin(project: Project, map: Clip, start: number, end: number, text: stri
  * measured, now that it's in (labels placed while the map waited for its
  * first frame sat over the middle). Returns how many moved.
  */
-export function repinPlaceLabels(project: Project, mediaId: string): number {
-  const points = mapMeasured(project, mediaId);
+export function repinPlaceLabels(project: Project, mediaId: string, lookup?: (mediaId: string) => Measured | null): number {
+  const points = mapMeasured(project, mediaId, lookup);
   if (points === null) return 0;
   let moved = 0;
   for (const map of project.clips) {

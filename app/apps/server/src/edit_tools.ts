@@ -8,6 +8,7 @@
 // with care.
 
 import * as fs from "node:fs";
+import type { Measured } from "./graphics.ts";
 
 import type { App } from "./app.ts";
 import { clipColorFrom, clipFrom, defaultTextAnimation, defaultTextStyle, defaultTransform, keyframesFrom, textAnimationFrom, textStyleFrom, transformFrom } from "./clips.ts";
@@ -2190,9 +2191,29 @@ export function hearWords(app: App, project: Project, operations: Json[]): void 
   for (const operation of wanting) operation.heard = frames;
 }
 
+/**
+ * What a map's render measured, read by its file's name from this project's maps folder: a cloud project's map points
+ * at its cloud copy once it's up, away from the JSON beside the render (E3, Nov 1: place_label refused a map made here).
+ * A slowed copy (`map-<key>-0.78x-….mp4`) is the same map played longer.
+ */
+export function mapMeasuredHere(app: App, project: Project, mediaId: string): Measured | null {
+  const media = project.media.find((one) => one.id === mediaId);
+  const named = /^map-(\w+?)(?:-wait)?(?:-first\.jpg|-(\d+(?:\.\d+)?)x-\w+\.mp4|\.mp4)$/u.exec(media?.name ?? "");
+  if (media === undefined || named === null) return null;
+  const maps = join(app.store.uploadsDir(project.id), "maps");
+  for (const file of [`map-${named[1]}.json`, `map-${named[1]}-first.json`]) {
+    try {
+      return { info: serdeParse(fs.readFileSync(join(maps, file), "utf8")), stretch: named[2] !== undefined ? 1 / Number(named[2]) : 1 };
+    } catch {
+      // The next, or none.
+    }
+  }
+  return null;
+}
+
 export async function planAssets(app: App, project: Project, operations: Json[]): Promise<[editPlan.Assets, seams.Made[]]> {
   const needs = editPlan.needs(operations, project);
-  const assets: editPlan.Assets = { shutter: null };
+  const assets: editPlan.Assets = { shutter: null, mapMeasured: (mediaId) => mapMeasuredHere(app, project, mediaId) };
   const made: seams.Made[] = [];
   const home = app.store.home;
   if (needs.shutter) {

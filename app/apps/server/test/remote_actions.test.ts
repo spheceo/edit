@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { Script } from "@edit/types/writer";
 
 import type { App } from "../src/app.ts";
-import { busyWith, problems, RESTART, resume, UNSTICK } from "../src/remote_actions.ts";
+import { busyWith, lastUsed, problems, RESTART, resume, UNSTICK } from "../src/remote_actions.ts";
 import * as store from "../src/writer/store.ts";
 
 /** An Edit home with one script in Script mode's folder, and no projects. */
@@ -75,8 +75,18 @@ describe("remote support's other actions", () => {
       "2026-10-26 23:20:02.000 ERROR [export] long ago",
     ];
     expect(problems(lines, now)).toEqual([
-      "    2× last 2026-10-29 23:10:01 · ERROR [export] p1793132820736-211: export failed after 40 s: decoder stalled at 88",
-      "    1× last 2026-10-29 23:20:01 · WARN [cloud] reading edit/proxies/a.mp4 in blocks: R2 answered 503 to a block read",
+      "    2× (2 since Edit started) last 2026-10-29 23:10:01 · ERROR [export] p1793132820736-211: export failed after 40 s: decoder stalled at 88",
+      "    1× (1 since Edit started) last 2026-10-29 23:20:01 · WARN [cloud] reading edit/proxies/a.mp4 in blocks: R2 answered 503 to a block read",
     ]);
+    // Edit started again at 23:15 (Nov 1: a fixed warning's two days read as a live flood): what's still happening comes first.
+    expect(problems(lines, now, Date.parse("2026-10-29T23:15:00"))).toEqual([
+      "    1× (1 since Edit started) last 2026-10-29 23:20:01 · WARN [cloud] reading edit/proxies/a.mp4 in blocks: R2 answered 503 to a block read",
+      "    2× (none since Edit started) last 2026-10-29 23:10:01 · ERROR [export] p1793132820736-211: export failed after 40 s: decoder stalled at 88",
+    ]);
+  });
+
+  test("diagnostics say when the window was last used, or that it wasn't since Edit started", () => {
+    expect(lastUsed(null)).toBe("last used: not since Edit started (no key, click or scroll in its window)");
+    expect(lastUsed(1_000, 1_000 + 3 * 60_000)).toMatch(/^last used: 3 min.* ago/);
   });
 });

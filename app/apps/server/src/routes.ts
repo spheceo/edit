@@ -52,6 +52,7 @@ import * as writer from "./writer/routes.ts";
 import * as ideas from "./ideas/routes.ts";
 import * as later from "./later.ts";
 import * as lessonInbox from "./lesson_inbox.ts";
+import * as presence from "./presence.ts";
 import * as devProjects from "./dev_projects.ts";
 import * as beta from "./beta.ts";
 import { BUILD, VERSION } from "./version.ts";
@@ -95,6 +96,7 @@ export function buildRouter(): Router<App> {
   ideas.routes(router);
   later.routes(router);
   lessonInbox.routes(router);
+  presence.routes(router);
   devProjects.routes(router);
   beta.routes(router);
   archive.routes(router);

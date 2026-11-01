@@ -13,10 +13,13 @@ import { IdeaScreen } from "./ideas/page";
 import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
 import { loadBeta, useBeta } from "./lib/beta";
+import { watchPresence } from "./lib/presence";
 import { usePath } from "./lib/route";
 
 export function App() {
   const path = usePath();
+  // How long the window has been idle, for diagnostics (lib/presence.ts).
+  useEffect(() => watchPresence(), []);
   const projectId = path.match(/^\/p\/([\w-]+)/)?.[1];
   // Script mode: /scripts (the library) and /scripts/<id> (a script), one screen that keeps its state across them.
   const scripts = path === "/scripts" || path.startsWith("/scripts/");

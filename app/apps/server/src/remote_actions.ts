@@ -26,6 +26,7 @@ import { importing } from "./drive_import.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
 import { join } from "./paths.ts";
+import * as presence from "./presence.ts";
 import * as problemReports from "./problem_reports.ts";
 import * as relay from "./relay.ts";
 import * as script from "./script.ts";
@@ -109,9 +110,20 @@ async function attention(app: App, setup: { id: string; ok: boolean; title: stri
 }
 
 /** Every recurring warning and error of the last two days: grouped by what it says (numbers, ids and quotes aside), each with its count, latest time and latest example. */
-export function problems(lines: string[], now = Date.now()): string[] {
+/** "last used: 3 min ago (…)": when someone last used the window (presence.ts). */
+export function lastUsed(at: number | null, now = Date.now()): string {
+  return at === null ? "last used: not since Edit started (no key, click or scroll in its window)" : `last used: ${diag.human(Math.max(0, now - at))} ago (a key, click or scroll in its window)`;
+}
+
+/**
+ * The warnings and errors of the last two days, each kind once with its count,
+ * and how many came since Edit last started (`started`): a kind with none since
+ * is history, listed after those still happening (Nov 1: two days of a warning
+ * already fixed on the running build read as a live flood).
+ */
+export function problems(lines: string[], now = Date.now(), started = 0): string[] {
   const since = now - 48 * 3600_000;
-  const groups = new Map<string, { count: number; last: string; example: string }>();
+  const groups = new Map<string, { count: number; recent: number; last: string; example: string }>();
   for (const line of lines) {
     const found = /^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\.\d+ (ERROR|WARN) \[([\w-]+)\] (.*)$/.exec(line);
     if (found === null || Date.parse(found[1]!.replace(" ", "T")) < since) continue;
@@ -122,13 +134,17 @@ export function problems(lines: string[], now = Date.now()): string[] {
       .replace(/\b[0-9a-f]{12,}\b/gi, "<id>")
       .replace(/\d+(\.\d+)?/g, "#")
       .slice(0, 160)}`;
-    const group = groups.get(shape) ?? { count: 0, last: "", example: "" };
+    const group = groups.get(shape) ?? { count: 0, recent: 0, last: "", example: "" };
     group.count++;
+    if (Date.parse(found[1]!.replace(" ", "T")) >= started) group.recent++;
     group.last = found[1]!;
     group.example = `${found[2]} [${found[3]}] ${found[4]!.slice(0, 300)}`;
     groups.set(shape, group);
   }
-  return [...groups.values()].sort((a, b) => b.count - a.count || b.last.localeCompare(a.last)).slice(0, 40).map((group) => `${String(group.count).padStart(5)}× last ${group.last} · ${group.example}`);
+  return [...groups.values()]
+    .sort((a, b) => Number(b.recent > 0) - Number(a.recent > 0) || b.count - a.count || b.last.localeCompare(a.last))
+    .slice(0, 40)
+    .map((group) => `${String(group.count).padStart(5)}× (${group.recent > 0 ? `${group.recent} since Edit started` : "none since Edit started"}) last ${group.last} · ${group.example}`);
 }
 
 /** The work under way: exports, imports, agent turns, Claude on scripts, the scripts' cloud. */
@@ -241,13 +257,14 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
   const needs = await attention(app, setup, relayOk);
   let errors: string[] = [];
   try {
-    errors = problems(fs.readFileSync(join(app.store.home, "logs", "edit.log"), "utf8").split("\n").slice(-200_000));
+    errors = problems(fs.readFileSync(join(app.store.home, "logs", "edit.log"), "utf8").split("\n").slice(-200_000), Date.now(), Date.now() - diag.uptime());
   } catch {
     errors = [];
   }
   return [
     why,
     `Edit ${BUILD} · ${diag.osName()} ${diag.archName()} · up ${diag.human(diag.uptime())}`,
+    lastUsed(presence.lastUsedAt()),
     "",
     "Needs attention:",
     ...(needs.length > 0 ? needs : ["nothing found"]),

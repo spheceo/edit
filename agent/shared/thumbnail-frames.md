@@ -13,10 +13,17 @@ Then take, on purpose (the user: "we pick the base frame e.g outside the house, 
 
 "the ideas for how to do this will come from the reference images we're giving to the agent": name the approved card you follow in `base_card`. With a base frame it goes on the card as the reference, after the frames.
 
-`subject_from: "video"` with the frames in `frames`, by the time `grab_frames` gave back, and the guide names each one:
+`subject_from: "video"` with the frames in `frames` (each by the time `grab_frames` gave back, the base first). The card shows them in that order, so the guide names each by its place, never its time (the user: "it should rather say, "use the first frame here..." it should know the order in which the frames will be shown to the user"):
 
-`use the frame at 0:41 as the base. take the father from the frame at 4:12 and stand him at the front door. have the father look just above the camera. add “HE KNEW” text.`
+`use the first frame as the base. take the father from the second frame and stand him at the front door. have the father look just above the camera.`
 
-`use the frame at 2:05 as the base with the daughter in it. have the daughter look bruised and sad. remove the video's subtitles. change the current “CAUGHT” text to “SHE TOLD”.`
+`use the first frame with the daughter in it. have the daughter look bruised and sad, with her mouth a bit open, almost like she is talking.`
 
-Here a frame of the case's video is the base (the editorial guide's "never alternative bases" is about pictures from outside the video). The scene elements and edits come from what the frame and the reference show, as the inspection above says. Many reposted videos have the channel's captions burned in: choose a moment between spoken lines when you can; otherwise say to remove the video's subtitles. When no frame shows the subject clearly (always masked, out of shot, too dark), say so in one line and use the original thumbnail or "find an image of…" as above.
+How the team says it (the user, Nov 2, on the first try's guide):
+
+- **Never into the camera.** "we never want subjects looking into the camera, instead we have them "look into the eyes of the POV" or "look just above the camera"".
+- **What the editor can make, not the moment.** Not "mid-sentence": "with her mouth a bit open, almost like she is talking".
+- **Not the clean-up.** "no need to say, remove subtitles or remove overlays as we do this anyway": the burned-in captions, the bodycam's stamp and the channel's logo always go; the guide never mentions them.
+- **Text rarely, and never in capitals.** "we rarely ever have all caps for our text and we rarely ever have text to begin with": most of these thumbnails have no text. Add a caption only when the picture can't carry the title's hook by itself, in its words' own case (`add “She knew” text.`).
+
+Here a frame of the case's video is the base (the editorial guide's "never alternative bases" is about pictures from outside the video). The scene elements and edits come from what the frame and the reference show, as the inspection above says. When no frame shows the subject clearly (always masked, out of shot, too dark), say so in one line and use the original thumbnail or "find an image of…" as above.

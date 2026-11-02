@@ -91,12 +91,12 @@ test("titles keep the channel's rules: no suicide, no dash split, no quoted line
 
 test("a guide is Repack's lowercase edits to the base with its caption in quotes, and a summary one compact paragraph", () => {
   expect(cleanGuide("Make the man a middle-aged man with a shaved head")).toBe("make the man a middle-aged man with a shaved head");
-  expect(guideProblem("make the man a middle-aged man with a shaved head in a grey t-shirt. have the suspect fold his arms. change the current “CAUGHT” text to “HE KNEW”.")).toBeNull();
+  expect(guideProblem("make the man a middle-aged man with a shaved head in a grey t-shirt. have the suspect fold his arms. change the current “CAUGHT” text to “He knew”.")).toBeNull();
   expect(guideProblem("make her look like Dina Thetford")).toContain("Dina");
   expect(guideProblem("make the man older. use a close-up camera angle.")).toContain("camera");
   expect(guideProblem("x".repeat(601))).toContain("600");
   // Where the subject's picture comes from, as the tool was told (the user, Nov 1).
-  expect(guideProblem("find an image of the woman. make the woman a heavyset woman. keep her seated on the porch. change the current “He abused me” text to “HE USED A BELT”.")).toBeNull();
+  expect(guideProblem("find an image of the woman. make the woman a heavyset woman. keep her seated on the porch. change the current “He abused me” text to “He used a belt”.")).toBeNull();
   expect(sourceProblem("find an image of the woman. make her older.", "find")).toBeNull();
   expect(sourceProblem("take the woman from the original thumbnail. make her older.", "case_thumbnail")).toBeNull();
   expect(sourceProblem("make the woman older.", "find")).toContain("find an image");
@@ -377,15 +377,24 @@ test("the video's times, storyboard and stream are read from yt-dlp's formats, a
   expect(frames.sharpness(edges, 40, 30)).toBeGreaterThan(frames.sharpness(flat, 40, 30));
 });
 
-test("a guide with frames names each one by its time, and the subject's frame when it takes the subject from the video", () => {
-  const guide = "use the frame at 0:41 as the base. take the father from the frame at 4:12 and stand him at the front door. have the father look just above the camera. remove the video's subtitles. add “HE KNEW” text.";
-  expect(guideProblem(guide)).toContain("more than");
+test("a guide with frames names each by its place on the card, and keeps the team's way of saying it", () => {
+  const guide = "use the first frame as the base. take the father from the second frame and stand him at the front door. have the father look just above the camera.";
   expect(guideProblem(guide, 2)).toBeNull();
   expect(sourceProblem(guide, "video")).toBeNull();
   expect(sourceProblem("find an image of the father.", "video")).toContain("which frame");
-  expect(framesProblem(guide, ["0:41", "4:12"])).toBeNull();
-  expect(framesProblem(guide, ["0:41"])).toContain("4:12, which isn't in frames");
-  expect(framesProblem(guide, ["0:41", "4:12", "5:00"])).toContain("doesn't name the frame at 5:00");
+  expect(framesProblem(guide, 2)).toBeNull();
+  expect(framesProblem(guide, 3)).toContain("what the third frame is for");
+  expect(framesProblem(guide, 1)).toContain("names the second frame, but the card has one frame");
+  expect(framesProblem("use the frame at 3:09 as the base.", 1)).toContain("by its time");
+  // Sphe's notes on the first try (Nov 2).
+  expect(guideProblem("use the first frame. have the woman in the white top look into the camera.", 1)).toContain("look into the eyes of the POV");
+  expect(guideProblem("use the first frame. have her look into the eyes of the POV.", 1)).toBeNull();
+  expect(guideProblem("use the first frame. have her talking mid-sentence.", 1)).toContain("mouth a bit open");
+  expect(guideProblem("use the first frame. remove the video's subtitles.", 1)).toContain("the editor always does");
+  expect(guideProblem("use the first frame. add “SHE ADMITTED IT” text.", 1)).toContain("“She admitted it”");
+  expect(guideProblem("use the first frame. add “She admitted it” text.", 1)).toBeNull();
+  // Repack's base caption is quoted as it is on the base.
+  expect(guideProblem("find an image of the man. remove the current “CAUGHT” text.")).toBeNull();
 });
 
 test("a repackaging looks through the case's video and puts the frames its guide takes on the card, the base frame first", async () => {
@@ -419,9 +428,10 @@ test("a repackaging looks through the case's video and puts the frames its guide
       { name: "grab_frames", arguments: { times: ["0:02", "0:08", "0:30"] } },
       { name: "grab_frames", arguments: { times: ["0:02", "0:08"] } },
       { name: "save_titles", arguments: { titles: ["Dad Realizes What The Dress Really Meant", "Mom Realizes Her Made Up Story Isn't Making Sense", "Mom Has No Idea Detectives Found The Dress"] } },
-      { name: "save_thumbnail_guide", arguments: { guide: "use the frame at 0:02 as the base. take the mom from the frame at 0:08. add “SHE KNEW” text.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:08", use: "subject" }] } },
-      { name: "save_thumbnail_guide", arguments: { guide: "use the frame at 0:02 as the base. take the mom from the frame at 0:09. add “SHE KNEW” text.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:09", use: "subject", who: "the mom" }] } },
-      { name: "save_thumbnail_guide", arguments: { guide: "use the frame at 0:02 as the base. take the mom from the frame at 0:08. add “SHE KNEW” text.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:08", use: "subject", who: "the mom" }] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "use the first frame as the base. take the mom from the second frame.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:08", use: "subject" }] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "use the first frame as the base. take the mom from the second frame.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:09", use: "subject", who: "the mom" }] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "use the first frame as the base. take the mom from the second frame.", subject_from: "video", frames: [{ at: "0:08", use: "subject", who: "the mom" }, { at: "0:02", use: "base" }] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "use the first frame as the base. take the mom from the second frame.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:08", use: "subject", who: "the mom" }] } },
     ]);
     await run.repackage(context(), "i11-test");
     const now = await settled("i11-test");
@@ -433,14 +443,15 @@ test("a repackaging looks through the case's video and puts the frames its guide
     expect(seen.answers[4]).toContain('say who (who: "the father")');
     // A time it didn't give back, past a second of every frame grabbed.
     expect(seen.answers[5]).toContain("No frame at 0:09");
-    expect(now.thumbnailGuide).toBe("use the frame at 0:02 as the base. take the mom from the frame at 0:08. add “SHE KNEW” text.");
-    expect(now.images.map((one) => [one.from, one.name, one.frame?.use])).toEqual([
-      ["frame", "frame 0:02 · base", "base"],
-      ["frame", "frame 0:08 · the mom", "subject"],
+    expect(seen.answers[6]).toContain("The base frame goes first");
+    expect(now.thumbnailGuide).toBe("use the first frame as the base. take the mom from the second frame.");
+    expect(now.images.map((one) => [one.from, one.name.replace(/ · 0:0\d$/, ""), one.frame?.use])).toEqual([
+      ["frame", "first frame · base", "base"],
+      ["frame", "second frame · the mom", "subject"],
     ]);
     // On R2, as the person's own pictures are, so the board can attach them.
     for (const one of now.images) expect(mock.objects.get(one.key!)?.slice(0, 2)).toEqual(new Uint8Array([0xff, 0xd8]));
-    expect(seen.answers[6]).toContain("on the frame at 0:02, with 2 frames on the card");
+    expect(seen.answers[7]).toContain("on the first frame, with 2 frames on the card");
   } finally {
     Object.assign(frames.looks, before);
   }

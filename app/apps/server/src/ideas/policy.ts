@@ -93,6 +93,19 @@ export function guideProblem(guide: string, frames = 0): string | null {
   const named = outside.match(/\b[A-Z][a-z]+\b/g);
   if (named !== null) return `has ${named.slice(0, 3).join(", ")} in capitals: write it in lowercase (only the caption, in quotes, keeps its own)`;
   if (/\b(?:crop|close-?up|camera angle|lighting|lens|zoom)\b/i.test(outside)) return "gives camera, crop or lighting directions, which a guide never does";
+  // Sphe, Nov 2: "we never want subjects looking into the camera, instead we have them "look into the eyes of the POV" or "look just above the camera"".
+  if (/\b(?:look|looks|looking|stare|stares|staring|gaze|gazes|gazing)\s+(?:straight\s+|directly\s+|right\s+)?(?:in(?:to)?|at|down)\s+(?:the\s+)?(?:camera|lens|viewer)\b/i.test(outside))
+    return "has the subject looking into the camera, which the team never wants: have them “look into the eyes of the POV” or “look just above the camera”";
+  // "instead of mid-sentance we can say "with her mouth a bit open, almost like she is talking"": what the editor can make.
+  if (/\bmid-?sentence\b/i.test(outside)) return "says mid-sentence: say what the editor can make (“with her mouth a bit open, almost like she is talking”)";
+  // "no need to say, remove subtitles or remove overlays as we do this anyway".
+  if (/\b(?:remove|delete|take out|hide|blur|clean up)\b[^.]*\b(?:subtitles?|captions?|overlays?|watermarks?|timestamps?|logos?)\b/i.test(outside))
+    return "says to remove the video's subtitles or overlays: the editor always does, so leave it out";
+  // "we rarely ever have all caps for our text and we rarely ever have text to begin with": a caption Claude adds is in its words' own case.
+  for (const added of text.matchAll(/\b(?:add|to)\s+[“"]([^”"]+)[”"]/gi)) {
+    const words = added[1]!;
+    if (/[A-Z].*[A-Z]/.test(words) && words === words.toUpperCase()) return `adds “${words}” in capitals: the team rarely writes text in all caps (“${words.charAt(0) + words.slice(1).toLowerCase()}”), and most thumbnails have none`;
+  }
   return null;
 }
 
@@ -103,22 +116,28 @@ export function guideProblem(guide: string, frames = 0): string | null {
  */
 export function sourceProblem(guide: string, from: "case_thumbnail" | "find" | "video"): string | null {
   const text = guide.toLowerCase();
-  if (from === "video") return /\bframe at \d/.test(text) ? null : "doesn't say which frame the subject comes from (“take the father from the frame at 4:12.”)";
+  if (from === "video") return /\b(?:first|second|third|fourth) frame\b/.test(text) ? null : "doesn't say which frame the subject comes from (“take the father from the second frame.”)";
   if (from === "case_thumbnail") return /\bfrom the original thumbnail\b/.test(text) ? null : "doesn't say to take the subject from the original thumbnail (“take the woman from the original thumbnail.”)";
   return /\bfind (?:an? )?(?:image|picture|photo) of\b/.test(text) ? null : "doesn't say to find an image of the subject (“find an image of the woman.”)";
 }
 
+/** How the card's frames are named, in the order they're shown. */
+export const ORDINALS = ["first", "second", "third", "fourth"] as const;
+
 /**
- * Whether the guide names each frame it takes, by its time as grab_frames gave
- * it ("the frame at 4:12"), and only those: the editor finds them on the card
- * by those times.
+ * Whether the guide names each frame it takes by its place on the card ("the
+ * first frame", "the second frame"), and only those (Sphe, Nov 2: "it should
+ * rather say, "use the first frame here..." it should know the order in which
+ * the frames will be shown"): never by its time.
  */
-export function framesProblem(guide: string, times: string[]): string | null {
-  const named = [...guide.toLowerCase().matchAll(/\bframes? at (\d+:\d{2}(?::\d{2})?)/g)].map((one) => one[1]!);
-  const missing = times.filter((one) => !named.includes(one));
-  if (missing.length > 0) return `doesn't name the frame at ${missing.join(", ")} (“use the frame at ${missing[0]} as the base.” or “take the father from the frame at ${missing[0]}.”)`;
-  const extra = named.filter((one) => !times.includes(one));
-  if (extra.length > 0) return `names the frame at ${extra[0]}, which isn't in frames: add it, or take it out of the guide`;
+export function framesProblem(guide: string, count: number): string | null {
+  const text = guide.toLowerCase();
+  if (/\bframes? at \d/.test(text)) return "names a frame by its time: name it by its place on the card (“use the first frame as the base.”, “take the father from the second frame.”)";
+  const names = ORDINALS.slice(0, count);
+  const missing = names.filter((one) => !new RegExp(`\\b${one} frame\\b`).test(text));
+  if (missing.length > 0) return `doesn't say what the ${missing[0]} frame is for (“use the first frame as the base.” or “take the father from the ${missing[0]} frame.”)`;
+  const extra = ORDINALS.slice(count).find((one) => new RegExp(`\\b${one} frame\\b`).test(text));
+  if (extra !== undefined) return `names the ${extra} frame, but the card has ${count === 1 ? "one frame" : `${count} frames`}`;
   return null;
 }
 

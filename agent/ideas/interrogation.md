@@ -73,13 +73,15 @@ First, where the editor gets the subject's picture, decided on purpose (the user
 
 - the case's subject is clearly in it: `take the woman from the original thumbnail.`, and `subject_from: "case_thumbnail"` (the thumbnail goes on the card beside the base);
 - they aren't (the thumbnail shows someone else, an officer, a house, only text): `find an image of the woman.`, and `subject_from: "find"` (nothing of the video goes on the card);
-- a frame of the case's video shows them better, or builds the reference's idea: `take the woman from the frame at 4:12.`, and `subject_from: "video"` (From the case's video, below).
+- a frame of the case's video shows them better, or builds the reference's idea: `take the woman from the second frame.`, and `subject_from: "video"` (From the case's video, below).
 
 Then, as Repack writes it (thumbnail-edits.ts): in lowercase, the subject as this case's person (fill hair, facial hair and clothing only with clear evidence from the transcript, the article or a case image whose subject identity is established; leave unknown details out), then at most two scene elements, each one observed in the base and at most one of each kind (keep the base's environment and subject arrangement; these are illustrative concepts, not claims about case events), then the caption for that base only:
 
 - keep it only if it fits the title: `keep the current “CAUGHT” text.`
 - otherwise remove it: `remove the current “CAUGHT” text.`
 - or replace it with one to four words grounded in the title: `change the current “CAUGHT” text to “HE KNEW”.` (no caption on the base: `add “HE KNEW” text.`)
+
+With a frame of the case's video as the base, the team's own way of saying it (From the case's video, below) comes first: no text unless the picture can't carry the hook, and never in capitals.
 
 For example: `find an image of the man. make the man a middle-aged man with a shaved head in a grey t-shirt. have the suspect fold his arms. change the current “CAUGHT” text to “SHE KNEW”.`
 

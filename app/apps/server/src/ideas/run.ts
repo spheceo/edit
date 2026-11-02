@@ -19,7 +19,7 @@ import * as live from "../writer/live.ts";
 import * as board from "./board.ts";
 import * as cloud from "./cloud.ts";
 import * as frames from "./frames.ts";
-import { cleanGuide, cleanTitle, closest, framesProblem, guideProblem, identity, lengthStyle, sourceProblem, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
+import { cleanGuide, cleanTitle, closest, framesProblem, guideProblem, ORDINALS, identity, lengthStyle, sourceProblem, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
 import * as sources from "./sources.ts";
 
 /** Runs at once on one Mac. */
@@ -144,7 +144,7 @@ export const TOOLS = [
   {
     name: "save_thumbnail_guide",
     description:
-      "Save the thumbnail guide for the main title: in lowercase, where the editor gets the subject's picture (“take the woman from the original thumbnail.”, “find an image of the woman.”, or “take the father from the frame at 4:12.”), then the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). subject_from: \"case_thumbnail\" when the case's subject is clearly in the case's own YouTube thumbnail (it goes on the card), \"video\" when they come from frames you grabbed, \"find\" when neither has them. frames: the grabbed frames the guide takes (at most 4), each by the time grab_frames gave it, as the scene (use \"base\"), a person (\"subject\", with who: \"the father\"), or both in one frame (\"base_and_subject\"); each goes on the card, a base frame first, and the guide names each (“use the frame at 1:05 as the base.”). base_card: the link of the approved card whose thumbnail is the base (with a base frame, the one whose idea it follows), from the list in the message.",
+      "Save the thumbnail guide for the main title: in lowercase, where the editor gets the subject's picture (“take the woman from the original thumbnail.”, “find an image of the woman.”, or “take the father from the second frame.”), then the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). subject_from: \"case_thumbnail\" when the case's subject is clearly in the case's own YouTube thumbnail (it goes on the card), \"video\" when they come from frames you grabbed, \"find\" when neither has them. frames: the grabbed frames the guide takes (at most 4), each by the time grab_frames gave it (at), as the scene (use \"base\"), a person (\"subject\", with who: \"the father\"), or both in one frame (\"base_and_subject\"); the card shows them in this order, the base first, and the guide names each by its place, never its time (“use the first frame as the base. take the father from the second frame.”). base_card: the link of the approved card whose thumbnail is the base (with a base frame, the one whose idea it follows), from the list in the message.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -282,14 +282,14 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       if (from !== "case_thumbnail" && from !== "find" && from !== "video") throw new Error('subject_from is "case_thumbnail" (the subject is in the case\'s own thumbnail), "video" (they come from frames you grabbed) or "find" (neither has them).');
       if (from === "case_thumbnail" && session.caseThumbnail === null) throw new Error('This case has no YouTube thumbnail to take the subject from: use subject_from "video" or "find".');
       if (from === "video" && !taken.some((one) => one.frame.use !== "base")) throw new Error('subject_from "video" takes the subject from a frame: give it in frames with use "subject" (and who) or "base_and_subject".');
-      const said = sourceProblem(guide, from) ?? framesProblem(guide, taken.map((one) => one.label));
+      const said = sourceProblem(guide, from) ?? framesProblem(guide, taken.length);
       if (said !== null) throw new Error(`The guide ${said}. Save it again.`);
       // The frames on the card: put in the idea's folder on R2 before the guide is saved.
       const framed: IdeaImage[] = [];
       for (const one of taken) {
         const key = await cloud.putPicture(session.id, new Uint8Array(fs.readFileSync(one.path)), "image/jpeg", "jpg");
         const label = one.frame.use === "base" ? "base" : one.frame.use === "base_and_subject" ? `base, ${one.frame.who ?? "the subject"}` : (one.frame.who ?? "the subject");
-        framed.push({ id: newId(), name: `frame ${one.label} · ${label}`, key, from: "frame", frame: one.frame });
+        framed.push({ id: newId(), name: `${one.label} frame · ${label} · ${frames.clock(one.frame.at)}`, key, from: "frame", frame: one.frame });
       }
       const baseFrame = framed.find((one) => one.frame?.use !== "subject") ?? null;
       const baseLink = typeof args.base_card === "string" && args.base_card.trim() !== "" ? args.base_card.trim() : null;
@@ -312,9 +312,8 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
         const approvedImage = base !== undefined ? { id: newId(), name: baseFrame !== null ? "reference" : "base", url: base.image, from: "base" as const } : baseImage;
         const pictures = idea.images.filter((one) => one.from !== "base" && one.from !== "video" && one.from !== "frame");
         idea.images = [
-          ...(baseFrame !== null ? [baseFrame] : []),
           ...(baseFrame === null && approvedImage !== null ? [approvedImage] : []),
-          ...framed.filter((one) => one !== baseFrame),
+          ...framed,
           ...(baseFrame !== null && approvedImage !== null ? [approvedImage] : []),
           ...(from === "case_thumbnail" && session.caseThumbnail !== null ? [{ id: newId(), name: "original thumbnail", url: session.caseThumbnail, from: "video" as const }] : []),
           ...pictures,
@@ -323,7 +322,7 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       session.saved.guide = true;
       return kept
         ? "The person wrote this idea's guide by hand, so theirs stays. Carry on."
-        : `Thumbnail guide saved${baseFrame !== null ? `, on the ${baseFrame.name.split(" · ")[0]!.replace("frame ", "frame at ")}` : ""}${base !== undefined ? `${baseFrame !== null ? ", following" : ", on the base from"} “${base.title}”` : ""}${framed.length > 0 ? `, with ${framed.length} ${framed.length === 1 ? "frame" : "frames"} on the card` : ""}.`;
+        : `Thumbnail guide saved${baseFrame !== null ? `, on the first frame` : ""}${base !== undefined ? `${baseFrame !== null ? ", following" : ", on the base from"} “${base.title}”` : ""}${framed.length > 0 ? `, with ${framed.length} ${framed.length === 1 ? "frame" : "frames"} on the card` : ""}.`;
     }
     case "save_summary": {
       const summary = words(args.summary, "summary").trim().replace(/\s+/g, " ");
@@ -378,10 +377,11 @@ function framesOf(session: Session, given: unknown): { frame: IdeaFrame; path: s
     if (use !== "base" && use !== "subject" && use !== "base_and_subject") throw new Error('Each frame\'s use is "base", "subject" or "base_and_subject".');
     const who = typeof one.who === "string" && one.who.trim() !== "" ? one.who.trim().toLowerCase().slice(0, 40) : undefined;
     if (use !== "base" && who === undefined) throw new Error(`The frame at ${frames.clock(at)} is a person: say who (who: "the father").`);
-    // Named as the guide names it: the time given (the sharpest frame can be a moment before the second asked).
-    out.push({ frame: { at: shown.at, use, ...(who !== undefined ? { who } : {}) }, path: shown.path, label: frames.clock(at) });
+    // Named as the card shows it, in this order: "the first frame".
+    out.push({ frame: { at: shown.at, use, ...(who !== undefined ? { who } : {}) }, path: shown.path, label: ORDINALS[out.length]! });
   }
   if (out.filter((one) => one.frame.use !== "subject").length > 1) throw new Error("One base frame at most: the scene the thumbnail is built on.");
+  if (out.length > 1 && out.slice(1).some((one) => one.frame.use !== "subject")) throw new Error("The base frame goes first in frames: the card shows the frames in this order, the base first.");
   return out;
 }
 

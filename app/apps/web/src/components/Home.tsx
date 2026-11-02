@@ -1,4 +1,4 @@
-import { Archive, Check, ChevronRight, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronRight, ListFilter, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
@@ -58,6 +58,8 @@ interface Item {
   mine: boolean;
   /** Started by the signed-in person in the last three days and not done: first in its Scripts or Edits, under New. */
   fresh?: boolean;
+  /** Its kind of video (an idea's workspace), for the filter; none for a board card or a stopped import. */
+  kind?: Style | null;
   row: () => ReactNode;
 }
 
@@ -132,6 +134,8 @@ export function Home() {
   // Yours, or everyone's (remembered on this browser); nobody signed in has nothing of their own.
   const [mineOnly, setMineOnly] = useState(() => localStorage.getItem(MINE) !== "0");
   const mine = mineOnly && account?.person != null;
+  // One kind of video only (Sphe, Nov 2: Mine/Everyone "turned into like a dropdown with filters like category"), remembered on this browser.
+  const [kind, setKind] = useState<Style | null>(() => (STYLES.some((one) => one.value === localStorage.getItem(KIND)) ? (localStorage.getItem(KIND) as Style) : null));
   const later = useLater();
   const [allDone, setAllDone] = useState(false);
   // Projects made on a dev build: shown or hidden (DevProjects.tsx).
@@ -301,6 +305,7 @@ export function Home() {
         title: script.title,
         mine: isMe(script.createdBy),
         fresh: fresh(row),
+        kind: script.style,
         row: () => <ScriptTableRow script={script} importing={row.importing} writing={row.writing === true} sharing={row.sharing === true} here={row.here === true} onChanged={refresh} onImport={row.importing ? () => setWatching(script.id) : undefined} />,
       });
       continue;
@@ -316,6 +321,7 @@ export function Home() {
       title: row.local?.name ?? row.cloud?.name ?? "",
       mine: isMe(starter(row)),
       fresh: fresh(row),
+      kind: row.local?.style ?? row.cloud?.summary?.style ?? row.script?.style ?? null,
       row: () => (row.local !== null ? <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} /> : <CloudTableRow project={row.cloud!} script={row.script} onChanged={refresh} />),
     });
   }
@@ -325,7 +331,7 @@ export function Home() {
   }
   if (ideasAllowed && ideasHome !== null) {
     for (const row of ideasHome.ideas) {
-      items.push({ id: `idea-${row.id}`, key: laterKey("idea", row.id), section: "ideas", stage: ideaStage(row), at: row.updatedAt, title: row.summary.title, mine: isMe(row.createdBy), row: () => <IdeaTableRow row={row} /> });
+      items.push({ id: `idea-${row.id}`, key: laterKey("idea", row.id), section: "ideas", stage: ideaStage(row), at: row.updatedAt, title: row.summary.title, mine: isMe(row.createdBy), kind: row.workspace ?? "interrogation", row: () => <IdeaTableRow row={row} /> });
     }
     // A card waiting on changes with no idea yet is the ideas team's, on the board.
     for (const card of ideasHome.changes) {
@@ -353,7 +359,7 @@ export function Home() {
     const { place: at, stage } = placeOf(place);
     return at !== null && placeOfSection(item.section) === at && (stage === null ? item.stage !== "done" : item.stage === stage);
   };
-  const ours = items.filter((item) => !mine || item.mine);
+  const ours = items.filter((item) => (!mine || item.mine) && (kind === null || item.kind === kind));
   const countOf = (place: Where) => ours.filter((item) => isIn(item, place)).length;
   // The foot's Later: how many are set aside, and the next to come back.
   const setAside = ours.filter((item) => isIn(item, "later"));
@@ -422,13 +428,23 @@ export function Home() {
     localStorage.setItem(MINE, value ? "1" : "0");
     setMineOnly(value);
   };
+  const chooseKind = (value: Style | null) => {
+    if (value === null) localStorage.removeItem(KIND);
+    else localStorage.setItem(KIND, value);
+    setKind(value);
+  };
+  // The kinds in the list on screen (in Mine, yours), with how many of each: the filter's menu.
+  const kinds = STYLES.map((one) => ({ ...one, count: items.filter((item) => item.kind === one.value && (!mine || item.mine) && isIn(item, shownWhere)).length })).filter((one) => one.count > 0 || one.value === kind);
   // Nothing in this list: why, and where to look.
-  const others = items.filter((item) => !item.mine && isIn(item, shownWhere)).length;
+  const others = items.filter((item) => !item.mine && (kind === null || item.kind === kind) && isIn(item, shownWhere)).length;
+  const otherKinds = kind === null ? 0 : items.filter((item) => item.kind !== kind && (!mine || item.mine) && isIn(item, shownWhere)).length;
   const empty = searching
     ? { title: "Nothing matches", text: `Nothing anywhere is called “${query.trim()}”.` }
     : shownWhere === "later"
         ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back. On its day it’s back, at the top of its list." }
-        : mine && others > 0
+        : kind !== null && otherKinds > 0
+          ? { title: `No ${STYLES.find((one) => one.value === kind)!.label.toLowerCase()} here`, text: `${otherKinds} of other kinds: the filter shows them all again.` }
+          : mine && others > 0
           ? { title: "Nothing of yours here", text: `Everyone shows the team’s ${others}.` }
           : { title: "Nothing here", text: shownWhere === "done" ? "Approved edits and ideas move here by themselves, and anything marked done from its ⋯ menu." : "Nothing is at this stage now." };
 
@@ -494,20 +510,14 @@ export function Home() {
                   </button>
                 )}
               </label>
-              {account?.person != null && (
-                // The kit's segmented control (.sp-seg).
-                <div className={cx("flex h-[34px] shrink-0 gap-0.5 rounded-[9px] bg-black p-0.5", searching && "pointer-events-none opacity-45")}>
-                  {([[true, "Mine"], [false, "Everyone"]] as const).map(([value, label]) => (
-                    <button
-                      key={label}
-                      onClick={() => chooseMine(value)}
-                      className={cx("rounded-md px-2.5 text-[13px] font-medium transition-colors", mineOnly === value ? "bg-active text-fg" : "text-muted hover:text-fg")}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <FilterButton
+                who={account?.person != null ? (mineOnly ? "mine" : "everyone") : null}
+                kind={kind}
+                kinds={kinds}
+                disabled={searching}
+                onWho={(value) => chooseMine(value === "mine")}
+                onKind={chooseKind}
+              />
               <DevControl count={all.filter((project) => project.dev === true).length} show={showDev} onShow={setShowDev} onChanged={refresh} />
             </div>
             {steps.length > 0 && (
@@ -555,6 +565,50 @@ export function Home() {
       <NewProject open={creating} onClose={() => { setCreating(false); setStart(null); }} only={null} start={start} />
       {ideasAllowed && <NewIdea open={ideaOpen} onClose={() => setIdeaOpen(false)} onMade={refreshIdeas} />}
     </LaterContext.Provider>
+  );
+}
+
+/**
+ * Whose and which kind (Sphe, Nov 2: "probably would help if we turned this
+ * into like a dropdown with filters like category"): one button saying what's
+ * shown ("Mine", "Everyone · Bodycam"), its menu Mine or Everyone, then every
+ * kind there is with how many. A search looks through everything, as before.
+ */
+function FilterButton({ who, kind, kinds, disabled, onWho, onKind }: { who: "mine" | "everyone" | null; kind: Style | null; kinds: { value: Style; label: string; count: number }[]; disabled: boolean; onWho: (value: "mine" | "everyone") => void; onKind: (value: Style | null) => void }) {
+  const kindLabel = kinds.find((one) => one.value === kind)?.label ?? STYLES.find((one) => one.value === kind)?.label ?? null;
+  const label = [who === "mine" ? "Mine" : who === "everyone" ? "Everyone" : null, kindLabel].filter(Boolean).join(" · ") || "All";
+  const filtered = kind !== null;
+  const open = (event: React.MouseEvent<HTMLButtonElement>) =>
+    toggleMenu(
+      event.currentTarget,
+      [
+        ...(who !== null
+          ? ([
+              { label: "Mine", hint: "what you started", checked: who === "mine", onSelect: () => onWho("mine") },
+              { label: "Everyone", hint: "the team’s", checked: who === "everyone", onSelect: () => onWho("everyone") },
+              { separator: true },
+            ] satisfies MenuItem[])
+          : []),
+        { label: "Every kind", checked: kind === null, onSelect: () => onKind(null) },
+        ...kinds.map((one): MenuItem => ({ label: one.label, detail: String(one.count), checked: kind === one.value, onSelect: () => onKind(one.value) })),
+      ],
+      { width: 220 },
+    );
+  return (
+    <button
+      type="button"
+      onClick={open}
+      disabled={disabled}
+      title={disabled ? "A search looks through everything" : "Whose and which kind"}
+      className={cx(
+        "flex h-[34px] shrink-0 items-center gap-1.5 rounded-[9px] bg-black px-2.5 text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-45",
+        filtered ? "text-fg" : "text-secondary hover:text-fg",
+      )}
+    >
+      <ListFilter size={14} className={filtered ? "text-fg" : "text-muted"} />
+      <span className="max-w-[180px] truncate">{label}</span>
+      <ChevronDown size={13} className="text-faint" />
+    </button>
   );
 }
 
@@ -741,6 +795,8 @@ export function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
 
 /** Which place Home shows (remembered on this browser). */
 export const VIEW = "edit.home.view";
+/** The kind of video Home's lists are filtered to (remembered on this browser). */
+const KIND = "edit.home.kind";
 /** Mine or Everyone (remembered on this browser). */
 const MINE = "edit.home.mine";
 

@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 
-import { NICHES, type Idea, type IdeaImage, type IdeaRun, type IdeaTool, type IdeaTurn, type Niche, type Workspace } from "@edit/types/ideas";
+import { NICHES, type Idea, type IdeaFrame, type IdeaImage, type IdeaRun, type IdeaTool, type IdeaTurn, type Niche, type Workspace } from "@edit/types/ideas";
 
 import { ideasGuide } from "../agent_text.ts";
 import * as diag from "../diag.ts";
@@ -18,7 +18,8 @@ import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
 import * as board from "./board.ts";
 import * as cloud from "./cloud.ts";
-import { cleanGuide, cleanTitle, closest, guideProblem, identity, lengthStyle, sourceProblem, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
+import * as frames from "./frames.ts";
+import { cleanGuide, cleanTitle, closest, framesProblem, guideProblem, identity, lengthStyle, sourceProblem, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
 import * as sources from "./sources.ts";
 
 /** Runs at once on one Mac. */
@@ -91,6 +92,13 @@ type Session = {
   bases: Map<string, { title: string; image: string }>;
   /** The case's own YouTube thumbnail, put on the card only when the guide takes the subject from it. */
   caseThumbnail: string | null;
+  home: string;
+  /** The case's YouTube video, looked at for frames: looked up once, on the first look. */
+  video: { id: string; found: Promise<frames.Video> | null } | null;
+  /** Where this run's pictures are (Claude reads them there). */
+  folder: string;
+  /** The frames grabbed this run, by the time they show ("4:12"). */
+  grabbed: Map<string, { at: number; path: string }>;
   skipped: string | null;
   saved: { titles: boolean; guide: boolean; summary: boolean };
   calls: number;
@@ -123,10 +131,35 @@ export const TOOLS = [
     inputSchema: { type: "object", additionalProperties: false, properties: { title: { type: "string" } }, required: ["title"] },
   },
   {
+    name: "scan_video",
+    description:
+      `Look through the case's YouTube video as its storyboard: sheets of small pictures, one every few seconds, nine to a sheet. Without from and to, the whole video (spread over ${frames.MAX_SHEETS} sheets when it's longer than about thirteen minutes); with them ("m:ss"), that stretch. Read the sheets it names, then grab_frames at the moments you want.`,
+    inputSchema: { type: "object", additionalProperties: false, properties: { from: { type: "string" }, to: { type: "string" } } },
+  },
+  {
+    name: "grab_frames",
+    description: `Full-size frames of the case's YouTube video (up to 1080p) at these times (\"m:ss\", 1–${frames.MAX_FRAMES}): each the sharpest within a second of the time asked. Read the files it names. save_thumbnail_guide's frames name them by the time it gives back.`,
+    inputSchema: { type: "object", additionalProperties: false, properties: { times: { type: "array", items: { type: "string" }, minItems: 1, maxItems: frames.MAX_FRAMES } }, required: ["times"] },
+  },
+  {
     name: "save_thumbnail_guide",
     description:
-      "Save the thumbnail guide for the main title: in lowercase, where the editor gets the subject's picture (“take the woman from the original thumbnail.” or “find an image of the woman.”), then the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). subject_from: \"case_thumbnail\" when the case's subject is clearly in the case's own YouTube thumbnail (it goes on the card), \"find\" when they aren't. base_card: the link of the approved card whose thumbnail is the base, from the list in the message.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { guide: { type: "string" }, subject_from: { type: "string", enum: ["case_thumbnail", "find"] }, base_card: { type: "string" } }, required: ["guide", "subject_from"] },
+      "Save the thumbnail guide for the main title: in lowercase, where the editor gets the subject's picture (“take the woman from the original thumbnail.”, “find an image of the woman.”, or “take the father from the frame at 4:12.”), then the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). subject_from: \"case_thumbnail\" when the case's subject is clearly in the case's own YouTube thumbnail (it goes on the card), \"video\" when they come from frames you grabbed, \"find\" when neither has them. frames: the grabbed frames the guide takes (at most 4), each by the time grab_frames gave it, as the scene (use \"base\"), a person (\"subject\", with who: \"the father\"), or both in one frame (\"base_and_subject\"); each goes on the card, a base frame first, and the guide names each (“use the frame at 1:05 as the base.”). base_card: the link of the approved card whose thumbnail is the base (with a base frame, the one whose idea it follows), from the list in the message.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        guide: { type: "string" },
+        subject_from: { type: "string", enum: ["case_thumbnail", "video", "find"] },
+        frames: {
+          type: "array",
+          maxItems: 4,
+          items: { type: "object", additionalProperties: false, properties: { at: { type: "string" }, use: { type: "string", enum: ["base", "subject", "base_and_subject"] }, who: { type: "string" } }, required: ["at", "use"] },
+        },
+        base_card: { type: "string" },
+      },
+      required: ["guide", "subject_from"],
+    },
   },
   {
     name: "save_summary",
@@ -168,6 +201,29 @@ export async function call(token: string, name: string, args: Args): Promise<[st
 
 async function run(session: Session, name: string, args: Args): Promise<string> {
   switch (name) {
+    case "scan_video": {
+      const found = await videoOf(session);
+      const from = args.from === undefined ? 0 : frames.secondsOf(args.from);
+      const to = args.to === undefined ? found.duration : frames.secondsOf(args.to);
+      if (from === null || to === null || to <= from) throw new Error("from and to are times in the video (\"m:ss\"), from before to.");
+      const sheets = await frames.scan(found, session.folder, from, Math.min(to, found.duration));
+      if (sheets.length === 0) throw new Error(`The video is ${frames.clock(found.duration)} long: nothing there.`);
+      const spread = sheets.length === frames.MAX_SHEETS && found.sheets.filter((one) => one.start + one.tiles * found.every > from && one.start < to).length > frames.MAX_SHEETS;
+      return [
+        `The video (${frames.clock(found.duration)}) as ${sheets.length} storyboard ${sheets.length === 1 ? "sheet" : "sheets"}${spread ? ", spread over the stretch: scan a shorter stretch for the sheets between" : ""}. Read each:`,
+        ...sheets.map((one) => `- ${frames.sheetText(found, one)}`),
+      ].join("\n");
+    }
+    case "grab_frames": {
+      const asked = Array.isArray(args.times) ? args.times.map(frames.secondsOf) : [];
+      if (asked.length === 0 || asked.length > frames.MAX_FRAMES || asked.some((one) => one === null)) throw new Error(`times are 1–${frames.MAX_FRAMES} times in the video, as "m:ss".`);
+      const found = await videoOf(session);
+      const late = (asked as number[]).filter((one) => one > found.duration);
+      if (late.length > 0) throw new Error(`The video is ${frames.clock(found.duration)} long: ${late.map(frames.clock).join(", ")} is past its end.`);
+      const got = await frames.grab(found, asked as number[], session.folder);
+      for (const one of got) session.grabbed.set(frames.clock(one.at), { at: one.at, path: one.path });
+      return ["Read each frame:", ...got.map((one) => `- the frame at ${frames.clock(one.at)}${frames.clock(one.at) === frames.clock(one.asked) ? "" : ` (asked ${frames.clock(one.asked)})`}: ${one.path}`)].join("\n");
+    }
     case "save_titles":
       return saveTitles(session, list(args.titles), args.niche, args.mode === "add" ? "add" : args.mode === "replace" ? "replace" : session.mode === "repackage" ? "replace" : "add");
     case "remove_titles": {
@@ -216,16 +272,26 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
     }
     case "save_thumbnail_guide": {
       const guide = cleanGuide(words(args.guide, "guide"));
-      const problem = guideProblem(guide);
+      const taken = framesOf(session, args.frames);
+      const problem = guideProblem(guide, taken.length);
       if (problem !== null) throw new Error(`The guide ${problem}. Save it again.`);
       // Where the subject's picture comes from, said on purpose (the user, Nov 1: the original video's thumbnail was
       // "just automatically passed through"; "let's try to find an image of the woman", or "we take the woman from
-      // the original thumbnail here").
+      // the original thumbnail here"; Nov 2: or from frames of the video).
       const from = args.subject_from;
-      if (from !== "case_thumbnail" && from !== "find") throw new Error('subject_from is "case_thumbnail" (the subject is in the case\'s own thumbnail) or "find" (they aren\'t).');
-      if (from === "case_thumbnail" && session.caseThumbnail === null) throw new Error('This case has no YouTube thumbnail to take the subject from: use subject_from "find".');
-      const said = sourceProblem(guide, from);
+      if (from !== "case_thumbnail" && from !== "find" && from !== "video") throw new Error('subject_from is "case_thumbnail" (the subject is in the case\'s own thumbnail), "video" (they come from frames you grabbed) or "find" (neither has them).');
+      if (from === "case_thumbnail" && session.caseThumbnail === null) throw new Error('This case has no YouTube thumbnail to take the subject from: use subject_from "video" or "find".');
+      if (from === "video" && !taken.some((one) => one.frame.use !== "base")) throw new Error('subject_from "video" takes the subject from a frame: give it in frames with use "subject" (and who) or "base_and_subject".');
+      const said = sourceProblem(guide, from) ?? framesProblem(guide, taken.map((one) => one.label));
       if (said !== null) throw new Error(`The guide ${said}. Save it again.`);
+      // The frames on the card: put in the idea's folder on R2 before the guide is saved.
+      const framed: IdeaImage[] = [];
+      for (const one of taken) {
+        const key = await cloud.putPicture(session.id, new Uint8Array(fs.readFileSync(one.path)), "image/jpeg", "jpg");
+        const label = one.frame.use === "base" ? "base" : one.frame.use === "base_and_subject" ? `base, ${one.frame.who ?? "the subject"}` : (one.frame.who ?? "the subject");
+        framed.push({ id: newId(), name: `frame ${one.label} · ${label}`, key, from: "frame", frame: one.frame });
+      }
+      const baseFrame = framed.find((one) => one.frame?.use !== "subject") ?? null;
       const baseLink = typeof args.base_card === "string" && args.base_card.trim() !== "" ? args.base_card.trim() : null;
       const base = baseLink === null ? undefined : session.bases.get(baseLink);
       if (baseLink !== null && base === undefined) throw new Error("That base isn't one of the approved thumbnails in the message: name one of their links, or leave base_card out.");
@@ -239,17 +305,25 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
         idea.thumbnailGuide = guide;
         idea.guideBy = "claude";
         if (base !== undefined && baseLink !== null) idea.base = { title: base.title, cardUrl: baseLink, image: base.image };
-        // The base first (the card's cover), the case's thumbnail only when the subject comes from it, then the person's pictures.
+        // The base first (the card's cover: a base frame, else the approved thumbnail), the subjects' frames, the approved
+        // thumbnail it follows when a frame is the base, the case's thumbnail only when the subject comes from it, then the
+        // person's pictures. A new guide's frames replace the last one's.
         const baseImage = idea.images.find((one) => one.from === "base") ?? null;
-        const pictures = idea.images.filter((one) => one.from !== "base" && one.from !== "video");
+        const approvedImage = base !== undefined ? { id: newId(), name: baseFrame !== null ? "reference" : "base", url: base.image, from: "base" as const } : baseImage;
+        const pictures = idea.images.filter((one) => one.from !== "base" && one.from !== "video" && one.from !== "frame");
         idea.images = [
-          ...(base !== undefined ? [{ id: newId(), name: "base", url: base.image, from: "base" as const }] : baseImage !== null ? [baseImage] : []),
+          ...(baseFrame !== null ? [baseFrame] : []),
+          ...(baseFrame === null && approvedImage !== null ? [approvedImage] : []),
+          ...framed.filter((one) => one !== baseFrame),
+          ...(baseFrame !== null && approvedImage !== null ? [approvedImage] : []),
           ...(from === "case_thumbnail" && session.caseThumbnail !== null ? [{ id: newId(), name: "original thumbnail", url: session.caseThumbnail, from: "video" as const }] : []),
           ...pictures,
-        ];
+        ].slice(0, 8);
       });
       session.saved.guide = true;
-      return kept ? "The person wrote this idea's guide by hand, so theirs stays. Carry on." : `Thumbnail guide saved${base !== undefined ? `, on the base from “${base.title}”` : ""}.`;
+      return kept
+        ? "The person wrote this idea's guide by hand, so theirs stays. Carry on."
+        : `Thumbnail guide saved${baseFrame !== null ? `, on the ${baseFrame.name.split(" · ")[0]!.replace("frame ", "frame at ")}` : ""}${base !== undefined ? `${baseFrame !== null ? ", following" : ", on the base from"} “${base.title}”` : ""}${framed.length > 0 ? `, with ${framed.length} ${framed.length === 1 ? "frame" : "frames"} on the card` : ""}.`;
     }
     case "save_summary": {
       const summary = words(args.summary, "summary").trim().replace(/\s+/g, " ");
@@ -272,6 +346,43 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
     default:
       throw new Error(`There's no tool called ${name}.`);
   }
+}
+
+/** The case's video, looked up on the first look of a run. */
+function videoOf(session: Session): Promise<frames.Video> {
+  if (session.video === null) return Promise.reject(new Error("This case has no YouTube video to look at."));
+  if (session.video.found === null) {
+    const looking = frames.video(session.home, session.video.id);
+    // A failed look is tried again on the next call.
+    looking.catch(() => {
+      if (session.video !== null && session.video.found === looking) session.video.found = null;
+    });
+    session.video.found = looking;
+  }
+  return session.video.found;
+}
+
+/** The frames save_thumbnail_guide was given, each one grabbed this run. */
+function framesOf(session: Session, given: unknown): { frame: IdeaFrame; path: string; label: string }[] {
+  if (given === undefined) return [];
+  if (!Array.isArray(given)) throw new Error("frames is a list of the frames the guide takes.");
+  if (given.length > 4) throw new Error("At most 4 frames: the base and the people the guide takes.");
+  const out: { frame: IdeaFrame; path: string; label: string }[] = [];
+  for (const one of given as Args[]) {
+    const at = frames.secondsOf(one.at);
+    if (at === null) throw new Error('Each frame\'s at is its time as grab_frames gave it ("4:12").');
+    // Its time as given back, else the grabbed frame within a second of it.
+    const shown = session.grabbed.get(frames.clock(at)) ?? [...session.grabbed.values()].find((grabbed) => Math.abs(grabbed.at - at) <= 1);
+    if (shown === undefined) throw new Error(`No frame at ${frames.clock(at)} was grabbed in this run: grab_frames first, and name it by the time it gives back.`);
+    const use = one.use;
+    if (use !== "base" && use !== "subject" && use !== "base_and_subject") throw new Error('Each frame\'s use is "base", "subject" or "base_and_subject".');
+    const who = typeof one.who === "string" && one.who.trim() !== "" ? one.who.trim().toLowerCase().slice(0, 40) : undefined;
+    if (use !== "base" && who === undefined) throw new Error(`The frame at ${frames.clock(at)} is a person: say who (who: "the father").`);
+    // Named as the guide names it: the time given (the sharpest frame can be a moment before the second asked).
+    out.push({ frame: { at: shown.at, use, ...(who !== undefined ? { who } : {}) }, path: shown.path, label: frames.clock(at) });
+  }
+  if (out.filter((one) => one.frame.use !== "subject").length > 1) throw new Error("One base frame at most: the scene the thumbnail is built on.");
+  return out;
 }
 
 async function saveTitles(session: Session, given: string[], niche: unknown, mode: "replace" | "add"): Promise<string> {
@@ -384,7 +495,12 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
     ...recent.map((one) => `- ${one}`),
     lengths,
   ].filter((line) => line !== "");
-  const pictureText = pictures.length > 0 ? ["# Thumbnails (Read them)", ...pictures.map((one) => `- ${one}`)].join("\n") : "";
+  const pictureText = [
+    pictures.length > 0 ? ["# Thumbnails (Read them)", ...pictures.map((one) => `- ${one}`)].join("\n") : "",
+    youtube !== undefined ? "# The case's video\nIts frames can go in the thumbnail: scan_video shows it as storyboard sheets, grab_frames gives full-size frames at the times you choose (the thumbnail guide's “From the case's video”)." : "",
+  ]
+    .filter((part) => part !== "")
+    .join("\n\n");
   return { caseText: ["# The case", ...parts].join("\n"), examples: approvedText, style, folder, bases, caseThumbnail, pictures: pictureText };
 }
 
@@ -396,7 +512,8 @@ function ideaText(idea: Idea): string {
     "Titles:",
     ...idea.titles.map((one) => `- ${one.text}${one.text === idea.main ? " (main)" : ""}${one.by === "claude" ? "" : ` (written by ${one.by})`}`),
     `Thumbnail Guide: ${idea.thumbnailGuide || "(none)"}${idea.guideBy !== "claude" && idea.thumbnailGuide !== "" ? ` (written by ${idea.guideBy})` : ""}`,
-    idea.base === null ? "" : `Base thumbnail: “${idea.base.title}” (${idea.base.cardUrl})`,
+    idea.base === null ? "" : `${idea.images.some((one) => one.from === "frame" && one.frame?.use !== "subject") ? "Reference" : "Base"} thumbnail: “${idea.base.title}” (${idea.base.cardUrl})`,
+    ...idea.images.flatMap((one) => (one.from === "frame" ? [`On the card: ${one.name}`] : [])),
     idea.summary === "" ? "" : `Summary: ${idea.summary}`,
   ]
     .filter((line) => line !== "")
@@ -492,7 +609,22 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
       }
       folder = prepared.folder;
       await step(what === "chat" ? "Claude is working" : "Writing titles");
-      const session: Session = { id, mode: what, by: context.by, style: prepared.style, bases: prepared.bases, caseThumbnail: prepared.caseThumbnail, skipped: null, saved: { titles: false, guide: false, summary: false }, calls: 0 };
+      const youtube = idea.sources.find((one) => one.kind === "youtube");
+      const session: Session = {
+        id,
+        mode: what,
+        by: context.by,
+        style: prepared.style,
+        bases: prepared.bases,
+        caseThumbnail: prepared.caseThumbnail,
+        home: context.home,
+        video: youtube?.kind === "youtube" ? { id: youtube.videoId, found: null } : null,
+        folder: prepared.folder,
+        grabbed: new Map(),
+        skipped: null,
+        saved: { titles: false, guide: false, summary: false },
+        calls: 0,
+      };
       const token = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
       sessions.set(token, session);
       const recent = idea.chat.slice(-SENT_TURNS - 1, -1).map((turn) => `${turn.role === "you" ? `${turn.by ?? "Producer"}` : "You (Claude)"}: ${turn.text}`);
@@ -512,7 +644,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         .join("\n\n");
       try {
         const answer = await live.within(running.turn, () =>
-          asking.ask({ model: claude.OPUS, system: system(idea.workspace), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/ideas/${token}`, read: prepared.folder, maxTurns: 16, effort: "medium", timeoutMs: 12 * 60_000, label: `Ideas ${id}`, signal }),
+          asking.ask({ model: claude.OPUS, system: system(idea.workspace), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/ideas/${token}`, read: prepared.folder, maxTurns: 40, effort: "medium", timeoutMs: 20 * 60_000, label: `Ideas ${id}`, signal }),
         );
         const said = (answer.text ?? running.turn.text).trim();
         if (session.skipped !== null) return { state: "done" as const, text: session.skipped };

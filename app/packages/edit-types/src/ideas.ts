@@ -50,9 +50,14 @@ export type IdeaImage = {
   key?: string;
   /** A YouTube thumbnail or a Trello attachment. */
   url?: string;
-  /** Where it came from: the video's thumbnail, an upload, the card, an approved title's cover. */
-  from: "video" | "upload" | "card" | "base";
+  /** Where it came from: the video's thumbnail, an upload, the card, an approved title's cover, a frame of the case's video. */
+  from: "video" | "upload" | "card" | "base" | "frame";
+  /** A frame's second in the video and what the guide takes from it: the scene (base), a person (subject, `who`), or both. */
+  frame?: IdeaFrame;
 };
+
+/** What a frame of the case's video is for (Sphe, Nov 2: "we pick the base frame e.g outside the house… and we pick the subjects, e.g the father, the child"). */
+export type IdeaFrame = { at: number; use: "base" | "subject" | "base_and_subject"; who?: string };
 
 /** A thumbnail that already worked (an approved card's cover), the guide's starting point. */
 export type IdeaBase = { title: string; cardUrl: string; image: string };

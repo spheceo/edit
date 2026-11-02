@@ -16,7 +16,7 @@ import { StartedBy } from "../components/StartedBy";
 import { Button, cx, Modal, Spinner } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
 import { buildTurns } from "../lib/agentTurns";
-import { WORKSPACE_NAMES } from "@edit/types/ideas";
+import { WORKSPACE_NAMES, type IdeaImage } from "@edit/types/ideas";
 import { ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
@@ -740,7 +740,11 @@ function Guide({
     setOver(false);
     upload(imageFiles(event.dataTransfer));
   };
-  const caption = (index: number, from: string) => (index === 0 ? "Cover" : from === "base" ? "Base" : from === "video" ? "YouTube thumbnail" : from === "card" ? "From the card" : null);
+  // A frame of the case's video says what it's for ("Frame 4:12 · the father"); an approved thumbnail beside a base frame is the reference it follows.
+  const caption = (index: number, image: IdeaImage) => {
+    const what = image.from === "frame" ? image.name.charAt(0).toUpperCase() + image.name.slice(1) : image.from === "base" ? (image.name === "reference" ? "Reference" : "Base") : image.from === "video" ? "YouTube thumbnail" : image.from === "card" ? "From the card" : null;
+    return index === 0 ? (what === null || image.from === "base" ? "Cover" : `Cover · ${what}`) : what;
+  };
   return (
     <section>
       <SectionHeader label="Thumbnail guide" section="guide" editing={editing} onToggle={onToggle} />
@@ -762,9 +766,9 @@ function Guide({
         {idea.images.map((image, index) => (
           <div key={image.id} className="group/image relative">
             <img src={imageUrl(idea.id, image.id)} alt={image.name} loading="lazy" className="max-h-[70vh] w-full rounded-xl border border-white/[0.06] object-contain" />
-            {caption(index, image.from) !== null && (
+            {caption(index, image) !== null && (
               <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] text-white/70 backdrop-blur">
-                {caption(index, image.from)}
+                {caption(index, image)}
                 {image.from === "base" && idea.base !== null ? ` · ${idea.base.title}` : ""}
               </span>
             )}

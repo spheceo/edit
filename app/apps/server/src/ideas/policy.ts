@@ -80,13 +80,15 @@ export function cleanGuide(guide: string): string {
 }
 
 /** What's wrong with a thumbnail guide, or null: Repack's form, lowercase edits to the base and its caption in quotes. */
-export function guideProblem(guide: string): string | null {
+export function guideProblem(guide: string, frames = 0): string | null {
   const text = guide.trim();
   if (text === "") return "is empty";
-  if (text.length > 600) return "is over 600 characters: write the editor's instructions, not a brief";
+  // A frame of the video taken is a line of its own ("use the frame at 1:05 as the base.", "take the father from the frame at 4:12.").
+  const most = 600 + 120 * frames;
+  if (text.length > most) return `is over ${most} characters: write the editor's instructions, not a brief`;
   // The caption ("change the current “CAUGHT” text to “HE KNEW”") is in quotes, its own capitals.
   const outside = text.replace(/[“"][^”"]*[”"]/g, "");
-  if (outside.split(/(?<=[.!?])\s+(?=\S)/).filter((one) => one.trim() !== "").length > 4) return "is more than where the subject's picture comes from, the subject, the scene and the caption";
+  if (outside.split(/(?<=[.!?])\s+(?=\S)/).filter((one) => one.trim() !== "").length > 4 + frames) return "is more than where the subject's picture comes from, the subject, the scene and the caption";
   // Acronyms (POV, CCTV, GPS) are fine; a capitalized word is a name or a sentence's start.
   const named = outside.match(/\b[A-Z][a-z]+\b/g);
   if (named !== null) return `has ${named.slice(0, 3).join(", ")} in capitals: write it in lowercase (only the caption, in quotes, keeps its own)`;
@@ -99,10 +101,25 @@ export function guideProblem(guide: string): string | null {
  * tool was told: "take the woman from the original thumbnail" or "find an
  * image of the woman" (the user, Nov 1).
  */
-export function sourceProblem(guide: string, from: "case_thumbnail" | "find"): string | null {
+export function sourceProblem(guide: string, from: "case_thumbnail" | "find" | "video"): string | null {
   const text = guide.toLowerCase();
+  if (from === "video") return /\bframe at \d/.test(text) ? null : "doesn't say which frame the subject comes from (“take the father from the frame at 4:12.”)";
   if (from === "case_thumbnail") return /\bfrom the original thumbnail\b/.test(text) ? null : "doesn't say to take the subject from the original thumbnail (“take the woman from the original thumbnail.”)";
   return /\bfind (?:an? )?(?:image|picture|photo) of\b/.test(text) ? null : "doesn't say to find an image of the subject (“find an image of the woman.”)";
+}
+
+/**
+ * Whether the guide names each frame it takes, by its time as grab_frames gave
+ * it ("the frame at 4:12"), and only those: the editor finds them on the card
+ * by those times.
+ */
+export function framesProblem(guide: string, times: string[]): string | null {
+  const named = [...guide.toLowerCase().matchAll(/\bframes? at (\d+:\d{2}(?::\d{2})?)/g)].map((one) => one[1]!);
+  const missing = times.filter((one) => !named.includes(one));
+  if (missing.length > 0) return `doesn't name the frame at ${missing.join(", ")} (“use the frame at ${missing[0]} as the base.” or “take the father from the frame at ${missing[0]}.”)`;
+  const extra = named.filter((one) => !times.includes(one));
+  if (extra.length > 0) return `names the frame at ${extra[0]}, which isn't in frames: add it, or take it out of the guide`;
+  return null;
 }
 
 /** What's wrong with a summary, or null (Repack's: one compact paragraph of 35–55 words, at most three sentences). */

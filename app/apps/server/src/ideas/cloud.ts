@@ -8,6 +8,7 @@
 import type { Idea, IdeaRow, IdeaSummary } from "@edit/types/ideas";
 
 import * as diag from "../diag.ts";
+import * as cloudStorage from "../cloud.ts";
 import * as relay from "../relay.ts";
 
 type Answer = { status: "success"; value: unknown } | { status: "error"; errorMessage?: string; errorData?: { code?: string; message?: string } | string };
@@ -100,4 +101,14 @@ export function summarize(idea: Idea): IdeaSummary {
     niche: idea.niche,
     source: first?.title ?? "",
   };
+}
+
+/** A picture put in the idea's folder on R2 (`edit/ideas/<idea>/`, named by its bytes): its key. */
+export async function putPicture(id: string, bytes: Uint8Array, type: string, extension: string): Promise<string> {
+  const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 24);
+  const key = `edit/ideas/${id}/${hash}.${extension}`;
+  const url = await cloudStorage.presign(key, "PUT");
+  const answer = await fetch(url, { method: "PUT", body: bytes, headers: { "content-type": type } });
+  if (!answer.ok) throw new Error(`the cloud refused the picture (${answer.status})`);
+  return key;
 }

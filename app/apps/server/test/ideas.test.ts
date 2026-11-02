@@ -10,7 +10,8 @@ import type { Idea } from "@edit/types/ideas";
 
 import * as board from "../src/ideas/board.ts";
 import * as cloud from "../src/ideas/cloud.ts";
-import { cleanGuide, cleanTitle, closest, guideProblem, lengthStyle, sourceProblem, summaryProblem, titleProblem } from "../src/ideas/policy.ts";
+import * as frames from "../src/ideas/frames.ts";
+import { cleanGuide, cleanTitle, closest, framesProblem, guideProblem, lengthStyle, sourceProblem, summaryProblem, titleProblem } from "../src/ideas/policy.ts";
 import { applyPatch, linksIn, mayIdeas, mayWorkspace, readiness, workspacesOf } from "../src/ideas/routes.ts";
 import * as run from "../src/ideas/run.ts";
 import * as sources from "../src/ideas/sources.ts";
@@ -354,4 +355,93 @@ test("a run cut off by a restart is marked stopped, only on the Mac that ran it"
   await run.markInterrupted("test-mac");
   expect(rows.get("i8-test")!.body.run).toMatchObject({ state: "stopped", error: "Edit restarted before Claude finished. Ask again." });
   expect(rows.get("i9-test")!.body.run!.state).toBe("running");
+});
+
+test("the video's times, storyboard and stream are read from yt-dlp's formats, and a sharp frame outscores a blur", () => {
+  expect(frames.secondsOf("4:12")).toBe(252);
+  expect(frames.secondsOf("[1:02:03]")).toBe(3723);
+  expect(frames.secondsOf("41")).toBe(41);
+  expect(frames.secondsOf("soon")).toBeNull();
+  expect(frames.clock(252.9)).toBe("4:12");
+  const found = frames.videoOf("J112wCvKWNY", 100, [
+    { format_id: "sb1", width: 160, height: 90, rows: 5, columns: 5, fragments: [{ url: "https://i.ytimg.com/sb/small.jpg", duration: 100 }] },
+    { format_id: "sb0", width: 320, height: 180, rows: 3, columns: 3, fragments: [{ url: "https://i.ytimg.com/sb/M0.jpg", duration: 45 }, { url: "https://i.ytimg.com/sb/M1.jpg", duration: 45 }, { url: "https://i.ytimg.com/sb/M2.jpg", duration: 10 }] },
+    { format_id: "137", vcodec: "avc1.640028", acodec: "none", protocol: "https", height: 1080, url: "https://rr.googlevideo.com/1080" },
+    { format_id: "399", vcodec: "av01.0.08M.08", acodec: "none", protocol: "https", height: 1080, url: "https://rr.googlevideo.com/av1" },
+    { format_id: "18", vcodec: "avc1.42001E", acodec: "mp4a.40.2", protocol: "https", height: 360, url: "https://rr.googlevideo.com/muxed" },
+  ]);
+  expect(found).toMatchObject({ every: 5, columns: 3, width: 320, stream: "https://rr.googlevideo.com/1080" });
+  expect(found.sheets).toEqual([{ url: "https://i.ytimg.com/sb/M0.jpg", start: 0, tiles: 9 }, { url: "https://i.ytimg.com/sb/M1.jpg", start: 45, tiles: 9 }, { url: "https://i.ytimg.com/sb/M2.jpg", start: 90, tiles: 2 }]);
+  const edges = new Uint8Array(40 * 30).map((_, n) => ((n % 40) + Math.floor(n / 40)) % 2 === 0 ? 255 : 0);
+  const flat = new Uint8Array(40 * 30).fill(128);
+  expect(frames.sharpness(edges, 40, 30)).toBeGreaterThan(frames.sharpness(flat, 40, 30));
+});
+
+test("a guide with frames names each one by its time, and the subject's frame when it takes the subject from the video", () => {
+  const guide = "use the frame at 0:41 as the base. take the father from the frame at 4:12 and stand him at the front door. have the father look just above the camera. remove the video's subtitles. add “HE KNEW” text.";
+  expect(guideProblem(guide)).toContain("more than");
+  expect(guideProblem(guide, 2)).toBeNull();
+  expect(sourceProblem(guide, "video")).toBeNull();
+  expect(sourceProblem("find an image of the father.", "video")).toContain("which frame");
+  expect(framesProblem(guide, ["0:41", "4:12"])).toBeNull();
+  expect(framesProblem(guide, ["0:41"])).toContain("4:12, which isn't in frames");
+  expect(framesProblem(guide, ["0:41", "4:12", "5:00"])).toContain("doesn't name the frame at 5:00");
+});
+
+test("a repackaging looks through the case's video and puts the frames its guide takes on the card, the base frame first", async () => {
+  // A 12-second test video standing in for YouTube's 1080p stream, served by range as googlevideo does.
+  const dir = fs.mkdtempSync(`${home}/frames-`);
+  const clip = `${dir}/source.mp4`;
+  const made = Bun.spawnSync(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=12", "-pix_fmt", "yuv420p", "-movflags", "+faststart", clip]);
+  expect(made.exitCode).toBe(0);
+  const bytes = fs.readFileSync(clip);
+  const before = { ...frames.looks };
+  frames.looks.info = async () => ({
+    duration: 12,
+    formats: [
+      { format_id: "sb0", width: 320, height: 180, rows: 3, columns: 3, fragments: [{ url: "https://i.ytimg.com/sb/M0.jpg", duration: 12 }] },
+      { format_id: "137", vcodec: "avc1.640028", acodec: "none", protocol: "https", height: 1080, url: "https://rr.googlevideo.com/stream" },
+    ],
+  });
+  frames.looks.fetch = async (url, init = {}) => {
+    if (url.includes("/sb/")) return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
+    const range = /bytes=(\d+)-(\d*)/.exec(init.range ?? "");
+    if (range === null) return new Response(bytes, { headers: { "content-type": "video/mp4", "accept-ranges": "bytes" } });
+    const start = Number(range[1]);
+    const end = range[2] ? Math.min(Number(range[2]), bytes.length - 1) : bytes.length - 1;
+    return new Response(bytes.subarray(start, end + 1), { status: 206, headers: { "content-type": "video/mp4", "content-range": `bytes ${start}-${end}/${bytes.length}`, "accept-ranges": "bytes" } });
+  };
+  try {
+    const idea = videoIdea("i11-test");
+    await cloud.commit(idea, 0, "Sphe");
+    const seen = claudeCalls([
+      { name: "scan_video", arguments: {} },
+      { name: "grab_frames", arguments: { times: ["0:02", "0:08", "0:30"] } },
+      { name: "grab_frames", arguments: { times: ["0:02", "0:08"] } },
+      { name: "save_titles", arguments: { titles: ["Dad Realizes What The Dress Really Meant", "Mom Realizes Her Made Up Story Isn't Making Sense", "Mom Has No Idea Detectives Found The Dress"] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "use the frame at 0:02 as the base. take the mom from the frame at 0:08. add “SHE KNEW” text.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:08", use: "subject" }] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "use the frame at 0:02 as the base. take the mom from the frame at 0:09. add “SHE KNEW” text.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:09", use: "subject", who: "the mom" }] } },
+      { name: "save_thumbnail_guide", arguments: { guide: "use the frame at 0:02 as the base. take the mom from the frame at 0:08. add “SHE KNEW” text.", subject_from: "video", frames: [{ at: "0:02", use: "base" }, { at: "0:08", use: "subject", who: "the mom" }] } },
+    ]);
+    await run.repackage(context(), "i11-test");
+    const now = await settled("i11-test");
+    expect(seen.prompt).toContain("# The case's video");
+    expect(seen.answers[0]).toContain("1 storyboard sheet");
+    expect(seen.answers[0]).toMatch(/storyboard-01\.jpg: 0:00–0:12, 9 tiles \(3 across\), one every 1\.3 s/);
+    expect(seen.answers[1]).toContain("0:30 is past its end");
+    expect(seen.answers[2]).toMatch(/the frame at 0:0[12].*frame-20\.jpg\n- the frame at 0:0[78].*frame-80\.jpg/);
+    expect(seen.answers[4]).toContain('say who (who: "the father")');
+    // A time it didn't give back, past a second of every frame grabbed.
+    expect(seen.answers[5]).toContain("No frame at 0:09");
+    expect(now.thumbnailGuide).toBe("use the frame at 0:02 as the base. take the mom from the frame at 0:08. add “SHE KNEW” text.");
+    expect(now.images.map((one) => [one.from, one.name, one.frame?.use])).toEqual([
+      ["frame", "frame 0:02 · base", "base"],
+      ["frame", "frame 0:08 · the mom", "subject"],
+    ]);
+    // On R2, as the person's own pictures are, so the board can attach them.
+    for (const one of now.images) expect(mock.objects.get(one.key!)?.slice(0, 2)).toEqual(new Uint8Array([0xff, 0xd8]));
+    expect(seen.answers[6]).toContain("on the frame at 0:02, with 2 frames on the card");
+  } finally {
+    Object.assign(frames.looks, before);
+  }
 });

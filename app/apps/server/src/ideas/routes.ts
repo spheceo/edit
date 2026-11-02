@@ -154,7 +154,7 @@ async function page(id: string) {
     if (problem !== null) problems[title.id] = problem;
   }
   const place = idea.card === null ? null : ((await board.where([idea.card.cardId], idea.workspace).catch(() => ({}) as Record<string, IdeaPlace>))[idea.card.cardId] ?? null);
-  return { idea: shown, rev, place, problems, guideProblem: idea.thumbnailGuide.trim() === "" ? null : guideProblem(idea.thumbnailGuide), style };
+  return { idea: shown, rev, place, problems, guideProblem: idea.thumbnailGuide.trim() === "" ? null : guideProblem(idea.thumbnailGuide, idea.images.filter((one) => one.from === "frame").length), style };
 }
 
 type Patch = {
@@ -246,11 +246,7 @@ async function upload(id: string, bytes: Uint8Array, type: string, name: string)
   const extension = IMAGE_TYPES[type];
   if (extension === undefined) throw bad("Add a JPEG, PNG, WebP or GIF picture.");
   if (bytes.length === 0 || bytes.length > 15 * 1024 * 1024) throw bad("A picture is at most 15 MB.");
-  const hash = new Bun.CryptoHasher("sha256").update(bytes).digest("hex").slice(0, 24);
-  const key = `edit/ideas/${id}/${hash}.${extension}`;
-  const url = await cloudStorage.presign(key, "PUT");
-  const answer = await fetch(url, { method: "PUT", body: bytes, headers: { "content-type": type } });
-  if (!answer.ok) throw new Error(`the cloud refused the picture (${answer.status})`);
+  const key = await cloud.putPicture(id, bytes, type, extension);
   return { id: shortId(), name: name.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[^\p{L}\p{N} _-]+/gu, " ").trim().slice(0, 80) || "picture", key, from: "upload" };
 }
 

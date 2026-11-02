@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-export type Dialog = "settings" | "logs" | "lessons";
+export type Dialog = "settings" | "logs";
 
 export const useDialogs = create<{ open: Dialog | null }>(() => ({ open: null }));
 

@@ -660,7 +660,7 @@ function startScript(idea: Idea): void {
 }
 
 const FOOTAGE_ICON = { youtube: SquarePlay, drive: FolderOpen, doc: FileText } as const;
-const FOOTAGE_KIND = { youtube: "YouTube", drive: "Drive", doc: "Script Doc" } as const;
+const FOOTAGE_KIND = { youtube: "YouTube", drive: "Google Drive", doc: "Script Doc" } as const;
 
 /**
  * What the script is written from, as New project takes it (Sphe, Nov 2: "we
@@ -688,24 +688,40 @@ function Footage({ idea, onChange }: { idea: Idea; onChange: (patch: IdeaChange)
     <section>
       <h3 className={LABEL}>Footage</h3>
       {idea.footage.length > 0 && (
-        <ul className="mt-2 flex flex-col divide-y divide-white/[0.05] rounded-xl border border-white/[0.06]">
+        <ul className="mt-2 flex flex-col overflow-hidden rounded-xl border border-white/[0.06]">
           {idea.footage.map((one) => {
             const Icon = FOOTAGE_ICON[one.kind];
+            const checking = one.title === undefined && one.problem === undefined;
+            const broken = one.problem !== undefined && !one.reuse;
             return (
-              <li key={one.id} className="group/footage flex items-center gap-3 px-3 py-2">
-                <Icon size={15} strokeWidth={1.8} className={cx("shrink-0", one.kind === "youtube" ? "text-red-300/70" : "text-white/40")} aria-label={FOOTAGE_KIND[one.kind]} />
+              <li key={one.id} className="group/footage flex items-center gap-3 border-t border-white/[0.05] px-3 py-2.5 transition-colors first:border-t-0 hover:bg-white/[0.02]">
+                <span className={cx("grid size-8 shrink-0 place-items-center rounded-lg", one.kind === "youtube" ? "bg-red-400/10 text-red-300/80" : "bg-white/[0.05] text-white/50")}>
+                  <Icon size={15} strokeWidth={1.8} aria-label={FOOTAGE_KIND[one.kind]} />
+                </span>
                 <span className="min-w-0 flex-1">
-                  <a href={one.url} target="_blank" rel="noreferrer" title={one.url} className="block truncate text-[14px] text-white/85 hover:text-white">
+                  <a href={one.url} target="_blank" rel="noreferrer" title={one.url} className="block truncate text-[14px] leading-snug text-white/85 transition-colors hover:text-white">
                     {one.title ?? one.url}
                   </a>
-                  {one.title === undefined && one.problem === undefined && <span className="shimmer block text-[11.5px] text-white/30">Checking…</span>}
-                  {one.problem !== undefined && !one.reuse && <span className="block truncate text-[11.5px] text-red-200/70">{one.problem}</span>}
+                  <span className={cx("block truncate text-[11.5px] leading-snug", broken ? "text-red-200/70" : checking ? "shimmer text-white/30" : "text-white/30")}>
+                    {broken ? one.problem : checking ? "Checking…" : FOOTAGE_KIND[one.kind]}
+                  </span>
                 </span>
-                <label className={cx("flex shrink-0 items-center gap-1.5 text-[12px]", one.kind === "doc" ? "text-white/30" : "cursor-pointer text-white/50")} title="A case the channel already covered: put in as it was, not written again">
-                  <input type="checkbox" checked={one.reuse} disabled={one.kind === "doc"} onChange={(event) => void save(idea.footage.map((other) => (other.id === one.id ? { ...other, reuse: event.target.checked } : other)))} />
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={one.reuse}
+                  disabled={one.kind === "doc"}
+                  title={one.kind === "doc" ? "A script's Doc is always reused as it was written" : one.reuse ? "Reused as it was: not written again" : "A case the channel already covered? Reuse it as it was"}
+                  onClick={() => void save(idea.footage.map((other) => (other.id === one.id ? { ...other, reuse: !other.reuse } : other)))}
+                  className={cx(
+                    "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-[background,border-color,color] duration-150 disabled:cursor-default",
+                    one.reuse ? "border-sky-300/25 bg-sky-300/[0.12] text-sky-100" : "border-white/[0.08] text-white/40 hover:border-white/[0.16] hover:bg-white/[0.04] hover:text-white/75",
+                  )}
+                >
+                  {one.reuse ? <Check size={12} strokeWidth={2.4} /> : <RotateCw size={11} strokeWidth={2.1} />}
                   Reuse
-                </label>
-                <button type="button" aria-label="Remove this footage" title="Remove" onClick={() => void save(idea.footage.filter((other) => other.id !== one.id))} className="grid size-6 shrink-0 place-items-center rounded-md text-white/25 opacity-0 transition-opacity group-hover/footage:opacity-100 hover:bg-white/[0.06] hover:text-white/70">
+                </button>
+                <button type="button" aria-label="Remove this footage" title="Remove" onClick={() => void save(idea.footage.filter((other) => other.id !== one.id))} className="-mr-1 grid size-7 shrink-0 place-items-center rounded-md text-white/25 opacity-0 transition-opacity group-hover/footage:opacity-100 hover:bg-white/[0.06] hover:text-white/70 focus-visible:opacity-100">
                   <X size={13} strokeWidth={2} />
                 </button>
               </li>

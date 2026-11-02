@@ -343,6 +343,12 @@ export function HomeClassic() {
                     {label} <span className="font-normal text-faint tabular">{total}</span>
                   </button>
                 ))}
+                {/* Thumbnails (Nov 2): their own screen, for the same people as ideas. */}
+                {ideasAllowed && (
+                  <button onClick={() => navigate("/thumbnails")} className="flex items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted transition-colors hover:text-fg">
+                    Thumbnails
+                  </button>
+                )}
               </div>
               <DevControl count={all.filter((project) => project.dev === true).length} cloudOnly={cloudOnly.filter((project) => project.summary?.dev === true).length} show={showDev} onShow={setShowDev} onChanged={refresh} />
               {cloud?.on && cloud.error && (

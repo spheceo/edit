@@ -1,0 +1,200 @@
+// A thumbnail's layers as given (by Claude's tools or the editor), checked and
+// filled in: every number in its range, a picture that's the thumbnail's own
+// or the library's, a colour a colour. What's left out takes the house's
+// defaults, so "a REC overlay" or "white caption, black box" is a short ask.
+
+import { assetOf, HEIGHT, NO_ADJUST, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Stroke, type TextLayer } from "@edit/types/thumbnails";
+
+type Args = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is Args => value !== null && typeof value === "object" && !Array.isArray(value);
+
+function number(value: unknown, fallback: number, low: number, high: number, what: string): number {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${what} must be a number.`);
+  return Math.min(high, Math.max(low, value));
+}
+
+const COLOR = /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\)|[a-z]{3,20})$/i;
+function color(value: unknown, fallback: string, what: string): string {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "string" || !COLOR.test(value.trim())) throw new Error(`${what} must be a colour ("#ffffff", "rgba(0,0,0,0.8)", "red").`);
+  return value.trim();
+}
+
+const newId = () => Math.random().toString(36).slice(2, 10);
+
+function adjustOf(given: unknown, before: Adjust | undefined): Adjust | undefined {
+  if (given === undefined) return before;
+  if (given === null) return undefined;
+  if (!isRecord(given)) throw new Error("adjust is an object: exposure, contrast, saturation, warmth, shadows, highlights (-100…100), vignette, sharpen (0…100).");
+  const base = before ?? NO_ADJUST;
+  const out: Adjust = { ...base };
+  for (const key of Object.keys(NO_ADJUST) as (keyof Adjust)[]) {
+    const low = key === "vignette" || key === "sharpen" ? 0 : -100;
+    out[key] = number(given[key], base[key], low, 100, `adjust.${key}`);
+  }
+  return out;
+}
+
+export const DEFAULT_SHADOW: Shadow = { color: "#000000", opacity: 75, angle: 120, distance: 6, spread: 20, size: 18 };
+
+function shadowOf(given: unknown, before: Shadow | undefined): Shadow | undefined {
+  if (given === undefined) return before;
+  if (given === null || given === false) return undefined;
+  const base = before ?? DEFAULT_SHADOW;
+  if (given === true) return base;
+  if (!isRecord(given)) throw new Error("shadow is an object: color, opacity (0…100), angle (degrees), distance (px), spread (0…100), size (px); or null for none.");
+  return {
+    color: color(given.color, base.color, "shadow.color"),
+    opacity: number(given.opacity, base.opacity, 0, 100, "shadow.opacity"),
+    angle: number(given.angle, base.angle, -360, 360, "shadow.angle"),
+    distance: number(given.distance, base.distance, 0, 200, "shadow.distance"),
+    spread: number(given.spread, base.spread, 0, 100, "shadow.spread"),
+    size: number(given.size, base.size, 0, 250, "shadow.size"),
+  };
+}
+
+function boxOf(given: unknown, before: Box | undefined): Box | undefined {
+  if (given === undefined) return before;
+  if (given === null || given === false) return undefined;
+  const base = before ?? { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 };
+  if (given === true) return base;
+  if (!isRecord(given)) throw new Error("box is an object: color, opacity (0…100), padX, padY, radius (px); or null for none.");
+  return {
+    color: color(given.color, base.color, "box.color"),
+    opacity: number(given.opacity, base.opacity, 0, 100, "box.opacity"),
+    padX: number(given.padX, base.padX, 0, 200, "box.padX"),
+    padY: number(given.padY, base.padY, 0, 200, "box.padY"),
+    radius: number(given.radius, base.radius, 0, 200, "box.radius"),
+  };
+}
+
+function strokeOf(given: unknown, before: Stroke | undefined): Stroke | undefined {
+  if (given === undefined) return before;
+  if (given === null || given === false) return undefined;
+  const base = before ?? { color: "#000000", width: 4 };
+  if (!isRecord(given)) throw new Error("stroke is an object: color, width (px); or null for none.");
+  return { color: color(given.color, base.color, "stroke.color"), width: number(given.width, base.width, 0, 60, "stroke.width") };
+}
+
+/**
+ * One layer as given, over what it was (`before`, for a change): checked, its
+ * leftovers the defaults. `sources` are the pictures it may show.
+ */
+export function layerOf(given: unknown, before: Layer | undefined, sources: Set<string>): Layer {
+  if (!isRecord(given)) throw new Error("A layer is an object.");
+  const kind = given.kind ?? before?.kind;
+  if (kind !== "image" && kind !== "text") throw new Error('A layer\'s kind is "image" (a picture or overlay) or "text".');
+  if (before !== undefined && before.kind !== kind) throw new Error(`Layer ${before.id} is ${before.kind === "image" ? "a picture" : "text"}: remove it and add another instead.`);
+  const id = typeof given.id === "string" && /^[\w-]{1,40}$/.test(given.id) ? given.id : (before?.id ?? newId());
+  const name = typeof given.name === "string" && given.name.trim() !== "" ? given.name.trim().slice(0, 60) : before?.name;
+  const opacity = number(given.opacity, before?.opacity ?? 100, 0, 100, "opacity");
+  const hidden = typeof given.hidden === "boolean" ? given.hidden : before?.hidden;
+  if (kind === "image") {
+    const was = before as ImageLayer | undefined;
+    const source = typeof given.source === "string" ? given.source.trim() : was?.source;
+    if (source === undefined || source === "") throw new Error("A picture layer needs its source: one of the thumbnail's images (its id) or a library overlay (asset:<id>).");
+    if (!sources.has(source)) throw new Error(`There's no picture ${source}: use one of the thumbnail's images (by id) or a library overlay (asset:<id>).`);
+    const fit = given.fit ?? was?.fit ?? (assetOf(source) !== null ? "stretch" : "cover");
+    if (fit !== "cover" && fit !== "contain" && fit !== "stretch") throw new Error('fit is "cover", "contain" or "stretch".');
+    const layer: ImageLayer = {
+      id,
+      kind: "image",
+      name: name ?? (assetOf(source) !== null ? assetOf(source)! : "picture"),
+      opacity,
+      ...(hidden ? { hidden } : {}),
+      source,
+      x: number(given.x, was?.x ?? 0, -WIDTH * 2, WIDTH * 3, "x"),
+      y: number(given.y, was?.y ?? 0, -HEIGHT * 2, HEIGHT * 3, "y"),
+      width: number(given.width, was?.width ?? WIDTH, 1, WIDTH * 4, "width"),
+      height: number(given.height, was?.height ?? HEIGHT, 1, HEIGHT * 4, "height"),
+      fit,
+    };
+    const zoom = number(given.zoom, was?.zoom ?? 1, 1, 8, "zoom");
+    if (zoom !== 1) layer.zoom = zoom;
+    const focusX = number(given.focusX, was?.focusX ?? 0.5, 0, 1, "focusX");
+    const focusY = number(given.focusY, was?.focusY ?? 0.5, 0, 1, "focusY");
+    if (focusX !== 0.5) layer.focusX = focusX;
+    if (focusY !== 0.5) layer.focusY = focusY;
+    const flip = typeof given.flip === "boolean" ? given.flip : was?.flip;
+    if (flip) layer.flip = true;
+    const rotation = number(given.rotation, was?.rotation ?? 0, -360, 360, "rotation");
+    if (rotation !== 0) layer.rotation = rotation;
+    const adjust = adjustOf(given.adjust, was?.adjust);
+    if (adjust !== undefined && Object.values(adjust).some((one) => one !== 0)) layer.adjust = adjust;
+    const shadow = shadowOf(given.shadow, was?.shadow);
+    if (shadow !== undefined) layer.shadow = shadow;
+    return layer;
+  }
+  const was = before as TextLayer | undefined;
+  const text = typeof given.text === "string" ? given.text : was?.text;
+  if (text === undefined || text.trim() === "") throw new Error("A text layer needs its text.");
+  if (text.length > 300) throw new Error("A thumbnail's text is at most 300 characters.");
+  const align = given.align ?? was?.align ?? "center";
+  if (align !== "left" && align !== "center" && align !== "right") throw new Error('align is "left", "center" or "right".');
+  const font = typeof given.font === "string" && given.font.trim() !== "" ? given.font.trim().slice(0, 60) : (was?.font ?? "Montserrat");
+  if (/["\\;{}]/.test(font)) throw new Error("font is a font's name (Montserrat, Helvetica Neue, Arial Black, Impact).");
+  const layer: TextLayer = {
+    id,
+    kind: "text",
+    name: name ?? text.slice(0, 30),
+    opacity,
+    ...(hidden ? { hidden } : {}),
+    text,
+    x: number(given.x, was?.x ?? WIDTH / 2, -WIDTH, WIDTH * 2, "x"),
+    y: number(given.y, was?.y ?? HEIGHT / 2, -HEIGHT, HEIGHT * 2, "y"),
+    width: number(given.width, was?.width ?? 900, 40, WIDTH * 2, "width"),
+    font,
+    weight: Math.round(number(given.weight, was?.weight ?? 800, 100, 900, "weight") / 100) * 100,
+    size: number(given.size, was?.size ?? 72, 8, 400, "size"),
+    color: color(given.color, was?.color ?? "#ffffff", "color"),
+    align,
+    lineHeight: number(given.lineHeight, was?.lineHeight ?? 1.05, 0.6, 3, "lineHeight"),
+  };
+  const uppercase = typeof given.uppercase === "boolean" ? given.uppercase : was?.uppercase;
+  if (uppercase) layer.uppercase = true;
+  const italic = typeof given.italic === "boolean" ? given.italic : was?.italic;
+  if (italic) layer.italic = true;
+  const rotation = number(given.rotation, was?.rotation ?? 0, -360, 360, "rotation");
+  if (rotation !== 0) layer.rotation = rotation;
+  const box = boxOf(given.box, was?.box);
+  if (box !== undefined) layer.box = box;
+  const stroke = strokeOf(given.stroke, was?.stroke);
+  if (stroke !== undefined) layer.stroke = stroke;
+  const shadow = shadowOf(given.shadow, was?.shadow);
+  if (shadow !== undefined) layer.shadow = shadow;
+  return layer;
+}
+
+/** A whole design as given: its layers, bottom first, each checked; ids kept apart. */
+export function designOf(given: unknown, before: Design, sources: Set<string>): Design {
+  const layers = isRecord(given) ? given.layers : given;
+  if (!Array.isArray(layers)) throw new Error("layers is a list, bottom first.");
+  if (layers.length > 40) throw new Error("At most 40 layers.");
+  const byId = new Map(before.layers.map((one) => [one.id, one]));
+  const seen = new Set<string>();
+  const out = layers.map((one) => {
+    const was = isRecord(one) && typeof one.id === "string" ? byId.get(one.id) : undefined;
+    const layer = layerOf(one, was !== undefined && was.kind === (isRecord(one) ? (one.kind ?? was.kind) : was.kind) ? was : undefined, sources);
+    if (seen.has(layer.id)) layer.id = newId();
+    seen.add(layer.id);
+    return layer;
+  });
+  return { layers: out };
+}
+
+/** The layers in a line each, for Claude: what's where. */
+export function describe(design: Design): string {
+  if (design.layers.length === 0) return "No layers yet: the canvas is black.";
+  return design.layers
+    .map((layer, index) => {
+      const at = `${index + 1}. ${layer.id} "${layer.name}"${layer.hidden ? " (hidden)" : ""}${layer.opacity < 100 ? ` at ${layer.opacity}%` : ""}`;
+      if (layer.kind === "image") {
+        const extra = [layer.zoom ? `zoom ${layer.zoom}` : "", layer.adjust ? `adjust ${JSON.stringify(Object.fromEntries(Object.entries(layer.adjust).filter(([, value]) => value !== 0)))}` : "", layer.shadow ? "shadow" : ""].filter(Boolean).join(", ");
+        return `${at}: picture ${layer.source}, ${layer.fit}, box ${Math.round(layer.x)},${Math.round(layer.y)} ${Math.round(layer.width)}×${Math.round(layer.height)}${extra ? `, ${extra}` : ""}`;
+      }
+      return `${at}: text “${layer.text}”, ${layer.font} ${layer.weight} ${layer.size}px ${layer.color}, centred at ${Math.round(layer.x)},${Math.round(layer.y)} (wraps at ${Math.round(layer.width)})${layer.box ? `, box ${layer.box.color}` : ""}${layer.stroke ? `, stroke ${layer.stroke.width}px` : ""}${layer.shadow ? `, shadow spread ${layer.shadow.spread} size ${layer.shadow.size}` : ""}`;
+    })
+    .join("\n");
+}

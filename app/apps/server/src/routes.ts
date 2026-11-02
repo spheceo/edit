@@ -50,6 +50,7 @@ import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
 import * as writer from "./writer/routes.ts";
 import * as ideas from "./ideas/routes.ts";
+import * as thumbnails from "./thumbnails/routes.ts";
 import * as later from "./later.ts";
 import * as lessonInbox from "./lesson_inbox.ts";
 import * as presence from "./presence.ts";
@@ -94,6 +95,7 @@ export function buildRouter(): Router<App> {
   writerHandoff.routes(router);
   writer.routes(router);
   ideas.routes(router);
+  thumbnails.routes(router);
   later.routes(router);
   lessonInbox.routes(router);
   presence.routes(router);

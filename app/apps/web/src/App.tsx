@@ -10,6 +10,8 @@ import { Home } from "./components/Home";
 import { HomeClassic } from "./components/HomeClassic";
 import { ScriptMode } from "./writer/script-mode";
 import { IdeaScreen } from "./ideas/page";
+import { ThumbnailScreen } from "./thumbnails/page";
+import { ThumbnailsScreen } from "./thumbnails/list";
 import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
 import { useConnection } from "./lib/api";
@@ -26,7 +28,10 @@ export function App() {
   const scripts = path === "/scripts" || path.startsWith("/scripts/");
   // An idea's page: /ideas/<id> (Home's Ideas section lists them).
   const ideaId = path.match(/^\/ideas\/([\w-]+)/)?.[1];
-  const screen = projectId ?? (scripts ? "scripts" : ideaId !== undefined ? `idea-${ideaId}` : "home");
+  // Thumbnails (Nov 2): /thumbnails (the list) and /thumbnails/<id> (one, with its conversation).
+  const thumbId = path.match(/^\/thumbnails\/([\w-]+)/)?.[1];
+  const thumbs = path === "/thumbnails";
+  const screen = projectId ?? (scripts ? "scripts" : ideaId !== undefined ? `idea-${ideaId}` : thumbId !== undefined ? `thumb-${thumbId}` : thumbs ? "thumbnails" : "home");
   return (
     // The kit: respect reduced motion (movement goes, fades stay).
     <MotionConfig reducedMotion="user">
@@ -40,14 +45,16 @@ export function App() {
           transition={{ duration: 0.16 }}
         >
           <ErrorBoundary key={screen}>
-            <SignInGate>{projectId ? <Editor id={projectId} /> : scripts ? <ScriptMode /> : ideaId !== undefined ? <IdeaScreen id={ideaId} /> : <HomeScreen />}</SignInGate>
+            <SignInGate>
+              {projectId ? <Editor id={projectId} /> : scripts ? <ScriptMode /> : ideaId !== undefined ? <IdeaScreen id={ideaId} /> : thumbId !== undefined ? <ThumbnailScreen id={thumbId} /> : thumbs ? <ThumbnailsScreen /> : <HomeScreen />}
+            </SignInGate>
           </ErrorBoundary>
         </motion.div>
       </AnimatePresence>
       <ServerDown />
       <Toasts />
       {/* Edit's exports, on Home and in the editor; a script page has none of its own, and the pill sat over its top bar (the user, Oct 31). */}
-      {!scripts && ideaId === undefined && <ExportActivity />}
+      {!scripts && ideaId === undefined && thumbId === undefined && !thumbs && <ExportActivity />}
       <AppDialogs />
       <ContextMenuHost />
     </MotionConfig>

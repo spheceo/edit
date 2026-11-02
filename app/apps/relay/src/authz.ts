@@ -82,9 +82,12 @@ export function reportRefused(found: Caller, key: string): string | null {
 /** An idea's pictures (ideas/images.ts): read and written only by someone who works on ideas. */
 export const IDEAS = "edit/ideas/";
 
-/** Why `found` may not touch `key` when it's an idea's picture (null: they may). */
+/** A thumbnail's pictures and the team's overlays (Nov 2): the same people as ideas, the repackagers. */
+export const THUMBNAILS = "edit/thumbnails/";
+
+/** Why `found` may not touch `key` when it's an idea's or a thumbnail's picture (null: they may). */
 export function ideaRefused(found: Caller, key: string): string | null {
-  if (!key.startsWith(IDEAS) || found.kind !== "person" || found.admin || found.perms.some((perm) => perm.startsWith("ideas."))) return null;
+  if ((!key.startsWith(IDEAS) && !key.startsWith(THUMBNAILS)) || found.kind !== "person" || found.admin || found.perms.some((perm) => perm.startsWith("ideas."))) return null;
   return "Your account can't work on ideas yet: an admin can give you Interrogation ideas at accounts.spheceo.com.";
 }
 
@@ -94,7 +97,7 @@ export const WRITABLE = [
   "edit/covers/", "edit/reviews/", "edit/exports/assets/", "edit/exports/manifests/",
   // A long recording to be heard by link (transcribe_jobs.ts); the relay deletes it once heard.
   "edit/transcribe/",
-  REPORTS, IDEAS,
+  REPORTS, IDEAS, THUMBNAILS,
 ];
 
 /** What a non-admin may list: the analysis beside a source (cloud_media's fetchAnalysisOf). */

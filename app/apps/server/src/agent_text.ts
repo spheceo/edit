@@ -9,6 +9,7 @@
 //     agent/shared/<name>.md                   text taken in with {{> name}}
 //     agent/writer/<name>.md                   Script mode's guides (Repack's, word for word)
 //     agent/ideas/<name>.md                    the ideas' craft (Sphe Research's, word for word)
+//     agent/thumbnails/<name>.md               the thumbnails' craft (Claude making one with the team)
 //
 // A file may open with frontmatter (`---` lines of `key: value`); a house
 // skill's `description` is its line in the instructions' SKILLS list, which
@@ -109,6 +110,13 @@ export function writerGuide(name: string): string {
 export function ideasGuide(name: string): string {
   const text = FILES[`ideas/${name}.md`];
   if (text === undefined) throw new Error(`agent text: no agent/ideas/${name}.md`);
+  return parse(text).body;
+}
+
+/** Thumbnails' guide (agent/thumbnails/<name>.md): its text without the frontmatter. */
+export function thumbnailsGuide(name: string): string {
+  const text = FILES[`thumbnails/${name}.md`];
+  if (text === undefined) throw new Error(`agent text: no agent/thumbnails/${name}.md`);
   return parse(text).body;
 }
 

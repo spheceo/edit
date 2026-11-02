@@ -4,6 +4,7 @@ import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
+import { openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
 import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
 
 export { DriveToR2 } from "./jobs";
@@ -30,6 +31,8 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  *                          with the cloud token only (see cloud.ts)
  *   GET|POST /v1/ideas/…   ideas: their Convex rows, YouTube's details, the Interrogation
  *                          board's Trello (ideas.ts), with an `ideas.*` capability
+ *   POST /v1/openart/mcp   the team's OpenArt account's MCP server, for thumbnails (openart.ts),
+ *                          with an `ideas.*` capability
  *   GET  /health
  *
  * Spend is bounded three ways: a burst limit per IP, a daily byte quota per
@@ -38,7 +41,7 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  * Worker never buffers or parses either (keeps CPU tiny on any plan).
  */
 
-export interface Env extends CloudEnv, AuthEnv, JobsEnv {
+export interface Env extends CloudEnv, AuthEnv, JobsEnv, OpenArtEnv {
   /** Transcription and the existing house voice. */
   ELEVENLABS_MAIN_KEY?: string;
   /** Only the voices named in ELEVENLABS_VOICES_IDS use this account. */
@@ -85,7 +88,7 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY), openart: openartReady(env) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
@@ -117,6 +120,13 @@ export default {
       if (!mayIdeas(found)) return json(403, { error: NO_IDEAS });
       if (env.CLOUD_BURST !== undefined && !(await env.CLOUD_BURST.limit({ key: `ideas:${burstKey(request, found)}` })).success) return json(429, { error: "Too many requests at once; try again in a minute." });
       return ideasRoute(request, url, env, found);
+    }
+    // Thumbnails' pictures on the team's OpenArt account (openart.ts): the same people as ideas.
+    if (url.pathname.startsWith("/v1/openart/")) {
+      const found = await allow(request, env, "use", "openart");
+      if (found instanceof Response) return found;
+      if (!mayIdeas(found)) return json(403, { error: NO_IDEAS });
+      return openartRoute(request, url, env);
     }
     // The YouTube proxy, to signed-in people only (as Writer's relay gives it): installed Edits carry no
     // keys, so a teammate's download YouTube refused had no proxy to fall back on (Oct 30).
@@ -458,6 +468,7 @@ interface BudgetState { storage: BudgetStorage }
 export class TranscriptionBudget {
   constructor(private state: BudgetState, private env: Env) {}
   async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/openart") return openartToken(request, this.state.storage, this.env);
     if (new URL(request.url).pathname === "/maps") return this.mapSession(request);
     if (new URL(request.url).pathname === "/lookups") return this.lookup(request);
     if (new URL(request.url).pathname === "/owner") return this.owner(request);

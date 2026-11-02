@@ -136,6 +136,14 @@ const IDEA_FUNCTIONS = new Map([
   ["ideas:get", "query"],
   ["ideas:commit", "mutation"],
   ["ideas:remove", "mutation"],
+  // Thumbnails (Nov 2), the same people's: made in a conversation with Claude, the team's overlays beside them.
+  ["thumbnails:list", "query"],
+  ["thumbnails:get", "query"],
+  ["thumbnails:commit", "mutation"],
+  ["thumbnails:remove", "mutation"],
+  ["thumbnails:listAssets", "query"],
+  ["thumbnails:putAsset", "mutation"],
+  ["thumbnails:removeAsset", "mutation"],
 ]);
 
 const MAX_BODY = 1024 * 1024;
@@ -197,17 +205,17 @@ export async function ideasRoute(request: Request, url: URL, env: IdeasEnv, foun
 async function convex(body: Record<string, unknown>, env: IdeasEnv, found: Caller): Promise<Response> {
   const path = typeof body.path === "string" ? body.path : "";
   const kind = IDEA_FUNCTIONS.get(path);
-  if (kind === undefined || body.kind !== kind) return json(403, { error: "Only the ideas functions Edit calls can be called here." });
+  if (kind === undefined || body.kind !== kind) return json(403, { error: "Only the ideas and thumbnails functions Edit calls can be called here." });
   if (body.args !== undefined && !isObject(body.args)) return json(400, { error: "args must be an object." });
   if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) return json(503, { error: "Convex is not configured on the relay yet." });
   const paused = convexPaused(env);
   if (paused !== null) return paused;
   const { actor: _sent, ...args } = (body.args ?? {}) as Record<string, unknown>;
   // Who started an idea, and who changed it, come from the token, never the caller.
-  if (path === "ideas:commit" || path === "ideas:remove") {
+  if (kind === "mutation") {
     const actor = actorOf(found);
     if (actor !== null && actor.name !== "") args.by = actor.name;
-    if (path === "ideas:commit" && actor !== null) args.actor = actor;
+    if ((path === "ideas:commit" || path === "thumbnails:commit") && actor !== null) args.actor = actor;
   }
   let answer: Response;
   try {

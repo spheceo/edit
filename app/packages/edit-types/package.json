@@ -11,7 +11,9 @@
     "./writer": "./src/writer.ts",
     "./ideas": "./src/ideas.ts",
     "./later": "./src/later.ts",
-    "./lessons": "./src/lessons.ts"
+    "./lessons": "./src/lessons.ts",
+    "./thumbnails": "./src/thumbnails.ts",
+    "./thumbnail_render": "./src/thumbnail_render.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

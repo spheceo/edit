@@ -4,10 +4,11 @@
 // way more organised"), after the team's "having to scroll through a long,
 // tedious" list of ideas, scripts and edits together.
 
-import { Check, Clock, FileText, Film, Inbox, Lightbulb, PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
+import { Check, Clock, FileText, Film, Image as ImageIcon, Inbox, Lightbulb, PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
+import { navigate } from "../lib/route";
 import { AppMenu } from "./AppMenu";
 import { cx, IconButton } from "./ui";
 
@@ -128,6 +129,13 @@ export function HomeSidebar({ sections, counts, where, onChoose, open, onClose }
               {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
             </div>
           ))}
+          {/* Thumbnails (Nov 2): their own screen, for the same people as ideas. */}
+          {sections.includes("ideas") && (
+            <button onClick={() => navigate("/thumbnails")} className="mt-2.5 flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium text-secondary transition-colors hover:bg-hover hover:text-fg">
+              <ImageIcon size={15} className="shrink-0 text-muted" />
+              <span className="min-w-0 flex-1 truncate">Thumbnails</span>
+            </button>
+          )}
           <div className="mx-2 my-2.5 border-t border-line" />
           {item("later", "Later", Clock)}
           {item("done", "Done", Check)}

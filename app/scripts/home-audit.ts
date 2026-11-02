@@ -110,7 +110,8 @@ const AUDIT = `(() => {
 })()`;
 // The sidebar's places (prototype C, Nov 2), and a place's stages as the steps over its list ("Edits/Editing").
 const VIEWS = ["Needs you", "Ideas", "Ideas/Drafts", "Ideas/On the board", "Thumbnails", "Scripts", "Scripts/Importing", "Scripts/Ready to script", "Scripts/Scripting", "Scripts/Ready to edit", "Edits", "Edits/Editing", "Edits/In review", "Edits/Subtitled", "Later", "Done"];
-const navPlace = (text: string) => js(`(() => { const b = [...document.querySelectorAll("aside nav button")].find((x) => x.querySelector("span")?.textContent.trim() === ${JSON.stringify(text)}); b?.click(); return !!b; })()`);
+// The sidebar's rows, and the foot's Later and Done card (outside its nav since Nov 2).
+const navPlace = (text: string) => js(`(() => { const b = [...document.querySelectorAll("aside button")].find((x) => [...x.querySelectorAll("span")].some((one) => one.textContent.trim() === ${JSON.stringify(text)})); b?.click(); return !!b; })()`);
 const navStep = (text: string) => js(`(() => { const b = [...document.querySelectorAll("main button")].find((x) => x.firstChild?.textContent?.trim() === ${JSON.stringify(text)} && !x.disabled); b?.click(); return !!b; })()`);
 const nav = async (view: string) => {
   const [place, step] = view.split("/") as [string, string | undefined];

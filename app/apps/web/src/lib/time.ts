@@ -30,3 +30,16 @@ export function ago(ms: number) {
   if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)}d ago`;
   return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
+
+/** When something set aside comes back, in a few words: "today", "tomorrow", "Thu", "Nov 12". */
+export function whenBack(until: number, now = Date.now()): string {
+  const day = (at: number) => {
+    const date = new Date(at);
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  };
+  const days = Math.round((day(until) - day(now)) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days < 7) return new Date(until).toLocaleDateString("en-US", { weekday: "short" });
+  return new Date(until).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}

@@ -372,6 +372,13 @@ export function Home() {
   };
   const ours = items.filter((item) => !mine || item.mine);
   const countOf = (place: Where) => ours.filter((item) => isIn(item, place)).length;
+  // The foot's Later: how many are set aside, and the next to come back.
+  const setAside = ours.filter((item) => isIn(item, "later"));
+  const nextBack = setAside
+    .map((item) => ({ title: item.title, until: entryOf(item)?.until }))
+    .filter((one): one is { title: string; until: number } => typeof one.until === "number")
+    .sort((a, b) => a.until - b.until)[0];
+  const laterSummary = { count: setAside.length, next: nextBack ?? null };
   // A search looks through everything, everyone's, wherever it is.
   const words = query.trim().toLowerCase();
   const searching = words !== "";
@@ -447,7 +454,7 @@ export function Home() {
   return (
     <LaterContext.Provider value={later}>
       <div className="flex h-full bg-black p-2">
-        <HomeSidebar places={places} thumbnails={ideasAllowed} needs={countOf("needs")} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        <HomeSidebar places={places} thumbnails={ideasAllowed} needs={countOf("needs")} later={laterSummary} done={countOf("done")} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
           <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
             {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}

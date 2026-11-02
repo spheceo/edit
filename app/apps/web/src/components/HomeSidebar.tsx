@@ -1,7 +1,7 @@
 // Home's sidebar (Oct 31 2026; Nov 2, prototype C): the account and the
 // hide button, what needs you, then Ideas, Thumbnails, Scripts and Edits,
-// then Later and Done; one short list at a time beside it, a place's stages
-// as steps over its list. The study portal's sidebar (the user, Oct 31: "i think this is
+// then Later and Done in a card at its foot; one short list at a time beside
+// it, a place's stages as steps over its list. The study portal's sidebar (the user, Oct 31: "i think this is
 // way more organised"), after the team's "having to scroll through a long,
 // tedious" list of ideas, scripts and edits together.
 
@@ -10,6 +10,7 @@ import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { AppMenu } from "./AppMenu";
+import { whenBack } from "../lib/time";
 import { cx, IconButton } from "./ui";
 
 /** The sidebar's own width, and its shell's: the content plus the gap before the panel, so closed it takes nothing. */
@@ -89,7 +90,13 @@ export function nameOf(where: Where): { parent: string | null; name: string } {
   return stage === null ? { parent: null, name: found.label } : { parent: found.label, name: found.stages.find((one) => one.key === stage)?.label ?? stage };
 }
 
-export function HomeSidebar({ places, thumbnails, needs, where, onChoose, open, onClose }: { places: Place[]; thumbnails: boolean; needs: number; where: Where; onChoose: (where: Where) => void; open: boolean; onClose: () => void }) {
+/** What's set aside: how many, and the next to come back (its name, and when; none when it waits to be brought back). */
+export interface LaterSummary {
+  count: number;
+  next: { title: string; until: number } | null;
+}
+
+export function HomeSidebar({ places, thumbnails, needs, later, done, where, onChoose, open, onClose }: { places: Place[]; thumbnails: boolean; needs: number; later: LaterSummary; done: number; where: Where; onChoose: (where: Where) => void; open: boolean; onClose: () => void }) {
   // No spring on the first frame: a sidebar remembered closed doesn't open and close as Home appears.
   const [moving, setMoving] = useState(false);
   useEffect(() => {
@@ -149,12 +156,40 @@ export function HomeSidebar({ places, thumbnails, needs, where, onChoose, open, 
             {thumbnails && item("thumbnails", "Thumbnails", ImageIcon)}
             {PLACES.filter((place) => place.key !== "ideas" && places.includes(place.key)).map((place) => item(place.key, place.label, place.icon))}
           </div>
-          {/* Set aside and finished: a group of their own just under the places, not pinned to the bottom. */}
-          <div className="mt-2.5 flex flex-col gap-0.5">
-            {item("later", "Later", Clock)}
-            {item("done", "Done", Check)}
-          </div>
         </nav>
+        {/*
+          Set aside and finished, in a card at the foot (Sphe, Nov 2, option 2 of four: "they're important but let's
+          think more about them"): Later says how many and when the next comes back, Done how many; each opens its list.
+        */}
+        <div className="mb-1 flex flex-col gap-0.5 rounded-xl border border-line bg-panel p-1">
+          <button
+            onClick={() => onChoose("later")}
+            className={cx("flex w-full min-w-0 flex-col rounded-lg px-2 py-1.5 text-left transition-colors", where === "later" ? "bg-active" : "hover:bg-hover")}
+          >
+            <span className="flex w-full items-center gap-2 text-[13px] font-medium">
+              <Clock size={15} className={cx("shrink-0", where === "later" ? "text-fg" : "text-muted")} />
+              <span className={cx("min-w-0 flex-1 truncate", where === "later" ? "text-fg" : "text-secondary")}>Later</span>
+              {later.count > 0 && <span className="text-[12px] text-faint tabular">{later.count}</span>}
+            </span>
+            {/* The day, then the name, a line each: on one line the name was cut to "R2: …". */}
+            <span className="mt-0.5 block truncate pl-[23px] text-[11.5px] text-faint">
+              {later.count === 0 ? "Nothing set aside" : later.next ? `Next back ${whenBack(later.next.until)}` : "None with a date"}
+            </span>
+            {later.next && (
+              <span className="block truncate pl-[23px] text-[11.5px] text-muted" title={later.next.title}>
+                {later.next.title}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => onChoose("done")}
+            className={cx("flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium transition-colors", where === "done" ? "bg-active text-fg" : "text-secondary hover:bg-hover hover:text-fg")}
+          >
+            <Check size={15} className={cx("shrink-0", where === "done" ? "text-fg" : "text-muted")} />
+            <span className="min-w-0 flex-1 truncate">Done</span>
+            {done > 0 && <span className="text-[12px] text-faint tabular">{done}</span>}
+          </button>
+        </div>
       </div>
     </motion.aside>
   );

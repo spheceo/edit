@@ -643,14 +643,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
         )}
       </section>
 
-      <section>
-        <SectionHeader label="Notes" section="notes" editing={editing} onToggle={toggle} hint="for the team here; never on the card" />
-        {editing === "notes" ? (
-          <textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} rows={3} placeholder="Anything worth remembering about this case" aria-label="Notes" className={cx(FIELD, "mt-2 resize-y")} />
-        ) : (
-          <p className="mt-2 text-[14.5px] leading-relaxed whitespace-pre-wrap text-white/80">{idea.notes || <span className="text-white/25">No notes</span>}</p>
-        )}
-      </section>
+      {/* Notes (idea.notes, the team's, never on the card) are hidden for now: Sphe, Nov 2, "remove this for now". */}
     </div>
   );
 }

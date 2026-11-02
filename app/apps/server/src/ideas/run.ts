@@ -211,7 +211,7 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       if (sheets.length === 0) throw new Error(`The video is ${frames.clock(found.duration)} long: nothing there.`);
       const spread = sheets.length === frames.MAX_SHEETS && found.sheets.filter((one) => one.start + one.tiles * found.every > from && one.start < to).length > frames.MAX_SHEETS;
       return [
-        `The video (${frames.clock(found.duration)}) as ${sheets.length} storyboard ${sheets.length === 1 ? "sheet" : "sheets"}${spread ? `, spread over the stretch: you see one sheet in every ${Math.round(found.sheets.filter((one) => one.start + one.tiles * found.every > from && one.start < to).length / sheets.length)}. Before you grab frames or say something isn't in the video, scan the stretches the transcript points to (the find, the arrest, the confrontation) with from and to` : ""}. Read each:`,
+        `The video (${frames.clock(found.duration)}) as ${sheets.length} storyboard ${sheets.length === 1 ? "sheet" : "sheets"}${spread ? `, spread over the stretch: you see ${sheets.length} of its ${found.sheets.filter((one) => one.start + one.tiles * found.every > from && one.start < to).length}. Before you grab frames or say something isn't in the video, scan the stretches the transcript points to (the find, the arrest, the confrontation) with from and to` : ""}. Read each:`,
         ...sheets.map((one) => `- ${frames.sheetText(found, one)}`),
       ].join("\n");
     }

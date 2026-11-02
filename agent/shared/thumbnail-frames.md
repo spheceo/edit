@@ -2,7 +2,7 @@
 
 How the team builds most thumbnails (Sphe, Nov 2: "usually we have the thumbnail references in our head and we then take frames from the youtube video"): **the reference gives the idea, the video gives the pictures.** For a case with a YouTube video, look at it before you settle the subject's picture on "find an image of…":
 
-1. `scan_video` once and read every sheet: what scenes the video has (outside the house, inside it, the car, the room), who is in them, and where each person is seen clearly. The transcript's times say who is talking when.
+1. `scan_video` and read every sheet: what scenes the video has (outside the house, inside it, the car, the room), who is in them, and where each person is seen clearly. The transcript's times say who is talking when. On a long video the sheets are spread (it says so): scan the stretches the transcript points to (the find, the arrest, the confrontation) before you choose, and never say someone "isn't clear in any frame" from the spread look alone.
 2. Choose the concept from the approved thumbnails (the references): what they show and how (the pose, the look, where the person stands in the scene). Then find this case's version of it in the video.
 3. `grab_frames` at the moments that could give it (a few seconds apart around each; the storyboard is only a sketch), and read each frame. Keep only a frame where the face is clear and the scene reads at a glance.
 
@@ -25,5 +25,13 @@ How the team says it (the user, Nov 2, on the first try's guide):
 - **What the editor can make, not the moment.** Not "mid-sentence": "with her mouth a bit open, almost like she is talking".
 - **Not the clean-up.** "no need to say, remove subtitles or remove overlays as we do this anyway": the burned-in captions, the bodycam's stamp and the channel's logo always go; the guide never mentions them.
 - **Text rarely, and never in capitals.** "we rarely ever have all caps for our text and we rarely ever have text to begin with": most of these thumbnails have no text. Add a caption only when the picture can't carry the title's hook by itself, in its words' own case (`add “She knew” text.`).
+
+## Something new, not the original again
+
+The case's own YouTube thumbnail is the picture the viewer may already have seen. Ours shows them something new (the user, Nov 2, on a guide that put the woman from the original thumbnail back in a box on the porch: "this is way too similar to the original thumbnail. I do like us to have a bit of novelty there, at least if we're going to change some things up. We change up the environments. We can still use the exact same frame, but we can then give instructions for how to change up the environments.").
+
+- Taking the subject from the original thumbnail is right when the video can't give them (blurred by police, never clear): "Take the woman from the original thumbnail. That is perfect, and that's how we would do it if we have a situation like this where she's blurred."
+- Then the environment changes: a different scene of the case (the basement she was kept in rather than the porch she was found on, the house from outside, the room of the interview), from a frame of the video or said in the guide (`put her in the dark basement from the first frame.`, `change the cluttered porch to a bare concrete basement.`). The same frame may stay the base when the guide changes what's around the subject.
+- Before saving, put the two side by side: if a viewer who saw the original would think it's the same picture, change the environment or the moment. `new_from_original` says in a line what's new.
 
 Here a frame of the case's video is the base (the editorial guide's "never alternative bases" is about pictures from outside the video). The scene elements and edits come from what the frame and the reference show, as the inspection above says. When no frame shows the subject clearly (always masked, out of shot, too dark), say so in one line and use the original thumbnail or "find an image of…" as above.

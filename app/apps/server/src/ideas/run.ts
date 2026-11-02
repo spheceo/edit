@@ -144,7 +144,7 @@ export const TOOLS = [
   {
     name: "save_thumbnail_guide",
     description:
-      "Save the thumbnail guide for the main title: in lowercase, where the editor gets the subject's picture (“take the woman from the original thumbnail.”, “find an image of the woman.”, or “take the father from the second frame.”), then the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). subject_from: \"case_thumbnail\" when the case's subject is clearly in the case's own YouTube thumbnail (it goes on the card), \"video\" when they come from frames you grabbed, \"find\" when neither has them. frames: the grabbed frames the guide takes (at most 4), each by the time grab_frames gave it (at), as the scene (use \"base\"), a person (\"subject\", with who: \"the father\"), or both in one frame (\"base_and_subject\"); the card shows them in this order, the base first, and the guide names each by its place, never its time (“use the first frame as the base. take the father from the second frame.”). base_card: the link of the approved card whose thumbnail is the base (with a base frame, the one whose idea it follows), from the list in the message.",
+      "Save the thumbnail guide for the main title: in lowercase, where the editor gets the subject's picture (“take the woman from the original thumbnail.”, “find an image of the woman.”, or “take the father from the second frame.”), then the edits to the base (this case's subject as the evidence supports, at most two scene elements seen in the base, then the caption kept, removed or changed to one to four words, in “quotes”). subject_from: \"case_thumbnail\" when the case's subject is clearly in the case's own YouTube thumbnail (it goes on the card), \"video\" when they come from frames you grabbed, \"find\" when neither has them. frames: the grabbed frames the guide takes (at most 4), each by the time grab_frames gave it (at), as the scene (use \"base\"), a person (\"subject\", with who: \"the father\"), or both in one frame (\"base_and_subject\"); the card shows them in this order, the base first, and the guide names each by its place, never its time (“use the first frame as the base. take the father from the second frame.”). base_card: the link of the approved card whose thumbnail is the base (with a base frame, the one whose idea it follows), from the list in the message. new_from_original (when the case has its own YouTube thumbnail): in a line, what a viewer who saw that thumbnail sees that's new in this one (the environment changed, a different scene of the video, another moment); the same picture again is refused.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -157,6 +157,7 @@ export const TOOLS = [
           items: { type: "object", additionalProperties: false, properties: { at: { type: "string" }, use: { type: "string", enum: ["base", "subject", "base_and_subject"] }, who: { type: "string" } }, required: ["at", "use"] },
         },
         base_card: { type: "string" },
+        new_from_original: { type: "string" },
       },
       required: ["guide", "subject_from"],
     },
@@ -210,7 +211,7 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       if (sheets.length === 0) throw new Error(`The video is ${frames.clock(found.duration)} long: nothing there.`);
       const spread = sheets.length === frames.MAX_SHEETS && found.sheets.filter((one) => one.start + one.tiles * found.every > from && one.start < to).length > frames.MAX_SHEETS;
       return [
-        `The video (${frames.clock(found.duration)}) as ${sheets.length} storyboard ${sheets.length === 1 ? "sheet" : "sheets"}${spread ? ", spread over the stretch: scan a shorter stretch for the sheets between" : ""}. Read each:`,
+        `The video (${frames.clock(found.duration)}) as ${sheets.length} storyboard ${sheets.length === 1 ? "sheet" : "sheets"}${spread ? `, spread over the stretch: you see one sheet in every ${Math.round(found.sheets.filter((one) => one.start + one.tiles * found.every > from && one.start < to).length / sheets.length)}. Before you grab frames or say something isn't in the video, scan the stretches the transcript points to (the find, the arrest, the confrontation) with from and to` : ""}. Read each:`,
         ...sheets.map((one) => `- ${frames.sheetText(found, one)}`),
       ].join("\n");
     }
@@ -283,6 +284,11 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       if (from === "case_thumbnail" && session.caseThumbnail === null) throw new Error('This case has no YouTube thumbnail to take the subject from: use subject_from "video" or "find".');
       if (from === "video" && !taken.some((one) => one.frame.use !== "base")) throw new Error('subject_from "video" takes the subject from a frame: give it in frames with use "subject" (and who) or "base_and_subject".');
       const said = sourceProblem(guide, from) ?? framesProblem(guide, taken.length);
+      // Sphe, Nov 2: "this is way too similar to the original thumbnail. I do like us to have a bit of novelty there…
+      // We change up the environments": said on purpose, against the case's own thumbnail.
+      const novelty = typeof args.new_from_original === "string" ? args.new_from_original.trim() : "";
+      if (session.caseThumbnail !== null && novelty.split(/\s+/).filter(Boolean).length < 4)
+        throw new Error("new_from_original: say in a line what this thumbnail shows that the case's own YouTube thumbnail doesn't (the environment changed, a different scene, another moment). The team wants something new, not the same picture again: “We change up the environments. We can still use the exact same frame, but we can then give instructions for how to change up the environments.”");
       if (said !== null) throw new Error(`The guide ${said}. Save it again.`);
       // The frames on the card: put in the idea's folder on R2 before the guide is saved.
       const framed: IdeaImage[] = [];

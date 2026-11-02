@@ -254,14 +254,17 @@ test("the case's thumbnail goes on the card only when the guide takes the subjec
     await cloud.commit(idea, 0, "Sphe");
     mock.on("GET", "/v1/ideas/trello/approved", () => Response.json({ titles: [{ id: "a1", title: "Mom Realizes Her Made Up Story Isn't Making Sense", list: "Uploaded (SI", url: "https://trello.com/c/a1", cover: "https://trello.com/1/cards/a1/attachments/c/download/cover.jpg" }] }), 1);
     board.forget();
-    claudeCalls([
+    const seen = claudeCalls([
       { name: "save_titles", arguments: { titles: ["Mom Realizes Her Made Up Story Isn't Making Sense Again", "Dad Realizes What The Dress Really Meant", "Mom Has No Idea Detectives Found The Dress"] } },
       { name: "save_thumbnail_guide", arguments: { guide: "take the mom from the original thumbnail. have her in the middle.", subject_from: "case_thumbnail", base_card: "https://trello.com/c/a1" } },
+      { name: "save_thumbnail_guide", arguments: { guide: "take the mom from the original thumbnail. have her in the middle.", subject_from: "case_thumbnail", base_card: "https://trello.com/c/a1", new_from_original: "she sits in the interrogation room, not her kitchen" } },
     ]);
     await run.repackage(context(), "i9-test");
     let now = await settled("i9-test");
+    // Something new against the case's own thumbnail, said on purpose (Sphe, Nov 2: "way too similar to the original thumbnail").
+    expect(seen.answers[1]).toContain("new_from_original");
     expect(now.images.map((one) => one.from)).toEqual(["base", "video", "upload"]);
-    claudeCalls([{ name: "save_thumbnail_guide", arguments: { guide: "find an image of the mom. have her in the middle.", subject_from: "find" } }], "Changed it.");
+    claudeCalls([{ name: "save_thumbnail_guide", arguments: { guide: "find an image of the mom. have her in the middle.", subject_from: "find", new_from_original: "a new picture of her in the room" } }], "Changed it.");
     await run.chat(context(), "i9-test", "she isn't in the thumbnail, find one");
     now = await settled("i9-test");
     expect(now.images.map((one) => one.from)).toEqual(["base", "upload"]);

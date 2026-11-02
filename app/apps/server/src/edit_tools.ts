@@ -65,6 +65,7 @@ import { read, readStruct, SerdeError, type Field, type Struct } from "./serde.t
 import * as sfx from "./sfx.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import { isSubtitled, UpdateError, type Live, type Store } from "./store.ts";
+import * as framePicks from "./frame_picks.ts";
 import * as progress from "./progress.ts";
 import * as styles from "./styles.ts";
 import type { Transcript } from "./transcribe.ts";
@@ -1023,16 +1024,25 @@ async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[
   const end = num(args.end) ?? media.duration;
   const count = clamp(uint(args.count) ?? 12, 1, 24);
   const { budget, columns } = sheetSpec(args, [], count);
+  // pick "auto": a frame each time the picture settles into a new state, at most count (frame_picks.ts).
+  const auto = str(args.pick) === "auto" && media.kind === "video";
+  const picked = auto ? framePicks.picks(await framePicks.grayOf(media.path, start, Math.min(end, media.duration || end)), start, count) : null;
   const { image: sheet, times } = await native().mediaFrames({
     media: structuredClone(media),
     start,
     end,
     count,
+    ...(picked === null || picked.length === 0 ? {} : { times: picked.map((one) => one.time) }),
     ...(budget === undefined ? {} : { budget }),
     ...(columns === undefined ? {} : { columns }),
     encode: "agent",
   });
   const said = times.map((time) => `${fixed(time, 2)}s`);
+  if (picked !== null && picked.length > 0) {
+    const states = picked.map((one, index) => `${index + 1} ${fixed(one.from, 1)}–${fixed(one.to, 1)}s`).join(", ");
+    const still = picked.length === 1 ? " The picture hardly changes here (a fixed camera): count without pick gives evenly spaced frames." : "";
+    return imageContent(sheet, `${mediaId}: ${picked.length} frame${picked.length === 1 ? "" : "s"}, one per picture the footage settles into (left-to-right then down), at ${said.join(", ")}; each stands for ${states}.${still}`);
+  }
   return imageContent(sheet, `${mediaId}: ${said.length} frames, left-to-right then down, at ${said.join(", ")}`);
 }
 

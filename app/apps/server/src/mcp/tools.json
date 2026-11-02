@@ -795,6 +795,14 @@
             "fine"
           ],
           "type": "string"
+        },
+        "pick": {
+          "description": "\"auto\": a frame each time the picture settles into a new state (a cut, the camera moved on), waiting out transitions, at most count; a fixed camera gives one. Default: evenly spaced.",
+          "enum": [
+            "even",
+            "auto"
+          ],
+          "type": "string"
         }
       },
       "required": [

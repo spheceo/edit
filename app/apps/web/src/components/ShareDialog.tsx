@@ -223,7 +223,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
         )}
 
         <div className="mt-4 flex items-center gap-3 rounded-[10px] border border-line bg-panel px-3 py-2.5">
-          <label className="flex min-w-0 flex-1 items-center gap-2.5 text-[13px]" title="The channel's logo at 20%, moving around the frame like a DVD player's, over everything">
+          <label className="flex min-w-0 flex-1 items-center gap-2.5 text-[13px]" title="The channel's logo at 15%, moving around the frame like a DVD player's, over everything">
             <input
               type="checkbox"
               checked={marked}
@@ -236,7 +236,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
             <span className="min-w-0">
               <span className="block text-fg">Watermark</span>
               <span className="block text-[12px] leading-snug text-muted">
-                {channelsFailed ? `The channels didn’t load: ${channelsFailed}` : channels === null ? "Loading the channels…" : channels.length === 0 ? "No channels in the Watermarks folder" : "The channel’s logo at 20%, moving around the frame"}
+                {channelsFailed ? `The channels didn’t load: ${channelsFailed}` : channels === null ? "Loading the channels…" : channels.length === 0 ? "No channels in the Watermarks folder" : "The channel’s logo at 15%, moving around the frame"}
               </span>
             </span>
           </label>

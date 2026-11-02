@@ -1,0 +1,161 @@
+# Diffusion Studio's ideas in Edit (Nov 2–3)
+
+Sphe's list of what to take from Diffusion Studio's agent video editor
+(github.com/diffusionstudio/editor, MPL-2.0; read, never run), in order of
+value. What shipped is in the commits; this note holds the measurements and
+what's still a decision.
+
+## Shipped
+
+| # | What | Commit |
+|---|------|--------|
+| 3 | The look fits the question; the check fits the change; never export to see your work; a worked walkthrough per story style | d9521f07, 8b3d92d4 |
+| 4 | Background work says how long it has left; `wait` once instead of polling | f1a61f23 |
+| 5 | `listen`: what's heard over a stretch (loudness strip, loud and silent stretches, who says what) | 4752aed8 |
+| 7 | `report_problem`: the agent files a bug with this Mac's diagnostics | 7a146f34 |
+| 6 | The Inspector moves, sizes and times a whole house graphic | c654b22c |
+
+## 1. Sheets sized for the model's eyes (code done; waits for an addon build)
+
+Claude reads a picture in 28 × 28 px patches, one token each
+(`⌈w/28⌉ × ⌈h/28⌉`), up to 2,576 px and 4,784 tokens on Opus 4.7 and later
+(1,568 on older models; platform.claude.com vision docs). `sheet.rs` lays every
+agent sheet on that grid (each cell's slot whole patches, so no token pays for
+a sliver), labels each cell with its number and time, puts a ruler over each
+row of a sheet in time (its span and a tick per cell), and sizes it to a
+budget: 160 tokens and 140 a frame, at most 1,300 (`detail: "fine"` twice
+that). A flat 1,300 made a two-frame review 49 % dearer than before (few
+frames blown up), so the budget follows the count.
+
+Tokens per look, before (the sheets the agent actually got, from its Claude
+Code transcripts to Nov 2) and after (the new plan for the same requests),
+over 3,008 sheets:
+
+| Tool | Looks | Before | After | Change |
+|---|---|---|---|---|
+| look_at_media | 1,319 | 1,337 | 991 | −26 % |
+| apply_edit_plan review frames | 875 | 825 | 857 | +4 % |
+| look_at_found | 364 | 3,327 | 1,078 | −68 % |
+| contact_sheet | 309 | 947 | 1,131 | +19 % (the ruler; cells kept at 360 px) |
+| review_edit | 128 | 1,253 | 1,123 | −10 % |
+| check_shots | 13 | 2,064 | 1,179 | −43 % |
+| all | 3,008 | 1,388 | 983 | −29 % |
+
+Still to measure on a run: the tokens a look costs in the agent's own usage,
+and that its answers about a sheet don't get worse (describe_shots on a known
+stretch).
+
+## 2. Frames that follow the footage (code done; waits for the same build)
+
+`frame_picks.ts`: the stretch at 2 frames a second in the camera angles' small
+grey frames (64 × 36, brightness taken out); a new state wherever the picture
+is 0.16 unlike where the current one began (seats.rs's cut); the stillest
+frame of each state kept (transitions waited out), states under a second
+skipped, past the cap the least distinct dropped. `look_at_media pick: "auto"`.
+
+On real footage (scenes: stretches of 1 s or more between frame-to-frame jumps
+over 0.16):
+
+| Stretch | Scenes | Auto, cap 24 | Auto, cap 12 | Even, 12 | Reading the frames |
+|---|---|---|---|---|---|
+| Welfare bodycam 300–420 s | 22 | 24 frames, 2 missed | 11 missed | 17 missed | 15.1 s |
+| Welfare bodycam 800–920 s | 20 | 24, 1 missed | 8 missed | 16 missed | 8.5 s |
+| Welfare bodycam 1200–1320 s | 25 | 24, 1 missed | 13 missed | 22 missed | 7.5 s |
+| Lola's interview room 600–720 s | 1 | 1 frame | 1 | 12 frames | 11.5 s |
+| Lola's interview room 1100–1220 s | 1 | 1 frame | 1 | 12 frames | 9.1 s |
+
+Picking takes under 0.2 s; the frames are read from the cloud preview on a
+Mac under load 10–40, so the reading times are high.
+
+## 5b. A model that hears: Apple's sound classifier (decision for Sphe)
+
+`listen` answers from loudness and the transcript; it can't say what's
+playing. The watcher hasn't heard since Oct 30 (Gemini dropped: "I just wanna
+get rid of gemini"), and no model Edit calls takes sound. Apple's on-device
+classifier (SoundAnalysis, `SNClassifySoundRequest`, ~300 labels: speech,
+shout, music, siren, gunshot, applause, crowd, dog…) is free and runs on the
+Mac. Probe: `~/edit-experiments/sound-analysis/probe.m` (one file, clang, no
+engine) over 10 minutes of a real interrogation's sound.
+
+Measured Nov 3, 00:20, on this 8 GB M1 under load 10–15 (two other threads
+running), 1.5 s windows overlapping by half, one process, 52 MB resident:
+
+| Footage (10 min of sound) | Classify | Cut the sound | What it heard (labels over 0.6) |
+|---|---|---|---|
+| Lola's interview room (16-Year-Old, m7 540–1140 s) | 13.0 s (46× real time) | 2.8 s | speech 578 of 600 s, its gaps where the room is quiet; a pen writing (31 s); sighs, a gasp, whispering; a few wrong ones (burp, hiccup at 1.00) |
+| Welfare Check bodycam (m6 0–600 s) | 11.2 s (54×) | 1.2 s | speech 313 s; a phone ringing 52–94 s; keys; a knock and a door at 137 s; an emergency vehicle at 193 s; screaming at 228 s; a shout at 293 s; laughter; a baby crying; a steady beep 360–469 s (a redaction tone or an alarm: not yet checked against the picture) |
+
+At 0.3 it lists twice as many labels, most of them noise; 0.6 keeps what an
+editor would want to know. Single windows of odd labels (cow_moo, burp) are
+its mistakes: a label held for one window only should be dropped unless it's
+one of the ones that matter alone (gunshot, scream, shout, glass breaking,
+siren).
+
+DESIGN, if Sphe says yes: `sound-v1.json` beside `loudness-v1.bin` in the
+media's cache dir: for each label from a short list that matters to an edit
+(speech, shout, screaming, crying, music, singing, siren and emergency vehicle,
+gunshot, glass breaking, door and knock, dog, crowd and applause, laughter,
+phone, beep), its runs (from, to, best confidence), merged as the probe does.
+Made at import on the same decode that makes the loudness analysis (loudness.rs
+already reads the whole sound once; the classifier takes the same PCM through
+`SNAudioStreamAnalyzer`, so no second decode): ~1 s per minute of sound on this
+Mac, nothing sent anywhere, nothing paid. Native code beside mac_media.m (a
+new `sound_classes.m` and its build line), a napi call, and `listen` reading
+it: "HEARD: shouting 228.0–229.5 s, a siren 192.8–195.0 s, music none". The
+watcher's windows could take the same labels as text, so it hears again
+without Gemini. Cost: a day's work, one Rust/ObjC build; the decision is
+Sphe's because it's new native code in the import path.
+
+## 8. SAM 2.1 tracking for blurs (feasibility)
+
+Diffusion runs SAM 2.1 in the browser on WebGPU through onnxruntime-web, from
+its own fp16 ONNX export on Hugging Face (`diffusionstudio/sam2.1-*-video-onnx-fp16`):
+Tiny is 512 px and 83 MB in five graphs (vision encoder 58 MB, memory
+attention 13 MB, mask decoder 9 MB, memory encoder 3 MB, pointer positions),
+Small 1024 px and ~110 MB. A tracked frame runs all five (tracker.ts `track`);
+a click runs the decoder alone on a held frame. Probe:
+`~/edit-experiments/sam2-probe/probe.py` (onnxruntime, CPU and Core ML).
+
+RESULTS: (below)
+
+## 9. HTML as a graphic clip (design only)
+
+What it would be: a graphic written as a web page (HTML, CSS, an animation
+timeline) that Edit renders to frames and places like footage, for what the
+house graphics can't draw (a chart building up, a phone's messages scrolling,
+a document with lines highlighting). Diffusion composes everything this way;
+Edit already does it once, for maps.
+
+How, on what's there: map_view's page is exactly this pipeline. broll.ts opens
+a page in headless Chrome (`renderMap`: its own profile, the page served by
+Edit at `/api/maps/<token>`), the page posts each frame back
+(`POST /api/maps/<token>/frame/<n>`, written whole by rename), a stall is
+noticed by the frames stopping (`mapStallMs`), the frames become an MP4
+(`framesVideo`), a stand-in holds the clip's place until it's done
+(`swapInMap`, the same media id), jobs.json carries it across a restart, and
+exports wait for it (`waitForMaps`). An HTML graphic needs the same with two
+changes:
+
+1. Deterministic time instead of real time. The page exports
+   `window.edit = { duration, fps, seek(t) }`; Edit calls `seek(frame / fps)`
+   and screenshots (`Page.captureScreenshot` over the DevTools protocol, which
+   map_view's page doesn't need because it draws to a canvas it reads back
+   itself). CSS animations are driven by `document.getAnimations()`'s
+   `currentTime`, GSAP and Web Animations timelines the same way, so a page
+   written for the browser renders frame-exact.
+2. Transparency. A graphic sits over the picture: frames as PNG with alpha
+   (`Emulation.setDefaultBackgroundColorOverride` to transparent), made into
+   ProRes 4444 or HEVC with alpha, which the engine's decoder (mac_media,
+   VideoToolbox) would need to read as BGRA with its alpha kept: the one
+   engine change, checked first on a 2 s clip.
+
+The tool: `html_graphic {html, duration, size?}` (or `make("html", …)` in
+e-code), its page kept beside its frames as a job file so it can be rendered
+again and edited (its source in the clip's media, so the agent and JJ can
+change a word and re-render). The audit treats it as any graphic (text_late,
+graphics_short). Cost, roughly: a minute of Chrome per 10 s of 30 fps
+graphic on this Mac (map_view's 1.2–1.9 s a frame was the tiles; a local page
+is faster), cached by the page's hash.
+
+Not tonight: it needs the engine's alpha path and a design pass with the team
+on which graphics are worth it; everything above it on the list came first.

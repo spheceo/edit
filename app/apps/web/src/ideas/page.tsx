@@ -456,7 +456,7 @@ function SectionHeader({ label, section, editing, onToggle, action, hint }: { la
 }
 
 function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Page; onChange: (patch: IdeaChange) => Promise<unknown>; busy: boolean; onRegenerate: () => void; onUploaded: (idea: Idea) => void }) {
-  const { idea, problems, style } = page;
+  const { idea } = page;
   const [editing, setEditing] = useState<Section | null>(null);
   // What's being written in the section open for editing; saved on Done (or Enter).
   const [titles, setTitles] = useState<{ id?: string; text: string }[]>([]);
@@ -520,7 +520,6 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
           section="titles"
           editing={editing}
           onToggle={toggle}
-          hint={style !== null ? `the team's run ${style.typicalWords[0]}–${style.typicalWords[1]} words` : undefined}
           action={
             <button type="button" onClick={onRegenerate} disabled={busy} className="rounded-lg px-2 py-1 text-[12px] text-white/55 transition-colors hover:bg-white/[0.05] hover:text-white disabled:opacity-40">
               Regenerate titles
@@ -532,7 +531,6 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
             titleRows.map((title, index) => {
               const isMain = main !== null && title.text.trim() === main;
               const key = title.id ?? `new-${index}`;
-              const problem = title.id === undefined ? undefined : problems[title.id];
               const by = title.id === undefined ? undefined : byOf.get(title.id);
               return (
                 <li key={key} aria-label={`Title ${index + 1}`} className="flex items-start gap-2">
@@ -554,12 +552,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
                     ) : (
                       <p className={cx("text-[14.5px] leading-relaxed break-words", isMain ? "font-medium text-amber-200/90" : "text-white/85")}>{title.text}</p>
                     )}
-                    {(problem !== undefined || (by !== undefined && by !== "claude")) && (
-                      <p className="mt-0.5 text-[11.5px] text-white/30">
-                        {problem !== undefined && <span className="text-amber-200/60">This title {problem}. </span>}
-                        {by !== undefined && by !== "claude" && <span>Written by {by}</span>}
-                      </p>
-                    )}
+                    {by !== undefined && by !== "claude" && <p className="mt-0.5 text-[11.5px] text-white/30">Written by {by}</p>}
                   </div>
                   {editing === "titles" && (
                     <div className="relative shrink-0">
@@ -622,7 +615,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
         </button>
       </section>
 
-      <Guide idea={idea} guideProblem={page.guideProblem} editing={editing} text={text} setText={setText} onToggle={toggle} done={done} onChange={onChange} onUploaded={onUploaded} />
+      <Guide idea={idea} editing={editing} text={text} setText={setText} onToggle={toggle} done={done} onChange={onChange} onUploaded={onUploaded} />
 
       <section>
         <SectionHeader label="Case" section="case" editing={editing} onToggle={toggle} />
@@ -675,7 +668,6 @@ const typing = (target: EventTarget | null) => target instanceof HTMLElement && 
 
 function Guide({
   idea,
-  guideProblem,
   editing,
   text,
   setText,
@@ -685,7 +677,6 @@ function Guide({
   onUploaded,
 }: {
   idea: Idea;
-  guideProblem: string | null;
   editing: Section | null;
   text: string;
   setText: (value: string) => void;
@@ -740,11 +731,32 @@ function Guide({
     setOver(false);
     upload(imageFiles(event.dataTransfer));
   };
-  // A frame of the case's video says what it's for ("Frame 4:12 · the father"); an approved thumbnail beside a base frame is the reference it follows.
-  const caption = (index: number, image: IdeaImage) => {
-    const what = image.from === "frame" ? image.name.charAt(0).toUpperCase() + image.name.slice(1) : image.from === "base" ? (image.name === "reference" ? "Reference" : "Base") : image.from === "video" ? "YouTube thumbnail" : image.from === "card" ? "From the card" : null;
-    return index === 0 ? (what === null || image.from === "base" ? "Cover" : `Cover · ${what}`) : what;
+  // One short label, as the guide names the picture (Sphe, Nov 2: "just have a label like "Base" on the bottom left corner and thats about it"):
+  // "First frame", "Base", "Reference", "Original thumbnail"; the person's own pictures and the card's have none.
+  const caption = (image: IdeaImage): string | null => {
+    if (image.from === "frame") {
+      const place = image.name.split(" · ")[0] ?? "frame";
+      return place.charAt(0).toUpperCase() + place.slice(1);
+    }
+    if (image.from === "base") return image.name === "reference" ? "Reference" : "Base";
+    if (image.from === "video") return "Original thumbnail";
+    return null;
   };
+  // Where a picture comes from, to open: a frame at its second of the video, the approved card, the case's video.
+  const video = idea.sources.find((one) => one.kind === "youtube");
+  const linkOf = (image: IdeaImage): string | null => {
+    if (image.from === "frame" && video !== undefined) return `${video.url}${video.url.includes("?") ? "&" : "?"}t=${Math.floor(image.frame?.at ?? 0)}s`;
+    if (image.from === "base") return idea.base?.cardUrl ?? null;
+    if (image.from === "video") return video?.url ?? null;
+    return null;
+  };
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (menuFor === null) return;
+    const dismiss = () => setMenuFor(null);
+    window.addEventListener("mousedown", dismiss);
+    return () => window.removeEventListener("mousedown", dismiss);
+  }, [menuFor]);
   return (
     <section>
       <SectionHeader label="Thumbnail guide" section="guide" editing={editing} onToggle={onToggle} />
@@ -755,46 +767,80 @@ function Guide({
           {idea.thumbnailGuide.trim() || <span className="text-white/25">No thumbnail guide</span>}
         </p>
       )}
-      {(guideProblem !== null || (idea.guideBy !== "claude" && idea.thumbnailGuide !== "")) && (
-        <p className="mt-1 text-[11.5px] text-white/30">
-          {guideProblem !== null && <span className="text-amber-200/60">The guide {guideProblem}. </span>}
-          {idea.guideBy !== "claude" && idea.thumbnailGuide !== "" && <span>Written by {idea.guideBy}: a fresh run keeps it.</span>}
-        </p>
-      )}
+      {idea.guideBy !== "claude" && idea.thumbnailGuide !== "" && <p className="mt-1 text-[11.5px] text-white/30">Written by {idea.guideBy}: a fresh run keeps it.</p>}
 
       <div className="mt-3 flex flex-col gap-3">
-        {idea.images.map((image, index) => (
-          <div key={image.id} className="group/image relative">
-            <img src={imageUrl(idea.id, image.id)} alt={image.name} loading="lazy" className="max-h-[70vh] w-full rounded-xl border border-white/[0.06] object-contain" />
-            {caption(index, image) !== null && (
-              <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] text-white/70 backdrop-blur">
-                {caption(index, image)}
-                {image.from === "base" && idea.base !== null ? ` · ${idea.base.title}` : ""}
-              </span>
-            )}
-            {(index > 0 || index < idea.images.length - 1) && (
-              <div className="absolute top-2 left-2 flex flex-col gap-1 opacity-0 transition-opacity group-hover/image:opacity-100">
-                {index > 0 && <ImageAction label="Move up (the first is the cover)" onClick={() => move(image.id, -1)} icon={<ArrowUp size={13} strokeWidth={1.9} />} />}
-                {index < idea.images.length - 1 && <ImageAction label="Move down" onClick={() => move(image.id, 1)} icon={<ArrowDown size={13} strokeWidth={1.9} />} />}
+        {idea.images.map((image, index) => {
+          const label = caption(image);
+          const link = linkOf(image);
+          const open = menuFor === image.id;
+          return (
+            <div key={image.id} className="group/image relative">
+              <img src={imageUrl(idea.id, image.id)} alt={image.name} loading="lazy" className="max-h-[70vh] w-full rounded-xl border border-white/[0.06] object-contain" />
+              {label !== null && <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] text-white/75 backdrop-blur">{label}</span>}
+              <div className={cx("absolute top-2 right-2 transition-opacity", open ? "opacity-100" : "opacity-0 group-hover/image:opacity-100")}>
+                <button
+                  type="button"
+                  aria-label="Picture options"
+                  title="Picture options"
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={() => setMenuFor((last) => (last === image.id ? null : image.id))}
+                  className="grid size-8 place-items-center rounded-lg bg-black/60 text-white/70 backdrop-blur transition-colors hover:text-white"
+                >
+                  <MoreHorizontal size={15} strokeWidth={1.9} />
+                </button>
+                {open && (
+                  <div onMouseDown={(event) => event.stopPropagation()} className="absolute top-9 right-0 z-30 w-44 rounded-xl border border-white/[0.08] bg-[#141414] p-1 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.95)]">
+                    {link !== null && (
+                      <MenuItem
+                        icon={<ExternalLink size={13} strokeWidth={1.9} />}
+                        onClick={() => {
+                          setMenuFor(null);
+                          window.open(link, "_blank", "noopener,noreferrer");
+                        }}
+                      >
+                        Open link
+                      </MenuItem>
+                    )}
+                    {index > 0 && (
+                      <MenuItem
+                        icon={<ArrowUp size={13} strokeWidth={1.9} />}
+                        onClick={() => {
+                          setMenuFor(null);
+                          move(image.id, -1);
+                        }}
+                      >
+                        Move up
+                      </MenuItem>
+                    )}
+                    {index < idea.images.length - 1 && (
+                      <MenuItem
+                        icon={<ArrowDown size={13} strokeWidth={1.9} />}
+                        onClick={() => {
+                          setMenuFor(null);
+                          move(image.id, 1);
+                        }}
+                      >
+                        Move down
+                      </MenuItem>
+                    )}
+                    <MenuItem
+                      danger
+                      icon={<Trash2 size={13} strokeWidth={1.9} />}
+                      onClick={() => {
+                        setMenuFor(null);
+                        void onChange({ images: order.filter((one) => one !== image.id) });
+                      }}
+                    >
+                      Delete
+                    </MenuItem>
+                  </div>
+                )}
               </div>
-            )}
-            <div className="absolute top-2 right-2 opacity-0 transition-opacity group-hover/image:opacity-100">
-              <ImageAction label="Remove this picture" onClick={() => void onChange({ images: order.filter((one) => one !== image.id) })} icon={<Trash2 size={13} strokeWidth={1.9} />} />
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      {idea.base !== null && (
-        <p className="mt-2 text-[12px] text-white/35">
-          Base:{" "}
-          <a href={idea.base.cardUrl} target="_blank" rel="noreferrer" className="text-white/60 underline decoration-white/20 underline-offset-2 hover:text-white/85">
-            {idea.base.title}
-          </a>{" "}
-          <button type="button" onClick={() => void onChange({ base: null })} className="ml-1 text-white/30 hover:text-white/70">
-            Remove
-          </button>
-        </p>
-      )}
 
       {idea.images.length < 8 && (
         <div className="mt-3">
@@ -828,14 +874,6 @@ function Guide({
         </div>
       )}
     </section>
-  );
-}
-
-function ImageAction({ label, onClick, icon }: { label: string; onClick: () => void; icon: ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-label={label} title={label} className="grid size-8 place-items-center rounded-lg bg-black/60 text-white/70 backdrop-blur transition-opacity hover:text-white">
-      {icon}
-    </button>
   );
 }
 

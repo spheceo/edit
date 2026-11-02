@@ -22,6 +22,7 @@ import { native } from "./native/index.ts";
 import { clipEnd, clipOf, duration, fps as fpsOf, mediaOf, trackLabel, trackOf } from "./project.ts";
 import { asInt, compareStrings, f32, fixed, round, signed } from "./rust.ts";
 import * as seams from "./seams.ts";
+import * as progress from "./progress.ts";
 import { read, SerdeError, unexpected } from "./serde.ts";
 import { stableStringify } from "./stable.ts";
 
@@ -250,7 +251,7 @@ async function smoothSlowMotion({ app, args, projectId }: ToolCall): Promise<Con
   if (!(bool(args.wait) ?? false)) {
     const started = broll.smoothInBackground(app, projectId, clips);
     return text(
-      `smoothing ${started.length} clip(s) in the background (${started.join(", ")}); each swaps in when done`,
+      `smoothing ${started.length} clip(s) in the background (${started.join(", ")}); each swaps in when done.${progress.lookAgain(projectId, ["smooth"])}`,
     );
   }
   const results = await Promise.allSettled(clips.map((clip) => broll.smoothSlowMotion(app, projectId, clip)));

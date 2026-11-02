@@ -20,6 +20,7 @@ import { importPaths } from "./import.ts";
 import { probe as probeFile, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project, VideoClip } from "./model.ts";
 import { canonical, fileName, fileStem, isFile, join, withExtension } from "./paths.ts";
+import * as progress from "./progress.ts";
 import { measuredTrack, repinPlaceLabels } from "./graphics.ts";
 import { clipMedia, clipOf, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import * as relay from "./relay.ts";
@@ -576,11 +577,14 @@ export function smoothInBackground(app: App, projectId: string, clipIds: string[
     clips.add(clipId);
     started.push(clipId);
     const job = jobs.begin(app.store.home, "smooth", projectId, { clip: clipId }, clipId);
+    progress.begin("smooth", projectId, clipId);
     void (async () => {
+      let ok = false;
       try {
         await diag.timeAsync("agent", "smooth slow motion (background)", async () => {
           try {
             await smoothSlowMotion(app, projectId, clipId);
+            ok = true;
           } catch (error) {
             // The edit moved on (the clip cut or changed): nothing to smooth, not a failure.
             if (!(error instanceof Superseded)) throw error;
@@ -591,6 +595,7 @@ export function smoothInBackground(app: App, projectId: string, clipIds: string[
         diag.warn("agent", `smoothing ${clipId} in ${projectId}: ${diag.messageOf(error)}`);
       }
       jobs.end(app.store.home, job);
+      progress.end("smooth", projectId, clipId, ok);
       const pending = smoothing.get(projectId);
       if (pending !== undefined) {
         pending.delete(clipId);
@@ -854,6 +859,9 @@ interface MapJob {
 
 const mapJobs = new Map<string, MapJob>();
 
+/** Who hears of each frame a moving shot's page sends, by its frames folder (its progress). */
+const frameListeners = new Map<string, () => void>();
+
 /** `GET /api/maps/{token}` */
 export function mapPage(token: string): Response {
   const job = mapJobs.get(token);
@@ -867,6 +875,7 @@ export function mapFrame(token: string, index: number, body: Uint8Array): number
   const dir = job?.frames;
   if (job === undefined || dir === undefined) return 404;
   job.progress = timing.now();
+  frameListeners.get(dir)?.();
   // Whole frames only: an attempt cut short is resumed from what's there.
   const partial = join(dir, `frame-${String(index).padStart(5, "0")}.partial`);
   const frame = join(dir, frameName(index));
@@ -1318,6 +1327,7 @@ export async function mapView(app: App, projectId: string, given: Json): Promise
     note +=
       " It's still rendering in the background: place it now (the media is its first frame until the footage is done, then the same media id is the moving shot by itself; get_edit_context lists it under smoothing until then, and exports wait for it).";
   }
+  if (rendering) note += progress.lookAgain(projectId, ["map"]);
   return {
     media,
     place: found,
@@ -1458,7 +1468,11 @@ function startRender(app: App, job: MapShotJob, projectId: string): MapRender {
         // Logged by the timing; the stand-ins hear of it.
       }
       mapRenders.delete(job.key);
-      for (const project of made.projects) jobs.end(app.store.home, jobs.keyOf("map", project, job.key));
+      frameListeners.delete(jobShots(job));
+      for (const project of made.projects) {
+        jobs.end(app.store.home, jobs.keyOf("map", project, job.key));
+        progress.end("map", project, job.key, made.failed === null);
+      }
       // A render that only ran out of time (tiles slow to come on a busy Mac)
       // goes again once by itself, a minute later, from the frames it has: the
       // agent can't, without map_view's arguments (loop 7 R1: "I don't have them
@@ -1476,6 +1490,7 @@ function startRender(app: App, job: MapShotJob, projectId: string): MapRender {
   if (!render.projects.has(projectId)) {
     render.projects.add(projectId);
     jobs.begin(app.store.home, "map", projectId, { first: jobFirst(job) }, job.key);
+    progress.begin("map", projectId, job.key, job.frames);
   }
   return render;
 }
@@ -1526,6 +1541,12 @@ async function renderMoving(app: App, job: MapShotJob, render: MapRender): Promi
         throw new Error(ioMessage(error));
       }
       const config = { ...job.config, have: framesHad(shots, job.frames) };
+      // Its frames are its progress (how long it has left: progress.ts).
+      let had = config.have.length;
+      frameListeners.set(shots, () => {
+        had += 1;
+        for (const project of render.projects) progress.step("map", project, job.key, had, job.frames);
+      });
       const early = new Once<Json>();
       const page = renderMap(app, config, job.width, job.height, shots, early);
       // Whichever comes first: the first frame and track, or the whole page.

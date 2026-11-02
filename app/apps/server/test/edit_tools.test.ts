@@ -10,6 +10,7 @@ import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
 import type { Transcript } from "../src/transcribe.ts";
 import { clipOf, newProject } from "../src/project.ts";
+import * as progress from "../src/progress.ts";
 import { fixtureHome, write, type Fixture } from "./helpers/home.ts";
 import { clip, media } from "./helpers/model.ts";
 
@@ -676,4 +677,21 @@ test("a cut-in covered again keeps its span from the footage either side, not it
   const shots = [{ media: "m1", source_in: 10 }, { media: "m1", source_in: 100, at: 15 }];
   expect(JSON.parse(await said(app, "cover_cut_in", { cut_in: 1, shots }))).toMatchObject({ span: [10, 20] });
   expect(JSON.parse(await said(app, "cover_cut_in", { cut_in: 1, shots: [{ media: "m1", source_in: 30, at: 10 }, { media: "m1", source_in: 120, at: 15 }] }))).toMatchObject({ span: [10, 20] });
+});
+
+test("wait waits once for background work and says what's left", async () => {
+  const { app, id } = setUp("wait");
+  expect(await said(app, "wait", {})).toBe("nothing of that is running: go on");
+  // A map shot rendering, done half a second in.
+  progress.begin("map", id, "k", 10);
+  setTimeout(() => progress.end("map", id, "k"), 500);
+  expect(await said(app, "wait", { for: ["map"], at_most: 5 })).toMatch(/^done \(waited [01] s; it was a map shot rendering: done in about \d+ min\)$/);
+  // Still running at the limit: what's left, and to go on.
+  progress.begin("smooth", id, "c1");
+  expect(await said(app, "wait", { for: ["smooth"], at_most: 1 })).toMatch(/^still running after 1 s: a clip smoothing: done in about 3 min\. Go on/);
+  progress.end("smooth", id, "c1", false);
+  // The edit's reads say what's still running, and how long it has left.
+  progress.begin("watch", id, "watch");
+  expect(await said(app, "review_edit", {})).toContain('"background":"the watcher: done in about');
+  progress.end("watch", id, "watch", false);
 });

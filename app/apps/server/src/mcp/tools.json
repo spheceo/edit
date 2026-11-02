@@ -2515,6 +2515,37 @@
     "name": "export"
   },
   {
+    "name": "wait",
+    "description": "Wait once for background work (smoothing, map shots, the watcher, an export) for as long as it says it has left, instead of reading the project again to see. Returns when it's done, or after at_most seconds (default: its estimate, at most 300) with what's still running.",
+    "inputSchema": {
+      "properties": {
+        "for": {
+          "description": "Which: smooth, map, watch, export (default all).",
+          "items": {
+            "enum": [
+              "smooth",
+              "map",
+              "watch",
+              "export"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "at_most": {
+          "description": "Seconds (at most 300).",
+          "type": "integer"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  {
     "name": "search_broll",
     "description": "Search YouTube in a batch for specific visual scenes matching narration beats; saves source leads and provenance. Titles are leads, inspect frames before use. Prefer original uploads, distinct settings, no baked captions or compilation logos. queries [] lists saved research/observations and imports the bundled brand wallpaper, returning brand_background media id. Its empty call also imports the brand kit: brand_avatar and brand_subscribe (for commentary_bumper) and brand_light_leak (the channel's real stock light leak, for commentary_leak).",
     "inputSchema": {

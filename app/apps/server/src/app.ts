@@ -9,6 +9,7 @@ import { Library as DriveLibrary } from "./library.ts";
 import { useGoogleSignIn } from "./script.ts";
 import { Processor } from "./media.ts";
 import { native, type Native } from "./native/index.ts";
+import * as progress from "./progress.ts";
 import {
   stubServices,
   type Agents,
@@ -59,6 +60,8 @@ export function createApp(options: AppOptions): App {
   // Docs and Drive files are read with the team's sign-in first (script.ts).
   const library = services.library;
   useGoogleSignIn(() => library.accessToken());
+  // Exports say how long they have left, as the agent's other background work does.
+  progress.followExports(options.store);
   return {
     store: options.store,
     media: new Processor(options.store),

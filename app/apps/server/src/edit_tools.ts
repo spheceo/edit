@@ -65,6 +65,7 @@ import { read, readStruct, SerdeError, type Field, type Struct } from "./serde.t
 import * as sfx from "./sfx.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import { isSubtitled, UpdateError, type Live, type Store } from "./store.ts";
+import * as progress from "./progress.ts";
 import * as styles from "./styles.ts";
 import type { Transcript } from "./transcribe.ts";
 
@@ -159,6 +160,35 @@ async function onLiveAsync<T>(app: App, found: Live, work: (input: ProjectInput)
   return withProjectAsync(found.project.id, found.rev, () => JSON.stringify(found.project), work);
 }
 
+/** What's still running in the background and how long it has left (progress.ts), when anything is. */
+function background(projectId: string): { background?: string } {
+  const said = progress.lookAgain(projectId).trim();
+  return said === "" ? {} : { background: said };
+}
+
+const WORK: readonly progress.Work[] = ["smooth", "map", "watch", "export"];
+
+/**
+ * Waits once for background work (smoothing, map shots, the watcher, an
+ * export) for as long as it says it has left, instead of the agent reading
+ * the project again and again to see (Sphe's Nov 2 list, item 4).
+ */
+async function waitTool({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  live(app, projectId);
+  const given = Array.isArray(args.for) ? args.for.filter((kind): kind is progress.Work => typeof kind === "string" && WORK.includes(kind as progress.Work)) : [];
+  const kinds = given.length === 0 ? WORK : given;
+  const before = progress.summary(projectId, kinds);
+  if (before === null) return text("nothing of that is running: go on");
+  const estimate = progress.remainingMs(projectId, kinds) ?? 0;
+  const most = clamp(uint(args.at_most) ?? Math.ceil(estimate / 1000) + 5, 1, 300);
+  const started = progress.timing.now();
+  const done = await progress.waitFor(projectId, kinds, most * 1000);
+  const waited = `${Math.round((progress.timing.now() - started) / 1000)} s`;
+  if (done) return text(`done (waited ${waited}; it was ${before})`);
+  const still = progress.summary(projectId, kinds);
+  return text(`still running after ${waited}: ${still ?? before}. Go on with other work, or wait once more for that long.`);
+}
+
 /** An image as MCP content: the picture, then its caption. */
 function imageContent(picture: EncodedImage, caption: string): Content[] {
   return image(picture.data, caption, picture.mime);
@@ -194,6 +224,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]> | Content[]][] = [
   ["check_shots", checkShots],
   ["look_at_media", lookAtMedia],
   ["export", exportTool],
+  ["wait", waitTool],
 ];
 
 /** Registers the editing tools with the MCP server (once; later calls do nothing). */
@@ -368,6 +399,7 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
       : {}),
     audit,
     smoothing_started: smoothing,
+    ...background(projectId),
   };
   const input: ProjectInput = dryRun ? { json: jsonForSerde(saved.project) } : { ref: { id: projectId, rev: saved.rev } };
   return withReview(app, saved.project, input, frames, report);
@@ -381,6 +413,7 @@ async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]
     audit: audited(app, found.project, found.rev),
     subtitle_coverage: hooks.subtitleCoverage(found.project, cachedTranscripts(app, found.project, true)),
     smoothing: hooks.smoothingPending(projectId),
+    ...background(projectId),
   };
   return withReview(app, found.project, { ref: { id: projectId, rev: found.rev } }, frames, report);
 }
@@ -410,6 +443,7 @@ function getProject({ app, args, projectId }: ToolCall): Content[] {
     track_labels: labels,
     sections: onLive(found, (input) => native().sections(input)),
     smoothing: hooks.smoothingPending(projectId),
+    ...background(projectId),
   };
   const whole = stableStringify({ ...head, project: { ...project, clips } });
   if (whole.length <= BUDGET) return text(whole);
@@ -604,6 +638,7 @@ async function coverCutIn(call: ToolCall): Promise<Content[]> {
   }
   const [, [report, smooth]] = await app.store.update(projectId, ORIGIN, (project) => cutin.cover(project, args));
   report.smoothing_started = hooks.smoothInBackground(app, projectId, smooth);
+  Object.assign(report, background(projectId));
   return text(stableStringify(report, 2));
 }
 
@@ -1065,6 +1100,9 @@ async function exportTool({ app, args, projectId }: ToolCall): Promise<Content[]
   } else if (drive === false) {
     said += ". It isn't uploaded to Drive (drive: false).";
   }
+  // How long it has left, so it's looked at once (progress.ts).
+  const eta = progress.lookAgain(projectId, ["export"]);
+  if (eta !== "") said += `${said.endsWith(".") ? "" : "."}${eta}`;
   return text(said);
 }
 
@@ -1687,6 +1725,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
     cut_ins: cutIns.filter((cutIn) => cutIn !== null),
     audit,
     smoothing: hooks.smoothingPending(p.id),
+    ...background(p.id),
   };
   if (overview) {
     context.overview = "Commentary overview: narration excerpts, chapter map and source/designed clips. Read start/end for ONE chapter's complete narration, notes, word times and clips as you compose it; do not read every chapter's word times up front.";

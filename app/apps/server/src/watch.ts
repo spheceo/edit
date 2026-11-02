@@ -38,6 +38,7 @@ import * as tools from "./tools.ts";
 import * as aiClaude from "./ai_claude.ts";
 import * as claudeAsk from "./writer/claude.ts";
 import type { Transcript, Word } from "./transcribe.ts";
+import * as progress from "./progress.ts";
 
 export type { Window, WatchOptions } from "./seams.ts";
 
@@ -1062,10 +1063,18 @@ export async function watchFootage(app: App, projectId: string, options: WatchOp
   const mine = before.catch(() => undefined).then(() => watchNow(app, projectId, options));
   const settled = mine.catch(() => undefined);
   watching.set(projectId, settled);
+  // How long it has left, for get_edit_context and the wait tool (progress.ts).
+  progress.begin("watch", projectId, "watch");
+  let ok = false;
   try {
-    return await mine;
+    const out = await mine;
+    ok = true;
+    return out;
   } finally {
-    if (watching.get(projectId) === settled) watching.delete(projectId);
+    if (watching.get(projectId) === settled) {
+      watching.delete(projectId);
+      progress.end("watch", projectId, "watch", ok);
+    }
   }
 }
 
@@ -1190,13 +1199,19 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   const title = project.name;
   const jobs: [number, number][] = [];
   parts.forEach((part, p) => part.windows.forEach((_, w) => jobs.push([p, w])));
-  const results = await limited(jobs, AT_ONCE, ([p, w]) => {
+  let watched = 0;
+  progress.step("watch", projectId, "watch", 0, jobs.length);
+  const results = await limited(jobs, AT_ONCE, async ([p, w]) => {
     const part = parts[p]!;
     const window = part.windows[w]!;
     const lines = part.lines.slice(window.lines[0], window.lines[1]);
     const names = { ...(transcripts.get(part.media)?.speakers ?? {}) };
     const dir = join(parent(app.media.paths(part.source).transcript) ?? app.store.cacheDir(), "watch");
-    return diag.timeAsync("watch", "watch window", () => watchWindow(part.source, dir, title, window, lines, names, options.force));
+    try {
+      return await diag.timeAsync("watch", "watch window", () => watchWindow(part.source, dir, title, window, lines, names, options.force));
+    } finally {
+      progress.step("watch", projectId, "watch", ++watched, jobs.length);
+    }
   });
   const answers = new Map<string, [number, number, Answer]>();
   let cost = 0.0;

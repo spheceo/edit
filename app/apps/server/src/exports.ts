@@ -821,9 +821,11 @@ export class ExportRegistry implements seams.Exports {
               let moved = performance.now();
               let last = -1;
               const job = native().ExportJob.start(
-                { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir(), sounds: originals?.sounds ?? {} },
+                { project: { json: jsonForSerde(exported) }, options, plan, output, cacheDir: store.cacheDir(), sounds: originals?.sounds ?? {}, excerpts: originals?.excerpts ?? [] },
                 (progress) => {
-                  if (progress > last) {
+                  // Any change is movement: the engine trying its chunks again reports from lower down (Nov 2:
+                  // Kroger's retry rendered 11 chunks yet "nothing new for 8 minutes", and was started over).
+                  if (progress !== last) {
                     last = progress;
                     moved = performance.now();
                   }

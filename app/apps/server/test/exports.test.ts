@@ -413,6 +413,43 @@ test("an export that stops moving is started again by itself", async () => {
   }
 });
 
+test("an export whose progress falls back (the engine trying its chunks again) and moves on isn't taken for stalled", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("retried-export");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const was = { ...stall };
+  Object.assign(stall, { ms: 60, everyMs: 10 });
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  let starts = 0;
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job, progress) => {
+    starts += 1;
+    return {
+      cancel: () => {},
+      wait: async () => {
+        // Up to 0.8, then the engine's retry: back to 0.1 and on, never past 0.8 within the watch's time.
+        for (const at of [0.4, 0.8, 0.1, 0.2, 0.3, 0.4, 0.5]) {
+          progress(at);
+          await Bun.sleep(25);
+        }
+        fs.writeFileSync(job.output, "export");
+        return { seconds: 1, bytes: 6 };
+      },
+    };
+  });
+  try {
+    const id = store.create("retried", { width: 64, height: 36, fps: 30 }).project.id;
+    await store.update(id, "test", (p) => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+    await registry.start(store, app.library, structuredClone(store.get(id)!.project), native.exportDefaults(), `${dir}/retried.mp4`, { backend: "local", drive: false, keepLocal: true });
+    for (let tries = 0; registry.running() && tries < 500; tries++) await Bun.sleep(5);
+    expect(starts).toBe(1);
+    expect(registry.activity().find((one) => one.id === id)?.state).toBe("done");
+  } finally {
+    Object.assign(stall, was);
+    render.mockRestore(); archive.mockRestore(); plan.mockRestore(); cleanup();
+  }
+});
+
 test("five projects the Mac can't take export on Modal at the same time, none queued, while this Mac stays free", async () => {
   const registry = new ExportRegistry();
   const { dir, store, app, native, cleanup } = fixtureHome("modal-five", { services: { exports: registry } });

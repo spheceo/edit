@@ -95,6 +95,8 @@ Then, as Repack writes it (thumbnail-edits.ts): in lowercase, the subject as thi
 - otherwise remove it: `remove the current “CAUGHT” text.`
 - or replace it with one to four words grounded in the title: `change the current “CAUGHT” text to “HE KNEW”.` (no caption on the base: `add “HE KNEW” text.`)
 
+The subject's look (hair, clothing, age) is written only with "find an image of…": when the editor takes them from the original thumbnail or a frame, the picture already shows it (the user, Nov 2: "thats smart"), so the guide goes straight to what changes.
+
 With a frame of the case's video as the base, the team's own way of saying it (From the case's video, below) comes first: no text unless the picture can't carry the hook, and never in capitals.
 
 For example: `find an image of the man. make the man a middle-aged man with a shaved head in a grey t-shirt. have the suspect fold his arms. change the current “CAUGHT” text to “SHE KNEW”.`

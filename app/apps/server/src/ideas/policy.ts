@@ -125,6 +125,19 @@ export function sourceProblem(guide: string, from: "case_thumbnail" | "find" | "
   return /\bfind (?:an? )?(?:image|picture|photo) of\b/.test(text) ? null : "doesn't say to find an image of the subject (“find an image of the woman.”)";
 }
 
+/**
+ * Whether the guide describes the look of a subject whose picture the editor is
+ * given (a frame, the original thumbnail): "make the mom a young woman with long
+ * dark curly hair… in a grey sweatshirt" told them what the frame showed. Only
+ * "find an image of…" needs the subject's look written.
+ */
+export function lookProblem(guide: string, from: "case_thumbnail" | "find" | "video"): string | null {
+  if (from === "find") return null;
+  const said = /\bmake (?:the [a-z' -]{1,30}?|her|him|them) (?:an?|into an?) [^.]*?\b(?:man|woman|girl|boy|teen|teenager|child|kid|person|lady|guy|mother|father|mom|dad)\b[^.]*/i.exec(guide.replace(/[“"][^”"]*[”"]/g, ""));
+  if (said === null) return null;
+  return `describes how the subject looks (“${said[0].trim()}”), but the editor takes them from ${from === "video" ? "a frame" : "the original thumbnail"}, which shows it: say only what changes`;
+}
+
 /** How the card's frames are named, in the order they're shown. */
 export const ORDINALS = ["first", "second", "third", "fourth"] as const;
 

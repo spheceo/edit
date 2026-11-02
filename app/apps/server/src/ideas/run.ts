@@ -19,7 +19,7 @@ import * as live from "../writer/live.ts";
 import * as board from "./board.ts";
 import * as cloud from "./cloud.ts";
 import * as frames from "./frames.ts";
-import { cleanGuide, cleanTitle, closest, framesProblem, guideProblem, ORDINALS, identity, lengthStyle, sourceProblem, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
+import { cleanGuide, cleanTitle, closest, framesProblem, guideProblem, identity, lookProblem, ORDINALS, lengthStyle, sourceProblem, summaryProblem, titleProblem, type LengthStyle } from "./policy.ts";
 import * as sources from "./sources.ts";
 
 /** Runs at once on one Mac. */
@@ -283,7 +283,7 @@ async function run(session: Session, name: string, args: Args): Promise<string> 
       if (from !== "case_thumbnail" && from !== "find" && from !== "video") throw new Error('subject_from is "case_thumbnail" (the subject is in the case\'s own thumbnail), "video" (they come from frames you grabbed) or "find" (neither has them).');
       if (from === "case_thumbnail" && session.caseThumbnail === null) throw new Error('This case has no YouTube thumbnail to take the subject from: use subject_from "video" or "find".');
       if (from === "video" && !taken.some((one) => one.frame.use !== "base")) throw new Error('subject_from "video" takes the subject from a frame: give it in frames with use "subject" (and who) or "base_and_subject".');
-      const said = sourceProblem(guide, from) ?? framesProblem(guide, taken.length);
+      const said = sourceProblem(guide, from) ?? framesProblem(guide, taken.length) ?? lookProblem(guide, from);
       // Sphe, Nov 2: "this is way too similar to the original thumbnail. I do like us to have a bit of novelty there…
       // We change up the environments": said on purpose, against the case's own thumbnail.
       const novelty = typeof args.new_from_original === "string" ? args.new_from_original.trim() : "";

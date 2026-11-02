@@ -15,7 +15,7 @@ import { ThumbnailsScreen } from "./thumbnails/list";
 import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
 import { useConnection } from "./lib/api";
-import { loadBeta, useBeta } from "./lib/beta";
+import { loadBeta, tabHome, useBeta } from "./lib/beta";
 import { watchPresence } from "./lib/presence";
 import { usePath } from "./lib/route";
 
@@ -65,10 +65,10 @@ export function App() {
  * Home: the sidebar one (Home.tsx) when this Mac has it on in Settings → Beta,
  * else the Home everyone has (HomeClassic.tsx). The user, Oct 31: "put the new
  * Home … behind a beta option in Settings that can easily be toggled on and
- * off".
+ * off". A check in headless Chrome opens `/?home=new` instead (tabHome).
  */
 function HomeScreen() {
-  const sidebar = useBeta((beta) => beta.home);
+  const sidebar = useBeta((beta) => tabHome ?? beta.home);
   useEffect(() => {
     void loadBeta().catch(() => {});
   }, []);

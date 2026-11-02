@@ -24,6 +24,25 @@ function kept(): Beta {
 
 export const useBeta = create<Beta>(() => kept());
 
+/**
+ * A tab's own Home, for checks in headless Chrome: `?home=new` or
+ * `?home=classic` shows that Home in this tab (kept for the tab, so it holds
+ * as the page moves) and never switches this Mac's beta. The agents' checks
+ * used to switch the beta on and back, and left the user on the old Home
+ * (Sphe, Nov 2: "sometimes when you make changes it goes off and takes me to
+ * the old one").
+ */
+export const tabHome: boolean | null = (() => {
+  try {
+    const asked = new URLSearchParams(location.search).get("home");
+    if (asked === "new" || asked === "classic") sessionStorage.setItem("edit.home", asked);
+    const kept = sessionStorage.getItem("edit.home");
+    return kept === "new" ? true : kept === "classic" ? false : null;
+  } catch {
+    return null;
+  }
+})();
+
 /** Switches made here: an answer asked for before the latest one is stale (a slow GET would switch it back). */
 let switches = 0;
 

@@ -22,7 +22,8 @@ import type { App } from "./app.ts";
 import { captionSize, hex, parseTranscript, subtitleName, subtitleRow, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import { fixTurns } from "./turns.ts";
-import { spills as post } from "./ai_claude.ts";
+import { post as claudeAsk, spills as post } from "./ai_claude.ts";
+import * as claudeModels from "./writer/claude.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import type {
@@ -83,6 +84,20 @@ const WHITE: Rgba = [1, 1, 1, 1];
 const BLACK: Rgba = [0, 0, 0, 1];
 
 /** One spoken line in a footage clip. */
+
+/** The watcher's question asked of Claude with the stills as images (ai_claude.ts): the same instructions and answer shape. */
+async function askClaudeInstead(prompt: string, images: unknown[], dir: string): Promise<string> {
+  const parts: unknown[] = [{ type: "text", text: prompt }];
+  for (const image of images as { path?: string }[]) {
+    if (typeof image.path !== "string" || !fs.existsSync(image.path)) continue;
+    parts.push({ type: "image_url", image_url: { url: `data:image/jpeg;base64,${fs.readFileSync(image.path).toString("base64")}` } });
+  }
+  const body = join(dir, "claude-request.json");
+  fs.writeFileSync(body, JSON.stringify({ messages: [{ role: "system", content: INSTRUCTIONS }, { role: "user", content: parts }], response_format: { json_schema: { schema: schema() } } }));
+  const answered = (await claudeAsk(body, claudeModels.SONNET, "Claude sonnet seeing who speaks")) as { choices?: { message?: { content?: string } }[] };
+  return answered.choices?.[0]?.message?.content ?? "";
+}
+
 export interface Line {
   /** The footage clip it's in. */
   clip: string;
@@ -1220,7 +1235,17 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
   const prompt = `Who's who: ${voices.join("; ")}.\n\nLines of the transcript, in order (n [time on the timeline, who says it] text). Still n, attached in order, is a frame from while line n is said.\n\n${listing.join("\n")}`;
   const input: unknown[] = [{ type: "text", text: prompt, text_elements: [] }, ...images];
   // Who's who in a still is seen, not reasoned out: medium answers in a fraction of high's time.
-  const answer = await app.agents.ask(WATCH_MODEL, "medium", INSTRUCTIONS, input, schema(), 600_000);
+  let answer: string;
+  try {
+    answer = await app.agents.ask(WATCH_MODEL, "medium", INSTRUCTIONS, input, schema(), 600_000);
+  } catch (error) {
+    // Codex out of credit or not signed in on this Mac: Claude looks at the
+    // same stills (loop 7, Nov 2 on the trial server: "You've hit your usage
+    // limit… try again at Nov 4th", and the intro's speaker captions failed).
+    if (!/usage limit|hit your|credits|sign in|signed in|log ?in|not installed|isn't installed|ENOENT/iu.test(diag.messageOf(error))) throw error;
+    diag.warn("captions", `${WATCH_MODEL} couldn't answer (${diag.messageOf(error)}); Claude looks at the stills instead`);
+    answer = await askClaudeInstead(prompt, images, dir);
+  }
   // Kept beside the stills, to see why a caption landed where it did.
   try {
     fs.writeFileSync(join(dir, "answer.json"), answer);

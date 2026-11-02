@@ -521,3 +521,45 @@ test("subtitles spell the case's names as the case does", () => {
   expect(spelledAsTheCase("Tabitha said Then they left", ["Tabitha Frank", "Thea"])).toBe("Tabitha said Then they left");
   expect(spelledAsTheCase("Officer Sinclair", [])).toBe("Officer Sinclair");
 });
+
+test("caption_speakers asks Claude to look when Codex is out of credit", async () => {
+  // Loop 7, Nov 2: "You've hit your usage limit… try again at Nov 4th", and the intro's captions failed.
+  const { app, dir, store, cleanup } = fixtureHome("captions-claude");
+  const { standIn } = await import("../src/ai_claude.ts");
+  const was = standIn.post;
+  try {
+    const id = await footage(app, dir);
+    realAgents.set(app, app.agents);
+    app.agents = {
+      status: async () => ({}),
+      ask: async () => {
+        throw new Error("You've hit your usage limit. Upgrade to Pro or try again at Nov 4th, 2026 11:39 AM.");
+      },
+    };
+    let claudeAsked = 0;
+    standIn.post = async () => {
+      claudeAsked++;
+      return { choices: [{ message: { content: JSON.stringify({ lines: [{ n: 0, above: true, people: [], overlays: [] }, { n: 1, above: true, people: [], overlays: [] }] }) } }] };
+    };
+    const bin = `${dir}/bin`;
+    write(`${bin}/ffmpeg`, "#!/bin/sh\nexit 0\n");
+    (await import("node:fs")).chmodSync(`${bin}/ffmpeg`, 0o755);
+    const before = process.env.EDIT_FFMPEG;
+    process.env.EDIT_FFMPEG = `${bin}/ffmpeg`;
+    (await import("../src/tools.ts")).forget();
+    let reply: { text: string; isError: boolean };
+    try {
+      reply = await call(app, "caption_speakers", { project_id: id, start: 0, end: 10 });
+    } finally {
+      if (before === undefined) delete process.env.EDIT_FFMPEG;
+      else process.env.EDIT_FFMPEG = before;
+      (await import("../src/tools.ts")).forget();
+    }
+    expect(reply.isError).toBe(false);
+    expect(reply.text.startsWith("captioned 0–10s")).toBe(true);
+    expect(claudeAsked).toBe(1);
+  } finally {
+    standIn.post = was;
+    cleanup();
+  }
+});

@@ -4,11 +4,15 @@ import * as os from "node:os";
 
 import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, macSpeed, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
+import * as capacity from "../src/export_capacity.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip } from "./helpers/model.ts";
 
 test("local exports queue across projects, preserve snapshots and advance after failure or queued cancellation", async () => {
+  // One at a time, whatever Mac runs the tests (export_capacity.ts lets a big one run more).
+  const most = process.env.EDIT_LOCAL_EXPORTS;
+  process.env.EDIT_LOCAL_EXPORTS = "1";
   const { dir, home, store, app, native, cleanup } = fixtureHome("queued-exports");
   const registry = new ExportRegistry(home);
   app.exports = registry;
@@ -57,6 +61,8 @@ test("local exports queue across projects, preserve snapshots and advance after 
     expect(registry.activity().find(one => one.id === third.id)?.state).toBe("done");
     expect(fs.existsSync(`${home}/jobs/export-${third.id}.json`)).toBe(false);
   } finally {
+    if (most === undefined) delete process.env.EDIT_LOCAL_EXPORTS;
+    else process.env.EDIT_LOCAL_EXPORTS = most;
     for (const release of releases.values()) release();
     render.mockRestore(); archive.mockRestore(); plan.mockRestore(); cleanup();
   }
@@ -482,4 +488,80 @@ test("a local export the disks can't hold is refused up front, saying what it ne
   expect(roomFor(bytes, "/cache", "/out", () => 3e9, oneDisk)).toContain("needs about 4.5 GB");
   // Two disks: each holds one of them.
   expect(roomFor(bytes, "/cache", "/out", () => 3e9, (path) => (path === "/cache" ? 1 : 2))).toBeNull();
+});
+
+test("a Mac with room exports several at once, and the rest wait for room", async () => {
+  const most = process.env.EDIT_LOCAL_EXPORTS;
+  process.env.EDIT_LOCAL_EXPORTS = "2";
+  const size = capacity.machine.totalBytes;
+  capacity.machine.totalBytes = 24 * 1024 ** 3;
+  const free = spyOn(capacity.machine, "availablePercent").mockReturnValue(70);
+  const load = spyOn(capacity.machine, "load").mockReturnValue(1);
+  const { dir, home, store, app, native, cleanup } = fixtureHome("parallel-exports");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job) => {
+    const name = JSON.parse(job.project.json).name as string;
+    started.push(name);
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    releases.set(name, release);
+    return { cancel: () => release(), wait: async () => { await wait; fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; } };
+  });
+  try {
+    const projects: Project[] = [];
+    for (const name of ["one", "two", "three"]) {
+      const id = store.create(name, { width: 64, height: 36, fps: 30 }).project.id;
+      await store.update(id, "test", p => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+      projects.push(structuredClone(store.get(id)!.project));
+    }
+    const options = native.exportDefaults();
+    for (const project of projects) await registry.start(store, app.library, project, options, `${dir}/${project.name}.mp4`, { backend: "local", drive: false, keepLocal: true });
+    // Two at once (its most), the third in line.
+    for (let tries = 0; started.length < 2 && tries < 100; tries++) await Bun.sleep(1);
+    expect(started).toEqual(["one", "two"]);
+    expect(registry.activity().find(one => one.name === "three")?.state).toBe("queued");
+    releases.get("one")!();
+    for (let tries = 0; !releases.has("three") && tries < 100; tries++) await Bun.sleep(1);
+    expect(started).toEqual(["one", "two", "three"]);
+    // Short of memory, one at a time again: nothing starts beside a running export.
+    free.mockReturnValue(20);
+    expect(capacity.noRoom(1)).toContain("memory is short");
+    expect(capacity.noRoom(0)).toBeNull();
+    releases.get("two")!();
+    releases.get("three")!();
+    for (let tries = 0; registry.running() && tries < 100; tries++) await Bun.sleep(1);
+    expect(registry.running()).toBe(false);
+  } finally {
+    for (const release of releases.values()) release();
+    render.mockRestore();
+    plan.mockRestore();
+    archive.mockRestore();
+    free.mockRestore();
+    load.mockRestore();
+    capacity.machine.totalBytes = size;
+    if (most === undefined) delete process.env.EDIT_LOCAL_EXPORTS;
+    else process.env.EDIT_LOCAL_EXPORTS = most;
+    cleanup();
+  }
+});
+
+test("how many exports a Mac runs at once, and when there's room for another", () => {
+  const mac = (gb: number, percent: number | null, load = 1, cores = 12): capacity.Machine => ({ totalBytes: gb * 1024 ** 3, cores, availablePercent: () => percent, load: () => load });
+  expect(capacity.mostAtOnce(mac(8, 50), {})).toBe(1);
+  expect(capacity.mostAtOnce(mac(16, 50), {})).toBe(1);
+  expect(capacity.mostAtOnce(mac(24, 50), {})).toBe(2);
+  expect(capacity.mostAtOnce(mac(64, 50), {})).toBe(3);
+  expect(capacity.mostAtOnce(mac(8, 50), { EDIT_LOCAL_EXPORTS: "2" })).toBe(2);
+  expect(capacity.noRoom(0, mac(8, 5), {})).toBeNull();
+  expect(capacity.noRoom(1, mac(24, 60), {})).toBeNull();
+  expect(capacity.noRoom(2, mac(24, 60), {})).toBe("this Mac exports 2 at a time");
+  expect(capacity.noRoom(1, mac(16, 90), {})).toBe("this Mac exports one at a time");
+  expect(capacity.noRoom(1, mac(24, 30), {})).toContain("memory is short");
+  expect(capacity.noRoom(1, mac(24, 60, 10), {})).toContain("the Mac is busy");
+  expect(capacity.noRoom(1, mac(24, null), {})).toContain("can't be read");
 });

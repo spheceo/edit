@@ -12,6 +12,7 @@ import { Effect } from "effect";
 
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
+import * as capacity from "./export_capacity.ts";
 import { runPromise } from "./effect/runtime.ts";
 import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
@@ -495,8 +496,11 @@ export function optionsKey(options: ExportOptions): string {
 
 export class ExportRegistry implements seams.Exports {
   private jobs = new Map<string, Running>();
-  private localActive = false;
+  /** Exports rendering on this Mac now: as many at once as it has room for (export_capacity.ts). */
+  private localActive = 0;
   private localQueue: { running: Running; start: () => void }[] = [];
+  /** A look again at the line when an export waits for room (memory, the CPU) rather than for one to end. */
+  private recheck: ReturnType<typeof setTimeout> | null = null;
   private recent = new Map<string, ExportActivity>();
   /** Files exported since the server started, newest last: the only ones it hands out or reveals. */
   private finished: string[] = [];
@@ -520,7 +524,7 @@ export class ExportRegistry implements seams.Exports {
   }
 
   localRunning(): boolean {
-    return this.localActive;
+    return this.localActive > 0;
   }
 
   activity(): ExportActivity[] {
@@ -535,16 +539,34 @@ export class ExportRegistry implements seams.Exports {
     store.emit({ type: "export", id: project.id, state, progress, path: running.output, ...extra });
   }
 
+  /** Starts what waits in line while this Mac has room for another (export_capacity.ts). */
   private drain(): void {
-    if (this.localActive) return;
-    while (this.localQueue.length) {
+    this.localQueue = this.localQueue.filter((one) => !one.running.cancelled);
+    while (this.localQueue.length > 0) {
+      const why = capacity.noRoom(this.localActive);
+      if (why !== null) {
+        // Waiting on room rather than on an export to end: looked at again in a while.
+        if (this.localActive < capacity.mostAtOnce() && this.recheck === null) {
+          this.recheck = setTimeout(() => {
+            this.recheck = null;
+            this.drain();
+          }, 20_000);
+          this.recheck.unref?.();
+        }
+        return;
+      }
       const next = this.localQueue.shift()!;
-      if (next.running.cancelled) continue;
-      this.localActive = true;
+      if (this.localActive > 0) diag.info("export", `starting another export beside ${this.localActive} running (${capacity.standing()})`);
+      this.localActive++;
       next.running.queued = false;
       next.start();
-      return;
     }
+  }
+
+  /** An export here let go of its place: the next in line may start. */
+  private releaseOne(): void {
+    this.localActive = Math.max(0, this.localActive - 1);
+    this.drain();
   }
 
   cancel(project: string): boolean {
@@ -612,7 +634,7 @@ export class ExportRegistry implements seams.Exports {
       // went there. Modal can't do some (`unsuitable`): those stay here too.
       const why = seams.modalExports.unsuitable(project, options, plan);
       const busy = why === null
-        ? seams.modalExports.cloudBetter(project, plan, this.localActive || this.localQueue.length > 0, undefined, macSpeed(this.home ?? store.home))
+        ? seams.modalExports.cloudBetter(project, plan, capacity.noRoom(this.localActive) !== null || this.localQueue.length > 0, undefined, macSpeed(this.home ?? store.home))
         : null;
       if (why === null && busy !== null) {
         diag.info("export", `${project.id}: exporting on Modal: ${busy}`);
@@ -681,13 +703,10 @@ export class ExportRegistry implements seams.Exports {
         if (snapshot !== null) fs.rmSync(snapshot, { force: true });
       };
       this.localQueue.push({ running, start: () => {
-        void this.run(store, library, project, options, plan, path, running, upload, () => {
-          this.localActive = false;
-          this.drain();
-        });
+        void this.run(store, library, project, options, plan, path, running, upload, () => this.releaseOne());
       } });
-      if (this.localActive) this.publish(store, project, running, "queued", 0);
       this.drain();
+      if (running.queued) this.publish(store, project, running, "queued", 0);
     }
     return path;
   }
@@ -737,13 +756,10 @@ export class ExportRegistry implements seams.Exports {
                 reject(new Error("cancelled"));
               };
               this.localQueue.push({ running, start: resolve });
-              if (this.localActive) emit("queued", 0);
               this.drain();
+              if (running.queued) emit("queued", 0);
             });
-            releaseLocal = () => {
-              this.localActive = false;
-              this.drain();
-            };
+            releaseLocal = () => this.releaseOne();
             emit("running", 0);
           }
         }

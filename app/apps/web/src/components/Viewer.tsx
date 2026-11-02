@@ -12,7 +12,7 @@ import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
-import { startNote } from "../lib/notes";
+import { startNote, useNotes } from "../lib/notes";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
@@ -145,6 +145,8 @@ export function Viewer() {
   const importing = job !== null && job.state !== "done" ? importProgress(job) : null;
 
   const hidden = fullscreen && idle;
+  // A note being written takes the transport's place (NoteDraft).
+  const noting = useNotes((state) => state.draft !== null);
   return (
     <section
       ref={(element) => { viewer = element; }}
@@ -161,9 +163,8 @@ export function Viewer() {
         />
         {/* Smooth playback over the canvas; clicks go through to it. */}
         <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
-        {/* A note being left here: its box over the picture, and the card it's written in. */}
+        {/* A note being left here: its box over the picture (the note itself is written in the bar below). */}
         {!fullscreen && <NoteBoxLayer wrap={wrap} />}
-        {!fullscreen && <NoteDraft />}
         {!error && project && playback !== null && (playback.state === "rendering" || playback.state === "waiting") && !smoothShown && (
           <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted tabular">
             {playback.state === "waiting" ? "Smooth playback after the export" : `Smooth playback ${Math.round(playback.progress * 100)}%`}
@@ -214,7 +215,7 @@ export function Viewer() {
       <div className={fullscreen
         ? cx("absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur transition-opacity duration-300", hidden && "pointer-events-none opacity-0")
         : undefined}>
-        <Transport fullscreen={fullscreen} />
+        {!fullscreen && noting ? <NoteDraft /> : <Transport fullscreen={fullscreen} />}
       </div>
     </section>
   );

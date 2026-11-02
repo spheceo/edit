@@ -1,10 +1,10 @@
 // A note being left on the player (lib/notes.ts): at the playhead's frame (or
 // the In–Out span when the playhead is in it), with a box dragged on the
-// picture if wanted. Enter queues it in the row above the chat's composer;
-// Esc lets it go. The agent gets the queue when someone tells it to
+// picture if wanted, written in the player's bar. Enter queues it in the row
+// above the chat's composer; Esc lets it go. The agent gets the queue when someone tells it to
 // implement the feedback.
 
-import { Square, X } from "lucide-react";
+import { CornerDownLeft, SquareDashed, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { inOutSpan, useInOut } from "../lib/inOut";
@@ -66,7 +66,14 @@ export function NoteBoxLayer({ wrap }: { wrap: HTMLDivElement | null }) {
   );
 }
 
-/** The card the note is written in, over the bottom of the picture. */
+/**
+ * The note, written in the player's own bar while it's open (Sphe, Nov 2: "it
+ * makes no sense to have the comment box be HUGE and have so many details and
+ * be in FRONT of the thing we're giving feedback for"): one line at the
+ * transport's height in place of the transport, so the picture stays whole and
+ * nothing moves. The time, the note, a box to mark the spot, Queue; Enter
+ * queues, Esc lets it go.
+ */
 export function NoteDraft() {
   const draft = useNotes((state) => state.draft);
   const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
@@ -75,7 +82,7 @@ export function NoteDraft() {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const input = useRef<HTMLInputElement>(null);
   const open = draft !== null;
   useEffect(() => {
     if (!open) return;
@@ -86,6 +93,7 @@ export function NoteDraft() {
   if (draft === null) return null;
   const inSpan = span !== null && draft.frame >= span[0] && draft.frame < span[1];
   const where = inSpan ? `${clock(span[0], fps)}–${clock(span[1], fps)}` : clock(draft.frame, fps);
+  const boxed = draft.drawing || draft.box !== null;
   const queue = async () => {
     if (text.trim() === "" || busy) return;
     setBusy(true);
@@ -95,60 +103,53 @@ export function NoteDraft() {
   };
   return (
     <form
-      className="absolute inset-x-3 bottom-3 z-10 mx-auto max-w-[520px] rounded-xl border border-line-strong bg-panel/95 p-2 shadow-2xl backdrop-blur"
+      className="@container flex h-11 shrink-0 items-center gap-2 border-t border-line px-3"
       onSubmit={(event) => {
         event.preventDefault();
         void queue();
       }}
     >
-      <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] text-muted">
-        <span className="size-2 rounded-full bg-warning" />
-        <span>
-          Note at <span className="font-mono text-fg tabular">{where}</span>
-          {inSpan && <span className="text-faint"> (In–Out)</span>}
-        </span>
-        <button type="button" aria-label="Cancel the note" title="Cancel (Esc)" onClick={cancelNote} className="ml-auto flex size-6 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg">
-          <X size={13} />
-        </button>
-      </div>
-      <textarea
+      {/* A narrow player (the editor squeezes it to ~140 px at 1100) keeps the note, the box and Queue: the time and × go first; Esc still cancels. */}
+      <span className="flex shrink-0 items-center gap-1.5 font-mono text-[12px] text-fg tabular @max-[320px]:hidden" title={inSpan ? "The note is on the In–Out span" : "The note is at the playhead"}>
+        <span className="size-1.5 rounded-full bg-warning" />
+        {where}
+      </span>
+      <input
         ref={input}
         aria-label="The note"
         value={text}
-        rows={2}
-        placeholder="What should change here?"
-        onChange={(event) => setText(event.target.value)}
+        placeholder={error ?? "What should change here?"}
+        onChange={(event) => {
+          setText(event.target.value);
+          setError(null);
+        }}
         onKeyDown={(event) => {
           event.stopPropagation();
           if (event.key === "Escape") {
             event.preventDefault();
             cancelNote();
-          } else if (event.key === "Enter" && !event.shiftKey) {
-            event.preventDefault();
-            void queue();
           }
         }}
-        className="max-h-32 min-h-[40px] w-full resize-none rounded-md bg-black/60 px-2 py-1.5 text-[13px] text-fg outline-none placeholder:text-faint"
+        className={cx("h-7 min-w-0 flex-1 rounded-md bg-black/60 px-2.5 text-[13px] text-fg outline-none placeholder:text-faint", error !== null && "placeholder:text-danger")}
       />
-      {error !== null && <div className="px-1 pt-1 text-[11px] text-danger">{error}</div>}
-      <div className="mt-1.5 flex items-center gap-1.5">
-        <button
-          type="button"
-          aria-pressed={draft.drawing || draft.box !== null}
-          onClick={() => (draft.box !== null ? setDraftBox(null) : setDraftBox(null, !draft.drawing))}
-          className={cx(
-            "flex h-7 items-center gap-1.5 rounded-md px-2 text-[12px] transition-colors",
-            draft.drawing || draft.box !== null ? "bg-warning-soft text-warning" : "text-muted hover:bg-hover hover:text-fg",
-          )}
-        >
-          <Square size={12} />
-          {draft.box !== null ? "Remove the box" : draft.drawing ? "Drawing… (drag on the picture)" : "Draw a box"}
-        </button>
-        <span className="ml-auto text-[11px] text-faint">Enter to queue</span>
-        <button type="submit" disabled={text.trim() === "" || busy} className="h-7 rounded-md bg-white px-3 text-[12px] font-medium text-black transition-opacity disabled:opacity-30">
-          Queue
-        </button>
-      </div>
+      {error !== null && text !== "" && <span className="max-w-[40%] shrink truncate text-[11px] text-danger" title={error}>{error}</span>}
+      <button
+        type="button"
+        aria-pressed={boxed}
+        aria-label={draft.box !== null ? "Remove the box" : "Mark the spot on the picture"}
+        title={draft.box !== null ? "Remove the box" : draft.drawing ? "Drag on the picture to mark the spot" : "Mark the spot on the picture"}
+        onClick={() => (draft.box !== null ? setDraftBox(null) : setDraftBox(null, !draft.drawing))}
+        className={cx("flex size-7 shrink-0 items-center justify-center rounded-md transition-colors", boxed ? "bg-warning-soft text-warning" : "text-muted hover:bg-hover hover:text-fg")}
+      >
+        <SquareDashed size={14} />
+      </button>
+      <button type="submit" aria-label="Queue" title="Queue it for the agent (Enter)" disabled={text.trim() === "" || busy} className="flex h-7 shrink-0 items-center rounded-md bg-white px-2.5 text-[12px] font-medium text-black transition-opacity disabled:opacity-30 @max-[320px]:px-1.5">
+        <span className="@max-[320px]:hidden">Queue</span>
+        <CornerDownLeft size={14} className="hidden @max-[320px]:block" />
+      </button>
+      <button type="button" aria-label="Cancel the note" title="Cancel (Esc)" onClick={cancelNote} className="flex size-7 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg @max-[320px]:hidden">
+        <X size={14} />
+      </button>
     </form>
   );
 }

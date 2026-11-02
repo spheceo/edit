@@ -39,7 +39,7 @@ export function useSidebarOpen(): [boolean, (open: boolean) => void] {
 export function OpenSidebar({ onOpen }: { onOpen: () => void }) {
   return (
     <IconButton label="Show the sidebar" onClick={onOpen} className="-ml-2 size-8 shrink-0">
-      <LayoutLeftIcon size={18} />
+      <LayoutLeftIcon />
     </IconButton>
   );
 }
@@ -140,7 +140,7 @@ export function HomeSidebar({ places, thumbnails, later, done, where, onChoose, 
             <AppMenu row />
           </div>
           <IconButton label="Hide the sidebar" onClick={onClose} className="size-8 shrink-0">
-            <LayoutLeftIcon size={18} />
+            <LayoutLeftIcon />
           </IconButton>
         </div>
         <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pb-2">

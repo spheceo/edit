@@ -1,11 +1,14 @@
 // Icons from Hugeicons' free stroke-rounded set (MIT, @hugeicons/core-free-icons
-// 4.4.0), drawn as they ship: 24 px grid, 1.5 px strokes in the current colour.
+// 4.4.0): their shapes on the 24 px grid, in the current colour, drawn at the
+// size and stroke of the Lucide icons beside them (15 px, a 2-unit stroke, so
+// 1.25 px on screen). As shipped (1.5 units) at 18 px it looked "HUGE compared
+// to the others" and "dithered" (Sphe, Nov 2): a 1.1 px line among 1.25 px ones.
 // Only those Edit uses, copied in, rather than the whole package. The sidebar's
 // toggle is the first (Sphe, Nov 2, of eight Hugeicons options: "i like 4. for
 // the sidebar").
 
 /** Hugeicons' layout-left: a panel with its left pane, to hide and show Home's sidebar. */
-export function LayoutLeftIcon({ size = 18, className }: { size?: number; className?: string }) {
+export function LayoutLeftIcon({ size = 15, strokeWidth = 2, className }: { size?: number; strokeWidth?: number; className?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true" className={className}>
       <path
@@ -13,9 +16,9 @@ export function LayoutLeftIcon({ size = 18, className }: { size?: number; classN
         stroke="currentColor"
         strokeLinecap="round"
         strokeLinejoin="round"
-        strokeWidth="1.5"
+        strokeWidth={strokeWidth}
       />
-      <path d="M9 21.5L9 2.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M9 21.5L9 2.5" stroke="currentColor" strokeLinecap="round" strokeWidth={strokeWidth} />
     </svg>
   );
 }

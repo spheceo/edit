@@ -35,7 +35,7 @@ import * as markers from "./markers.ts";
 import { call, ORIGIN } from "./mcp/index.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Marker, Media, Project } from "./model.ts";
-import { native, withProject, withProjectAsync, type EncodedImage, type ProjectInput } from "./native/index.ts";
+import { native, withProject, withProjectAsync, type EncodedImage, type ProjectInput, type SheetSpec } from "./native/index.ts";
 import { dirname, resolve as resolvePath } from "node:path";
 
 import { listExports } from "./exports.ts";
@@ -912,6 +912,24 @@ async function tidyTracksTool({ app, projectId }: ToolCall): Promise<Content[]> 
   return text(`moved ${moved} clip(s) down, removed ${removed} empty track(s)`);
 }
 
+/**
+ * A contact sheet's layout from a tool's arguments: numbered cells with their
+ * times, sized for the model's eyes by how many there are (the engine's
+ * sheet.rs: 160 tokens and 140 a frame, at most 1,300; `detail: "fine"`,
+ * twice that, for small text, plates and faces), the grid drawing the frames
+ * largest unless `columns` is given.
+ */
+export function sheetSpec(args: Args, times: number[], count = times.length): SheetSpec {
+  const columns = uint(args.columns);
+  const fine = str(args.detail) === "fine";
+  return {
+    labels: times.map((_, index) => String(index + 1)),
+    times,
+    ...(fine ? { budget: native().sheetBudget(count, true) } : {}),
+    ...(columns === null ? {} : { columns: clamp(columns, 1, 8) }),
+  };
+}
+
 async function renderFrame({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const found = live(app, projectId);
   const fps = fpsOf(found.project);
@@ -936,7 +954,6 @@ async function contactSheet({ app, args, projectId }: ToolCall): Promise<Content
   if (endGiven === null) throw new Error("end is required");
   const end = Math.max(endGiven, start);
   const count = clamp(uint(args.count) ?? 12, 1, 24);
-  const columns = clamp(uint(args.columns) ?? 4, 1, 8);
   const frames = Array.from({ length: count }, (_, index) => {
     const t = count === 1 ? start : start + ((end - start) * index) / (count - 1);
     return asInt(Math.floor(t * fps));
@@ -948,7 +965,7 @@ async function contactSheet({ app, args, projectId }: ToolCall): Promise<Content
       maxSide: native().SHEET_CELL,
       priority: "agent",
       encode: "agent",
-      sheetColumns: columns,
+      sheet: sheetSpec(args, frames.map((frame) => frame / fps)),
     }),
   );
   const rendered = sheet[0];
@@ -983,7 +1000,8 @@ async function checkShots({ app, args, projectId }: ToolCall): Promise<Content[]
     const out = clip.source_in + (clip.duration / fps) * clip.speed;
     for (const word of heard.words) if (word.end > clip.source_in && word.start < out) said.push([clip.start + ((word.start - clip.source_in) / clip.speed) * fps, trim(word.text)]);
   }
-  const sheet = await onLiveAsync(app, found, (project) => native().renderFrames({ project, frames: picked.map((one) => asInt(Math.floor((one.from + one.to) / 2))), maxSide: native().SHEET_CELL, priority: "agent", encode: "agent", sheetColumns: 4 }));
+  const middles = picked.map((one) => asInt(Math.floor((one.from + one.to) / 2)));
+  const sheet = await onLiveAsync(app, found, (project) => native().renderFrames({ project, frames: middles, maxSide: native().SHEET_CELL, priority: "agent", encode: "agent", sheet: sheetSpec(args, middles.map((frame) => frame / fps)) }));
   const rendered = sheet[0]; if (rendered === undefined) throw new Error("nothing was rendered");
   const rows = picked.map((one, i) => {
     const c = p.clips.find((own) => own.id === one.id);
@@ -1004,14 +1022,14 @@ async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[
   const start = Math.max(num(args.start) ?? 0, 0);
   const end = num(args.end) ?? media.duration;
   const count = clamp(uint(args.count) ?? 12, 1, 24);
-  const columns = clamp(uint(args.columns) ?? 4, 1, 8);
+  const { budget, columns } = sheetSpec(args, [], count);
   const { image: sheet, times } = await native().mediaFrames({
     media: structuredClone(media),
     start,
     end,
     count,
-    maxSide: 480,
-    sheetColumns: columns,
+    ...(budget === undefined ? {} : { budget }),
+    ...(columns === undefined ? {} : { columns }),
     encode: "agent",
   });
   const said = times.map((time) => `${fixed(time, 2)}s`);
@@ -1122,6 +1140,7 @@ async function withReview(app: App, project: Project, input: ProjectInput, frame
     try {
       await seams.cloudMedia.restoreStills(app, project);
       if (frames.some((frame) => frame >= durationOf(project))) throw new Error("a review frame is past the timeline's end");
+      const fps = fpsOf(project);
       const work = (on: ProjectInput) =>
         native().renderFrames({
           project: on,
@@ -1129,7 +1148,7 @@ async function withReview(app: App, project: Project, input: ProjectInput, frame
           maxSide: native().SHEET_CELL,
           priority: "agent",
           encode: "agent",
-          sheetColumns: 4,
+          sheet: sheetSpec({}, frames.map((frame) => frame / fps)),
         });
       const sheet =
         "ref" in input

@@ -56,11 +56,14 @@ describe("frame renders", () => {
       maxSide: 160,
       priority: "agent",
       encode: "agent",
-      sheetColumns: 2,
+      sheet: { labels: ["1", "2", "3", "4"], times: [0, 0.5, 1, 1.5], budget: 120, columns: 2 },
     });
     expect(images.length).toBe(1);
-    // Two 160×90 cells across, two down, 4 px apart.
-    expect([images[0].width, images[0].height]).toEqual([324, 184]);
+    // Two across, two down, on the model's 28 px patches, within 120 tokens.
+    const [w, h] = [images[0].width, images[0].height];
+    expect([w % 28, h % 28]).toEqual([0, 0]);
+    expect((w / 28) * (h / 28)).toBeLessThanOrEqual(120);
+    expect([w, h]).toEqual([336, 224]);
     expect(images[0].mime).toBe(process.platform === "darwin" ? "image/jpeg" : "image/png");
   });
 
@@ -72,11 +75,13 @@ describe("frame renders", () => {
         { width: 4, height: 4, pixels: red },
         { width: 4, height: 4, pixels: red },
       ],
-      2,
+      { labels: ["1", "2"] },
       "png",
     );
-    expect(pngSize(sheet.data)).toEqual([12, 4]);
-    expect(native.composeSheet([{ width: 4, height: 4, pixels: Buffer.alloc(3) }], 1, "png")).rejects.toThrow(
+    // Never enlarged: each in a one-patch cell, side by side.
+    expect(pngSize(sheet.data)).toEqual([56, 28]);
+    expect(native.SHEET_BUDGET).toBe(1300);
+    expect(native.composeSheet([{ width: 4, height: 4, pixels: Buffer.alloc(3) }], { labels: [] }, "png")).rejects.toThrow(
       "needs 64 bytes",
     );
   });

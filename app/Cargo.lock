@@ -858,6 +858,7 @@ dependencies = [
  "ebur128",
  "edit-core",
  "edit-render",
+ "fontdue",
  "libc",
  "parking_lot",
  "png 0.18.1",

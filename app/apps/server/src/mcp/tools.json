@@ -764,11 +764,11 @@
     "name": "still_frame"
   },
   {
-    "description": "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each.",
+    "description": "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. Each frame is labelled with its number and its time in the file, a ruler over each row. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each.",
     "inputSchema": {
       "properties": {
         "columns": {
-          "description": "Default 4.",
+          "description": "Default: the grid that draws the frames largest.",
           "type": "integer"
         },
         "count": {
@@ -787,6 +787,14 @@
         },
         "start": {
           "type": "number"
+        },
+        "detail": {
+          "description": "\"fine\" for small text, plates or faces: twice the pixels and tokens. Default \"normal\".",
+          "enum": [
+            "normal",
+            "fine"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -2092,11 +2100,11 @@
     "name": "render_frame"
   },
   {
-    "description": "Render evenly spaced frames between start and end (seconds) into one grid image, to review motion or many moments at once.",
+    "description": "Render evenly spaced frames between start and end (seconds) into one grid image, to review motion or many moments at once. Each frame is labelled with its number and time, a ruler over each row; the sheet is sized for the model's eyes: 160 tokens and 140 a frame, at most 1,300 (detail \"fine\": twice that).",
     "inputSchema": {
       "properties": {
         "columns": {
-          "description": "Default 4.",
+          "description": "Default: the grid that draws the frames largest.",
           "type": "integer"
         },
         "count": {
@@ -2112,6 +2120,14 @@
         },
         "start": {
           "type": "number"
+        },
+        "detail": {
+          "description": "\"fine\" for small text, plates or faces: twice the pixels and tokens. Default \"normal\".",
+          "enum": [
+            "normal",
+            "fine"
+          ],
+          "type": "string"
         }
       },
       "required": [
@@ -2971,6 +2987,14 @@
         "end": {
           "description": "Timeline seconds (at most 120 after start).",
           "type": "number"
+        },
+        "detail": {
+          "description": "\"fine\" for small text, plates or faces: twice the pixels and tokens. Default \"normal\".",
+          "enum": [
+            "normal",
+            "fine"
+          ],
+          "type": "string"
         }
       },
       "required": [

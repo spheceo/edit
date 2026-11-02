@@ -483,6 +483,11 @@ export function createStub(): Stub {
       return null;
     },
     SHEET_CELL: 360,
+    SHEET_BUDGET: 1300,
+    sheetBudget(count: number, fine: boolean) {
+      const plain = Math.min(1300, 160 + 140 * count);
+      return fine ? Math.min(2600, 2 * plain) : plain;
+    },
 
     exportDefaults: defaults,
     exportPlan() {

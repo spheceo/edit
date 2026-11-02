@@ -7,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 
 use edit_core::Media;
 use edit_engine::render::{self, FrameRenderer, RgbaImage};
+use edit_engine::sheet;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use parking_lot::Mutex;
@@ -14,6 +15,16 @@ use parking_lot::Mutex;
 /// Contact-sheet cells' longest side.
 #[napi]
 pub const SHEET_CELL: u32 = render::SHEET_CELL;
+
+/// A contact sheet's model tokens at most unless asked otherwise.
+#[napi]
+pub const SHEET_BUDGET: u32 = sheet::BUDGET;
+
+/// A sheet of `count` pictures' tokens (`sheet::budget_for`): `fine` for small text, plates and faces.
+#[napi]
+pub fn sheet_budget(count: u32, fine: bool) -> u32 {
+    sheet::budget_for(count as usize, fine)
+}
 
 static RENDERER: OnceLock<Mutex<Option<Arc<FrameRenderer>>>> = OnceLock::new();
 
@@ -82,8 +93,35 @@ pub struct RenderRequest {
     pub priority: String,
     #[napi(ts_type = "\"png\" | \"agent\"")]
     pub encode: String,
-    /// Tile the frames into one sheet this many across (left to right, then down).
-    pub sheet_columns: Option<u32>,
+    /// Tile the frames into one sheet (left to right, then down), sized for
+    /// the model's eyes (`edit_engine::sheet`).
+    pub sheet: Option<SheetSpec>,
+}
+
+/// A contact sheet: each cell's label, and its time (seconds) when the
+/// sheet is in time (a ruler then runs above each row); a budget in model
+/// tokens (default `sheet::BUDGET`), or a fixed number across.
+#[napi(object)]
+pub struct SheetSpec {
+    pub labels: Vec<String>,
+    pub times: Option<Vec<f64>>,
+    pub budget: Option<u32>,
+    pub columns: Option<u32>,
+}
+
+fn sheet_plan(spec: &SheetSpec, count: usize, source: (u32, u32)) -> sheet::SheetPlan {
+    sheet::plan(
+        count,
+        source,
+        spec.budget
+            .unwrap_or_else(|| sheet::budget_for(count, false)),
+        spec.columns,
+        spec.times.is_some(),
+    )
+}
+
+fn compose(images: &[RgbaImage], spec: &SheetSpec, plan: &sheet::SheetPlan) -> RgbaImage {
+    sheet::compose(images, &spec.labels, spec.times.as_deref(), plan)
 }
 
 /// Renders frames of a project: one picture per frame, or one sheet of
@@ -97,20 +135,29 @@ pub async fn render_frames(request: RenderRequest) -> napi::Result<Vec<EncodedIm
         max_side,
         priority,
         encode: how,
-        sheet_columns,
+        sheet,
     } = request;
     let project = crate::project::project_of(&project).map_err(crate::fail)?;
     let renderer = renderer().map_err(crate::fail)?;
     let project = (*project).clone();
+    let plan = sheet.as_ref().map(|spec| {
+        sheet_plan(
+            spec,
+            frames.len(),
+            (project.settings.width, project.settings.height),
+        )
+    });
+    // A sheet's frames are rendered at its cells' size.
+    let max_side = plan.map_or(max_side, |plan| plan.cell_width.max(plan.cell_height));
     let images = match priority.as_str() {
         "agent" => renderer.render_for_agent(project, frames, max_side).await,
         "ui" => renderer.render(project, frames, max_side).await,
         other => Err(format!("unknown priority {other} (ui or agent)")),
     }
     .map_err(crate::fail)?;
-    crate::blocking("encoding frames", move || match sheet_columns {
-        Some(columns) => Ok(vec![encode(&render::tile(&images, columns), &how)?]),
-        None => images.iter().map(|image| encode(image, &how)).collect(),
+    crate::blocking("encoding frames", move || match (sheet, plan) {
+        (Some(spec), Some(plan)) => Ok(vec![encode(&compose(&images, &spec, &plan), &how)?]),
+        _ => images.iter().map(|image| encode(image, &how)).collect(),
     })
     .await
 }
@@ -123,8 +170,12 @@ pub struct MediaFramesRequest {
     pub start: f64,
     pub end: f64,
     pub count: u32,
-    pub max_side: u32,
-    pub sheet_columns: u32,
+    /// These times (seconds of the file) instead of `count` evenly spaced ones.
+    pub times: Option<Vec<f64>>,
+    /// Model tokens for the sheet (default `sheet::BUDGET`).
+    pub budget: Option<u32>,
+    /// A fixed number across (else the grid drawing frames largest).
+    pub columns: Option<u32>,
     #[napi(ts_type = "\"png\" | \"agent\"")]
     pub encode: String,
 }
@@ -144,19 +195,41 @@ pub async fn media_frames(request: MediaFramesRequest) -> napi::Result<MediaFram
         let media: Media =
             serde_json::from_value(request.media).map_err(|error| format!("media: {error}"))?;
         let cache = crate::cache_dir().ok();
-        let (images, times) = render::media_frames(
-            &media,
-            cache.as_deref(),
-            request.start,
-            request.end,
-            request.count as usize,
-            request.max_side,
-        )?;
-        Ok(MediaFrames {
-            image: encode(
-                &render::tile(&images, request.sheet_columns),
-                &request.encode,
+        let count = request
+            .times
+            .as_ref()
+            .map_or(request.count.max(1) as usize, |times| times.len().max(1));
+        let mut spec = SheetSpec {
+            labels: (1..=count).map(|n| n.to_string()).collect(),
+            times: Some(Vec::new()),
+            budget: request.budget,
+            columns: request.columns,
+        };
+        let plan = sheet_plan(&spec, count, (media.width.max(2), media.height.max(2)));
+        let side = plan.cell_width.max(plan.cell_height);
+        let (images, times) = match &request.times {
+            // Picked times (frame_picks.ts): each decoded where it is.
+            Some(given) if !given.is_empty() => {
+                let mut images = Vec::with_capacity(given.len());
+                for time in given {
+                    let (mut one, _) =
+                        render::media_frames(&media, cache.as_deref(), *time, *time, 1, side)?;
+                    images.append(&mut one);
+                }
+                (images, given.clone())
+            }
+            _ => render::media_frames(
+                &media,
+                cache.as_deref(),
+                request.start,
+                request.end,
+                count,
+                side,
             )?,
+        };
+        spec.times = Some(times.clone());
+        Ok(MediaFrames {
+            image: encode(&compose(&images, &spec, &plan), &request.encode)?,
             times,
         })
     })
@@ -174,11 +247,11 @@ pub async fn save_still(media: serde_json::Value, time: f64, out: String) -> nap
     .await
 }
 
-/// Tiles pictures into a sheet `columns` across and encodes it.
+/// Tiles pictures into a labelled sheet (`SheetSpec`) and encodes it.
 #[napi]
 pub async fn compose_sheet(
     images: Vec<RawImage>,
-    columns: u32,
+    spec: SheetSpec,
     #[napi(ts_arg_type = "\"png\" | \"agent\"")] encoding: String,
 ) -> napi::Result<EncodedImage> {
     let images: Vec<RgbaImage> = images
@@ -201,7 +274,11 @@ pub async fn compose_sheet(
                 ));
             }
         }
-        encode(&render::tile(&images, columns), &encoding)
+        let shape = images.iter().fold((1, 1), |(w, h), image| {
+            (w.max(image.width), h.max(image.height))
+        });
+        let plan = sheet_plan(&spec, images.len(), shape);
+        encode(&compose(&images, &spec, &plan), &encoding)
     })
     .await
 }

@@ -103,8 +103,16 @@ export interface RenderRequest {
   priority: "ui" | "agent";
   /** PNG, or the agent's JPEG. */
   encode: "png" | "agent";
-  /** Tile the frames into one contact sheet this many across. */
-  sheetColumns?: number;
+  /** Tile the frames into one contact sheet, sized for the model's eyes (the engine's sheet.rs). */
+  sheet?: SheetSpec;
+}
+
+/** A contact sheet: each cell's label, its time (seconds) when the sheet is in time (a ruler runs above each row), a budget in model tokens (sheetBudget's by default) or a fixed number across. */
+export interface SheetSpec {
+  labels: string[];
+  times?: number[];
+  budget?: number;
+  columns?: number;
 }
 
 export interface MediaFramesRequest {
@@ -113,8 +121,12 @@ export interface MediaFramesRequest {
   start: number;
   end: number;
   count: number;
-  maxSide: number;
-  sheetColumns: number;
+  /** These times (seconds of the file) instead of `count` evenly spaced ones (frame_picks.ts). */
+  times?: number[];
+  /** Model tokens for the sheet (sheetBudget's by default). */
+  budget?: number;
+  /** A fixed number across (else the grid drawing frames largest). */
+  columns?: number;
   encode: "agent";
 }
 
@@ -221,9 +233,12 @@ export interface Native {
   renderFrames(request: RenderRequest): Promise<EncodedImage[]>; // A
   mediaFrames(request: MediaFramesRequest): Promise<{ image: EncodedImage; times: number[] }>; // A
   saveStill(media: Media, time: number, out: string): Promise<void>; // A
-  composeSheet(images: RawImage[], columns: number, encode: "png" | "agent"): Promise<EncodedImage>; // A
+  composeSheet(images: RawImage[], spec: SheetSpec, encode: "png" | "agent"): Promise<EncodedImage>; // A
   bundledFont(file: string): Buffer | null; // S
   readonly SHEET_CELL: number;
+  readonly SHEET_BUDGET: number;
+  /** A sheet of `count` pictures' model tokens (the engine's sheet.rs `budget_for`); `fine` for small text, plates and faces. */
+  sheetBudget(count: number, fine: boolean): number; // S
 
   // Export
   exportDefaults(): ExportOptions; // S

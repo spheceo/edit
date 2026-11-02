@@ -70,7 +70,7 @@ describe("previews", () => {
       expect(native.mediaKey(source)).toBe(native.mediaKey(source.replace(`:${server.port}/`, ":9999/")));
       const probe = await native.probe(source);
       const media = { ...probe, id: "cloud", name: "cloud.mp4", path: source };
-      const { image } = await native.mediaFrames({ media, start: 0, end: 1, count: 2, maxSide: 160, sheetColumns: 2, encode: "agent" });
+      const { image } = await native.mediaFrames({ media, start: 0, end: 1, count: 2, budget: 200, encode: "agent" });
       expect(image.data.length).toBeGreaterThan(0);
       if (process.platform === "darwin") {
         expect(Object.keys(await native.facesDetect(source, [320, 180], [0, 1]))).toHaveLength(2);

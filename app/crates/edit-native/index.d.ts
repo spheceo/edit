@@ -82,8 +82,8 @@ export declare function censorWarm(path: string): void
 /** The cloud proxy's bitrate (bits/s) for a `width` × `height` picture. */
 export declare function cloudProxyBitrate(width: number, height: number): number
 
-/** Tiles pictures into a sheet `columns` across and encodes it. */
-export declare function composeSheet(images: Array<RawImage>, columns: number, encoding: "png" | "agent"): Promise<EncodedImage>
+/** Tiles pictures into a labelled sheet (`SheetSpec`) and encodes it. */
+export declare function composeSheet(images: Array<RawImage>, spec: SheetSpec, encoding: "png" | "agent"): Promise<EncodedImage>
 
 /**
  * The desktop profile's pictures for a `width` × `height` frame, drawn into
@@ -303,8 +303,12 @@ export interface MediaFramesRequest {
   start: number
   end: number
   count: number
-  maxSide: number
-  sheetColumns: number
+  /** These times (seconds of the file) instead of `count` evenly spaced ones. */
+  times?: Array<number>
+  /** Model tokens for the sheet (default `sheet::BUDGET`). */
+  budget?: number
+  /** A fixed number across (else the grid drawing frames largest). */
+  columns?: number
   encode: "png" | "agent"
 }
 
@@ -429,8 +433,11 @@ export interface RenderRequest {
   /** "agent" goes ahead of "ui". */
   priority: "ui" | "agent"
   encode: "png" | "agent"
-  /** Tile the frames into one sheet this many across (left to right, then down). */
-  sheetColumns?: number
+  /**
+   * Tile the frames into one sheet (left to right, then down), sized for
+   * the model's eyes (`edit_engine::sheet`).
+   */
+  sheet?: SheetSpec
 }
 
 export interface RippleResult {
@@ -481,8 +488,26 @@ export declare function sections(project: ProjectInput): Sections
 /** The media folders changed (`store.publish_layout` / `set_media_dir`). */
 export declare function setMediaFolders(known: Array<string>): void
 
+/** A contact sheet's model tokens at most unless asked otherwise. */
+export declare const SHEET_BUDGET: number
+
 /** Contact-sheet cells' longest side. */
 export declare const SHEET_CELL: number
+
+/** A sheet of `count` pictures' tokens (`sheet::budget_for`): `fine` for small text, plates and faces. */
+export declare function sheetBudget(count: number, fine: boolean): number
+
+/**
+ * A contact sheet: each cell's label, and its time (seconds) when the
+ * sheet is in time (a ruler then runs above each row); a budget in model
+ * tokens (default `sheet::BUDGET`), or a fixed number across.
+ */
+export interface SheetSpec {
+  labels: Array<string>
+  times?: Array<number>
+  budget?: number
+  columns?: number
+}
 
 /**
  * Stops the frame renderer's thread and cancels running exports (the

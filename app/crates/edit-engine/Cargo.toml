@@ -14,6 +14,7 @@ ts = ["dep:ts-rs", "edit-core/ts"]
 [dependencies]
 edit-core.workspace = true
 edit-render = { workspace = true, features = ["bundled-fonts"] }
+fontdue.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["rt", "sync"] }

@@ -186,7 +186,7 @@ registerTool("look_at_found", async ({ app, args, projectId }): Promise<Content[
   const thumbs = await Promise.all(
     shown.map(async (item) => (await research.thumbnail(await researchCloud.image(item.file).catch(() => item.file))) ?? { width: 320, height: 240, pixels: Buffer.alloc(320 * 240 * 4) }),
   );
-  const sheet = await native().composeSheet(thumbs, 6, "png");
+  const sheet = await native().composeSheet(thumbs, { labels: shown.map((_, index) => String(offset + index + 1)) }, "png");
   // Whether each one's title or address names the case's people (use_found reads the page of one that doesn't).
   const words = caseWordsOf(app, projectId);
   const tag = (item: (typeof shown)[number]) => (words.length === 0 ? "" : research.namesCase(`${item.title} ${item.page}`, words) !== null ? " · names the case" : " · its title doesn't name the case's people (use_found reads its page)");

@@ -2674,11 +2674,16 @@ fn render_frames_watched(
         let encoded = encoder
             .join()
             .unwrap_or_else(|_| Err("the encoder crashed".to_owned()));
-        // The encoder's own error explains a compositor that found it gone.
+        // The encoder's own error explains a compositor that found it gone;
+        // any other error of the compositor's is why the encoder was left
+        // with a chunk cut short (Nov 2: Kroger's export said only "the
+        // export stopped part-way through a chunk", three times over, the
+        // compositor's reason never logged).
         match (composited, encoded) {
             (Err(error), _) if error == "cancelled" => Err(error),
-            (_, Err(error)) => Err(error),
-            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(encoder)) if error == "the encoder stopped" => Err(encoder),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
             (Ok(()), Ok(())) => Ok(()),
         }
     })

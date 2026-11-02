@@ -27,7 +27,19 @@ native profile="release":
     set -euo pipefail
     cd crates/edit-native
     [ -d node_modules ] || bun install --frozen-lockfile
-    if [ "{{profile}}" = release ]; then bun run build; else bun run build:debug; fi
+    # Built beside it, then swapped in by rename: a server running the addon keeps the file it mapped. Written in
+    # place (Nov 2), `just dev`'s rebuild changed the code under the trial server's export, which failed mid-chunk.
+    out="$(mktemp -d)"
+    trap 'rm -rf "$out"' EXIT
+    if [ "{{profile}}" = release ]; then
+        node_modules/.bin/napi build --release -o "$out" --dts index.d.ts
+        codesign -s - -f "$out/edit-native.node"
+    else
+        node_modules/.bin/napi build -o "$out" --dts index.d.ts
+    fi
+    if [ -f "$out/index.d.ts" ]; then cp "$out/index.d.ts" index.d.ts; fi
+    cp "$out/edit-native.node" edit-native.node.next
+    mv -f edit-native.node.next edit-native.node
 
 # The native addon's smoke tests under Bun (builds it first; GPU tests skip
 # without one, or with EDIT_NO_GPU=1), and its types
@@ -234,13 +246,13 @@ dev: wasm web-install (native "debug")
     # EMFILE mid-reload, holding 10,245 files after five hours of reloads, and nothing started it again).
     (set +e; while true; do bun --watch apps/server/src/main.ts serve; echo "dev: the server stopped (exit $?); starting it again" >&2; sleep 2; done) &
     SERVER=$!
-    # The engine and its bindings: a new addon (the server restarts onto it).
-    cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-engine -w crates/edit-native/src -s 'just native debug' &
-    NATIVE=$!
+    # The engine and its bindings aren't rebuilt on every save any more: run `just native` after a Rust change and the
+    # server restarts onto the new addon. A watch rebuilt it (debug) on every save of a Rust file, over the release
+    # build other servers on this Mac were running (Nov 2: the trial server's Kroger export failed mid-chunk twice).
     # The browser engine shares edit-core/edit-render: rebuild it too (Vite reloads it).
     cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-wasm -s 'just wasm' &
     ENGINE=$!
-    trap 'pkill -P $SERVER 2>/dev/null; kill $SERVER $NATIVE $ENGINE 2>/dev/null || true' EXIT INT TERM
+    trap 'pkill -P $SERVER 2>/dev/null; kill $SERVER $ENGINE 2>/dev/null || true' EXIT INT TERM
     bun run --cwd apps/web dev
 
 # Copy a prod cloud project into dev (scripts/copy_to_dev.py): `just copy-to-dev --list`, then `just copy-to-dev <id or name>`

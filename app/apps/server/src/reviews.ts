@@ -1443,14 +1443,14 @@ export async function checkIn(app: App): Promise<string[]> {
       continue;
     }
     waitingFix.delete(request.reviewId);
-    const taken = (await cloud.mutation("reviews:takeFix", { machine: machine.id(), reviewId: request.reviewId })) as { ok?: boolean; reason?: string; noteIds?: string[] };
+    const taken = (await cloud.mutation("reviews:takeFix", { machine: machine.id(), reviewId: request.reviewId })) as { ok?: boolean; reason?: string; noteIds?: string[]; reshare?: boolean };
     if (taken.ok !== true) {
       diag.info("review", `${live.project.name}: Ready for changes not taken (${taken.reason ?? "?"})`);
       continue;
     }
     took.push(project);
     readying.add(project);
-    void fixReady(app, project, request.reviewId, taken.noteIds ?? [])
+    void fixReady(app, project, request.reviewId, taken.noteIds ?? [], followMs, taken.reshare === true)
       .catch(async (error: unknown) => {
         diag.warn("review", `${live.project.name}: Ready for changes: ${diag.messageOf(error)}`);
         await progress(request.reviewId, { state: "failed", error: diag.messageOf(error) });
@@ -1482,10 +1482,16 @@ export function followEveryForTests(ms: number): void {
  * settings and shared as the next version, which ends the request on the
  * page. Nothing changed (questions answered): done, nothing shared.
  */
-export async function fixReady(app: App, project: string, reviewId: string, noteIds: string[], every = followMs): Promise<void> {
+export async function fixReady(app: App, project: string, reviewId: string, noteIds: string[], every = followMs, reshare = false): Promise<void> {
   const home = app.store.home;
   const live = app.store.get(project);
   if (live === null) throw new Error("the project isn't on this computer any more");
+  // Asked again after a share failed, with nothing new to fix ("Share v2 again"): straight to the share.
+  if (noteIds.length === 0) {
+    if (!reshare) throw new Error("there were no notes to fix");
+    await shareAgain(app, project, reviewId);
+    return;
+  }
   const claimed = ((await cloud.mutation("reviews:claim", { noteIds, by: app.machine, machine: machine.id() })) as { claimed?: string[] }).claimed ?? [];
   const state = read(home);
   const mine = claimed.map((id) => state.notes[id]).filter((note): note is Note => note !== undefined);
@@ -1513,9 +1519,9 @@ export async function fixReady(app: App, project: string, reviewId: string, note
     throw error;
   }
   diag.info("review", `${live.project.name}: Ready for changes: the agent is fixing ${mine.length} note(s)`);
-  noteFix(home, project, { reviewId, noteIds: mine.map((note) => note.id), before, at: Date.now() });
+  noteFix(home, project, { reviewId, noteIds: mine.map((note) => note.id), before, at: Date.now(), ...(reshare ? { reshare } : {}) });
   try {
-    await followFix(app, project, reviewId, mine.map((note) => note.id), before, every);
+    await followFix(app, project, reviewId, mine.map((note) => note.id), before, every, 0, reshare);
   } finally {
     noteFix(home, project, null);
   }
@@ -1615,7 +1621,8 @@ export async function pullFeedback(app: App, projectId: string, again = false): 
 }
 
 /** Fixes under way, by project: what a restart needs to follow one to its share (review-fixes.json). */
-type Taken = { reviewId: string | null; noteIds: string[]; before: string; at: number };
+/** A fix under way, kept for a restart; `reshare`: an earlier share of its fixes failed, so it's shared even if this round changes nothing. */
+type Taken = { reviewId: string | null; noteIds: string[]; before: string; at: number; reshare?: boolean };
 const FIXES = "review-fixes.json";
 
 function takenFixes(home: string): Record<string, Taken> {
@@ -1648,7 +1655,7 @@ export function resumeFixes(app: App): void {
     }
     readying.add(project);
     diag.info("review", `${project}: Ready for changes: following the fix a restart cut short`);
-    void followFix(app, project, taken.reviewId, taken.noteIds, taken.before)
+    void followFix(app, project, taken.reviewId, taken.noteIds, taken.before, followMs, 0, taken.reshare === true)
       .catch(async (error: unknown) => {
         diag.warn("review", `${project}: Ready for changes: ${diag.messageOf(error)}`);
         await progress(taken.reviewId, { state: "failed", error: diag.messageOf(error) });
@@ -1675,7 +1682,7 @@ export function onLatest(home: string, project: string): Note[] {
  * goes as v3 and fixes those comments as well"). `round`: comments that came
  * in during the fix, sent to the agent after it (twice at most).
  */
-async function followFix(app: App, project: string, reviewId: string | null, noteIds: string[], before: string, every = followMs, round = 0): Promise<void> {
+async function followFix(app: App, project: string, reviewId: string | null, noteIds: string[], before: string, every = followMs, round = 0, reshare = false): Promise<void> {
   const home = app.store.home;
   const panel = seams.agentPanel(app);
   const mine = noteIds.flatMap((id) => (read(home).notes[id] ? [read(home).notes[id]!] : []));
@@ -1716,16 +1723,49 @@ async function followFix(app: App, project: string, reviewId: string | null, not
       await panel.send(project, fixMessage(after.project, state.shared[project], more, replies, await boxStills(home, project, state.shared[project], more)), null, null);
       diag.info("review", `${after.project.name}: Ready for changes: ${more.length} comment(s) came in meanwhile, sent to the agent too`);
       const all = [...noteIds, ...more.map((note) => note.id)];
-      noteFix(home, project, { reviewId, noteIds: all, before, at: Date.now() });
-      await followFix(app, project, reviewId, all, before, every, round + 1);
+      noteFix(home, project, { reviewId, noteIds: all, before, at: Date.now(), ...(reshare ? { reshare } : {}) });
+      await followFix(app, project, reviewId, all, before, every, round + 1, reshare);
       return;
     }
   }
-  // Fixes an earlier share failed on go out now, even when this round changed nothing.
-  if (timelineHash(after.project) === before && read(home).unshared?.[project] !== true) {
+  // Fixes an earlier share failed on go out now, even when this round changed nothing:
+  // failed here (`unshared`), or anywhere, as the page says (`reshare`).
+  if (timelineHash(after.project) === before && read(home).unshared?.[project] !== true && !reshare) {
     await progress(reviewId, { state: "done", stage: "Answered: nothing in the edit changed" });
     return;
   }
+  await shareFixes(app, project, reviewId, after.project.name);
+}
+
+/**
+ * "Share v<n> again" on the review page: the fixes are in but sharing them
+ * failed (Nov 2, JJ's Mom Secretly: every note done in v2, then the export
+ * stalled, and nothing on the page could try again). The edit is exported and
+ * shared as it is now, unless what it is now is already the latest version
+ * shared (shared by hand meanwhile): then that's said, and nothing's shared twice.
+ */
+async function shareAgain(app: App, project: string, reviewId: string): Promise<void> {
+  const home = app.store.home;
+  const live = app.store.get(project);
+  if (live === null) throw new Error("the project isn't on this computer any more");
+  const approved = read(home).shared[project]?.approved;
+  if (approved) {
+    await progress(reviewId, { state: "failed", error: `v${approved.version} was approved meanwhile, so nothing was shared.` });
+    return;
+  }
+  const versions = read(home).shared[project]?.versions ?? [];
+  const newest = versions.reduce<(typeof versions)[number] | null>((most, one) => (most === null || one.n > most.n ? one : most), null);
+  if (read(home).unshared?.[project] !== true && newest !== null && newest.timeline === timelineHash(live.project)) {
+    await progress(reviewId, { state: "done", stage: `v${newest.n} is already shared as the edit is now` });
+    return;
+  }
+  diag.info("review", `${live.project.name}: Ready for changes: sharing again (the fixes are in; the last share failed)`);
+  await shareFixes(app, project, reviewId, live.project.name);
+}
+
+/** Exports and shares the fixes: in place of the latest version unless it has comments, else as the next one; the share ends the request on the page. */
+async function shareFixes(app: App, project: string, reviewId: string | null, name: string): Promise<void> {
+  const home = app.store.home;
   const latest = read(home).shared[project]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? 0;
   const replace = latest > 0 && onLatest(home, project).length === 0;
   const next = replace ? latest : latest + 1;
@@ -1742,7 +1782,7 @@ async function followFix(app: App, project: string, reviewId: string | null, not
   try {
     // The share ends the request on the page, as done with this version.
     const shared = await exportAndShare(app, project, read(home).shareOptions?.[project] ?? {}, replace);
-    diag.info("review", `${after.project.name}: Ready for changes: shared v${shared.version}${replace ? " in its place" : ""}`);
+    diag.info("review", `${name}: Ready for changes: shared v${shared.version}${replace ? " in its place" : ""}`);
   } catch (error) {
     update(home, (state) => {
       state.unshared = { ...state.unshared, [project]: true };

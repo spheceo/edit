@@ -212,6 +212,116 @@ test("asked of this computer it takes the request, follows the agent's turn and,
   }
 });
 
+// Nov 2, JJ's Mom Secretly: every note done in v2, then sharing v2 failed
+// (Native encoder stalled), and the page had no way to try again. Now it
+// offers "Share v2 again": takeFix answers reshare with no notes to claim.
+test("Share again: with nothing to claim, it goes straight to exporting and sharing, never to the agent", async () => {
+  const { app, home, cleanup } = fixtureHome("ready-reshare");
+  const live = app.store.createAs("Mom Secretly", "bodycam", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  const sent: string[] = [];
+  idle(app, { send: async (_project: string, text: string) => void sent.push(text) });
+  let exports = 0;
+  (app as unknown as { exports: unknown }).exports = {
+    running: () => false,
+    runningFor: () => null,
+    cancel: () => false,
+    exported: () => false,
+    start: async (_store: unknown, _library: unknown, _project: unknown, _options: unknown, path: string) => {
+      exports++;
+      setTimeout(() => app.store.emit({ type: "export", id, state: "done", progress: 1, path }), 10);
+      return path;
+    },
+  };
+  try {
+    // v1 shared, with JJ's notes on it, done in the fix whose share failed.
+    const v1 = { n: 1, timeline: "an-older-cut", path: "/nowhere.mp4", fps: 30, durationMs: 10_000, clips: [] };
+    const note = { id: "n1", reviewId: "r1", project: id, version: 1, ms: 0, endMs: null, text: "cut the intro", author: "JJ", status: "done", parentId: null, createdAt: 1, updatedAt: 1, fix: { summary: "cut", ranges: [], clips: [] } };
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: { n1: note }, shared: { [id]: { reviewId: "r1", url: "https://feedback.test/r/x", versions: [v1] } } }));
+    const calls = convex({
+      "reviews:checkIn": () => ({ chosen: true, requests: [request(id, { title: "Mom Secretly" })] }),
+      "reviews:changes": () => ({ notes: [], cursor: 1, more: false }),
+      "reviews:open": () => [{ sourceId: id, reviewId: "r1", approved: null }],
+      "reviews:takeFix": () => ({ ok: true, sourceId: id, title: "Mom Secretly", version: 1, noteIds: [], reshare: true }),
+      "reviews:fixProgress": () => ({ ok: true }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([id]);
+    const said = () => calls.filter((call) => call.path === "reviews:fixProgress").map((call) => call.args);
+    const end = Date.now() + 10_000;
+    while (!said().some((one) => one.state === "failed" || one.state === "done") && Date.now() < end) await Bun.sleep(20);
+    // v1 has JJ's comments: the fixes go up as v2, exported now.
+    expect(said()[0]).toMatchObject({ reviewId: "r1", state: "sharing", stage: "Exporting v2" });
+    expect(exports).toBe(1);
+    expect(calls.some((call) => call.path === "reviews:claim")).toBe(false);
+    expect(sent).toEqual([]);
+    // The fixture has no export on record, so the share itself stops there; it's said, and kept to try again.
+    expect(said().at(-1)).toMatchObject({ state: "failed" });
+    expect(String(said().at(-1)!.error)).toContain("The fixes are in, but sharing v2 failed");
+    const saved = JSON.parse(fs.readFileSync(`${home}/reviews.json`, "utf8")) as { unshared?: Record<string, true> };
+    expect(saved.unshared?.[id]).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Share again with a new note: the agent fixes it, and the earlier fixes are shared even when this round changes nothing", async () => {
+  const { app, home, cleanup } = fixtureHome("ready-reshare-notes");
+  const live = app.store.createAs("Mom Secretly", "bodycam", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  let running = false;
+  idle(app, {
+    chat: () => ({ running }),
+    send: async (project: string) => {
+      running = true;
+      setTimeout(() => void reviews.unfixed(app, project, "n2", "a question: answered").then(() => (running = false)), 30);
+    },
+  });
+  (app as unknown as { exports: unknown }).exports = { running: () => false, runningFor: () => null, cancel: () => false, exported: () => false, start: async () => { throw new Error("no exports in this test"); } };
+  try {
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: {}, shared: { [id]: { reviewId: "r1", url: "u", versions: [{ n: 1, timeline: "older", path: "/nowhere.mp4", fps: 30, durationMs: 10_000, clips: [] }] } } }));
+    const note = { noteId: "n2", reviewId: "r1", sourceId: id, parentId: null, anchor: { kind: "time", ms: 1000 }, status: "open", fromApp: false, version: 1, author: "JJ", text: "Why this music?", createdAt: 1, updatedAt: 1 };
+    const calls = convex({
+      "reviews:checkIn": () => ({ chosen: true, requests: [request(id)] }),
+      "reviews:changes": () => ({ notes: [note], cursor: 1, more: false }),
+      "reviews:open": () => [{ sourceId: id, reviewId: "r1", approved: null }],
+      "reviews:takeFix": () => ({ ok: true, sourceId: id, title: "Mom Secretly", version: 1, noteIds: ["n2"], reshare: true }),
+      "reviews:claim": (args) => ({ claimed: args.noteIds }),
+      "reviews:fixProgress": () => ({ ok: true }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([id]);
+    const said = () => calls.filter((call) => call.path === "reviews:fixProgress").map((call) => call.args);
+    const end = Date.now() + 10_000;
+    while (!said().some((one) => one.state === "failed" || one.state === "done") && Date.now() < end) await Bun.sleep(20);
+    expect(said().some((one) => one.state === "sharing")).toBe(true);
+    expect(said().some((one) => one.stage === "Answered: nothing in the edit changed")).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Share again when the edit as it is now is already the latest version shared: said, nothing shared twice", async () => {
+  const { app, home, cleanup } = fixtureHome("ready-reshare-shared");
+  const live = app.store.createAs("Mom Secretly", "bodycam", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  idle(app);
+  try {
+    const v2 = { n: 2, timeline: timelineHash(live.project), path: "/nowhere.mp4", fps: 30, durationMs: 10_000, clips: [] };
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: {}, shared: { [id]: { reviewId: "r1", url: "u", versions: [{ ...v2, n: 1, timeline: "older" }, v2] } } }));
+    const calls = convex({
+      "reviews:fixProgress": () => ({ ok: true }),
+    });
+    await reviews.fixReady(app, id, "r1", [], 20, true);
+    const said = calls.filter((call) => call.path === "reviews:fixProgress").map((call) => call.args);
+    expect(said).toEqual([expect.objectContaining({ reviewId: "r1", state: "done", stage: "v2 is already shared as the edit is now" })]);
+    expect(calls.some((call) => call.path === "reviews:claim" || call.path === "reviews:publish")).toBe(false);
+    // No notes and no reshare: nothing to do, and nothing claimed.
+    expect(await reviews.fixReady(app, id, "r1", [], 20, false).catch((error: Error) => error.message)).toBe("there were no notes to fix");
+    expect(calls.some((call) => call.path === "reviews:claim")).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a fix goes up in place of the latest version unless it has a reviewer's comment", () => {
   const { home, cleanup } = fixtureHome("ready-versions");
   try {

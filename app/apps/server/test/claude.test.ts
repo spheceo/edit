@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 
 import { Agents, editToolsFailed, EXITED, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
+import * as toolChanges from "../src/tool_changes.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
 const MODELS = [
@@ -591,6 +592,48 @@ test("a turn whose Edit tools didn't connect starts again by itself, never askin
   } finally {
     timing.sleep = sleep;
     agents.shutdown();
+    home.cleanup();
+  }
+});
+
+test("a resumed session is told once what changed in the tools; a fresh one isn't", async () => {
+  const home = fixtureHome("claude-tools");
+  try {
+    const project = home.store.create("Tools test", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const { agents, asked, queries } = agentsWith(home);
+    const finish = async (index: number, session: string) => {
+      const q = queries[index]!;
+      q.push({ type: "system", subtype: "init", session_id: session });
+      q.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+      q.end();
+      await settle();
+    };
+    // A fresh session: no note, and the build's tools are kept with the chat.
+    await agents.send(project, "Look at the intro", null, null);
+    expect(asked[0]!.prompt).toBe("Look at the intro");
+    await finish(0, "session-1");
+    const now = toolChanges.current();
+    expect(agents.withChat(project).tools?.hash).toBe(now.hash);
+    // Saved and read back with the chat.
+    const saved = JSON.parse(fs.readFileSync(home.store.chatPath(project), "utf8")) as { tools?: { hash?: string } };
+    expect(saved.tools?.hash).toBe(now.hash);
+    // The session last saw an older build: look_at_media without pick, no wait or listen.
+    const older = structuredClone(now.tools);
+    older.look_at_media = older.look_at_media!.filter((arg) => arg !== "pick");
+    delete older.wait;
+    delete older.listen;
+    agents.withChat(project).tools = toolChanges.schemaOf(older, now.skills.filter((skill) => skill !== "walkthrough"));
+    await agents.send(project, "Find a shot of the house", null, null);
+    expect(asked[1]!.options.resume).toBe("session-1");
+    expect(asked[1]!.prompt).toBe(
+      "(Edit updated since this chat last looked at its tools: look_at_media gained pick; new tools listen, wait; new skill walkthrough. Use what's new where it fits; the tools' current descriptions say how.)\n\nFind a shot of the house",
+    );
+    await finish(1, "session-1");
+    // Told once: the next turn on the same build carries no note.
+    await agents.send(project, "And the outro", null, null);
+    expect(asked[2]!.prompt).toBe("And the outro");
+    expect(toolChanges.changes(now, now)).toBe("");
+  } finally {
     home.cleanup();
   }
 });

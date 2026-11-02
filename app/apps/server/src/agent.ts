@@ -28,6 +28,7 @@ import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
 import type { Project } from "./model.ts";
 import type { Store } from "./store.ts";
+import * as toolChanges from "./tool_changes.ts";
 import { VERSION } from "./version.ts";
 
 type Json = unknown;
@@ -89,6 +90,8 @@ export interface Chat {
   dropped: boolean;
   /** A message already resumed or explicitly cancelled: never adopt it again from old history. */
   authRecoveryUser: string | null;
+  /** The tools the Claude session last saw (tool_changes.ts): a resumed one is told what changed since. */
+  tools: toolChanges.ToolSchema | null;
 }
 
 export interface Model {
@@ -122,6 +125,7 @@ function freshChat(): Chat {
     heard: 0,
     dropped: false,
     authRecoveryUser: null,
+    tools: null,
   };
 }
 
@@ -729,7 +733,7 @@ export class Agents implements seams.AgentPanel {
 
   private save(project: string): void {
     const chat = this.withChat(project);
-    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, entries: chat.entries.map(entryJson) };
+    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, ...(chat.tools === null ? {} : { tools: chat.tools }), entries: chat.entries.map(entryJson) };
     try {
       writeAtomic(this.store.chatPath(project), JSON.stringify(snapshot));
     } catch {
@@ -1020,12 +1024,17 @@ export class Agents implements seams.AgentPanel {
     const level = chat.effort ?? "medium";
     if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];
     if (chat.thread !== null) options.resume = chat.thread;
+    // A resumed session keeps the tool schemas it read: tell it once what this build changed (tool_changes.ts).
+    const tools = toolChanges.current();
+    const updated = chat.thread !== null && chat.tools !== null ? toolChanges.changes(chat.tools, tools) : "";
+    chat.tools = tools;
     const now = this.withChat(project);
     if (!stillOn(now, generation)) throw new Error("Stopped.");
     now.provider = "claude";
     this.save(project);
     this.emit(project, { event: "status", running: true });
-    await this.runClaude(project, generation, text + context, options);
+    if (updated !== "") diag.info("agent", `${project}: told the resumed session what changed in the tools`);
+    await this.runClaude(project, generation, updated === "" ? text + context : `${updated}\n\n${text}${context}`, options);
   }
 
   /**
@@ -1893,6 +1902,7 @@ export function readChat(text: string): Chat {
   chat.model = option("model");
   chat.effort = option("effort");
   chat.authRecoveryUser = option("authRecoveryUser");
+  chat.tools = toolChanges.read(given.tools);
   const entries = given.entries;
   if (entries !== undefined) {
     if (!Array.isArray(entries)) throw new Error("entries: invalid type, expected a sequence");

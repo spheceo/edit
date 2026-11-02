@@ -87,6 +87,49 @@ test("pulls the open notes, claims them by hand, hands them over as a review tur
   }
 });
 
+// The database gives a request's notes, claimed without "by hand", only to the
+// computer working on that request (Nov 2): asked in the chat there's none,
+// so a note that came in during the fix is claimed by hand too.
+test("a note that came in during a pulled fix is claimed by hand, as the first were", async () => {
+  const { app, home, cleanup } = fixtureHome("pull-late-note");
+  const live = app.store.createAs("Judge", "courtroom", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  let running = true;
+  let sends = 0;
+  (app as unknown as { agents: unknown }).agents = {
+    chat: () => ({ running }),
+    send: async () => {
+      sends++;
+      setTimeout(() => void reviews.unfixed(app, id, "n4", "answered").catch(() => {}), 30);
+    },
+  };
+  try {
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: {}, shared: { [id]: { reviewId: "r1", url: "https://feedback.test/r/x", versions: [{ n: 1, timeline: "t", path: "/nowhere.mp4", fps: 30, durationMs: 10_000, clips: [] }] } } }));
+    const note = (noteId: string) => ({ noteId, reviewId: "r1", sourceId: id, parentId: null, anchor: { kind: "time", ms: 1000 }, status: "open", fromApp: false, version: 1, author: "Marc", text: `note ${noteId}`, createdAt: 1, updatedAt: 1 });
+    let heard = [note("n1")];
+    const calls = convex({
+      "reviews:changes": () => ({ notes: heard, cursor: 1, more: false }),
+      "reviews:open": () => [{ sourceId: id, reviewId: "r1", approved: null }],
+      "reviews:claim": (args) => ({ claimed: args.noteIds }),
+    });
+    await reviews.pullFeedback(app, id);
+    // A reviewer's note lands while the agent works.
+    heard = [note("n4")];
+    await reviews.poll(app);
+    await reviews.unfixed(app, id, "n1", "answered");
+    running = false;
+    const end = Date.now() + 5_000;
+    while (!calls.some((call) => call.path === "reviews:claim" && (call.args.noteIds as string[]).includes("n4")) && Date.now() < end) await Bun.sleep(20);
+    const late = calls.find((call) => call.path === "reviews:claim" && (call.args.noteIds as string[]).includes("n4"));
+    expect(late?.args).toMatchObject({ noteIds: ["n4"], manual: true, machine: machine.id() });
+    expect(sends).toBe(1);
+    // The follow ends before the fixture goes.
+    while (Date.now() < end && (await reviews.pullFeedback(app, id).catch((error: Error) => error.message)).includes("being fixed already")) await Bun.sleep(20);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a project never shared for review has nothing to pull", async () => {
   const { app, cleanup } = fixtureHome("pull-unshared");
   const live = app.store.createAs("Judge", "courtroom", { width: 1920, height: 1080, fps: 30 });

@@ -23,7 +23,6 @@ import { Deferred, Effect, Exit } from "effect";
 import type { App } from "./app.ts";
 import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
-import { ConvexFailure } from "./cloud.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
@@ -1379,15 +1378,9 @@ export function busyHere(app: App): boolean {
   }
 }
 
-/** The database refused `busy` (not deployed yet): left out until then, asked again after this long. */
-const BUSY_AGAIN_MS = 30 * 60_000;
-let busyRefusedAt: number | null = null;
-const refusesBusy = (error: unknown) => error instanceof ConvexFailure && error.kind === "function" && /extra field `?busy/iu.test(error.said);
-
 /** Tests: forget what earlier check-ins learnt. */
 export function resetCheckInForTests(): void {
   asked = false;
-  busyRefusedAt = null;
   declined.clear();
   waitingFix.clear();
 }
@@ -1401,18 +1394,8 @@ export function resetCheckInForTests(): void {
  */
 export async function checkIn(app: App): Promise<string[]> {
   const email = accounts.status().person as { email?: string } | null;
-  const base = { machine: machine.id(), name: machine.name(), email: email?.email ?? null };
-  const withBusy = busyRefusedAt === null || Date.now() - busyRefusedAt >= BUSY_AGAIN_MS;
-  let answer: { chosen?: boolean; requests?: Request[] };
-  try {
-    answer = (await cloud.mutation("reviews:checkIn", withBusy ? { ...base, busy: busyHere(app) } : base)) as typeof answer;
-    if (withBusy) busyRefusedAt = null;
-  } catch (error) {
-    if (!withBusy || !refusesBusy(error)) throw error;
-    if (busyRefusedAt === null) diag.info("review", "the database doesn't take busy on a check-in yet: checking in without it");
-    busyRefusedAt = Date.now();
-    answer = (await cloud.mutation("reviews:checkIn", base)) as typeof answer;
-  }
+  // Busy is the whole Mac's: Script mode's work (Claude on a script, its imports) counts too.
+  const answer = (await cloud.mutation("reviews:checkIn", { machine: machine.id(), name: machine.name(), email: email?.email ?? null, busy: busyHere(app) })) as { chosen?: boolean; requests?: Request[] };
   const requests = (answer.requests ?? []).filter((one) => typeof one.reviewId === "string" && typeof one.sourceId === "string");
   const now = requests.length > 0;
   if (now !== asked) diag.info("review", now ? "Ready for changes is asked of this computer" : "no Ready for changes is asked of this computer now");
@@ -1723,7 +1706,8 @@ async function followFix(app: App, project: string, reviewId: string | null, not
   // Comments on the latest version that came in during the fix: fixed before it's shared.
   const unseen = onLatest(home, project).filter((note) => note.status === "open" && !noteIds.includes(note.id) && note.fix === undefined && note.unfixed === undefined);
   if (unseen.length > 0 && round < 2) {
-    const claimed = ((await cloud.mutation("reviews:claim", { noteIds: unseen.map((note) => note.id), by: app.machine, machine: machine.id() })) as { claimed?: string[] }).claimed ?? [];
+    // Asked in the chat (no request taken here): by hand, as pull_feedback claimed the first; the database gives a request's notes only to the computer working on it.
+    const claimed = ((await cloud.mutation("reviews:claim", { noteIds: unseen.map((note) => note.id), by: app.machine, machine: machine.id(), ...(reviewId === null ? { manual: true } : {}) })) as { claimed?: string[] }).claimed ?? [];
     const more = unseen.filter((note) => claimed.includes(note.id));
     if (more.length > 0) {
       const state = read(home);

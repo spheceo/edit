@@ -34,11 +34,6 @@ afterAll(() => {
 
 type Call = { path: string; args: Record<string, unknown> };
 
-/** A Convex function's own error, as the relay passes it on. */
-class Refused {
-  constructor(readonly message: string) {}
-}
-
 /** Repack's reviews functions as the relay answers them; every call kept. */
 function convex(answers: Record<string, (args: Record<string, unknown>) => unknown>): Call[] {
   const calls: Call[] = [];
@@ -46,9 +41,7 @@ function convex(answers: Record<string, (args: Record<string, unknown>) => unkno
     const { path, args } = request.json<{ path: string; args: Record<string, unknown> }>();
     calls.push({ path, args });
     const answer = answers[path];
-    const value = answer ? answer(args) : null;
-    if (value instanceof Refused) return Response.json({ status: "error", errorMessage: value.message });
-    return Response.json({ status: "success", value });
+    return Response.json({ status: "success", value: answer ? answer(args) : null });
   });
   return calls;
 }
@@ -87,21 +80,6 @@ test("a check-in says busy while an agent turn runs on any project here", async 
     (app as unknown as { exports: unknown }).exports = { running: () => true };
     await reviews.checkIn(app);
     expect(calls[1]!.args.busy).toBe(true);
-  } finally {
-    cleanup();
-  }
-});
-
-test("a database that doesn't take busy yet gets the check-in without it, and isn't asked with it again for a while", async () => {
-  const { app, cleanup } = fixtureHome("ready-busy-refused");
-  idle(app);
-  try {
-    const calls = convex({
-      "reviews:checkIn": (args) => ("busy" in args ? new Refused("ArgumentValidationError: Object contains extra field `busy` that is not in the validator.") : { chosen: false, requests: [] }),
-    });
-    expect(await reviews.checkIn(app)).toEqual([]);
-    await reviews.checkIn(app);
-    expect(calls.map((call) => "busy" in call.args)).toEqual([true, false, false]);
   } finally {
     cleanup();
   }

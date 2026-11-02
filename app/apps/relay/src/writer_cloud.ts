@@ -50,6 +50,7 @@ export const WRITER_FUNCTIONS: Record<string, string> = {
   "reviews:note": "review.share",
   "reviews:deleteNote": "review.share",
   "reviews:takeFix": "review.share",
+  "reviews:declineFix": "review.share",
   "reviews:fixProgress": "review.share",
   "reviews:check": "review.share",
   "reviews:setMeta": "review.share",

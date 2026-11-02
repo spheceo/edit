@@ -211,6 +211,17 @@ test("a_new_picture_after_the_last_page_is_flagged", () => {
   expect(kinds(p, "end_new_picture").length).toBe(0);
 });
 
+test("a_clip_stacked_on_its_own_copy_is_flagged", () => {
+  const p = project("plan");
+  p.media.push(footage());
+  apply(p, [
+    { op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 3, start: 0, duration: 90, name: "Cut-in 3 · Desktop · Notepad" } },
+    { op: "add", clip: { type: "video", track: "new", media: "m1", source_in: 3, start: 0, duration: 90, name: "Cut-in 3 · Desktop · Notepad" } },
+    { op: "add", clip: { type: "video", track: "new", media: "m1", source_in: 3, start: 30, duration: 60 } },
+  ]);
+  expect(kinds(p, "stacked_copies").map((issue) => issue.count)).toEqual([1]);
+});
+
 test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {
   const p = project("plan");
   p.media.push(footage(), media({ id: "m2", name: "g", path: "/g.mp4", kind: "video", duration: 600, width: 1920, height: 1080 }));

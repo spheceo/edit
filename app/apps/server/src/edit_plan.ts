@@ -1710,6 +1710,20 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       }
     }
   }
+  // The same picture stacked on itself: one clip copied onto other tracks at
+  // the same frames (loop 7's holdout: a Notepad three times over in one
+  // cut-in, twice in another), which doubles its shadow and every later edit.
+  {
+    const seen = new Map<string, string>();
+    const copies: string[] = [];
+    for (const clip of project.clips) {
+      if (clip.type !== "video" || !visible(clip.track)) continue;
+      const key = JSON.stringify([clip.media, clip.start, clip.duration, round(clip.source_in * 1000), clip.transform, clip.keyframes ?? null, clip.crop ?? null]);
+      if (seen.has(key)) copies.push(clip.id);
+      else seen.set(key, clip.id);
+    }
+    if (copies.length > 0) issues.push({ kind: "stacked_copies", clips: copies.slice(0, 12), count: copies.length, fix: "delete these: each is an exact copy of a clip already there at the same frames" });
+  }
   // A found photo or still as plain B-roll (letterboxed, often): pictures go
   // on screen only inside a designed graphic (an evidence card or board).
   issues.push(...graphics.bareStills(project));

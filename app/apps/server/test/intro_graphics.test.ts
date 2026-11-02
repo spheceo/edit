@@ -99,3 +99,17 @@ test("a pause holds the shot at its zoom on that frame, then pushes in", () => {
   expect(pause.keyframes!.scale![0]!.value).toBeCloseTo(1.6, 2);
   expect(pause.keyframes!.scale!.at(-1)!.value).toBeGreaterThan(1.6);
 });
+
+test("a pause held from another moment of the same tape continues the zoom of the shot it cuts from", () => {
+  const p = room();
+  const shot = p.clips.find((clip) => clip.type === "video")!;
+  if (shot.type !== "video") throw new Error("no shot");
+  shot.duration = 300;
+  shot.transform = { ...shot.transform, scale: 1.37 };
+  apply(p, [{ op: "add", clip: { type: "video", track: "new", media: "room", source_in: 100, start: 0, duration: 100, transform: { x: 0, y: 0, scale: 1.2, rotation: 0 } } }]);
+  // Held from frame 50 (the 1.2 shot), placed at 300 straight after the 1.37 tape.
+  apply(p, [{ op: "pause", start: 300, end: 390, from: 50 }]);
+  const pause = clipNamed(p, "Pause");
+  if (pause.type !== "video") throw new Error("no pause");
+  expect(pause.transform.scale).toBeCloseTo(1.37, 2);
+});

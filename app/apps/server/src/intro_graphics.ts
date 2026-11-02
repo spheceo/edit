@@ -274,7 +274,12 @@ export function pause(project: Project, args: Args): Record<string, unknown> {
   // on the clip's base scale snapped back from its zoom (Jones JJ, OnlyFans,
   // Oct 31: "we cut over to the clip, and then we have a zoom in a weird way";
   // the fix: "Pause zoom continues from the shot before"; loop 7 R1 had five).
-  const framing = framingAt(under, from - under.start);
+  // Held from another moment of the same footage, it still continues the zoom
+  // of the shot it cuts from (loop 7's second holdout: tape at 1.37, pause at 1.21).
+  const before = project.clips
+    .filter((clip) => clip.type === "video" && clip !== under && clip.media === under.media && Math.abs(clipEnd(clip) - start) <= 1)
+    .sort((a, b) => video.indexOf(b.track) - video.indexOf(a.track))[0];
+  const framing = before !== undefined && before.type === "video" && from < start - 1 && !(under.start <= start - 1 && start - 1 < clipEnd(under)) ? framingAt(before, before.duration - 1) : framingAt(under, from - under.start);
   const scale = framing.scale;
   const duration = end - start;
   const made: string[] = [];

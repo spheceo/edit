@@ -1275,7 +1275,11 @@ pub fn export_file(
         // Tried twice before exporting it whole: the chunks made are kept, so
         // a second try only makes the rest. A sound encoder that stalled once
         // under load (card 1, Oct 29) sent a 93-minute edit to the whole
-        // export, hours where the chunks take minutes.
+        // export, hours where the chunks take minutes. The second try copies
+        // nothing out of the last export: what it copied may be what was
+        // wrong, and copying it again fails the same way (Nov 2, JJ's Mom
+        // Secretly v2: both joins had 53141 frames, not 53036, and the whole
+        // export after stalled on a Mac out of memory).
         #[cfg(target_os = "macos")]
         for attempt in 1..=2 {
             match export_chunked(
@@ -1286,6 +1290,7 @@ pub fn export_file(
                 &temporary.0,
                 cache,
                 sounds,
+                attempt == 1,
                 cancel,
                 &mut progress,
             ) {
@@ -1298,7 +1303,7 @@ pub fn export_file(
                 }
                 Err(error) if attempt == 1 => crate::log::warn(
                     "export",
-                    format!("a chunked export failed ({error}); trying the chunks again"),
+                    format!("a chunked export failed ({error}); trying the chunks again, rendering what it had copied from the last export"),
                 ),
                 Err(error) => crate::log::warn(
                     "export",
@@ -1310,16 +1315,35 @@ pub fn export_file(
         let _ = settings;
     }
     if made.is_none() {
-        export_with(
-            project,
-            options,
-            plan,
-            &temporary.0,
-            cache,
-            sounds,
-            cancel,
-            &mut progress,
-        )?;
+        // The native encoder first; when it fails (stalled on a Mac out of
+        // memory: JJ's, Nov 2, after 16 minutes), once more with FFmpeg's.
+        let whole = |native: bool, progress: &mut dyn FnMut(f32)| {
+            export_with(
+                project,
+                options,
+                plan,
+                &temporary.0,
+                cache,
+                sounds,
+                native,
+                cancel,
+                progress,
+            )
+        };
+        match whole(true, &mut progress) {
+            Err(error)
+                if error != "cancelled"
+                    && !cancel.load(Ordering::Acquire)
+                    && is_native_encoder_error(&error) =>
+            {
+                crate::log::warn(
+                    "export",
+                    format!("the whole export failed ({error}); exporting it again with FFmpeg's encoder"),
+                );
+                whole(false, &mut progress)?;
+            }
+            other => other?,
+        }
     }
     if cancel.load(Ordering::Acquire) {
         return Err("cancelled".to_owned());
@@ -1355,6 +1379,7 @@ fn export_chunked(
     output: &Path,
     cache: &Path,
     sounds: &HashMap<String, PathBuf>,
+    reuse_last: bool,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
 ) -> Result<(Vec<crate::chunks::Chunk>, Option<String>), String> {
@@ -1372,7 +1397,7 @@ fn export_chunked(
     let list = crate::log::time_on("export", "export: chunks", &project.id, || {
         Ok::<_, String>(chunks::split(project, plan, &key))
     })?;
-    let last = chunks::Manifest::load(&dir, fps);
+    let last = chunks::Manifest::load(&dir, fps).filter(|_| reuse_last);
     let mut pieces = Vec::new();
     let mut todo = Vec::new();
     let mut copied = 0;
@@ -1645,6 +1670,7 @@ pub fn export(
         output,
         cache,
         &HashMap::new(),
+        true,
         cancel,
         progress,
     )
@@ -1662,7 +1688,8 @@ fn sound_path(
         .or_else(|| project.media(media).map(|media| PathBuf::from(&media.path)))
 }
 
-/// [`export`], mixing from `sounds` where given.
+/// [`export`], mixing from `sounds` where given; the picture through the
+/// native encoder when `native` and it suits, else FFmpeg's.
 #[allow(clippy::too_many_arguments)]
 fn export_with(
     project: &Project,
@@ -1671,6 +1698,7 @@ fn export_with(
     output: &Path,
     cache: &Path,
     sounds: &HashMap<String, PathBuf>,
+    native: bool,
     cancel: &AtomicBool,
     mut progress: impl FnMut(f32),
 ) -> Result<(), String> {
@@ -1740,6 +1768,7 @@ fn export_with(
             plan,
             destination,
             !joined,
+            native,
             cache,
             cancel,
             &mut |done| progress(before + done * (1.0 - before)),
@@ -1878,12 +1907,19 @@ fn render_picture(
     plan: &Plan,
     output: &Path,
     alone: bool,
+    native: bool,
     cache: &Path,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
 ) -> Result<(), String> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = native;
     #[cfg(target_os = "macos")]
-    if let Some(writer) = native_writer(project, options, plan, output, alone)? {
+    if let Some(writer) = native
+        .then(|| native_writer(project, options, plan, output, alone))
+        .transpose()?
+        .flatten()
+    {
         return crate::log::time_on("export", "export: native video", &project.id, || {
             render_frames(
                 project,
@@ -2010,6 +2046,15 @@ fn native_options(
         finished: true,
         faststart: alone,
     }))
+}
+
+/// An error of the native (AVFoundation) encoder, which FFmpeg's may not
+/// have: stalled, a frame rejected, a buffer it couldn't give.
+fn is_native_encoder_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("native encoder")
+        || lower.contains("encoder pixel buffer")
+        || lower.contains("the encoder stopped early")
 }
 
 #[cfg(target_os = "macos")]
@@ -2877,6 +2922,74 @@ mod tests {
                 "frame {frame}: {middle:?}"
             );
         }
+    }
+
+    /// A re-export whose copies out of the last export come out wrong (Nov 2,
+    /// JJ's Mom Secretly v2: the join had 105 frames too many, twice) tries
+    /// again rendering those chunks, not copying them again, and stays a
+    /// chunked export instead of going whole.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_second_try_renders_what_the_first_copied_from_the_last_export() {
+        let dir = temp_dir("chunks-retry");
+        let red = source(&dir, "red.mp4", "red", 0.5);
+        let blue = source(&dir, "blue.mp4", "blue", 1.0);
+        let options = ExportOptions::default();
+        let cache = dir.join("cache");
+        let run = |project: &Project, name: &str| {
+            let plan = export_plan(project, &options).unwrap();
+            let output = dir.join(name);
+            export_file(
+                project,
+                &options,
+                &plan,
+                &output,
+                &cache,
+                &HashMap::new(),
+                &AtomicBool::new(false),
+                |_| {},
+            )
+            .unwrap();
+            output
+        };
+        let one = run(&cuts(&red, &blue, &[], 0), "one.mp4");
+        // The last export spoilt where its manifest can't tell: the same size and time.
+        let modified = std::fs::metadata(&one).unwrap().modified().unwrap();
+        let size = std::fs::metadata(&one).unwrap().len();
+        std::fs::write(&one, vec![0_u8; size as usize]).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&one)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let two = run(&cuts(&red, &blue, &[96], 0), "two.mp4");
+        assert_eq!(
+            manifest(&cache).output,
+            two,
+            "made of chunks, not exported whole"
+        );
+        shows(
+            &two,
+            |frame| (frame / 30) % 2 == 1 || frame / 30 == 96,
+            3000,
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn only_the_native_encoders_failures_are_tried_again_with_ffmpeg() {
+        assert!(is_native_encoder_error("Native encoder stalled"));
+        assert!(is_native_encoder_error(
+            "Native encoder: The operation could not be completed"
+        ));
+        assert!(is_native_encoder_error(
+            "Cannot allocate native encoder pixel buffer"
+        ));
+        assert!(!is_native_encoder_error("cancelled"));
+        assert!(!is_native_encoder_error(
+            "No video frame at the requested source time"
+        ));
     }
 
     /// A chunked re-export copies what didn't change out of the last export

@@ -722,7 +722,9 @@ int edit_writer_frame(void *handle, int64_t frame, const uint8_t *pixels, size_t
         }
         // Bound both the encoder's queue and the pixel-buffer pool. Offline writers
         // must obey readiness, otherwise a long export buffers the entire movie.
-        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:30];
+        // 90 s, not 30: a Mac out of memory (JJ's, Nov 2: 0.1 GB free, two
+        // exports at once) held a whole export's encoder past 30 s.
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:90];
         CVPixelBufferRef pixel = NULL;
         while (!pixel) {
             if (w.writer.status != AVAssetWriterStatusWriting || deadline.timeIntervalSinceNow < 0) {

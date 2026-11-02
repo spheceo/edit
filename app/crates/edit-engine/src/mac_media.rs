@@ -711,7 +711,7 @@ impl Writer {
         if ok == 1 {
             Ok(())
         } else {
-            Err(message(&error))
+            Err(encoder_said(&error))
         }
     }
 
@@ -728,8 +728,19 @@ impl Writer {
         if ok == 1 {
             Ok(())
         } else {
-            Err(message(&error))
+            Err(encoder_said(&error))
         }
+    }
+}
+
+/// The video encoder's error, said as the native encoder's (AVFoundation's
+/// own words don't say so), so an export knows to try FFmpeg's.
+fn encoder_said(error: &[c_char; 1024]) -> String {
+    let said = message(error);
+    if said.to_lowercase().contains("native encoder") {
+        said
+    } else {
+        format!("Native encoder: {said}")
     }
 }
 

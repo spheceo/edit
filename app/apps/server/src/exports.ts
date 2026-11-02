@@ -670,7 +670,26 @@ export class ExportRegistry implements seams.Exports {
             // Something wrong on Modal (out of credit, down): exported here instead.
             diag.warn("export", `${project.name}: Modal couldn't export it (${diag.messageOf(error)}); exporting on this Mac`);
             running.backend = "local";
+            running.remote = false;
             fresh = false;
+            // In line for this Mac's renderer like any export here. It went
+            // around the line (Nov 2, JJ's Mac: Modal refused Cops Surprise,
+            // it exported here, and Mom Secretly's v2 started beside it, two
+            // whole renders on a Mac with 0.1 GB free, until its encoder stalled).
+            await new Promise<void>((resolve, reject) => {
+              running.queued = true;
+              running.cancelQueued = () => {
+                this.localQueue = this.localQueue.filter(one => one.running !== running);
+                reject(new Error("cancelled"));
+              };
+              this.localQueue.push({ running, start: resolve });
+              if (this.localActive) emit("queued", 0);
+              this.drain();
+            });
+            releaseLocal = () => {
+              this.localActive = false;
+              this.drain();
+            };
             emit("running", 0);
           }
         }

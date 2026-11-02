@@ -244,6 +244,64 @@ test("a free Mac keeps an export Modal could take, and its first export teaches 
   }
 });
 
+// Nov 2, JJ's Mac: Modal refused Cops Surprise (429), it exported here
+// outside the line, and Mom Secretly's v2 started beside it: two whole renders
+// on a Mac with 0.1 GB free, until the second's encoder stalled.
+test("an export Modal refuses waits its turn for this Mac like any other, and the next one waits for it", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("modal-refused-queues");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const enabled = spyOn(seams.modalExports, "enabled").mockReturnValue(true);
+  const suitable = spyOn(seams.modalExports, "unsuitable").mockReturnValue(null);
+  // The first goes to Modal (long); the second is asked while the first renders here.
+  const better = spyOn(seams.modalExports, "cloudBetter").mockImplementation((_project, _plan, busy) => (busy ? "this Mac is already exporting" : "it would take about 36 min on this Mac"));
+  let refuse = true;
+  const modal = spyOn(seams.modalExports, "run").mockImplementation(async (_home, _project, _options, output) => {
+    if (refuse) throw new Error("modal-http: Input rate limit (0/s) exceeded (429)");
+    fs.writeFileSync(output, "modal export");
+    return { bytes: 12, key: null };
+  });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 1800, width: 64, height: 36, audio: true }, fps: 30 });
+  let rendering = 0;
+  let most = 0;
+  let finish!: () => void;
+  const held = new Promise<void>((resolve) => (finish = resolve));
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job) => ({
+    cancel: () => {},
+    wait: async () => {
+      rendering++;
+      most = Math.max(most, rendering);
+      await held;
+      fs.writeFileSync(job.output, "export");
+      rendering--;
+      return { seconds: 1, bytes: 6 };
+    },
+  }));
+  try {
+    const ids: string[] = [];
+    for (const name of ["cops", "mom"]) {
+      const project = store.create(name, { width: 64, height: 36, fps: 30 }).project;
+      await store.update(project.id, "test", p => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 1800, type: "solid" })));
+      ids.push(project.id);
+    }
+    await registry.start(store, app.library, store.get(ids[0]!)!.project, native.exportDefaults(), `${dir}/cops.mp4`);
+    for (let tries = 0; render.mock.calls.length === 0 && tries < 200; tries++) await Bun.sleep(5);
+    expect(registry.localRunning()).toBe(true);
+    // Modal would take it now, but this Mac is the one asked about: busy.
+    refuse = false;
+    await registry.start(store, app.library, store.get(ids[1]!)!.project, native.exportDefaults(), `${dir}/mom.mp4`);
+    expect(better.mock.calls.at(-1)![2]).toBe(true);
+    finish();
+    for (let tries = 0; registry.running() && tries < 400; tries++) await Bun.sleep(5);
+    expect(most).toBe(1);
+    expect(registry.localRunning()).toBe(false);
+  } finally {
+    finish();
+    render.mockRestore(); plan.mockRestore(); archive.mockRestore(); modal.mockRestore(); better.mockRestore(); suitable.mockRestore(); enabled.mockRestore(); cleanup();
+  }
+});
+
 test("a Mac's speed is the median of its newest fresh exports of that kind, and the 25 minutes go by it", () => {
   const home = fs.mkdtempSync(`${os.tmpdir()}/edit-speed-`);
   try {

@@ -156,8 +156,12 @@ export function status(app: App, id: string): Status {
   // A save that changed nothing seen (a note, the chat) keeps the render.
   if (live !== null && ready !== undefined && ready.rev !== live.rev && ready.hash === pictureHash(live.project)) ready.rev = live.rev;
   const url = ready === undefined ? null : `/api/projects/${encodeURIComponent(id)}/playback.mp4?v=${ready.stamp}`;
-  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url, error: null };
-  if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url, error: null };
+  // While another revision renders or waits, the file there shows an older
+  // picture: no url, so nothing plays it as this one (JJ, Nov 2: "I've made
+  // changes to the window screen rather than the paper, but on the screen, it
+  // still shows the paper thing": the status gave the new rev with the old file).
+  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null };
+  if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url: asked.get(id) === ready?.rev ? url : null, error: null };
   if (ready !== undefined) return { state: "ready", rev: ready.rev, progress: 1, url, error: null };
   const lost = failed.get(id);
   if (lost !== undefined) return { state: "failed", rev: lost.rev, progress: 0, url: null, error: lost.error };

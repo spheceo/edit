@@ -42,3 +42,34 @@ test("an agent's turn over, its edit is made smooth on Modal by itself; a turn s
     cleanup();
   }
 });
+
+test("while a changed edit renders, the old render is never offered as it", async () => {
+  // JJ, Nov 2: "I've made changes to the window screen rather than the paper, but on the screen, it still shows the paper thing."
+  const fs = await import("node:fs");
+  const { fixtureHome } = await import("./helpers/home.ts");
+  const playback = await import("../src/playback_render.ts");
+  const { app, store, cleanup } = fixtureHome("playback-stale");
+  const toCloud = playback.hooks.toCloud;
+  try {
+    Object.assign(app.exports, { localRunning: () => false, running: () => false });
+    const id = store.create("stale", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const live = store.get(id)!;
+    const mp4 = playback.file(app, id);
+    fs.mkdirSync(mp4.replace(/\/[^/]+$/u, ""), { recursive: true });
+    fs.writeFileSync(mp4, "old picture");
+    fs.writeFileSync(mp4.replace(/\.mp4$/u, ".json"), JSON.stringify({ rev: live.rev, hash: playback.pictureHash(live.project), stamp: "old" }));
+    expect(playback.status(app, id)).toMatchObject({ state: "ready", rev: live.rev });
+    expect(playback.status(app, id).url).not.toBeNull();
+    // The picture changes; its render waits (here, for ever).
+    await store.update(id, "test", (p) => {
+      p.settings.fps = 25;
+    });
+    playback.hooks.toCloud = () => new Promise<boolean>(() => {});
+    const asked = playback.request(app, id);
+    expect(asked.rev).toBe(store.get(id)!.rev);
+    expect(asked.url).toBeNull();
+  } finally {
+    playback.hooks.toCloud = toCloud;
+    cleanup();
+  }
+});

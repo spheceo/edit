@@ -95,7 +95,7 @@ export function Viewer() {
   // Smooth playback: the rendered edit plays when it shows what's on screen (its
   // revision, nothing waiting to save); else the canvas draws live.
   const projectId = project?.id ?? null;
-  const smooth = playback?.url && playback.rev === rev && !dirty ? playback.url : null;
+  const smooth = playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? playback.url : null;
   useEffect(() => { preview.setSmooth(smooth); }, [smooth]);
   useEffect(() => {
     if (projectId === null) return;

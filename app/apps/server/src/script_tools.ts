@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import * as names from "./names.ts";
 import * as diag from "./diag.ts";
 import { isBug } from "./guard.ts";
 import { mimeOf } from "./http/assets.ts";
@@ -186,7 +187,10 @@ registerTool("look_at_found", async ({ app, args, projectId }): Promise<Content[
     shown.map(async (item) => (await research.thumbnail(await researchCloud.image(item.file).catch(() => item.file))) ?? { width: 320, height: 240, pixels: Buffer.alloc(320 * 240 * 4) }),
   );
   const sheet = await native().composeSheet(thumbs, 6, "png");
-  const list = shown.map((item, index) => `${offset + index + 1} ${item.id} — ${item.title} (${item.page})`).join("\n");
+  // Whether each one's title or address names the case's people (use_found reads the page of one that doesn't).
+  const words = caseWordsOf(app, projectId);
+  const tag = (item: (typeof shown)[number]) => (words.length === 0 ? "" : research.namesCase(`${item.title} ${item.page}`, words) !== null ? " · names the case" : " · page doesn't name the case");
+  const list = shown.map((item, index) => `${offset + index + 1} ${item.id} — ${item.title} (${item.page})${tag(item)}`).join("\n");
   return image(
     sheet.data,
     `found images ${offset + 1}–${offset + shown.length} of ${total} waiting, left to right then down:\n${list}`,
@@ -209,9 +213,24 @@ registerTool("collect_images", async ({ app, args, projectId }) => {
   );
 });
 
+/** The words that name this case's people: its names (names.json) and the edit's cast. */
+function caseWordsOf(app: App, projectId: string): string[] {
+  const project = app.store.get(projectId)?.project;
+  if (project === undefined) return [];
+  return research.caseWords([...names.known(app, project), ...(project.people ?? []).map((person) => person.name)]);
+}
+
 registerTool("use_found", async ({ app, args, projectId }) => {
   const found = str(args.found_id);
   if (found === null) throw new Error("found_id is required");
+  const candidate = research.items(app.store.home, projectId).find((own) => own.id === found);
+  // A place or a thing (the building, a weapon like the one used, a form), never a person, isn't anyone's: no tie asked.
+  if (candidate !== undefined && candidate.status !== "kept" && args.not_a_person !== true) {
+    const tie = await research.tiedToCase(candidate, caseWordsOf(app, projectId), research.articles(app.store.home, projectId).map((article) => article.url));
+    if (tie !== null && !tie.tied) {
+      throw new Error(`kept nothing: ${found} isn't tied to this case: ${tie.why} (${candidate.page}). A picture is this case's only when its page is about it; choose another (look_at_found), or collect_images naming the case's people; a place or a thing, never a person, is kept with not_a_person: true (labelled "Illustrative image" unless its page is about this case)`);
+    }
+  }
   const item = await research.reviewFound(app, projectId, found, "kept", ORIGIN);
   if (item.media === undefined || item.media === null) throw new Error("it was kept but isn't in the media bin");
   return text(`kept ${found}: media ${item.media} (${item.title})`);

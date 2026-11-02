@@ -288,3 +288,20 @@ test.skipIf(ffmpeg === null || Bun.which("ffprobe") === null)("collect_images ke
     cleanup();
   }
 }, 60_000);
+
+test("a found picture is this case's only when its page names the case's people", async () => {
+  // Loop 7's holdout: Christian Obumseli's photo came from a Daily Star page about another case.
+  const words = research.caseWords(["Courtney Clenney", "Christian Obumseli", "Miami Police Department", "Detective"]);
+  expect(words).toEqual(["christian", "clenney", "courtney", "obumseli"]);
+  expect(research.namesCase("OnlyFans model Courtney Clenney charged", words)).toBe("clenney");
+  expect(research.namesCase("https://news.example/christian-obumseli-photos", words)).toBe("christian");
+  expect(research.namesCase("Dad tortured and set on fire by gang as kids watched", words)).toBeNull();
+  const item = (title: string, page: string) => ({ id: "f1", file: "/f.jpg", width: 640, height: 480, title, page, image: "https://img.example/a.jpg", query: "q", status: "new" }) as Parameters<typeof research.tiedToCase>[0];
+  expect(await research.tiedToCase(item("Courtney Clenney in court", "https://news.example/a"), words, [])).toMatchObject({ tied: true });
+  expect(await research.tiedToCase(item("Anything", "https://news.example/saved"), words, ["https://news.example/saved"])).toMatchObject({ tied: true, why: "from a saved article" });
+  hooks.dump = async () => "<html><body><p>Gang members set a father on fire.</p></body></html>";
+  const other = await research.tiedToCase(item("Dad tortured and set on fire by gang", "https://www.dailystar.co.uk/news/dad-tortured"), words, []);
+  expect(other?.tied).toBe(false);
+  // Nothing to judge by yet (no names): left to the agent.
+  expect(await research.tiedToCase(item("Anything", "https://x.example"), [], [])).toBeNull();
+});

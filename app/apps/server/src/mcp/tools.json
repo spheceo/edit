@@ -696,11 +696,15 @@
     "name": "import_media"
   },
   {
-    "description": "Keep a found image (from collect_images / look_at_found, by its id) and put it in the project's media; returns the media id to place, e.g. a mugshot for the outro.",
+    "description": "Keep a found image (from collect_images / look_at_found, by its id) and put it in the project's media; returns the media id to place, e.g. a mugshot for the outro. It must be this case's: its page has to name the case's people (or be a saved article), else nothing is kept and it says why.",
     "inputSchema": {
       "properties": {
         "found_id": {
           "type": "string"
+        },
+        "not_a_person": {
+          "description": "A place or a thing (the building, a weapon like the one used, a form), never a person: kept without the case check; labelled \"Illustrative image\" unless its page is about this case.",
+          "type": "boolean"
         },
         "project_id": {
           "description": "Defaults to the project open in the UI.",
@@ -1536,7 +1540,7 @@
     "name": "read_upload"
   },
   {
-    "description": "A contact sheet of found images still waiting for the user's review, numbered, with their ids and pages, so you can weed out what's off-target before the user looks (reject_found).",
+    "description": "A contact sheet of found images still waiting for the user's review, numbered, with their ids and pages, and whether each page names the case's people, so you can weed out what's off-target before the user looks (reject_found).",
     "inputSchema": {
       "properties": {
         "count": {

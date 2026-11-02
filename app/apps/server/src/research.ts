@@ -940,3 +940,61 @@ export async function reviewFound(app: App, id: string, item: string, status: st
 // Its routes live beside the package's other routes (script_tools.ts).
 export { researchRoutes as routes } from "./script_tools.ts";
 export { caseNames, known as knownNames } from "./names.ts";
+
+// ---------------------------------------------------------------------------
+// Whose picture: a found picture is this case's only when its page is about
+// the case (loop 7's holdout, Nov 2: the photo used as Christian Obumseli came
+// from a Daily Star page titled "Dad tortured and set on fire by gang…", about
+// another case; Writer's rule: "every image needs publisher evidence tying it
+// to this exact case").
+
+const NOT_NAMES = new Set([
+  "police", "county", "sheriff", "sheriff's", "office", "department", "court", "state", "city", "officer", "detective", "deputy", "district", "attorney", "judge",
+  "the", "and", "of", "street", "avenue", "road", "unknown", "suspect", "victim", "mother", "father", "medical", "examiner", "crime", "scene", "investigator",
+  "north", "south", "east", "west", "beach", "lake", "park", "center", "hospital", "school", "university", "jail", "prison", "news", "channel",
+  "river", "creek", "bridge", "highway", "interstate", "circuit", "judicial", "superior", "parking", "lots", "lot", "mall", "station", "store", "motel",
+  "hotel", "apartments", "apartment", "church", "woman", "girl", "boy", "man", "agency", "bureau", "investigation", "federal", "national",
+  "alabama", "alaska", "arizona", "arkansas", "california", "colorado", "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho", "illinois", "indiana",
+  "iowa", "kansas", "kentucky", "louisiana", "maine", "maryland", "massachusetts", "michigan", "minnesota", "mississippi", "missouri", "montana", "nebraska",
+  "nevada", "hampshire", "jersey", "mexico", "york", "carolina", "dakota", "ohio", "oklahoma", "oregon", "pennsylvania", "rhode", "island", "tennessee", "texas",
+  "utah", "vermont", "virginia", "washington", "wisconsin", "wyoming",
+]);
+
+/** The words that name this case's people: each name's parts of four letters or more (surnames, first names), lower case. */
+export function caseWords(names: string[]): string[] {
+  const words = new Set<string>();
+  for (const name of names) {
+    const all = name.split(/[\s,()]+/u).map((part) => part.replace(/[^\p{L}'-]/gu, "").toLowerCase()).filter((part) => part !== "");
+    // A person's name, not an agency or a role ("Miami Police Department", "Detective").
+    // Two or three words: a single word ("Miami", "Subway", "Instagram") is a place, a brand or a first name alone.
+    if (all.length < 2 || all.length > 3 || all.some((part) => NOT_NAMES.has(part))) continue;
+    for (const part of all) if (part.length >= 4) words.add(part);
+  }
+  return [...words].sort();
+}
+
+/** What in `text` names the case: the first of `words` found, or null. */
+export function namesCase(text: string, words: string[]): string | null {
+  const said = decode(text).toLowerCase().replace(/%20|[-_+]+/gu, " ");
+  return words.find((word) => new RegExp(`(^|[^\\p{L}])${word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}([^\\p{L}]|$)`, "u").test(said)) ?? null;
+}
+
+/**
+ * Whether found picture `item` is tied to this case: from a saved article's
+ * page, or its title or page address names one of the case's people, or (read
+ * now) its page does. Null when there's nothing to judge by (no names yet).
+ */
+export async function tiedToCase(item: Item, words: string[], articleUrls: string[]): Promise<{ tied: boolean; why: string } | null> {
+  if (words.length === 0) return null;
+  if (articleUrls.includes(item.page)) return { tied: true, why: "from a saved article" };
+  const named = namesCase(`${item.title} ${item.page}`, words);
+  if (named !== null) return { tied: true, why: `its page names ${named}` };
+  try {
+    const page = readable(await articlePage(item.page));
+    const found = namesCase(page.slice(0, 60_000), words);
+    if (found !== null) return { tied: true, why: `its page names ${found}` };
+  } catch (error) {
+    return { tied: false, why: `its page couldn't be read (${diag.messageOf(error)}), and its title doesn't name the case` };
+  }
+  return { tied: false, why: `its page ("${takeChars(item.title, 80)}") never names this case's people` };
+}

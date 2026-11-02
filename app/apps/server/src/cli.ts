@@ -127,11 +127,13 @@ export async function main(args: string[]): Promise<void> {
       const onDevice = ["update", "update-when-idle", "diagnostics", "resume", "unstick", "restart", "history", "probe"];
       if (!given || !["enable", "devices", ...onDevice].includes(given) || (onDevice.includes(given) && !args[2]) || ((given === "resume" || given === "probe") && !args[3])) fail("use edit remote enable|devices|update|update-when-idle|diagnostics|unstick|restart|history [device-id], or edit remote resume|probe <device-id> <project-or-script-id>");
       // unstick, restart, update-when-idle and probe go as a resume of a reserved target (remote_actions.ts).
+      // Read before args[3] is rewritten below: `--port N` there was lost, and the request went to :7700 (Nov 2).
+      const at = port();
       const action = given === "unstick" || given === "restart" || given === "update-when-idle" || given === "probe" ? "resume" : given;
       if (given === "probe") args[3] = `probe-${args[3]}`;
       else if (action !== given) args[3] = given;
       try {
-        const response = await fetch(`http://127.0.0.1:${port()}/api/remote-support`, {
+        const response = await fetch(`http://127.0.0.1:${at}/api/remote-support`, {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ action, ...(["update", "diagnostics", "resume", "history"].includes(action) ? { device: args[2] } : {}), ...(action === "resume" ? { project: args[3] } : {}) }),
           signal: AbortSignal.timeout(30000),

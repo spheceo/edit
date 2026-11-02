@@ -3,7 +3,7 @@
 // or the library's, a colour a colour. What's left out takes the house's
 // defaults, so "a REC overlay" or "white caption, black box" is a short ask.
 
-import { assetOf, HEIGHT, NO_ADJUST, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Stroke, type TextLayer } from "@edit/types/thumbnails";
+import { assetOf, HEIGHT, NO_ADJUST, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail } from "@edit/types/thumbnails";
 
 type Args = Record<string, unknown>;
 
@@ -197,4 +197,60 @@ export function describe(design: Design): string {
       return `${at}: text “${layer.text}”, ${layer.font} ${layer.weight} ${layer.size}px ${layer.color}, centred at ${Math.round(layer.x)},${Math.round(layer.y)} (wraps at ${Math.round(layer.width)})${layer.box ? `, box ${layer.box.color}` : ""}${layer.stroke ? `, stroke ${layer.stroke.width}px` : ""}${layer.shadow ? `, shadow spread ${layer.shadow.spread} size ${layer.shadow.size}` : ""}`;
     })
     .join("\n");
+}
+
+/** What a change to the layout did, in a few words, for undo ("changed “She smiled”", "added REC overlay"). */
+export function labelOf(before: Design, after: Design): string {
+  const name = (layer: Layer) => (layer.kind === "text" ? `“${layer.text.replace(/^["“”']+|["“”']+$/g, "").slice(0, 24)}”` : layer.name);
+  const was = new Map(before.layers.map((one) => [one.id, one]));
+  const now = new Map(after.layers.map((one) => [one.id, one]));
+  const added = after.layers.filter((one) => !was.has(one.id));
+  const removed = before.layers.filter((one) => !now.has(one.id));
+  const changed = after.layers.filter((one) => was.has(one.id) && JSON.stringify(sorted(was.get(one.id))) !== JSON.stringify(sorted(one)));
+  const parts = [
+    ...added.map((one) => `added ${name(one)}`),
+    ...removed.map((one) => `removed ${name(one)}`),
+    ...changed.map((one) => `changed ${name(one)}`),
+  ];
+  if (parts.length === 0) return "reordered the layers";
+  return parts.length > 3 ? `${parts.slice(0, 2).join(", ")} and ${parts.length - 2} more` : parts.join(", ");
+}
+
+const sorted = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(sorted) : value !== null && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, inner]) => [key, sorted(inner)])) : value;
+
+/** How many steps back undo can go. */
+export const KEPT_STEPS = 40;
+
+/**
+ * A new layout for the thumbnail, the one before it kept for undo (redo's
+ * steps dropped, as any editor does). False when nothing changed.
+ */
+export function record(thumb: Thumbnail, next: Design, by: string): boolean {
+  if (JSON.stringify(sorted(thumb.design)) === JSON.stringify(sorted(next))) return false;
+  thumb.history = [...(thumb.history ?? []), { design: thumb.design, by, at: Date.now(), label: labelOf(thumb.design, next) }].slice(-KEPT_STEPS);
+  thumb.future = [];
+  thumb.design = next;
+  thumb.render = null;
+  return true;
+}
+
+/** One step back (undo) or forward (redo): the step taken, or null when there's none. */
+export function step(thumb: Thumbnail, back: boolean): Step | null {
+  const from = back ? (thumb.history ?? []) : (thumb.future ?? []);
+  const taken = from.at(-1);
+  if (taken === undefined) return null;
+  const rest = from.slice(0, -1);
+  // The layout left goes on the other side, under the same label, so the step can be taken again the other way.
+  const left: Step = { design: thumb.design, by: taken.by, at: taken.at, label: taken.label };
+  if (back) {
+    thumb.history = rest;
+    thumb.future = [...(thumb.future ?? []), left].slice(-KEPT_STEPS);
+  } else {
+    thumb.future = rest;
+    thumb.history = [...(thumb.history ?? []), left].slice(-KEPT_STEPS);
+  }
+  thumb.design = taken.design;
+  thumb.render = null;
+  return taken;
 }

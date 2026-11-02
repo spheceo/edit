@@ -170,6 +170,16 @@ export type ThumbRun = {
   tools?: ThumbTool[];
 };
 
+/** A layout as it was before a change, and what the change was (Sphe, Nov 2: "we should have undo both for us and for the agent"). */
+export type Step = {
+  design: Design;
+  /** "claude", or the person's name. */
+  by: string;
+  at: number;
+  /** What the change did, in a few words ("changed the caption", "added the REC overlay"). */
+  label: string;
+};
+
 export type Thumbnail = {
   id: string;
   title: string;
@@ -181,6 +191,10 @@ export type Thumbnail = {
   render: { key: string; at: number } | null;
   chat: ThumbTurn[];
   run: ThumbRun | null;
+  /** Every change to the layout, the person's and Claude's on one timeline: undo steps back through it, newest last. */
+  history?: Step[];
+  /** What undo stepped back from, for redo (cleared by a new change). */
+  future?: Step[];
   createdAt: number;
   createdBy: string;
   updatedAt: number;

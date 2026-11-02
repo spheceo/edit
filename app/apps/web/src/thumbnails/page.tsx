@@ -6,7 +6,7 @@
 // dropped or pasted anywhere join the thumbnail and go to Claude with the
 // next message.
 
-import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Paperclip, Plus, SlidersHorizontal, Trash2, Type, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Paperclip, Plus, Redo2, SlidersHorizontal, Trash2, Type, Undo2, Upload, X } from "lucide-react";
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer, ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
@@ -92,10 +92,10 @@ export function ThumbnailScreen({ id }: { id: string }) {
   const [saving, setSaving] = useState<"saving" | "saved" | "error" | null>(null);
   const [credits, setCredits] = useState<string | null>(null);
   const toastError = useEditor((state) => state.toastError);
+  const toast = useEditor((state) => state.toast);
   // Edits not saved yet: the server's design doesn't replace them.
   const dirty = useRef(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const history = useRef<{ past: Design[]; future: Design[] }>({ past: [], future: [] });
   const canvas = useRef<HTMLCanvasElement>(null);
 
   const load = useCallback(
@@ -135,44 +135,69 @@ export function ThumbnailScreen({ id }: { id: string }) {
     return () => cancelAnimationFrame(frame);
   }, [design, tick, picture]);
 
-  /** The person's change: drawn at once, saved a moment after the last one (and its drawing kept as the list's picture). */
-  const change = (next: Design, keep = true) => {
-    if (design !== null && keep) {
-      history.current.past = [...history.current.past.slice(-60), design];
-      history.current.future = [];
-    }
+  /** The thumbnail's drawing kept as the list's picture. */
+  const keepDrawing = async () => {
+    const png = await new Promise<Blob | null>((resolve) => canvas.current?.toBlob(resolve, "image/png") ?? resolve(null));
+    if (png !== null) await thumbnailsApi.saveRender(id, png).catch(() => {});
+  };
+  // The person's change waiting to be saved: one save a moment after the last change, so a drag is one step of undo.
+  const pending = useRef<Design | null>(null);
+  const save = () => {
+    if (saveTimer.current !== null) clearTimeout(saveTimer.current);
+    saveTimer.current = null;
+    const next = pending.current;
+    pending.current = null;
+    if (next === null) return Promise.resolve();
+    return thumbnailsApi
+      .change(id, { design: next })
+      .then(async ({ thumb }) => {
+        setThumb(thumb);
+        if (pending.current === null) dirty.current = false;
+        setSaving("saved");
+        await keepDrawing();
+      })
+      .catch((error: unknown) => {
+        setSaving("error");
+        toastError(error, "save the thumbnail");
+      });
+  };
+  /** The person's change: drawn at once, saved a moment after the last one. */
+  const change = (next: Design, _keep = true) => {
     dirty.current = true;
+    pending.current = next;
     setDesign(next);
     setSaving("saving");
     if (saveTimer.current !== null) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      void thumbnailsApi
-        .change(id, { design: next })
-        .then(async ({ thumb }) => {
-          setThumb(thumb);
-          dirty.current = false;
-          setSaving("saved");
-          const png = await new Promise<Blob | null>((resolve) => canvas.current?.toBlob(resolve, "image/png") ?? resolve(null));
-          if (png !== null) await thumbnailsApi.saveRender(id, png).catch(() => {});
-        })
-        .catch((error: unknown) => {
-          setSaving("error");
-          toastError(error, "save the thumbnail");
-        });
-    }, 700);
+    saveTimer.current = setTimeout(() => void save(), 700);
   };
-  const undo = () => {
-    const last = history.current.past.pop();
-    if (last === undefined || design === null) return;
-    history.current.future.push(design);
-    change(last, false);
+  /**
+   * Undo and redo walk the thumbnail's own timeline (Sphe, Nov 2: "we should have
+   * undo both for us and for the agent"): the person's changes and Claude's
+   * alike, newest first, whoever is on the page.
+   */
+  const [stepping, setStepping] = useState(false);
+  const walk = async (back: boolean) => {
+    if (stepping) return;
+    setStepping(true);
+    try {
+      await save();
+      const { thumb, step } = await thumbnailsApi.step(id, back);
+      setThumb(thumb);
+      setDesign(thumb.design);
+      dirty.current = false;
+      if (step === null) toast(back ? "Nothing to undo." : "Nothing to redo.");
+      else {
+        toast(`${back ? "Undid" : "Redid"}: ${step}`);
+        requestAnimationFrame(() => void keepDrawing());
+      }
+    } catch (error) {
+      toastError(error, back ? "undo" : "redo");
+    } finally {
+      setStepping(false);
+    }
   };
-  const redo = () => {
-    const next = history.current.future.pop();
-    if (next === undefined || design === null) return;
-    history.current.past.push(design);
-    change(next, false);
-  };
+  const undo = () => void walk(true);
+  const redo = () => void walk(false);
   const changeLayer = (layerId: string, patch: Partial<ImageLayer> | Partial<TextLayer>, keep = true) => {
     if (design === null) return;
     change({ layers: design.layers.map((one) => (one.id === layerId ? ({ ...one, ...patch } as Layer) : one)) }, keep);
@@ -266,6 +291,8 @@ export function ThumbnailScreen({ id }: { id: string }) {
     >
       <Header
         thumb={thumb}
+        onUndo={undo}
+        onRedo={redo}
         saving={saving}
         credits={credits}
         onTitle={(title) =>
@@ -369,7 +396,10 @@ const newText = (): TextLayer => ({ id: newId(), kind: "text", name: "caption", 
 
 // ---------------------------------------------------------------- the header
 
-function Header({ thumb, saving, credits, onTitle, onDownload, onDelete }: { thumb: Thumbnail | null; saving: string | null; credits: string | null; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void; onDelete: () => void }) {
+function Header({ thumb, onUndo, onRedo, saving, credits, onTitle, onDownload, onDelete }: { thumb: Thumbnail | null; onUndo: () => void; onRedo: () => void; saving: string | null; credits: string | null; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void; onDelete: () => void }) {
+  const last = thumb?.history?.at(-1);
+  const next = thumb?.future?.at(-1);
+  const who = (by: string) => (by === "claude" ? "Claude" : by.split(" ")[0]);
   const [title, setTitle] = useState(thumb?.title ?? "");
   const [confirm, setConfirm] = useState(false);
   useEffect(() => setTitle(thumb?.title ?? ""), [thumb?.title]);
@@ -386,6 +416,12 @@ function Header({ thumb, saving, credits, onTitle, onDownload, onDelete }: { thu
         onKeyDown={(event) => event.key === "Enter" && (event.target as HTMLInputElement).blur()}
         className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-2 text-[14px] font-semibold text-fg outline-none placeholder:text-faint hover:bg-hover focus:bg-hover"
       />
+      <IconButton label={last ? `Undo ${who(last.by)}'s change: ${last.label} (⌘Z)` : "Nothing to undo"} disabled={last === undefined} onClick={onUndo}>
+        <Undo2 size={15} />
+      </IconButton>
+      <IconButton label={next ? `Redo ${who(next.by)}'s change: ${next.label} (⇧⌘Z)` : "Nothing to redo"} disabled={next === undefined} onClick={onRedo}>
+        <Redo2 size={15} />
+      </IconButton>
       <span className="text-[12px] text-faint">{saving === "saving" ? "Saving…" : saving === "error" ? "Not saved" : saving === "saved" ? "Saved" : ""}</span>
       {credits !== null && <span title="The team's OpenArt account (mamagi-openart-1)" className="rounded-full border border-line px-2 py-0.5 text-[12px] text-muted">OpenArt · {credits}</span>}
       <Button

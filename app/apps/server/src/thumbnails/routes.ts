@@ -14,7 +14,7 @@ import { readBytes, readJson, type RouteContext, type Router } from "../http/rou
 import { mayIdeas } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { designOf } from "./design.ts";
+import { designOf, record, step } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
@@ -176,10 +176,7 @@ export function routes(router: Router<App>): void {
         const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
           if (typeof body.title === "string") thumb.title = body.title.trim().slice(0, 120);
           if (typeof body.brief === "string") thumb.brief = body.brief.trim().slice(0, 600);
-          if (body.design !== undefined && sources !== null) {
-            thumb.design = designOf(body.design, thumb.design, sources);
-            thumb.render = null;
-          }
+          if (body.design !== undefined && sources !== null) record(thumb, designOf(body.design, thumb.design, sources), by());
         });
         return json({ thumb, rev });
       } catch (error) {
@@ -209,6 +206,9 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
+    // One step back or forward on the layout's timeline (the person's changes and Claude's alike).
+    .post("/api/thumbnails/{id}/undo", ({ params }: Context) => stepped(params.id!, true))
+    .post("/api/thumbnails/{id}/redo", ({ params }: Context) => stepped(params.id!, false))
     .post("/api/thumbnails/{id}/stop", ({ params }: Context) => {
       guard();
       return json({ stopped: run.stop(params.id!) });
@@ -297,6 +297,21 @@ export function routes(router: Router<App>): void {
       if (answers.length === 0) return empty(202);
       return json(Array.isArray(body) ? answers : answers[0]);
     });
+}
+
+async function stepped(id: string, back: boolean): Promise<Response> {
+  guard();
+  try {
+    let taken: string | null = null;
+    const { thumb, rev } = await cloud.change(id, by(), (thumb) => {
+      const one = step(thumb, back);
+      taken = one === null ? null : one.label;
+      return one !== null;
+    });
+    return json({ thumb, rev, step: taken });
+  } catch (error) {
+    failed(error);
+  }
 }
 
 async function sourcesFor(id: string): Promise<Set<string>> {

@@ -19,7 +19,7 @@ import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { describe, designOf, layerOf } from "./design.ts";
+import { describe, designOf, layerOf, record, step } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import { sizeOf } from "./size.ts";
@@ -140,6 +140,16 @@ export const TOOLS = [
         order: { type: "array", items: { type: "string" } },
       },
     },
+  },
+  {
+    name: "undo",
+    description: "Step the layout back (steps: how many, default 1): the person's changes and yours are one timeline, newest first, as “Recent changes” lists them. Draws it: Read it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { steps: { type: "number" } } },
+  },
+  {
+    name: "redo",
+    description: "Take back an undo (steps: how many, default 1). Draws it: Read it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { steps: { type: "number" } } },
   },
   {
     name: "look",
@@ -268,14 +278,37 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       const found = await cloud.get(session.id);
       if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
       const sources = await sourcesOf(found.thumb);
+      let same = false;
       await cloud.change(session.id, session.by, (thumb) => {
-        thumb.design = name === "set_layers" ? designOf(args.layers, thumb.design, sources) : changed(thumb.design, args, sources);
-        thumb.render = null;
-        design = thumb.design;
+        const next = name === "set_layers" ? designOf(args.layers, thumb.design, sources) : changed(thumb.design, args, sources);
+        design = next;
+        same = !record(thumb, next, "claude");
+        return !same;
       });
+      if (same) return `Nothing changed: the layout is already that.\n${describe(design!)}`;
       session.changed = true;
       const path = await drawn(session, design!, false);
       return `Laid out:\n${describe(design!)}\nRead the drawing: ${path}`;
+    }
+    case "undo":
+    case "redo": {
+      const times = typeof args.steps === "number" && Number.isInteger(args.steps) ? Math.min(10, Math.max(1, args.steps)) : 1;
+      const taken: string[] = [];
+      let design: Design | null = null;
+      await cloud.change(session.id, session.by, (thumb) => {
+        taken.length = 0;
+        for (let index = 0; index < times; index++) {
+          const one = step(thumb, name === "undo");
+          if (one === null) break;
+          taken.push(`${one.label} (${one.by === "claude" ? "you" : one.by})`);
+        }
+        design = thumb.design;
+        return taken.length > 0;
+      });
+      if (taken.length === 0) throw new Error(name === "undo" ? "There's nothing to undo." : "There's nothing to redo.");
+      session.changed = true;
+      const path = await drawn(session, design!, false);
+      return `${name === "undo" ? "Undid" : "Redid"}: ${taken.join("; ")}.\n${describe(design!)}\nRead the drawing: ${path}`;
     }
     case "look": {
       const found = await cloud.get(session.id);
@@ -353,6 +386,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
     images.length > 0 ? `# Its images (Read the ones you use)\n${images.join("\n")}` : "# Its images\nNone yet.",
     `# The layers now, bottom first\n${describe(thumb.design)}`,
     current !== null ? `# As it looks now (Read it)\n${current}` : "",
+    (thumb.history ?? []).length > 0 ? `# Recent changes to the layout (newest last; undo steps back through them)\n${(thumb.history ?? []).slice(-8).map((one) => `- ${one.by === "claude" ? "you" : one.by}: ${one.label}`).join("\n")}` : "",
     `# The library (asset:<id> as a layer's source or a reference)\n${library.map((one) => `- asset:${one.id} “${one.name}” (${one.kind}, ${one.width}×${one.height}${one.builtIn ? "" : `, the team's`}): ${one.note}`).join("\n")}`,
     `# Fonts\n${FONTS.map((one) => `- ${one.family}: ${one.note}`).join("\n")}`,
     recent.length > 0 ? `# The conversation so far\n${recent.join("\n\n")}` : "",

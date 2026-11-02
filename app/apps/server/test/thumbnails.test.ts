@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
-import { designOf, layerOf } from "../src/thumbnails/design.ts";
+import { designOf, labelOf, layerOf, record, step } from "../src/thumbnails/design.ts";
+import { fresh } from "../src/thumbnails/run.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
 import { canonical, changed } from "../src/thumbnails/run.ts";
 import { sizeOf } from "../src/thumbnails/size.ts";
@@ -49,4 +50,25 @@ test("OpenArt's answers: a picture done, a job still going, a failure; a form's 
   const form = { jsonSchema: { properties: { prompt: { type: "string" }, aspectRatio: { enum: ["1:1", "16:9"] }, quality: { enum: ["low", "high"], default: "low" } }, required: ["prompt", "quality"] } };
   expect(paramsOf(form, "a door", "16:9", [], {})).toEqual({ prompt: "a door", aspectRatio: "16:9", quality: "low" });
   expect(paramsOf(form, "a door", "21:9", [{ id: "r" }], { quality: "high" })).toEqual({ prompt: "a door", aspectRatio: "16:9", quality: "high", visualReferences: [{ id: "r" }] });
+});
+
+test("undo and redo walk one timeline, the person's changes and Claude's alike", () => {
+  const thumb = fresh("t1", "Sphe", "", "");
+  const base = designOf([{ id: "base", kind: "image", source: "img1" }], thumb.design, sources);
+  expect(record(thumb, base, "Sphe")).toBe(true);
+  expect(record(thumb, base, "Sphe")).toBe(false);
+  const captioned = changed(base, { add: [{ id: "cap", kind: "text", text: "She smiled" }] }, sources);
+  record(thumb, captioned, "claude");
+  expect(thumb.history?.map((one) => [one.by, one.label])).toEqual([["Sphe", "added picture"], ["claude", "added “She smiled”"]]);
+  expect(step(thumb, true)?.label).toBe("added “She smiled”");
+  expect(thumb.design.layers.map((one) => one.id)).toEqual(["base"]);
+  expect(step(thumb, false)?.by).toBe("claude");
+  expect(thumb.design.layers.map((one) => one.id)).toEqual(["base", "cap"]);
+  step(thumb, true);
+  // A new change after an undo drops what redo had.
+  record(thumb, changed(base, { changes: [{ id: "base", adjust: { contrast: 10 } }] }, sources), "Sphe");
+  expect(thumb.future).toEqual([]);
+  expect(step(thumb, false)).toBeNull();
+  expect(labelOf(base, changed(base, { add: [{ kind: "text", text: "“He abused me”" }] }, sources))).toBe("added “He abused me”");
+  expect(labelOf(captioned, { layers: [...captioned.layers].reverse() })).toBe("reordered the layers");
 });

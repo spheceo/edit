@@ -35,6 +35,8 @@ export const thumbnailsApi = {
   change: (id: string, change: { title?: string; brief?: string; design?: Design }) => call<{ thumb: Thumbnail; rev: number }>("PUT", base(id), change),
   remove: (id: string) => call<void>("DELETE", base(id)),
   chat: (id: string, text: string, images: string[]) => call<{ ok: true }>("POST", `${base(id)}/chat`, { text, images }),
+  /** One step back (undo) or forward (redo) on the layout's timeline, the person's changes and Claude's alike: what it was, or null when there's none. */
+  step: (id: string, back: boolean) => call<{ thumb: Thumbnail; rev: number; step: string | null }>("POST", `${base(id)}/${back ? "undo" : "redo"}`),
   stop: (id: string) => call<{ stopped: boolean }>("POST", `${base(id)}/stop`),
   upload: (id: string, file: File) => call<{ image: ThumbImage; thumb: Thumbnail }>("POST", `${base(id)}/images?name=${encodeURIComponent(file.name)}`, undefined, { bytes: file, type: file.type }),
   removeImage: (id: string, image: string) => call<{ thumb: Thumbnail }>("DELETE", `${base(id)}/images/${encodeURIComponent(image)}`),

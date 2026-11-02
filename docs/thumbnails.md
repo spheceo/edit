@@ -47,7 +47,16 @@ its tools:
   `run.PREFERRED_MODELS` the account has.
 - `set_layers`, `change_layers`: the layout, drawn at once and named for Claude
   to look at; `look` (with a grid every 160×120 px for placing by eye).
+- `undo`, `redo`: back or forward on the layout's timeline (below).
 - `openart_models`, `model_options`, `rename`.
+
+Undo is one timeline for both (Sphe, Nov 2: "we should have undo both for us
+and for the agent"): every change to the layout, the person's (a drag, a
+dialog's OK) or Claude's, keeps the layout before it on the thumbnail
+(`history`, the last 40, each with who and what: "changed “She smiled”"), so
+⌘Z or the header's undo steps back through it whoever made the change, and
+Claude has `undo` / `redo` too, with the recent changes in its message ("undo
+the last change I made"). A new change drops what redo had.
 
 Pictures dropped or pasted anywhere on the page join the thumbnail and go to
 Claude with the next message. The team's own overlays are uploaded from the

@@ -52,6 +52,7 @@ import * as writer from "./writer/routes.ts";
 import * as ideas from "./ideas/routes.ts";
 import * as thumbnails from "./thumbnails/routes.ts";
 import * as later from "./later.ts";
+import * as editNotes from "./edit_notes.ts";
 import * as lessonInbox from "./lesson_inbox.ts";
 import * as presence from "./presence.ts";
 import * as devProjects from "./dev_projects.ts";
@@ -86,6 +87,7 @@ export function buildRouter(): Router<App> {
   seams.cloudProjects.routes(router);
   // Before /api/projects/{id}: /api/projects/status is its own.
   reviews.routes(router);
+  editNotes.routes(router);
   playbackRender.routes(router);
   firstPrompt.routes(router);
   reset.routes(router);

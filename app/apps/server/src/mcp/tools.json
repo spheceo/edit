@@ -1384,7 +1384,7 @@
     "name": "note_lesson"
   },
   {
-    "description": "The review's open notes, for the user's \"implement the new feedback\". From Repack (feedback.spheceo.com), when Edit hasn't handed them to you. Each note comes with its [id], its moment on the export and its place on this timeline now, as Ready for changes gives them; load the feedback skill, fix them, and call feedback_done / feedback_unfixed / feedback_answer after each. When your turn ends Edit exports the edit and shares it on the review as the next version.",
+    "description": "The feedback to fix, for the user's \"implement the new feedback\". Two kinds: the team's own notes left in Edit at the playhead ([app:id]: their moment now, the clip there, a box drawn on the picture), and the review's open notes from Repack (feedback.spheceo.com), when Edit hasn't handed them to you ([id], as Ready for changes gives them). Load the feedback skill, fix them, and call feedback_done / feedback_unfixed / feedback_answer after each, with the id as given. When your turn ends, a review's fixes are exported and shared on it as the next version; the team's own notes share nothing, and any you didn't answer go back in their queue.",
     "inputSchema": {
       "properties": {
         "again": {
@@ -1405,7 +1405,7 @@
     "inputSchema": {
       "properties": {
         "note": {
-          "description": "The note's id, as Edit gave it ([id]).",
+          "description": "The note's id, as Edit gave it ([id], or [app:id] for the team's own notes).",
           "type": "string"
         },
         "project_id": {

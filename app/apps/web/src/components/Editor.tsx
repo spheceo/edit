@@ -8,6 +8,7 @@ import { cloudApi } from "../lib/cloud";
 import { clientId, connectEvents, leave, settled, syncScriptJob, useEditor } from "../lib/store";
 import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
 import { goToEnd, goToStart, useView } from "../lib/timelineView";
+import { followNotes, startNote } from "../lib/notes";
 import { uploadFiles } from "../lib/upload";
 import { ShareDialog } from "./ShareDialog";
 import { FileBrowser } from "./FileBrowser";
@@ -88,6 +89,12 @@ export function Editor({ id }: { id: string }) {
   const [researching, setResearching] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The team's notes on this edit, for the player and the row above the composer.
+  useEffect(() => {
+    followNotes(id);
+    return () => followNotes(null);
+  }, [id]);
 
   useEffect(() => {
     let alive = true;
@@ -478,6 +485,10 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
       } else if (key === "o") {
         handled();
         markOut(playhead.frame);
+      } else if (key === "q") {
+        // A note for the agent, at the playhead (lib/notes.ts).
+        handled();
+        startNote();
       } else if (key === "k") {
         preview.pause();
       } else if (key === "l") {

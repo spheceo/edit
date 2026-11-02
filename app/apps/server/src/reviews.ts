@@ -25,6 +25,7 @@ import * as cloud from "./cloud.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
+import * as editNotes from "./edit_notes.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
 import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
@@ -1452,70 +1453,96 @@ export async function fixReady(app: App, project: string, reviewId: string, note
 }
 
 /**
- * The review's open notes, pulled now because the team asked in the chat
- * ("implement the new feedback"; Sphe, Nov 2: feedback sat on
- * feedback.spheceo.com and there was no way to just tell the agent to pull
- * it): Repack asked for its latest, the open notes claimed by hand (any
- * computer may), and handed back as Ready for changes hands them, so the
- * agent fixes them in this turn. From here the turn is a review turn (the
- * notes are guests' words); when it ends the edit is exported and shared as
- * the next version, as after Ready for changes. `again`: notes the agent left
- * before (feedback_unfixed) are taken too.
+ * The feedback, pulled now because the team asked in the chat ("implement the
+ * new feedback"; Sphe, Nov 2: feedback sat on feedback.spheceo.com and there
+ * was no way to just tell the agent to pull it): the team's own notes left in
+ * Edit (edit_notes.ts), and the review's open notes, Repack asked for its
+ * latest and those claimed by hand (any computer may). Both handed back as
+ * Ready for changes hands them, so the agent fixes them in this turn. With the
+ * review's notes the turn is a review turn from here (they're guests' words),
+ * and when it ends the edit is exported and shared as the next version, as
+ * after Ready for changes; the team's own notes alone share nothing (they're
+ * in the app: "in app feedback and feedback-feedback are different"), and any
+ * the turn didn't answer go back in their queue. `again`: notes the agent left
+ * before are taken too.
  */
 export async function pullFeedback(app: App, projectId: string, again = false): Promise<string> {
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
-  if (!cloud.enabled()) throw new Error("pulling a review's notes needs Edit's cloud (sign in)");
+  if (!cloud.enabled()) throw new Error("pulling the feedback needs Edit's cloud (sign in)");
   const home = app.store.home;
+  const said: string[] = [];
+  // The team's own notes first: they don't wait on the review.
+  const own = await editNotes.take(app, projectId, again);
   const shared = read(home).shared[projectId];
-  if (shared === undefined) throw new Error("this project hasn't been shared for review (Share), so it has no notes to pull");
-  if (readying.has(projectId)) throw new Error("its notes are being fixed already (a Ready for changes or an earlier pull): wait for that to end");
-  await poll(app);
-  const state = read(home);
-  const open = Object.values(state.notes)
-    .filter((note) => note.project === projectId && note.parentId === null && note.fromApp !== true && note.status === "open" && note.fix === undefined)
-    .filter((note) => note.asks?.intent !== "fyi")
-    .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0) || a.createdAt - b.createdAt);
-  const left = open.filter((note) => note.unfixed !== undefined);
-  const wanted = again ? open : open.filter((note) => note.unfixed === undefined);
-  if (wanted.length === 0) {
-    return `No open notes to fix on the review (${shared.url})${left.length > 0 ? `: ${left.length} you left before (feedback_unfixed); pull_feedback {again: true} takes those too` : ""}. Say so to the user.`;
-  }
-  const claimed = new Set<string>();
-  for (let at = 0; at < wanted.length; at += 100) {
-    const batch = wanted.slice(at, at + 100).map((note) => note.id);
-    const answer = (await cloud.mutation("reviews:claim", { noteIds: batch, by: app.machine, machine: machine.id(), manual: true })) as { claimed?: string[] };
-    for (const id of answer.claimed ?? []) claimed.add(id);
-  }
-  const mine = wanted.filter((note) => claimed.has(note.id));
-  const taken = wanted.length - mine.length;
-  if (mine.length === 0) throw new Error(`the review's ${wanted.length} open note(s) are being fixed by another run just now (on this or another computer): try again in half an hour, or once that run ends`);
-  update(home, (saved) => {
-    for (const note of mine) {
-      const own = saved.notes[note.id];
-      if (own === undefined) continue;
-      own.claimed = Date.now();
-      own.attempts = (own.attempts ?? 0) + 1;
-      if (again) delete own.unfixed;
+  let mine: Note[] = [];
+  let taken = 0;
+  let before = timelineHash(live.project);
+  if (shared === undefined) {
+    if (own.length === 0) said.push("This project hasn't been shared for review, and the team left no notes in Edit to fix.");
+  } else if (readying.has(projectId)) {
+    said.push("The review's notes are being fixed already (a Ready for changes or an earlier pull): leave them to that run.");
+  } else {
+    await poll(app);
+    const state = read(home);
+    const open = Object.values(state.notes)
+      .filter((note) => note.project === projectId && note.parentId === null && note.fromApp !== true && note.status === "open" && note.fix === undefined)
+      .filter((note) => note.asks?.intent !== "fyi")
+      .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0) || a.createdAt - b.createdAt);
+    const left = open.filter((note) => note.unfixed !== undefined);
+    const wanted = again ? open : open.filter((note) => note.unfixed === undefined);
+    if (wanted.length === 0) {
+      said.push(`No open notes to fix on the review (${shared.url})${left.length > 0 ? `: ${left.length} you left before (feedback_unfixed); pull_feedback {again: true} takes those too` : ""}.`);
+    } else {
+      const claimed = new Set<string>();
+      for (let at = 0; at < wanted.length; at += 100) {
+        const batch = wanted.slice(at, at + 100).map((note) => note.id);
+        const answer = (await cloud.mutation("reviews:claim", { noteIds: batch, by: app.machine, machine: machine.id(), manual: true })) as { claimed?: string[] };
+        for (const id of answer.claimed ?? []) claimed.add(id);
+      }
+      mine = wanted.filter((note) => claimed.has(note.id));
+      taken = wanted.length - mine.length;
+      if (mine.length === 0) said.push(`The review's ${wanted.length} open note(s) are being fixed by another run just now (on this or another computer): leave them to it.`);
     }
-  });
-  const before = timelineHash(live.project);
+  }
+  if (own.length === 0 && mine.length === 0) return `${said.join(" ")} Nothing to fix: say so to the user.`;
+  before = timelineHash(live.project);
   checkpoints.set(projectId, structuredClone(live.project));
-  const replies = Object.values(state.notes).filter((note) => note.project === projectId && note.parentId !== null);
-  const stills = await boxStills(home, projectId, shared, mine);
-  reviewGuard.reviewTurnNow(projectId);
-  const ids = mine.map((note) => note.id);
-  readying.add(projectId);
-  noteFix(home, projectId, { reviewId: null, noteIds: ids, before, at: Date.now() });
-  diag.info("review", `${live.project.name}: asked in the chat: the agent is fixing ${mine.length} note(s)`);
-  void followFix(app, projectId, null, ids, before)
-    .catch((error: unknown) => diag.warn("review", `${live.project.name}: the pulled feedback: ${diag.messageOf(error)}`))
-    .finally(() => {
-      noteFix(home, projectId, null);
-      readying.delete(projectId);
+  const parts: string[] = [];
+  if (own.length > 0) {
+    parts.push(editNotes.message(live.project, own));
+    const ids = own.map((note) => note.id);
+    void editNotes.requeueAfterTurn(app, projectId, ids).catch((error: unknown) => diag.warn("notes", `${live.project.name}: putting unanswered notes back: ${diag.messageOf(error)}`));
+    diag.info("notes", `${live.project.name}: asked in the chat: the agent is fixing ${own.length} of the team's note(s)`);
+  }
+  if (mine.length > 0) {
+    update(home, (saved) => {
+      for (const note of mine) {
+        const one = saved.notes[note.id];
+        if (one === undefined) continue;
+        one.claimed = Date.now();
+        one.attempts = (one.attempts ?? 0) + 1;
+        if (again) delete one.unfixed;
+      }
     });
-  const message = fixMessage(live.project, shared, mine, replies, stills, true);
-  return taken > 0 ? `${message}\n(${taken} more open note(s) are being fixed by another run and aren't yours.)` : message;
+    const state = read(home);
+    const replies = Object.values(state.notes).filter((note) => note.project === projectId && note.parentId !== null);
+    const stills = await boxStills(home, projectId, shared, mine);
+    reviewGuard.reviewTurnNow(projectId);
+    const ids = mine.map((note) => note.id);
+    readying.add(projectId);
+    noteFix(home, projectId, { reviewId: null, noteIds: ids, before, at: Date.now() });
+    diag.info("review", `${live.project.name}: asked in the chat: the agent is fixing ${mine.length} review note(s)`);
+    void followFix(app, projectId, null, ids, before)
+      .catch((error: unknown) => diag.warn("review", `${live.project.name}: the pulled feedback: ${diag.messageOf(error)}`))
+      .finally(() => {
+        noteFix(home, projectId, null);
+        readying.delete(projectId);
+      });
+    parts.push(fixMessage(live.project, shared, mine, replies, stills, true) + (taken > 0 ? `\n(${taken} more open note(s) are being fixed by another run and aren't yours.)` : ""));
+  }
+  if (said.length > 0) parts.push(said.join(" "));
+  return parts.join("\n\n");
 }
 
 /** Fixes under way, by project: what a restart needs to follow one to its share (review-fixes.json). */
@@ -1742,12 +1769,26 @@ export function forReviewer(given: string): string {
   return out;
 }
 
+/**
+ * One of the team's own notes (edit_notes.ts) the agent fixed: what changed
+ * since the note before, kept with it, as a review note's fix is.
+ */
+async function appDone(app: App, projectId: string, id: string, summary: string): Promise<Note["fix"]> {
+  const live = app.store.get(projectId);
+  if (live === null) throw new Error("no such project");
+  const changed = changes(checkpoints.get(projectId) ?? live.project, live.project);
+  await editNotes.done(app, projectId, id, { summary, ...changed });
+  checkpoints.set(projectId, structuredClone(live.project));
+  return { ...changed, summary, at: Date.now() };
+}
+
 registerTool("feedback_done", async ({ app, args, projectId }: ToolCall) => {
   const note = str(args.note);
   const given = str(args.summary);
   if (note === null || given === null) throw new Error("note (its id) and summary (one line: what you changed) are required");
-  const summary = forReviewer(given);
-  const fix = await done(app, projectId, note, summary);
+  const own = editNotes.idOf(note);
+  const summary = own === null ? forReviewer(given) : given.slice(0, 1900);
+  const fix = own === null ? await done(app, projectId, note, summary) : await appDone(app, projectId, own, summary);
   const fps = fpsOf(app.store.get(projectId)!.project);
   return text(
     stableStringify({
@@ -1763,6 +1804,13 @@ registerTool("feedback_unfixed", async ({ app, args, projectId }: ToolCall) => {
   const note = str(args.note);
   const given = str(args.reason);
   if (note === null || given === null) throw new Error("note (its id) and reason are required");
+  const own = editNotes.idOf(note);
+  if (own !== null) {
+    await editNotes.left(app, projectId, own, given.slice(0, 1900));
+    const live = app.store.get(projectId);
+    if (live !== null) checkpoints.set(projectId, structuredClone(live.project));
+    return text(`left ${note}, saying why on the note`);
+  }
   const reason = forReviewer(given);
   await unfixed(app, projectId, note, reason);
   return text(`left ${note} open, saying why on the review`);
@@ -1772,6 +1820,11 @@ registerTool("feedback_answer", async ({ app, args, projectId }: ToolCall) => {
   const asked = str(args.note);
   const given = str(args.answer);
   if (asked === null || given === null) throw new Error("note (its id) and answer are required");
+  const inApp = editNotes.idOf(asked);
+  if (inApp !== null) {
+    await editNotes.done(app, projectId, inApp, { summary: `Answer: ${given.slice(0, 1890)}`, clips: [], ranges: [] });
+    return text(`answered ${asked} on the note`);
+  }
   const answer = forReviewer(given);
   const home = app.store.home;
   const note = noteIdOf(home, projectId, asked);

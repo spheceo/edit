@@ -62,10 +62,17 @@ export const EDIT_CALLS = new Map<string, string>([
   ["edit:listLater", "query"], ["edit:setLater", "mutation"], ["edit:clearLater", "mutation"],
   // The lessons inbox: the team's lasting feedback, noted by the agents, closed by a teaching round (who comes from the token).
   ["edit:listLessons", "query"], ["edit:noteLesson", "mutation"], ["edit:closeLesson", "mutation"],
+  // The team's own notes on an edit, left in Edit at the playhead for the agent (who left one comes from the token).
+  ["edit:listNotes", "query"], ["edit:addNote", "mutation"], ["edit:editNote", "mutation"], ["edit:removeNote", "mutation"],
+  ["edit:sendNotes", "mutation"], ["edit:resolveNote", "mutation"],
 ]);
 
-/** Calls that change a project (refused outside the caller's kinds). */
-export const PROJECT_WRITES = new Set(["edit:commitProject", "edit:deleteProject", "edit:acquireLock", "edit:clearRestore"]);
+/** Calls that change a project, or read its notes (refused outside the caller's kinds). */
+export const PROJECT_WRITES = new Set([
+  "edit:commitProject", "edit:deleteProject", "edit:acquireLock", "edit:clearRestore",
+  // A project's notes, read or written, are its own: only for who may work on it.
+  "edit:listNotes", "edit:addNote", "edit:editNote", "edit:removeNote", "edit:sendNotes", "edit:resolveNote",
+]);
 
 /**
  * Problem reports sent from Edit's Report a problem (the error, the log, how

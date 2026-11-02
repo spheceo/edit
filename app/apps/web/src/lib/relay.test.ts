@@ -341,6 +341,34 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "query", path: "edit:noteLesson" }, { token: NAMED })).status).toBe(403);
   });
 
+  it("Edit's own notes: who left one comes from the token; a project's notes are for who may work on it", async () => {
+    const upstream = vi.fn(async (_url: string, init: RequestInit) => {
+      const { path } = JSON.parse(String(init.body)) as { path: string };
+      // The project's row, when the relay looks up its kind: p1 a bodycam edit, p2 a courtroom one.
+      if (path === "edit:getProject") {
+        const { args } = JSON.parse(String(init.body)) as { args: { projectId: string } };
+        return Response.json({ status: "success", value: { summary: { style: args.projectId === "p2" ? "courtroom" : "bodycam" } } });
+      }
+      return Response.json({ status: "success", value: { id: "n1" } });
+    });
+    vi.stubGlobal("fetch", upstream);
+    const sent = () => JSON.parse(String((upstream.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body));
+    const person = { sub: "person-t", name: "Some One", email: "someone@gmail.com", picture: "https://lh3.googleusercontent.com/a/someone=s96-c" };
+    await call("convex", { kind: "mutation", path: "edit:addNote", args: { projectId: "p1", text: "mute it", frame: 10, fps: 30, actor: { sub: "forged", name: "x" } } }, { token: NAMED });
+    expect(sent()).toMatchObject({ path: "edit:addNote", args: { projectId: "p1", text: "mute it", actor: person } });
+    for (const path of ["edit:sendNotes", "edit:resolveNote", "edit:editNote", "edit:removeNote"]) {
+      await call("convex", { kind: "mutation", path, args: { projectId: "p1", id: "n1" } }, { token: NAMED });
+      expect(sent().path).toBe(path);
+    }
+    await call("convex", { kind: "query", path: "edit:listNotes", args: { projectId: "p1" } }, { token: NAMED });
+    expect(sent().path).toBe("edit:listNotes");
+    expect((await call("convex", { kind: "query", path: "edit:listNotes", args: {} }, { token: NAMED })).status).toBe(400);
+    // A courtroom edit's notes aren't for someone given only bodycam.
+    expect((await call("convex", { kind: "query", path: "edit:listNotes", args: { projectId: "p2" } }, { token: NAMED })).status).toBe(403);
+    expect((await call("convex", { kind: "mutation", path: "edit:addNote", args: { projectId: "p2", text: "x", frame: 1, fps: 30 } }, { token: NAMED })).status).toBe(403);
+    expect((await call("convex", { kind: "query", path: "edit:addNote", args: { projectId: "p1" } }, { token: NAMED })).status).toBe(403);
+  });
+
   it("passes Convex's errors on", async () => {
     // A function's error (or no such function): Convex's own shape, as 200.
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:listMedia'.\n" })));

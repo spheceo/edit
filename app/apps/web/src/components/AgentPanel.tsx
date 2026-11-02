@@ -49,9 +49,11 @@ import {
 } from "../lib/agent";
 import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "../lib/agentTurns";
 import { api, useMachine } from "../lib/api";
+import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
 import { useSettled } from "../lib/settled";
 import { useEditor } from "../lib/store";
+import { NoteQueue } from "./NoteQueue";
 import { ProblemView } from "./ProblemView";
 import { Button, cx } from "./ui";
 import { ClaudeSetupCard } from "./ClaudeSetupCard";
@@ -600,8 +602,10 @@ function Markdown({ text }: { text: string }) {
 function Composer({ disabled }: { disabled: boolean }) {
   const running = useAgent((state) => state.running);
   const modelName = useAgent((state) => state.modelName);
+  const notes = useNotes((state) => queued(state.notes).length);
   return (
     <ChatComposer
+      above={notes > 0 ? <NoteQueue /> : undefined}
       running={running}
       disabled={disabled}
       modelName={modelName ?? ""}
@@ -622,6 +626,7 @@ export function ChatComposer({
   onSend,
   onStop,
   draft,
+  above,
 }: {
   running: boolean;
   disabled: boolean;
@@ -631,6 +636,8 @@ export function ChatComposer({
   onStop: () => void;
   /** Where an unsent message is kept (localStorage), if anywhere. */
   draft?: string;
+  /** Attached to the composer's top (the queued notes). */
+  above?: ReactNode;
 }) {
   const [text, setText] = useState(() => (draft === undefined ? "" : (localStorage.getItem(draft) ?? "")));
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
@@ -658,7 +665,8 @@ export function ChatComposer({
         send();
       }}
     >
-      <div className={cx("rounded-xl border border-line bg-black p-2 transition-colors focus-within:border-muted", disabled && "opacity-50")}>
+      {above}
+      <div className={cx("border border-line bg-black p-2 transition-colors focus-within:border-muted", above === undefined ? "rounded-xl" : "rounded-b-xl", disabled && "opacity-50")}>
         <textarea
           ref={input}
           name="message"

@@ -285,6 +285,12 @@ export const api = {
   projectStatus: () => request<Record<string, ProjectStatus>>("GET", "/api/projects/status"),
   /** A new project's first message to its agent, sent when its import is done. */
   firstPrompt: (id: string, text: string) => request<{ ok: boolean }>("POST", `/api/projects/${id}/first-prompt`, { text }),
+  /** The team's own notes on the edit, left at the playhead (never on the review), with where each is now. */
+  notes: (id: string) => request<AppNote[]>("GET", `/api/projects/${id}/notes`),
+  /** Leaves a note at `frame` (the In–Out span when the frame is in it), queued for the agent. */
+  addNote: (id: string, note: { text: string; frame: number; box?: NoteBox | null }) => request<AppNote>("POST", `/api/projects/${id}/notes`, note),
+  editNote: (id: string, note: string, text: string) => request<AppNote>("PUT", `/api/projects/${id}/notes/${note}`, { text }),
+  removeNote: (id: string, note: string) => request<{ removed: boolean }>("DELETE", `/api/projects/${id}/notes/${note}`),
   /** The project's Repack review: its link, its notes with their frames, the agent's fixes. */
   review: (id: string) => request<Review>("GET", `/api/projects/${id}/review`),
   /** Shares a whole export for review (the newest without `path`); `started` while it uploads. */
@@ -346,6 +352,32 @@ export interface ProjectStatus {
   working: boolean;
   /** How its share is going, while it runs. */
   sharing: string | null;
+}
+
+/** A box drawn on the picture, as fractions of the frame from its top left. */
+export interface NoteBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One of the team's own notes on an edit (edit_notes.ts): queued, with the agent, done or left. */
+export interface AppNote {
+  id: string;
+  text: string;
+  /** The frame it was written at, and where that moment is now (its clip moved, it moved with it). */
+  frame: number;
+  endFrame: number | null;
+  now: number;
+  nowEnd: number | null;
+  box: NoteBox | null;
+  source: string | null;
+  status: "queued" | "sent" | "done" | "left";
+  fix: { summary: string; clips: string[]; ranges: number[][] } | null;
+  reason: string | null;
+  at: number;
+  by: { sub: string; name: string; picture: string | null } | null;
 }
 
 /** A note on a project's Repack review, as Edit has it. */

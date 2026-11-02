@@ -645,6 +645,9 @@ export function connectEvents() {
     } else if (event.type === "review-missed") {
       // A client's notes Edit hadn't heard (reviews.reconcile): never quietly.
       useEditor.getState().toast(event.message, "error");
+    } else if (event.type === "notes" && project && event.id === project.id) {
+      // The team's notes on this edit changed (left, sent, fixed): the row above the composer reloads (lib/notes.ts).
+      window.dispatchEvent(new CustomEvent("edit:notes", { detail: event.id }));
     } else if (event.type === "transcript") {
       // A transcript changed on disk (its voices were just named): panels reload it.
       window.dispatchEvent(new CustomEvent("edit:transcript", { detail: event.path }));

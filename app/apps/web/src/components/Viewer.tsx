@@ -1,4 +1,4 @@
-import { Maximize, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
+import { Maximize, MessageSquarePlus, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useAgent } from "../lib/agent";
@@ -12,8 +12,10 @@ import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
+import { startNote } from "../lib/notes";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
+import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { ProblemView } from "./ProblemView";
 import { cx, IconButton, Spinner } from "./ui";
 import { Loader } from "./Logo";
@@ -46,6 +48,7 @@ export function Viewer() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const project = useEditor((state) => state.project);
   const media = useEditor((state) => state.media);
   const rev = useEditor((state) => state.rev);
@@ -150,7 +153,7 @@ export function Viewer() {
         ? cx("relative flex bg-black", hidden && "cursor-none")
         : "flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel"}
     >
-      <div ref={wrapRef} className="relative min-h-0 flex-1 bg-black">
+      <div ref={(element) => { wrapRef.current = element; setWrap(element); }} className="relative min-h-0 flex-1 bg-black">
         {/* Fullscreen is for watching: a click plays or pauses instead of moving the selection. */}
         <canvas ref={canvasRef} className="absolute inset-0 size-full"
           onPointerDown={(event) => { if (fullscreen) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
@@ -158,6 +161,9 @@ export function Viewer() {
         />
         {/* Smooth playback over the canvas; clicks go through to it. */}
         <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
+        {/* A note being left here: its box over the picture, and the card it's written in. */}
+        {!fullscreen && <NoteBoxLayer wrap={wrap} />}
+        {!fullscreen && <NoteDraft />}
         {!error && project && playback !== null && (playback.state === "rendering" || playback.state === "waiting") && !smoothShown && (
           <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted tabular">
             {playback.state === "waiting" ? "Smooth playback after the export" : `Smooth playback ${Math.round(playback.progress * 100)}%`}
@@ -288,6 +294,11 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
         </IconButton>
       </div>
       <div className="flex w-[180px] items-center justify-end gap-2">
+        {!fullscreen && (
+          <IconButton label="Leave a note here (Q)" onClick={startNote}>
+            <MessageSquarePlus size={15} />
+          </IconButton>
+        )}
         {span ? (
           <button
             onClick={clearInOut}

@@ -6,6 +6,7 @@
 //     agent/skills/<name>.md                   a house skill
 //     agent/styles/<style>/notes.md            a kind of video's own rules
 //     agent/styles/<style>/skills/<name>.md    its own skill, or its version of a house one
+//     agent/styles/<style>/walkthrough.md      one finished edit of that kind, stage by stage (its skill "walkthrough")
 //     agent/shared/<name>.md                   text taken in with {{> name}}
 //     agent/writer/<name>.md                   Script mode's guides (Repack's, word for word)
 //     agent/ideas/<name>.md                    the ideas' craft (Sphe Research's, word for word)
@@ -92,7 +93,14 @@ for (const path of Object.keys(FILES)) {
   const parsed = notes === undefined ? null : parse(notes);
   // `voice: <ElevenLabs voice id>` in the notes' frontmatter: its narrator, where it isn't the house voice.
   const voice = parsed?.fields.voice;
-  STYLES[style] = { notes: parsed?.body ?? "", skills: skillsIn(`styles/${style}/skills/`), ...(voice ? { voice } : {}) };
+  const skills = skillsIn(`styles/${style}/skills/`);
+  // Its worked example: loaded like a skill when the notes point to it.
+  const walkthrough = FILES[`styles/${style}/walkthrough.md`];
+  if (walkthrough !== undefined) {
+    const { fields, body } = parse(walkthrough);
+    skills.push({ name: "walkthrough", description: fields.description ?? "", body });
+  }
+  STYLES[style] = { notes: parsed?.body ?? "", skills, ...(voice ? { voice } : {}) };
 }
 
 /**

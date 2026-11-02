@@ -1,0 +1,1 @@
+- A WORKED EDIT of this kind of video, stage by stage (what each stage made and the few calls it took): skill walkthrough, when you're unsure how a stage goes.

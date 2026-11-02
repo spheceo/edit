@@ -21,8 +21,12 @@ test("every_style_has_the_house_skills", () => {
     }
     expect(styles.instructions(style)).toContain(style);
   }
-  expect(styles.instructions("bodycam")).toBe("THIS VIDEO'S STYLE: bodycam. The house style above applies to it.");
-  expect(styles.allSkillNames()).toEqual(SKILLS.map((skill) => skill.name));
+  // Bodycam is the house style; its notes only point to its worked edit.
+  expect(styles.instructions("bodycam")).toBe(
+    "THIS VIDEO'S STYLE: bodycam. The house style above applies to it, with these rules for this kind of video (they win where they differ):\n- A WORKED EDIT of this kind of video, stage by stage (what each stage made and the few calls it took): skill walkthrough, when you're unsure how a stage goes.",
+  );
+  // The house skills, and the styles' worked edits.
+  expect(styles.allSkillNames()).toEqual([...SKILLS.map((skill) => skill.name), "walkthrough"]);
   // Interrogations and courtrooms have their own rules and versions of the workflow.
   expect(styles.instructions("interrogation")).toContain("INTERROGATION VIDEOS");
   expect(styles.instructions("courtroom")).toContain("COURTROOM VIDEO");

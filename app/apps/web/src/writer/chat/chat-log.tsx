@@ -43,6 +43,9 @@ import {
   X,
 } from "lucide-react";
 import { useState } from "react";
+
+import { formatWorking, isWorking } from "../../lib/agentTurns";
+import { useNow } from "../../lib/now";
 import { parseScriptQuotedMessage } from "./quote";
 import {
   type ScriptToolCall,
@@ -237,6 +240,7 @@ export function AgentTurn({
   live = false,
   waitingLabel = "Thinking",
   waitingNote,
+  since = null,
   onJump,
 }: {
   text: string;
@@ -248,6 +252,8 @@ export function AgentTurn({
   live?: boolean;
   waitingLabel?: string;
   waitingNote?: string;
+  /** When the work began: past its first tool or a few seconds, the line says "Working for 1m 12s" (Sphe, Nov 2), shown while tools run too. */
+  since?: number | null;
   onJump?: Jump;
 }) {
   const [open, setOpen] = useState(false);
@@ -255,11 +261,17 @@ export function AgentTurn({
   const traced = parts.some((part) => part.type === "tools");
   const last = parts.at(-1);
   // Nothing on screen is moving: no words arriving and no tool running.
-  const waiting =
+  const still =
     live &&
     (!last ||
       (last.type === "tools" &&
         !last.calls.some((call) => call.state === "running")));
+  const now = useNow(live && since !== null);
+  const elapsed = live && since !== null ? now - since : 0;
+  const working = live && since !== null && isWorking(elapsed, traced);
+  const waiting = still || working;
+  // A step of its own ("Adding the footage") keeps its words, with the time after them.
+  const label = working ? (waitingLabel === "Thinking" ? formatWorking(elapsed) : `${waitingLabel} · ${formatWorking(elapsed).replace("Working for ", "")}`) : waitingLabel;
   return (
     <div className={`${styles.turn} repack-chat`}>
       {!live && traced ? (
@@ -294,7 +306,7 @@ export function AgentTurn({
       )}
       {waiting ? (
         <div className={styles.waiting} role="status">
-          <span className={styles.thinking}>{waitingLabel}</span>
+          <span className={styles.thinking}>{label}</span>
           {waitingNote ? (
             <span className={styles.waitingNote}>{waitingNote}</span>
           ) : null}

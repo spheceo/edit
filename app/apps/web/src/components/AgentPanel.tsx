@@ -47,7 +47,8 @@ import {
   useAgent,
   type AgentEntry,
 } from "../lib/agent";
-import { buildTurns, callTitle, formatWorked, groupSummary, type Turn } from "../lib/agentTurns";
+import { buildTurns, callTitle, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
+import { useNow } from "../lib/now";
 import { api, useMachine } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
@@ -232,7 +233,11 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
   const quiet = useQuiet(activityAt, 450);
   const lastGroup = [...turn.parts].reverse().find((part) => part.kind === "group");
   const toolRunning = lastGroup?.kind === "group" && lastGroup.calls.some((call) => call.status === "running");
-  const thinking = turn.live && (said !== undefined || quiet) && !toolRunning;
+  // Into real work (a tool called, or a few seconds in): "Working for 1m 12s", ticking, shown while tools run too.
+  const now = useNow(turn.live);
+  const elapsed = turn.live && turn.startedAt > 0 ? now - turn.startedAt : 0;
+  const working = turn.live && said === undefined && isWorking(elapsed, lastGroup !== undefined);
+  const thinking = turn.live && (working || ((said !== undefined || quiet) && !toolRunning));
   const fresh = (id: string) => !known.has(id);
   return (
     <div className="flex flex-col gap-1.5">
@@ -296,7 +301,7 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
             exit={{ opacity: 0, transition: { duration: 0.08 } }}
             className="shimmer h-7 px-1.5 text-[12px] leading-7"
           >
-            {said ?? "Thinking"}
+            {said ?? (working ? formatWorking(elapsed) : "Thinking")}
           </motion.div>
         )}
       </AnimatePresence>

@@ -15,6 +15,8 @@ export interface Turn {
   /** The reply that stays visible (last assistant message) and any errors. */
   answer: AgentEntry[];
   workedMs: number;
+  /** When it began (its message, else its first entry). */
+  startedAt: number;
   live: boolean;
 }
 
@@ -39,7 +41,7 @@ export function buildTurns(entries: AgentEntry[], running: boolean): Turn[] {
     const all = [current.user, ...parts.flatMap((part) => (part.kind === "group" ? part.calls : [part.entry]))].filter(Boolean) as AgentEntry[];
     const start = current.user?.at ?? all[0]?.at ?? 0;
     const end = Math.max(...all.map((entry) => entry.updated || entry.at || 0));
-    turns.push({ id: current.user?.id ?? all[0]?.id ?? String(turns.length), user: current.user, parts, work, answer, workedMs: Math.max(0, end - start), live: false });
+    turns.push({ id: current.user?.id ?? all[0]?.id ?? String(turns.length), user: current.user, parts, work, answer, workedMs: Math.max(0, end - start), startedAt: start, live: false });
     current = null;
   };
   for (const entry of entries) {
@@ -197,6 +199,26 @@ export function groupSummary(calls: AgentEntry[]): string {
   };
   const text = order.map((key) => phrase(key, counts.get(key) ?? 1)).join(", ");
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * A live turn's line once it's into real work (Sphe, Nov 2: "we should have a
+ * \"Working for _\" when an agent is running long stuff like when it starts
+ * calling tools"): after its first tool, or a few seconds in.
+ */
+export const WORKING_AFTER_MS = 5000;
+
+export function isWorking(elapsedMs: number, usedTools: boolean): boolean {
+  return usedTools || elapsedMs >= WORKING_AFTER_MS;
+}
+
+/** "Working for 8s", "Working for 1m 12s", "Working for 1h 4m": to the second while it runs. */
+export function formatWorking(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `Working for ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `Working for ${minutes}m ${seconds % 60}s`;
+  return `Working for ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 export function formatWorked(ms: number) {

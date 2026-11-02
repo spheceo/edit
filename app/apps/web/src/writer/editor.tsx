@@ -892,6 +892,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
                 text={liveTurn?.text ?? ""}
                 trace={liveTurn?.trace}
                 waitingLabel={stage || "Thinking"}
+                since={started}
                 waitingNote={
                   stage === "Editing the script"
                     ? "Edits usually take a minute or two."

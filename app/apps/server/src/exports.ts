@@ -25,6 +25,7 @@ import { duration } from "./project.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
+import { BUILD } from "./version.ts";
 
 /** How many finished exports are remembered (handed out, revealed). */
 const KEEP_FINISHED = 50;
@@ -41,6 +42,55 @@ export interface StartExtra {
   drive?: boolean;
   /** Keep the local file after its verified cloud upload (default: deleted, cloud is canonical). */
   keepLocal?: boolean;
+  /** A share's export (reviews.exportAndShare): a failure is the share's to try again, not the export's (retry_after_update.ts). */
+  share?: boolean;
+  /** Said beside it in the Exports panel ("Trying again after the update"). */
+  note?: string;
+}
+
+/**
+ * An export that failed, kept in `<home>/export-failures.json` (the panel's
+ * outcomes are in memory and gone with a restart, an update's too) until the
+ * project's next export succeeds: what an update tries again, once, with the
+ * same settings (retry_after_update.ts).
+ */
+export interface ExportFailure {
+  project: string;
+  name: string;
+  options: ExportOptions;
+  output: string;
+  error: string;
+  at: number;
+  /** The build it failed on. */
+  build: string;
+  drive?: boolean;
+  keepLocal?: boolean;
+  share?: boolean;
+}
+
+const FAILURES = "export-failures.json";
+
+/** The exports that failed and haven't succeeded since, by project. */
+export function failedExports(home: string): Record<string, ExportFailure> {
+  try {
+    const value = JSON.parse(fs.readFileSync(join(home, FAILURES), "utf8")) as unknown;
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, ExportFailure>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function noteFailure(home: string, project: string, failure: ExportFailure | null): void {
+  const all = failedExports(home);
+  if (failure === null) {
+    if (all[project] === undefined) return;
+    delete all[project];
+  } else all[project] = failure;
+  try {
+    writeAtomic(join(home, FAILURES), JSON.stringify(all, null, 1));
+  } catch (error) {
+    diag.warn("export", `couldn't note the failed exports: ${diag.messageOf(error)}`);
+  }
 }
 
 interface Running {
@@ -62,6 +112,8 @@ interface Running {
   options: string;
   keepLocal: boolean;
   queued: boolean;
+  share?: boolean;
+  note?: string;
   /** Rendered on Modal and kept in the cloud there (never copied here): its key and size. */
   inCloud?: { key: string; bytes: number | null };
   cancelQueued?: () => void;
@@ -78,6 +130,8 @@ export interface ExportActivity {
   backend: Backend;
   updated_ms: number;
   error?: string;
+  /** Said beside it: "Trying again after the update". */
+  note?: string;
 }
 
 /**
@@ -474,7 +528,7 @@ export class ExportRegistry implements seams.Exports {
   }
 
   private publish(store: Store, project: Project, running: Running, state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}): void {
-    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, backend: running.backend, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}) });
+    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, backend: running.backend, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }) });
     // Keep every active job and only the latest completed outcomes.
     const ended = [...this.recent.values()].filter(one => one.state !== "queued" && one.state !== "running").sort((a, b) => b.updated_ms - a.updated_ms);
     for (const old of ended.slice(20)) this.recent.delete(old.id);
@@ -604,7 +658,7 @@ export class ExportRegistry implements seams.Exports {
     // after enqueueing must never change the export that was accepted.
     project = structuredClone(project);
     options = structuredClone(options);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), options: optionsKey(options), keepLocal: extra.keepLocal === true, queued: !remote };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), options: optionsKey(options), keepLocal: extra.keepLocal === true, queued: !remote, ...(extra.share === true ? { share: true } : {}), ...(extra.note === undefined ? {} : { note: extra.note }) };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -799,6 +853,7 @@ export class ExportRegistry implements seams.Exports {
         // In the cloud only.
       }
       emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload, backend: running.backend });
+      if (this.home !== null) noteFailure(this.home, id, null);
       try {
         remember(this.home ?? store.home, id, {
           path: output,
@@ -847,6 +902,13 @@ export class ExportRegistry implements seams.Exports {
     } else {
       diag.record("export", "export", took, `${project.name}: ${result.error}`);
       emit("failed", 0, { error: result.error });
+      // Kept for the next build to try again (retry_after_update.ts).
+      if (this.home !== null) {
+        noteFailure(this.home, id, {
+          project: id, name: project.name, options, output, error: result.error, at: nowMs(), build: BUILD,
+          ...(upload ? { drive: true } : {}), ...(running.keepLocal ? { keepLocal: true } : {}), ...(running.share === true ? { share: true } : {}),
+        });
+      }
     }
     this.jobs.delete(id);
     jobs.end(this.home, running.key);

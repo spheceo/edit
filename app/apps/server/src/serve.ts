@@ -29,6 +29,7 @@ import * as firstPrompt from "./first_prompt.ts";
 import * as researchCloud from "./research_cloud.ts";
 import * as playbackRender from "./playback_render.ts";
 import * as reviews from "./reviews.ts";
+import * as retryAfterUpdate from "./retry_after_update.ts";
 import { buildRouter } from "./routes.ts";
 import * as seams from "./seams.ts";
 import { Store } from "./store.ts";
@@ -230,6 +231,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   if (trials) diag.info("edit", "a trial server: no review fixes, Writer folder or archives, idea runs or remote support here");
   // Repack reviews of exports: their notes followed, and fixed by the agent once they settle.
   if (!trials) optional("review", () => reviews.start(app));
+  // What failed on the build before, tried again once on this one, when the Mac is idle.
+  if (!trials) optional("retry after update", () => retryAfterUpdate.start(app));
   // Smooth playback: the open edit rendered small in the background, out of the way of exports.
   optional("playback", () => playbackRender.start(app));
   // Projects archived on Repack: their big files freed here, and restores asked for done.

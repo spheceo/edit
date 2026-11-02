@@ -81,6 +81,7 @@ export function ExportActivity() {
               {exportActive(job) ? <Button size="sm" variant="ghost" disabled={stopping === job.id} onClick={() => void stop(job.id)}>{stopping === job.id ? "Stopping…" : "Cancel"}</Button>
                 : <IconButton label={`Dismiss ${job.name}'s export`} onClick={() => setHidden(previous => ({ ...previous, [job.id]: job.updated_ms }))}><X size={12} /></IconButton>}
             </div>
+            {job.note && <div className="mt-1 text-[11px] text-muted">{job.note}</div>}
             {job.state === "failed" && job.error ? <ProblemView error={job.error} doing="export it" className="mt-1.5" /> : <div className="mt-1.5 text-[11px] text-muted">{exportLabel(job)}</div>}
             {job.state === "running" && <progress aria-label={`${job.name} export progress`} max={1} value={job.progress} className="mt-2 h-1 w-full accent-fg" />}
             {job.state === "done" && <a className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-fg hover:underline" href={`/api/exports/file?path=${encodeURIComponent(job.path)}`} download><Download size={12} /> Download export</a>}

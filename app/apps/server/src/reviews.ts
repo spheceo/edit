@@ -355,7 +355,7 @@ export async function share(app: App, projectId: string, path: string | null, re
  * one: "new revisions replace the one version they are on… everything up till
  * now on v1".
  */
-export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>, replace = false): Promise<{ url: string; version: number }> {
+export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>, replace = false, note?: string): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
   if (removing.has(projectId)) throw new Error("this project's review link is being deleted: share it again once that's done");
@@ -381,7 +381,7 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
     const live = app.store.get(projectId);
     if (live === null) throw new Error("no such project");
     const asked = { ...native().exportDefaults(), ...options } as ExportOptions;
-    path = await exportOnce(app, projectId, live.project, asked);
+    path = await exportOnce(app, projectId, live.project, asked, note);
   } finally {
     sharing.delete(projectId);
   }
@@ -412,7 +412,7 @@ type Ended = { readonly file: string } | { readonly failed: string } | { readonl
  * "already being shared" until Edit restarted; now it's exported again, and
  * after `exportWatch.silentEnds` such ends the share says so.
  */
-const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, projectId: string, project: Project, options: ExportOptions) {
+const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, projectId: string, project: Project, options: ExportOptions, note?: string) {
   const timeline = timelineHash(project);
   const wanted = optionsKey(options);
   const began = Date.now();
@@ -466,7 +466,7 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
         // this Mac the share holds the file while it reads it (withExport), so
         // the archive never takes it away underneath.
         const started = yield* Effect.tryPromise({
-          try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), {}),
+          try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), { share: true, ...(note === undefined ? {} : { note }) }),
           catch: (error) => error as Error,
         }).pipe(Effect.result);
         // Another export began between the look and the start: wait for it, as above.
@@ -490,8 +490,8 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
   }
 });
 
-function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions): Promise<string> {
-  return runPromise(exportOnceEffect(app, projectId, project, options).pipe(inArea("review")));
+function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions, note?: string): Promise<string> {
+  return runPromise(exportOnceEffect(app, projectId, project, options, note).pipe(inArea("review")));
 }
 
 /**
@@ -1325,6 +1325,14 @@ export function askedHere(): boolean {
   return asked;
 }
 
+/** The projects whose Ready for changes is asked of this computer, as of its last check-in. */
+let askedProjects = new Set<string>();
+
+/** Whether a Ready for changes on `project` is asked of this computer (waiting at the last check-in) or being worked here now. */
+export function askedFor(project: string): boolean {
+  return askedProjects.has(project) || readying.has(project) || sharing.has(project);
+}
+
 /** A review waiting on this computer, as `reviews:checkIn` lists it. */
 interface Request {
   reviewId: string;
@@ -1381,6 +1389,7 @@ export function busyHere(app: App): boolean {
 /** Tests: forget what earlier check-ins learnt. */
 export function resetCheckInForTests(): void {
   asked = false;
+  askedProjects = new Set();
   declined.clear();
   waitingFix.clear();
 }
@@ -1397,6 +1406,7 @@ export async function checkIn(app: App): Promise<string[]> {
   // Busy is the whole Mac's: Script mode's work (Claude on a script, its imports) counts too.
   const answer = (await cloud.mutation("reviews:checkIn", { machine: machine.id(), name: machine.name(), email: email?.email ?? null, busy: busyHere(app) })) as { chosen?: boolean; requests?: Request[] };
   const requests = (answer.requests ?? []).filter((one) => typeof one.reviewId === "string" && typeof one.sourceId === "string");
+  askedProjects = new Set(requests.map((one) => one.sourceId));
   const now = requests.length > 0;
   if (now !== asked) diag.info("review", now ? "Ready for changes is asked of this computer" : "no Ready for changes is asked of this computer now");
   asked = now;
@@ -1763,8 +1773,8 @@ async function shareAgain(app: App, project: string, reviewId: string): Promise<
   await shareFixes(app, project, reviewId, live.project.name);
 }
 
-/** Exports and shares the fixes: in place of the latest version unless it has comments, else as the next one; the share ends the request on the page. */
-async function shareFixes(app: App, project: string, reviewId: string | null, name: string): Promise<void> {
+/** Exports and shares the fixes: in place of the latest version unless it has comments, else as the next one; the share ends the request on the page. `note`: what the Exports panel says beside its export ("Trying again after the update"). */
+export async function shareFixes(app: App, project: string, reviewId: string | null, name: string, note?: string): Promise<void> {
   const home = app.store.home;
   const latest = read(home).shared[project]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? 0;
   const replace = latest > 0 && onLatest(home, project).length === 0;
@@ -1781,7 +1791,7 @@ async function shareFixes(app: App, project: string, reviewId: string | null, na
   ticker.unref?.();
   try {
     // The share ends the request on the page, as done with this version.
-    const shared = await exportAndShare(app, project, read(home).shareOptions?.[project] ?? {}, replace);
+    const shared = await exportAndShare(app, project, read(home).shareOptions?.[project] ?? {}, replace, note);
     diag.info("review", `${name}: Ready for changes: shared v${shared.version}${replace ? " in its place" : ""}`);
   } catch (error) {
     update(home, (state) => {

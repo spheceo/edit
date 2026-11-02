@@ -164,6 +164,8 @@ export interface ExportActivity {
   backend: "local" | "cloud" | "modal";
   updated_ms: number;
   error?: string;
+  /** Said beside it: "Trying again after the update". */
+  note?: string;
 }
 
 export const api = {

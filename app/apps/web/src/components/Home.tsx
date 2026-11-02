@@ -426,11 +426,11 @@ export function Home() {
 
   return (
     <LaterContext.Provider value={later}>
-      <div className="flex h-full bg-bg p-2">
+      <div className="flex h-full bg-black p-2">
         <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-bg">
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-panel">
           {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
-          <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
+          <header className="flex h-[52px] shrink-0 items-center gap-3 px-5">
             <h1 className="flex min-w-0 items-center gap-1.5 text-[15px] font-semibold tracking-[-0.01em] whitespace-nowrap">
               {title.parent !== null && (
                 <>
@@ -458,8 +458,8 @@ export function Home() {
           <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3", sidebarOpen ? "pb-6" : "pb-14")}>
             <SetupCard />
             <div className="mb-3 flex items-center gap-2">
-              {/* The kit's field: inset on the page colour, its edge brighter in focus. */}
-              <label className="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-line-strong bg-bg px-2.5 text-muted focus-within:border-muted">
+              {/* Inset in black on the grey panel, as the chat's box is; an edge only in focus. */}
+              <label className="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent bg-black px-2.5 text-muted focus-within:border-line-strong">
                 <Search size={14} className="shrink-0" />
                 <input
                   value={query}
@@ -476,7 +476,7 @@ export function Home() {
               </label>
               {account?.person != null && (
                 // The kit's segmented control (.sp-seg).
-                <div className={cx("flex h-[34px] shrink-0 gap-0.5 rounded-[9px] border border-line bg-bg p-0.5", searching && "pointer-events-none opacity-45")}>
+                <div className={cx("flex h-[34px] shrink-0 gap-0.5 rounded-[9px] bg-black p-0.5", searching && "pointer-events-none opacity-45")}>
                   {([[true, "Mine"], [false, "Everyone"]] as const).map(([value, label]) => (
                     <button
                       key={label}
@@ -629,7 +629,7 @@ function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string;
           <Fragment key={group.key}>
             {group.label !== null && (
               // The kit's section label: sentence case, 13/500, muted.
-              <div className="col-span-full flex items-center gap-1.5 border-t border-line px-3 pt-5 pb-2 text-[13px] font-medium text-muted">
+              <div className="col-span-full flex items-center gap-1.5 px-3 pt-5 pb-2 text-[13px] font-medium text-muted">
                 {group.label} <span className="font-normal text-faint tabular">{group.items.length}</span>
               </div>
             )}

@@ -1,4 +1,4 @@
-// Home's sidebar (Oct 31 2026): what needs you, then ideas, scripts and edits
+// Home's sidebar (Oct 31 2026): what needs you, then ideas, thumbnails, scripts and edits
 // each with their stages, then Later and Done; one short list at a time
 // beside it. The study portal's sidebar (the user, Oct 31: "i think this is
 // way more organised"), after the team's "having to scroll through a long,
@@ -6,7 +6,7 @@
 
 import { Check, Clock, FileText, Film, Image as ImageIcon, Inbox, Lightbulb, PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
 import { motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { navigate } from "../lib/route";
 import { AppMenu } from "./AppMenu";
@@ -124,19 +124,22 @@ export function HomeSidebar({ sections, counts, where, onChoose, open, onClose }
         <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pb-2">
           {item("needs", "Needs you", Inbox)}
           {SECTIONS.filter((section) => sections.includes(section.key)).map((section) => (
-            <div key={section.key} className="mt-2.5 flex flex-col gap-0.5">
-              {item(section.key, section.label, section.icon)}
-              {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
-            </div>
+            <Fragment key={section.key}>
+              <div className="mt-2.5 flex flex-col gap-0.5">
+                {item(section.key, section.label, section.icon)}
+                {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
+              </div>
+              {/* Thumbnails (Nov 2): their own screen, for the same people as ideas, right after them (Sphe, Nov 2: "ideas first then thumbnails, scripts edits"). */}
+              {section.key === "ideas" && (
+                <button onClick={() => navigate("/thumbnails")} className="mt-2.5 flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium text-secondary transition-colors hover:bg-hover hover:text-fg">
+                  <ImageIcon size={15} className="shrink-0 text-muted" />
+                  <span className="min-w-0 flex-1 truncate">Thumbnails</span>
+                </button>
+              )}
+            </Fragment>
           ))}
-          {/* Thumbnails (Nov 2): their own screen, for the same people as ideas. */}
-          {sections.includes("ideas") && (
-            <button onClick={() => navigate("/thumbnails")} className="mt-2.5 flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium text-secondary transition-colors hover:bg-hover hover:text-fg">
-              <ImageIcon size={15} className="shrink-0 text-muted" />
-              <span className="min-w-0 flex-1 truncate">Thumbnails</span>
-            </button>
-          )}
-          <div className="mx-2 my-2.5 border-t border-line" />
+          {/* Space, not a rule, before Later and Done (Sphe, Nov 2: "less borders"). */}
+          <div className="mt-6" />
           {item("later", "Later", Clock)}
           {item("done", "Done", Check)}
         </nav>

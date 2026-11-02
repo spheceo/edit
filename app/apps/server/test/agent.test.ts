@@ -19,6 +19,9 @@ import {
 import * as diag from "../src/diag.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
+// These test the Codex integration, kept for later and off by default (agent.ts codexEnabled).
+process.env.EDIT_CODEX = "1";
+
 test("a_ready_status_is_kept_for_a_while", () => {
   const found = 1000;
   const status = { ready: true, state: "ready" };

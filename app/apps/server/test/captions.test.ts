@@ -375,6 +375,7 @@ async function call(app: App, name: string, args: Record<string, unknown>): Prom
 
 test("caption_speakers asks Luna who speaks and lays the intro's captions out (no faces found: bottom middle)", async () => {
   const { app, dir, store, cleanup } = fixtureHome("captions");
+  process.env.EDIT_CODEX = "1";
   try {
     const id = await footage(app, dir);
     const asked: unknown[][] = [];
@@ -413,6 +414,7 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
     try {
       reply = await call(app, "caption_speakers", { project_id: id, start: 0, end: 10 });
     } finally {
+    delete process.env.EDIT_CODEX;
       if (before === undefined) delete process.env.EDIT_FFMPEG;
       else process.env.EDIT_FFMPEG = before;
       (await import("../src/tools.ts")).forget();
@@ -522,9 +524,10 @@ test("subtitles spell the case's names as the case does", () => {
   expect(spelledAsTheCase("Officer Sinclair", [])).toBe("Officer Sinclair");
 });
 
-test("caption_speakers asks Claude to look when Codex is out of credit", async () => {
+test("caption_speakers asks Claude to look when Codex is out of credit, and by default", async () => {
   // Loop 7, Nov 2: "You've hit your usage limit… try again at Nov 4th", and the intro's captions failed.
   const { app, dir, cleanup } = fixtureHome("captions-claude");
+  process.env.EDIT_CODEX = "1";
   const { standIn } = await import("../src/ai_claude.ts");
   const was = standIn.post;
   try {
@@ -558,7 +561,23 @@ test("caption_speakers asks Claude to look when Codex is out of credit", async (
     expect(reply.isError).toBe(false);
     expect(reply.text.startsWith("captioned 0–10s")).toBe(true);
     expect(claudeAsked).toBe(1);
+    // Codex off (the default, Sphe Nov 2): Claude is asked straight away, Codex never.
+    delete process.env.EDIT_CODEX;
+    let codexAsked = 0;
+    app.agents = { status: async () => ({}), ask: async () => { codexAsked++; return ""; } };
+    process.env.EDIT_FFMPEG = `${bin}/ffmpeg`;
+    (await import("../src/tools.ts")).forget();
+    try {
+      reply = await call(app, "caption_speakers", { project_id: id, start: 0, end: 10 });
+    } finally {
+      if (before === undefined) delete process.env.EDIT_FFMPEG;
+      else process.env.EDIT_FFMPEG = before;
+      (await import("../src/tools.ts")).forget();
+    }
+    expect(reply.isError).toBe(false);
+    expect([codexAsked, claudeAsked]).toEqual([0, 2]);
   } finally {
+    delete process.env.EDIT_CODEX;
     standIn.post = was;
     cleanup();
   }

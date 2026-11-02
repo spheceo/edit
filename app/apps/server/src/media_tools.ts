@@ -432,7 +432,11 @@ async function agentProviderRoute(context: RouteContext<App>): Promise<Response>
   const given = await body(context, "AgentProvider", ["provider"]);
   const provider = given.provider;
   if (provider !== "claude" && provider !== "codex") throw bad("provider: expected \"claude\" or \"codex\"");
-  seams.agentPanel(context.app).setProvider(provider);
+  try {
+    seams.agentPanel(context.app).setProvider(provider);
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
   return agentStatusRoute(context);
 }
 

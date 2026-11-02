@@ -37,6 +37,15 @@ export type Provider = "claude" | "codex";
 
 export const DEFAULT_PROVIDER: Provider = "claude";
 
+/**
+ * Codex is kept for later but off by default: every turn and every one-off
+ * question goes to Claude (Sphe, Nov 2: "We shouldn't even have codex cli
+ * enabled, we can keep the integration for the future but by default only use
+ * Claude"; this Mac's ChatGPT plan had run out and stopped caption_speakers).
+ * EDIT_CODEX=1 turns it back on.
+ */
+export const codexEnabled = (): boolean => process.env.EDIT_CODEX === "1";
+
 /** How long a cached model list is trusted before a background refresh. */
 const MODELS_TTL_MS = 24 * 3600 * 1000;
 
@@ -407,6 +416,7 @@ export class Agents implements seams.AgentPanel {
 
   /** Switches provider; each chat starts a new conversation on its next turn there. */
   setProvider(provider: Provider): void {
+    if (provider === "codex" && !codexEnabled()) throw new Error("Codex is off in this Edit: the agent runs on Claude (EDIT_CODEX=1 turns Codex on)");
     this.chosen = provider;
     this.ready = null;
     if (provider !== "claude") { this.cancelClaudeRetries(); }
@@ -534,7 +544,7 @@ export class Agents implements seams.AgentPanel {
 
   /** Settings: whether each CLI Edit drives (Claude Code, Codex for `ask`) is installed and signed in, and which runs the agent. */
   async clis(): Promise<Json> {
-    const [claudeStatus, codexStatus] = await Promise.all([claude.checkClaude(), checkCodex()]);
+    const [claudeStatus, codexStatus] = await Promise.all([claude.checkClaude(), codexEnabled() ? checkCodex() : Promise.resolve(sorted({ provider: "codex", ready: false, state: "off", error: "Codex is off in this Edit." }))]);
     const support = this.claudeSupport.status();
     const blocked = !["idle", "ready"].includes(support.phase);
     return sorted({ claude: { ...claudeStatus, support, ...(blocked ? { ready: false, state: support.phase, error: support.error ?? support.message } : {}) }, codex: codexStatus, provider: this.chosen });
@@ -818,7 +828,9 @@ export class Agents implements seams.AgentPanel {
         chat.effort = effort;
       }
       // A retried turn stays with the provider it ran on, whatever's chosen since.
-      const provider = generation !== null && chat.provider !== null ? chat.provider : this.chosen;
+      const kept = generation !== null && chat.provider !== null ? chat.provider : this.chosen;
+      // A chat that ran on Codex carries on with Claude while Codex is off.
+      const provider: Provider = kept === "codex" && !codexEnabled() ? "claude" : kept;
       chat.running = true;
       chat.started = timing.now();
       chat.heard = chat.started;
@@ -1261,6 +1273,7 @@ export class Agents implements seams.AgentPanel {
     timeoutMs: number,
   ): Promise<string> {
     if (model.startsWith("claude-")) return this.askClaude(model, effort, instructions, input, schema, timeoutMs);
+    if (!codexEnabled()) throw new Error(`Codex is off in this Edit: ${model} can't be asked (ask a Claude model)`);
     const codex = await this.codex();
     const workspace = join(this.dir, "workspace");
     fs.mkdirSync(workspace, { recursive: true });

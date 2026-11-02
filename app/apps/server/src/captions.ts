@@ -24,6 +24,7 @@ import * as diag from "./diag.ts";
 import { fixTurns } from "./turns.ts";
 import { post as claudeAsk, spills as post } from "./ai_claude.ts";
 import * as claudeModels from "./writer/claude.ts";
+import { codexEnabled } from "./agent.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import type {
@@ -1237,8 +1238,10 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
   // Who's who in a still is seen, not reasoned out: medium answers in a fraction of high's time.
   let answer: string;
   try {
-    answer = await app.agents.ask(WATCH_MODEL, "medium", INSTRUCTIONS, input, schema(), 600_000);
+    // Claude looks at the stills unless Codex is on (it's off by default, agent.ts codexEnabled).
+    answer = codexEnabled() ? await app.agents.ask(WATCH_MODEL, "medium", INSTRUCTIONS, input, schema(), 600_000) : await askClaudeInstead(prompt, images, dir);
   } catch (error) {
+    if (!codexEnabled()) throw error;
     // Codex out of credit or not signed in on this Mac: Claude looks at the
     // same stills (loop 7, Nov 2 on the trial server: "You've hit your usage
     // limit… try again at Nov 4th", and the intro's speaker captions failed).

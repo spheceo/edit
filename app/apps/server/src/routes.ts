@@ -57,6 +57,7 @@ import * as lessonInbox from "./lesson_inbox.ts";
 import * as presence from "./presence.ts";
 import * as devProjects from "./dev_projects.ts";
 import * as beta from "./beta.ts";
+import * as channelMarks from "./channel_marks.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
 import * as remoteSupport from "./remote_support.ts";
@@ -103,6 +104,7 @@ export function buildRouter(): Router<App> {
   presence.routes(router);
   devProjects.routes(router);
   beta.routes(router);
+  channelMarks.routes(router);
   archive.routes(router);
   covers.routes(router);
   avatars.routes(router);
@@ -1079,6 +1081,8 @@ async function startExport(context: Context): Promise<Response> {
   const given = (await optionalBody(context)) ?? {};
   const path = field<string>(given, "path", "string");
   const drive = field<boolean>(given, "drive", "boolean");
+  // A channel's watermark over it (channel_marks.ts): its picture's id in the Watermarks folder.
+  const watermark = field<string>(given, "watermark", "string");
   const asked = given.options;
   if (asked !== undefined && (typeof asked !== "object" || asked === null || Array.isArray(asked))) {
     throw badShape(`options: invalid type: ${kindOf(asked)}, expected struct ExportOptions`);
@@ -1108,7 +1112,7 @@ async function startExport(context: Context): Promise<Response> {
   const output =
     path !== null && path.trim() !== "" ? expandHome(path) : defaultExportPath(app.store, live.project);
   try {
-    return json({ path: await app.exports.start(app.store, app.library, live.project, options, output, drive === null ? {} : { drive }) });
+    return json({ path: await app.exports.start(app.store, app.library, live.project, options, output, { ...(drive === null ? {} : { drive }), ...(watermark === null || watermark === "" ? {} : { watermark }) }) });
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

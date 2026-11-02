@@ -17,6 +17,7 @@ import type { Router } from "./http/router.ts";
 import * as appModule from "./app_seam.ts";
 import * as brollModule from "./broll.ts";
 import * as captionsModule from "./captions.ts";
+import * as channelMarksModule from "./channel_marks.ts";
 import * as cloudModule from "./cloud.ts";
 import * as cloudMediaModule from "./cloud_media.ts";
 import * as cloudExportsModule from "./cloud_exports.ts";
@@ -238,6 +239,11 @@ export interface CloudSeam {
 export const cloudMedia: CloudMediaSeam = cloudMediaModule;
 export const cloudExports = cloudExportsModule;
 export const modalExports = modalExportsModule;
+/** A channel's watermark over an export (channel_marks.ts). */
+export interface ChannelMarksSeam {
+  addWatermark(app: { library: Library }, cacheDir: string, project: Project, plan: { start: number; end: number }, id: string): Promise<Project>;
+}
+export const channelMarks: ChannelMarksSeam = channelMarksModule;
 export const cloudProjects: CloudProjectsSeam = {
   delete: (app, id) => cloudProjectsModule.remove(app, id),
   routes: (router) => cloudProjectsModule.routes(router),

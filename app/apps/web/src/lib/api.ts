@@ -301,8 +301,11 @@ export const api = {
   /** Approves the latest shared version: the review closes and the other versions' files (and their exports here) are deleted. */
   /** Share: exports the whole edit, then puts it on the project's review link (a new version after the first). */
   /** `options` null: the last Share's settings; `byRule`: in place of the latest version unless it has comments (Home's Share). */
-  shareProject: (id: string, options: ExportOptions | null, replace = false, byRule = false) =>
-    request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { ...(options === null ? {} : { options }), replace, byRule }),
+  /** `watermark`: a channel's picture id, or null for none; left out, the last Share's. */
+  shareProject: (id: string, options: ExportOptions | null, replace = false, byRule = false, watermark?: string | null) =>
+    request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { ...(options === null ? {} : { options }), replace, byRule, ...(watermark === undefined ? {} : { watermark }) }),
+  /** The channels with a watermark: the pictures in the team's Watermarks folder on Drive. */
+  watermarks: () => request<{ channels: { id: string; code: string; name: string }[] }>("GET", "/api/watermarks"),
   /** A reset the agent is asking about (`reset_edit`), and the user's answer to it. */
   resetAsked: (id: string) => request<{ pending: { asked_ms: number } | null }>("GET", `/api/projects/${id}/reset`),
   answerReset: (id: string, accept: boolean) => request<{ answered: boolean }>("POST", `/api/projects/${id}/reset`, { accept }),
@@ -400,6 +403,8 @@ export interface ReviewNote {
 
 export interface Review {
   sharing: string | null;
+  /** The channel whose watermark this project's shares carry (a picture id in the Watermarks folder), or none. */
+  watermark?: string | null;
   review: { url: string; versions: { n: number; path: string }[]; approved: { version: number; by: string; at: number } | null } | null;
   notes: ReviewNote[];
 }

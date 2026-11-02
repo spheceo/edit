@@ -47,6 +47,8 @@ export interface StartExtra {
   share?: boolean;
   /** Said beside it in the Exports panel ("Trying again after the update"). */
   note?: string;
+  /** A channel's watermark over the whole export (channel_marks.ts): its picture's Drive id in the Watermarks folder. */
+  watermark?: string;
 }
 
 /**
@@ -109,8 +111,10 @@ interface Running {
   snapshot: string | null;
   /** What it exports, as `timelineHash`. */
   timeline: string;
-  /** The options it exports with, as JSON with sorted keys. */
+  /** The options it exports with, as JSON with sorted keys (and its watermark: `withWatermarkKey`). */
   options: string;
+  /** The edit's picture clips, for the review's clip map: the watermark's own isn't one. */
+  clips?: [string, number, number][];
   keepLocal: boolean;
   queued: boolean;
   share?: boolean;
@@ -487,6 +491,11 @@ export function deleteExport(home: string, id: string, path: string): void {
   diag.info("export", `${id}: deleted the export ${path}`);
 }
 
+/** An export's options key with its watermark (a channel's picture id), so a share follows only an export with the same one. */
+export function withWatermarkKey(key: string, watermark: string | undefined): string {
+  return watermark === undefined ? key : `${key}|watermark:${watermark}`;
+}
+
 /** Export options as JSON with sorted keys: two asks for the same export compare equal. */
 export function optionsKey(options: ExportOptions): string {
   const sorted = (value: unknown): unknown =>
@@ -597,6 +606,9 @@ export class ExportRegistry implements seams.Exports {
     const cloudJob = extra.cloudJob;
     const addon = native();
     const { plan, fps } = addon.exportPlan({ json: jsonForSerde(project) }, options);
+    // The edit as it is, before a watermark goes over it: what this export is of (its hash and clip map).
+    const edit = project;
+    if (extra.watermark !== undefined) project = await seams.channelMarks.addWatermark({ library }, store.cacheDir(), project, plan, extra.watermark);
     let path = addon.withExtension(output, options.format);
     // Never into an unplugged media drive's folder (or the empty mount point it leaves behind).
     store.layout().writable(path);
@@ -680,7 +692,7 @@ export class ExportRegistry implements seams.Exports {
     // after enqueueing must never change the export that was accepted.
     project = structuredClone(project);
     options = structuredClone(options);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(project), options: optionsKey(options), keepLocal: extra.keepLocal === true, queued: !remote, ...(extra.share === true ? { share: true } : {}), ...(extra.note === undefined ? {} : { note: extra.note }) };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(edit), options: withWatermarkKey(optionsKey(options), extra.watermark), clips: clipMap(edit), keepLocal: extra.keepLocal === true, queued: !remote, ...(extra.share === true ? { share: true } : {}), ...(extra.note === undefined ? {} : { note: extra.note }) };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -888,7 +900,7 @@ export class ExportRegistry implements seams.Exports {
           ...(running.inCloud === undefined ? {} : { cloudKey: running.inCloud.key }),
         });
         fs.mkdirSync(join(this.home ?? store.home, "export-maps"), { recursive: true });
-        writeAtomic(mapFile(this.home ?? store.home, running.timeline), JSON.stringify(clipMap(project)));
+        writeAtomic(mapFile(this.home ?? store.home, running.timeline), JSON.stringify(running.clips ?? clipMap(project)));
       } catch (error) {
         diag.warn("export", `couldn't list ${output}: ${diag.messageOf(error)}`);
       }

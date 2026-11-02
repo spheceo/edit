@@ -9,7 +9,7 @@ import { flushSave, useEditor } from "../lib/store";
 import { rate } from "../lib/types";
 import { CAN, useGrants } from "../writer/can";
 import { ProblemView } from "./ProblemView";
-import { Button, Modal } from "./ui";
+import { Button, cx, Modal, Select } from "./ui";
 
 /**
  * Share replaces Export (Oct 24): one button exports the whole edit the
@@ -33,6 +33,24 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   // Deleting the link is asked first (it can't be undone), and needs “Share for review”.
   const [deleting, setDeleting] = useState<"ask" | "running" | null>(null);
   const mayDelete = useGrants().has(CAN.share);
+  // A channel's watermark on the export (Sphe, Nov 2: "a checkbox to include the watermark and we pick the channel"):
+  // the channels are the Watermarks folder's pictures; the project's last choice is the server's (review.watermark).
+  const [channels, setChannels] = useState<{ id: string; code: string; name: string }[] | null>(null);
+  const [channelsFailed, setChannelsFailed] = useState<string | null>(null);
+  const [marked, setMarked] = useState(false);
+  const [channel, setChannel] = useState<string | null>(null);
+  const [markTouched, setMarkTouched] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setMarkTouched(false);
+    void api.watermarks().then(
+      (given) => {
+        setChannels(given.channels);
+        setChannelsFailed(null);
+      },
+      (error: Error) => setChannelsFailed(error.message),
+    );
+  }, [open]);
   const sections = preview.sections;
   const chapters = useMemo(() => (project ? scriptChapters(project, sections) : []), [project, sections]);
   const id = project?.id ?? "";
@@ -54,6 +72,17 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       clearInterval(timer);
     };
   }, [open, id, sharing, starting]);
+
+  // The project's watermark as last shared, until it's changed here.
+  const savedMark = review?.watermark ?? null;
+  useEffect(() => {
+    if (markTouched || review === null) return;
+    setMarked(savedMark !== null);
+    if (savedMark !== null) setChannel(savedMark);
+  }, [review, savedMark, markTouched]);
+  useEffect(() => {
+    if (channel === null && channels && channels.length > 0) setChannel((channels.find((one) => one.code === "SI") ?? channels[0]!).id);
+  }, [channels, channel]);
 
   // A share that just finished: its link copied, said once.
   const [said, setSaid] = useState<string | null>(null);
@@ -88,7 +117,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       const span: [number, number] = [0, duration];
       const embedded = chaptersInSpan(chapters, span, rate(project.settings));
       const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [] };
-      await api.shareProject(project.id, options, replace && latest !== null);
+      await api.shareProject(project.id, options, replace && latest !== null, false, marked && channel !== null ? channel : null);
       setReview(await api.review(project.id));
     } catch (error) {
       setProblem((error as Error).message);
@@ -192,6 +221,38 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
             )}
           </div>
         )}
+
+        <div className="mt-4 flex items-center gap-3 rounded-[10px] border border-line bg-panel px-3 py-2.5">
+          <label className="flex min-w-0 flex-1 items-center gap-2.5 text-[13px]" title="The channel's logo at 20%, moving around the frame like a DVD player's, over everything">
+            <input
+              type="checkbox"
+              checked={marked}
+              disabled={busy || channels === null || channels.length === 0}
+              onChange={(event) => {
+                setMarkTouched(true);
+                setMarked(event.target.checked);
+              }}
+            />
+            <span className="min-w-0">
+              <span className="block text-fg">Watermark</span>
+              <span className="block text-[12px] leading-snug text-muted">
+                {channelsFailed ? `The channels didn’t load: ${channelsFailed}` : channels === null ? "Loading the channels…" : channels.length === 0 ? "No channels in the Watermarks folder" : "The channel’s logo at 20%, moving around the frame"}
+              </span>
+            </span>
+          </label>
+          {channels && channels.length > 0 && channel !== null && (
+            <Select
+              value={channel}
+              options={channels.map((one) => ({ value: one.id, label: one.name }))}
+              onChange={(value) => {
+                setMarkTouched(true);
+                setChannel(value);
+                setMarked(true);
+              }}
+              className={cx("h-[30px] min-w-[150px] shrink-0 justify-between rounded-lg border border-line-strong bg-bg pr-2.5 pl-3 text-[13px] hover:border-muted", !marked && "opacity-50")}
+            />
+          )}
+        </div>
 
         <div className="mt-5 flex min-h-[34px] items-center gap-3">
           <div className="min-w-0 flex-1 text-[12px]">

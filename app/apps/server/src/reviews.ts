@@ -33,7 +33,7 @@ import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as remote from "./remote_actions.ts";
-import { chunkFolder, clipMap, deleteExport, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport } from "./exports.ts";
+import { chunkFolder, clipMap, deleteExport, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport, withWatermarkKey } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
@@ -121,6 +121,8 @@ interface State {
   notes: Record<string, Note>;
   /** Each project's last Share settings (not its range or chapters), for the share after a Ready for changes. */
   shareOptions?: Record<string, Partial<ExportOptions>>;
+  /** Each project's watermark from its last Share (a channel's picture id, channel_marks.ts), kept for the shares after it; absent, none. */
+  shareWatermark?: Record<string, string>;
   /** Projects whose Ready for changes made fixes but couldn't share them: the next one shares them, changed or not. */
   unshared?: Record<string, true>;
 }
@@ -355,15 +357,23 @@ export async function share(app: App, projectId: string, path: string | null, re
  * one: "new revisions replace the one version they are on… everything up till
  * now on v1".
  */
-export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>, replace = false, note?: string): Promise<{ url: string; version: number }> {
+export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>, replace = false, note?: string, watermark?: string | null): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
   if (removing.has(projectId)) throw new Error("this project's review link is being deleted: share it again once that's done");
   // Remembered for the share after a Ready for changes: the house settings, not this span or its chapters.
   const { range: _range, chapters: _chapters, ...settings } = options;
+  // The watermark too (Sphe, Nov 2: a channel's logo on the final export): `null` takes it off, absent keeps the last one.
   update(app.store.home, (state) => {
     state.shareOptions = { ...state.shareOptions, [projectId]: settings };
+    if (watermark === null) {
+      const { [projectId]: _gone, ...rest } = state.shareWatermark ?? {};
+      state.shareWatermark = rest;
+    } else if (watermark !== undefined) {
+      state.shareWatermark = { ...state.shareWatermark, [projectId]: watermark };
+    }
   });
+  const mark = read(app.store.home).shareWatermark?.[projectId];
   sharing.set(projectId, "exporting");
   let path: string;
   try {
@@ -381,7 +391,7 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
     const live = app.store.get(projectId);
     if (live === null) throw new Error("no such project");
     const asked = { ...native().exportDefaults(), ...options } as ExportOptions;
-    path = await exportOnce(app, projectId, live.project, asked, note);
+    path = await exportOnce(app, projectId, live.project, asked, note, mark);
   } finally {
     sharing.delete(projectId);
   }
@@ -412,9 +422,9 @@ type Ended = { readonly file: string } | { readonly failed: string } | { readonl
  * "already being shared" until Edit restarted; now it's exported again, and
  * after `exportWatch.silentEnds` such ends the share says so.
  */
-const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, projectId: string, project: Project, options: ExportOptions, note?: string) {
+const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, projectId: string, project: Project, options: ExportOptions, note?: string, watermark?: string) {
   const timeline = timelineHash(project);
-  const wanted = optionsKey(options);
+  const wanted = withWatermarkKey(optionsKey(options), watermark);
   const began = Date.now();
   let followed = false;
   let silent = 0;
@@ -466,7 +476,7 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
         // this Mac the share holds the file while it reads it (withExport), so
         // the archive never takes it away underneath.
         const started = yield* Effect.tryPromise({
-          try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), { share: true, ...(note === undefined ? {} : { note }) }),
+          try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), { share: true, ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) }),
           catch: (error) => error as Error,
         }).pipe(Effect.result);
         // Another export began between the look and the start: wait for it, as above.
@@ -490,8 +500,8 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
   }
 });
 
-function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions, note?: string): Promise<string> {
-  return runPromise(exportOnceEffect(app, projectId, project, options, note).pipe(inArea("review")));
+function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions, note?: string, watermark?: string): Promise<string> {
+  return runPromise(exportOnceEffect(app, projectId, project, options, note, watermark).pipe(inArea("review")));
 }
 
 /**
@@ -1816,6 +1826,8 @@ export function view(app: App, projectId: string): unknown {
     .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0));
   return {
     sharing: sharing.get(projectId) ?? null,
+    // The channel whose watermark its shares carry (a picture id in the Watermarks folder), or none.
+    watermark: state.shareWatermark?.[projectId] ?? null,
     review: shared === undefined ? null : { url: shared.url, versions: shared.versions.map((one) => ({ n: one.n, path: one.path })), approved: shared.approved ?? null },
     notes: notes.map((note) => {
       const version = shared?.versions.find((one) => one.n === note.version);
@@ -2060,7 +2072,9 @@ export function routes(router: Router<App>): void {
     const options = typeof given?.options === "object" && given.options !== null && !Array.isArray(given.options) ? (given.options as Partial<ExportOptions>) : (read(home).shareOptions?.[id] ?? {});
     const versions = read(home).shared[id]?.versions.length ?? 0;
     const replace = given?.byRule === true ? versions > 0 && onLatest(home, id).length === 0 : given?.replace === true;
-    const started = exportAndShare(context.app, id, options, replace);
+    // The dialog's watermark: a channel's picture id, or null for none; from Home, the last Share's.
+    const watermark = typeof given?.watermark === "string" && given.watermark !== "" ? given.watermark : given?.watermark === null ? null : undefined;
+    const started = exportAndShare(context.app, id, options, replace, undefined, watermark);
     started.catch((error: unknown) => diag.warn("review", `sharing ${id}: ${diag.messageOf(error)}`));
     // Refused at once (already sharing, no cloud) says so; else it runs on.
     const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 300))]).catch((error: unknown) => {

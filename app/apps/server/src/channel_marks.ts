@@ -42,8 +42,8 @@ export const LOOK = {
   opacity: 0.2,
   /** The logo's height, a share of the frame's. */
   height: 0.14,
-  /** Its speed along each axis, frame heights a second (a 1080p frame: 108 px/s, about 16 s across). */
-  speed: 0.1,
+  /** Its speed along each axis, frame heights a second (a 1080p frame: 43 px/s, about 40 s across). 0.1 was "TOO fast" (Sphe, Nov 2). */
+  speed: 0.04,
   /** Kept off the frame's edge, a share of its height. */
   margin: 0.02,
 };

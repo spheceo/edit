@@ -62,7 +62,7 @@ test("the watermark is a locked top track over the export at 20%, the logo 14% o
     expect(Math.abs(x) + w / 2).toBeLessThanOrEqual(960 - margin + 1e-6);
     expect(Math.abs(y) + h / 2).toBeLessThanOrEqual(540 - margin + 1e-6);
   }
-  // 108 px a second at 1080p: 3.6 px a frame at 30 fps.
+  // 43.2 px a second at 1080p: 1.44 px a frame at 30 fps.
   const [a, b] = clip.keyframes!.x!;
   expect(Math.abs(b!.value - a!.value) / (b!.frame - a!.frame)).toBeCloseTo((LOOK.speed * 1080) / 30, 9);
   // The same video starts it in the same place every time; another, elsewhere.

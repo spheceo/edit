@@ -9,7 +9,7 @@
 
 use std::sync::OnceLock;
 
-use crate::render::{RgbaImage, downscale};
+use crate::render::{downscale, RgbaImage};
 
 /// A visual token's side, px.
 pub const PATCH: u32 = 28;

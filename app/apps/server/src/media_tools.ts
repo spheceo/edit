@@ -15,6 +15,7 @@ import { isBug } from "./guard.ts";
 import { ApiError, bad, notFound } from "./http/errors.ts";
 import { badShape, readBytes, readJson, type RouteContext, type Router } from "./http/router.ts";
 import * as library from "./library.ts";
+import * as listening from "./listen.ts";
 import { playheadContext } from "./playhead.ts";
 import { handlerFor, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import type { AudioClip } from "./model.ts";
@@ -267,6 +268,19 @@ async function smoothSlowMotion({ app, args, projectId }: ToolCall): Promise<Con
   return text(out.join("\n"));
 }
 
+/** What's heard over a stretch of a file (listen.ts). */
+async function listenTool({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const project = app.store.get(projectId)?.project;
+  if (project === undefined) throw new Error("no such project");
+  const id = typeof args.media_id === "string" ? args.media_id : null;
+  if (id === null) throw new Error("media_id is required");
+  const media = mediaOf(project, id);
+  if (media === undefined) throw new Error(`no media ${id}`);
+  const start = typeof args.start === "number" ? args.start : 0;
+  const end = typeof args.end === "number" ? args.end : Math.min(media.duration, start + listening.MOST);
+  return text(await listening.listen(app, media, start, end));
+}
+
 async function mapView({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const done = await broll.mapView(app, projectId, args);
   return text(broll.pretty(done));
@@ -280,6 +294,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
   ["measure_audio", measureAudio],
   ["smooth_slow_motion", smoothSlowMotion],
   ["map_view", mapView],
+  ["listen", listenTool],
 ];
 
 /** Registers the media tools with the MCP server (once; later calls do nothing). */

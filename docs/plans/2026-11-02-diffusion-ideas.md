@@ -114,9 +114,36 @@ Tiny is 512 px and 83 MB in five graphs (vision encoder 58 MB, memory
 attention 13 MB, mask decoder 9 MB, memory encoder 3 MB, pointer positions),
 Small 1024 px and ~110 MB. A tracked frame runs all five (tracker.ts `track`);
 a click runs the decoder alone on a held frame. Probe:
-`~/edit-experiments/sam2-probe/probe.py` (onnxruntime, CPU and Core ML).
+`~/edit-experiments/sam2-probe/probe.py` (onnxruntime 1.31, CPU and Core ML;
+the weights from the commit Diffusion pins, sizes matching its constants).
 
-RESULTS: (below)
+Measured Nov 3, 01:00, on this 8 GB M1 under load 12–26 (other threads
+exporting), niced, 4 threads, a real 1080p bodycam frame:
+
+| | Seed (a click: encoder, decoder, memory) | A tracked frame | Of which: encoder / memory attention / decoder / memory encoder |
+|---|---|---|---|
+| Core ML | 1.4–2.4 s | 2.1–3.0 s (0.3–0.5 fps) | 1.1–1.6 s / 0.8–1.2 s / 0.06–0.09 s / 0.1–0.15 s |
+| CPU | 3.5–4.9 s | 3.0–4.0 s (0.25–0.3 fps) | 1.5–2.2 s / 1.2–1.5 s / 0.12 s / 0.14–0.19 s |
+
+Memory: 0.8 GB resident, 1.3 GB at peak, both sessions loaded. Core ML takes
+only part of the memory attention graph (its zero-length slices fall back to
+the CPU). On a quiet Mac, perhaps twice as fast; Diffusion's own path
+(onnxruntime-web on WebGPU, Metal underneath, in a browser) is untried here.
+
+What it means for blurs: a 10 s shot at 30 fps is 300 frames, ~10–15 min of
+tracking at these speeds; every 6th frame (5 a second, the mask's box
+interpolated between) is ~2 min. Edit's template tracking (`track_region`,
+`blur_marks`) does the same shot in seconds. SAM's gain is a mask that
+follows a face or a plate through turns and occlusion, where the template
+loses it, from one click; its cost is minutes a shot on this Mac and 1.3 GB.
+
+Recommendation: not as the default tracker on 8 GB Macs. Worth it as a
+fallback, run in the background like smoothing (progress.ts would say how long),
+for the shots where template tracking reports it lost the face (track.rs's
+confidence), at 5 samples a second with the box interpolated. Next step if
+Sphe wants it: the same probe through onnxruntime-web in Edit's headless
+Chrome (WebGPU), since the browser path may be several times faster on the
+M1's GPU; then a `track_region` option `follow: "mask"`.
 
 ## 9. HTML as a graphic clip (design only)
 

@@ -10,7 +10,7 @@ Thumbnails is a working draft (Nov 2; `docs/thumbnails.md`; commits 39a833aa, 44
 2. **Frames from YouTube**: give Claude Ideas' `scan_video` and `grab_frames` (`app/apps/server/src/ideas/frames.ts`, through the YouTube proxy) on a thumbnail, so it can pick a base and its subjects from the case's video itself.
 3. **A thumbnail from an idea's guide**: start one from the idea page with its thumbnail guide, frames and base already in the thumbnail, and link the two.
 
-Before it ships to the team: the same OpenArt sign-in for prod as dev (Sphe: "use the same openart sign in for dev and prod"). It waits on `infisical login` on kenobi: first check whether OpenArt renews with a new refresh token each time (if so, dev and prod must share one copy of the live token), then put the secrets in Infisical prod `/edit-relay` and push them to the live relay. Also deploy mamagi prod's `thumbnails` module before the nightly.
+Shipped to prod with nightly-48: one OpenArt sign-in, held by the live relay (dev asks it).
 
 ## e-code: keep it or remove it (get back to this)
 

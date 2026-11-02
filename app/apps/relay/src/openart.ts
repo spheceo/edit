@@ -9,12 +9,26 @@
 //   GET  /v1/openart/account   which account it is (its label), never a token
 //
 // The sign-in is OPENART_CLIENT_ID and OPENART_REFRESH_TOKEN (Infisical
-// `/edit-relay`, put there by scripts/openart-connect.ts). OpenArt may hand a
-// new refresh token with each renewal, so the live pair is kept in the BUDGET
-// Durable Object (its "openart" instance), renewed one at a time; a new
-// sign-in in Infisical (a different refresh token) starts it over from that.
+// `/edit-relay`, put there by scripts/openart-connect.ts). OpenArt hands a new
+// refresh token with each renewal and revokes the old one (seen Nov 2: the
+// saved one was dead after the dev relay's first renewal), so the live pair
+// is kept in the BUDGET Durable Object (its "openart" instance), renewed one
+// at a time; a new sign-in in Infisical (a different refresh token) starts it
+// over from that.
+//
+// One sign-in for dev and prod (Sphe, Nov 2: "use the same openart sign in for
+// dev and prod"): with tokens that turn over, two relays can't each keep a
+// copy, so only the live relay holds it. The dev relay (OPENART_UPSTREAM, the
+// live relay's address) forwards each message there instead, with
+// OPENART_RELAY_TOKEN (the same in both environments' Infisical), which the
+// live relay takes in place of a person's sign-in on this route alone; the
+// dev relay has already checked the person.
 
 export interface OpenArtEnv {
+  /** The dev relay: the live relay's address, which holds the team's one sign-in. */
+  OPENART_UPSTREAM?: string;
+  /** Between the two relays: what the dev relay sends, and the live relay takes, on this route only. */
+  OPENART_RELAY_TOKEN?: string;
   OPENART_CLIENT_ID?: string;
   OPENART_REFRESH_TOKEN?: string;
   OPENART_ACCOUNT?: string;
@@ -29,7 +43,36 @@ function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-export const openartReady = (env: OpenArtEnv): boolean => Boolean(env.OPENART_CLIENT_ID && env.OPENART_REFRESH_TOKEN);
+export const openartReady = (env: OpenArtEnv): boolean => Boolean((env.OPENART_UPSTREAM && env.OPENART_RELAY_TOKEN) || (env.OPENART_CLIENT_ID && env.OPENART_REFRESH_TOKEN));
+
+const RELAY_HEADER = "x-openart-relay";
+
+/** Whether the request comes from the dev relay with the token the two share (constant-time). */
+export function fromOtherRelay(request: Request, env: OpenArtEnv): boolean {
+  const given = request.headers.get(RELAY_HEADER) ?? "";
+  const want = env.OPENART_RELAY_TOKEN ?? "";
+  if (want.length < 32 || given.length !== want.length) return false;
+  let differ = 0;
+  for (let index = 0; index < want.length; index++) differ |= given.charCodeAt(index) ^ want.charCodeAt(index);
+  return differ === 0;
+}
+
+/** The dev relay: the message passed to the live relay, which holds the sign-in. */
+async function upstream(request: Request, url: URL, env: OpenArtEnv): Promise<Response> {
+  const headers: Record<string, string> = { [RELAY_HEADER]: env.OPENART_RELAY_TOKEN! };
+  for (const name of ["accept", "content-type", "mcp-session-id", "mcp-protocol-version"]) {
+    const value = request.headers.get(name);
+    if (value) headers[name] = value;
+  }
+  const target = `${env.OPENART_UPSTREAM!.replace(/\/+$/, "")}${url.pathname}`;
+  const answer = await fetch(target, { method: request.method, headers, body: request.method === "POST" ? await request.text() : null });
+  const back = new Headers();
+  for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version"]) {
+    const value = answer.headers.get(name);
+    if (value) back.set(name, value);
+  }
+  return new Response(answer.body, { status: answer.status, headers: back });
+}
 
 /** The team's access token from the Durable Object; `stale` asks for a new one in its place. */
 async function token(env: OpenArtEnv, stale: string | null): Promise<string> {
@@ -42,6 +85,7 @@ async function token(env: OpenArtEnv, stale: string | null): Promise<string> {
 
 export async function openartRoute(request: Request, url: URL, env: OpenArtEnv): Promise<Response> {
   if (!openartReady(env)) return json(503, { error: "OpenArt isn't connected on the relay yet: run scripts/openart-connect.ts and push its secrets." });
+  if (env.OPENART_UPSTREAM && env.OPENART_RELAY_TOKEN) return upstream(request, url, env);
   const route = url.pathname.slice("/v1/openart/".length);
   if (route === "account" && request.method === "GET") return json(200, { account: env.OPENART_ACCOUNT ?? "OpenArt" });
   if (route !== "mcp") return json(404, { error: "not found" });

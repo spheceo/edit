@@ -4,7 +4,7 @@ import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
 import { cloud, type CloudEnv } from "./cloud";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
-import { openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
+import { fromOtherRelay, openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
 import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
 
 export { DriveToR2 } from "./jobs";
@@ -123,6 +123,8 @@ export default {
     }
     // Thumbnails' pictures on the team's OpenArt account (openart.ts): the same people as ideas.
     if (url.pathname.startsWith("/v1/openart/")) {
+      // The dev relay, asking for a person it has already checked: the live relay holds the one sign-in (openart.ts).
+      if (fromOtherRelay(request, env)) return openartRoute(request, url, env);
       const found = await allow(request, env, "use", "openart");
       if (found instanceof Response) return found;
       if (!mayIdeas(found)) return json(403, { error: NO_IDEAS });

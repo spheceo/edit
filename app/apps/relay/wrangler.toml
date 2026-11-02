@@ -147,6 +147,8 @@ workers_dev = true
 preview_urls = false
 
 [env.dev.vars]
+# Thumbnails' OpenArt: the live relay holds the team's one sign-in (openart.ts); dev asks it.
+OPENART_UPSTREAM = "https://edit-relay.sphe-g-personal.workers.dev"
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
 MODAL_PROXY_URL = "https://sphealt-dev--edit-proxies-endpoint.us-east.modal.run"

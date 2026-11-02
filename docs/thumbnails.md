@@ -22,7 +22,7 @@ sidebar), `/thumbnails` and `/thumbnails/<id>`.
 | --- | --- |
 | The thumbnails | mamagi's Convex, `thumbnails` module (`accounts/convex/thumbnails.ts`): one row a thumbnail, its whole body, rev by rev as ideas are; the team's overlays are `thumbnailAssets` |
 | Their pictures | R2 under `edit/thumbnails/<id>/`; the team's overlays under `edit/thumbnails/assets/`; kept on the Mac in `<cache>/thumbnails/` after the first look |
-| OpenArt | the team's account (`mamagi-openart-1`), only through the relay: `POST /v1/openart/mcp` forwards OpenArt's MCP server with the team's token (`apps/relay/src/openart.ts`); the sign-in is `OPENART_CLIENT_ID` / `OPENART_REFRESH_TOKEN` / `OPENART_ACCOUNT` in Infisical `/edit-relay` (put there by `apps/relay/scripts/openart-connect.ts`, then `push-secrets.ts --only …`), the live token pair in the BUDGET Durable Object's `openart` instance (OpenArt may hand a new refresh token with each renewal; a new sign-in in Infisical starts it over) |
+| OpenArt | the team's account (`mamagi-openart-1`), only through the relay: `POST /v1/openart/mcp` forwards OpenArt's MCP server with the team's token (`apps/relay/src/openart.ts`); the sign-in is `OPENART_CLIENT_ID` / `OPENART_REFRESH_TOKEN` / `OPENART_ACCOUNT` in Infisical `/edit-relay` (put there by `apps/relay/scripts/openart-connect.ts`, then `push-secrets.ts --only …`), the live token pair in the BUDGET Durable Object's `openart` instance (OpenArt hands a new refresh token with each renewal and revokes the old; a new sign-in in Infisical starts it over). One sign-in for dev and prod (Sphe, Nov 2): only the live relay holds it; the dev relay forwards to it (`OPENART_UPSTREAM` in wrangler's `[env.dev.vars]`, `OPENART_RELAY_TOKEN` the same in both environments' Infisical) |
 | Server | `app/apps/server/src/thumbnails/` (`/api/thumbnails`, Claude's tools at `/mcp/thumbnails/<token>`) |
 | Drawing | `app/packages/edit-types/src/thumbnail_render.ts`: Canvas 2D, the one drawing for the page and for Claude (the server hands it, transpiled, to a headless Chrome kept open five minutes: `thumbnails/render.ts`) |
 | UI | `app/apps/web/src/thumbnails/` (`list.tsx`, `page.tsx`) |
@@ -67,5 +67,4 @@ page's Overlays panel with a note Claude reads (what it is, where it goes).
 The channel's caption styles by niche ("the text stuff depends on the
 niche/channel whatever but we'll get to that later"); frames pulled from a
 YouTube video here (Ideas' `scan_video` / `grab_frames`); a thumbnail started
-from an idea's guide; prod (the relay's OpenArt secrets for `--env prod`, and
-mamagi prod's `thumbnails` module, go out with the next nightly).
+from an idea's guide.

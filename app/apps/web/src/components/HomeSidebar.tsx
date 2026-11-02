@@ -1,14 +1,13 @@
-// Home's sidebar (Oct 31 2026): what needs you, then ideas, thumbnails, scripts and edits
-// each with their stages, then Later and Done; one short list at a time
-// beside it. The study portal's sidebar (the user, Oct 31: "i think this is
+// Home's sidebar (Oct 31 2026; Nov 2, prototype C): what needs you, then
+// Ideas, Videos and Thumbnails, then Later and Done at its foot; one short
+// list at a time beside it, a place's stages as steps over its list. The study portal's sidebar (the user, Oct 31: "i think this is
 // way more organised"), after the team's "having to scroll through a long,
 // tedious" list of ideas, scripts and edits together.
 
-import { Check, Clock, FileText, Film, Image as ImageIcon, Inbox, Lightbulb, PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
+import { Check, Clock, Image as ImageIcon, Inbox, Lightbulb, PanelLeftClose, PanelLeftOpen, Video, type LucideIcon } from "lucide-react";
 import { motion } from "motion/react";
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { navigate } from "../lib/route";
 import { AppMenu } from "./AppMenu";
 import { cx, IconButton } from "./ui";
 
@@ -42,52 +41,67 @@ export function OpenSidebar({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+/** Where an item comes from: an idea (or a board card), a script, an edit. */
 export type Section = "ideas" | "scripts" | "edits";
 
-/** Where Home is: what needs you, a section or one of its stages, Later or Done. */
-export type Where = "needs" | "later" | "done" | Section | `${Section}:${string}`;
+/**
+ * A place in the sidebar with stages (Sphe, Nov 2, picking prototype C):
+ * Ideas, and Videos, a video's whole way from its import to its review in one
+ * list (scripts and edits were two places for one handoff: Ready to edit and
+ * Editing).
+ */
+export type Place = "ideas" | "videos";
 
-export const SECTIONS: { key: Section; label: string; icon: LucideIcon; stages: { key: string; label: string }[] }[] = [
+/** Where Home is: what needs you, a place or one of its stages, the thumbnails, Later or Done. */
+export type Where = "needs" | "later" | "done" | "thumbnails" | Place | `${Place}:${string}`;
+
+export const PLACES: { key: Place; label: string; icon: LucideIcon; stages: { key: string; label: string }[] }[] = [
   { key: "ideas", label: "Ideas", icon: Lightbulb, stages: [{ key: "drafts", label: "Drafts" }, { key: "board", label: "On the board" }] },
   {
-    key: "scripts",
-    label: "Scripts",
-    icon: FileText,
-    // The script's way to the edit (the user, Oct 30: "know which projects are ready to script").
+    key: "videos",
+    label: "Videos",
+    icon: Video,
+    // A video's way, in order: the script's (the user, Oct 30: "know which projects are ready to script"), then the edit's.
     stages: [
       { key: "importing", label: "Importing" },
       { key: "toscript", label: "Ready to script" },
       { key: "scripting", label: "Scripting" },
       { key: "ready", label: "Ready to edit" },
+      { key: "editing", label: "Editing" },
+      { key: "review", label: "In review" },
+      { key: "subtitled", label: "Subtitled" },
     ],
   },
-  { key: "edits", label: "Edits", icon: Film, stages: [{ key: "editing", label: "Editing" }, { key: "review", label: "In review" }, { key: "subtitled", label: "Subtitled" }] },
 ];
 
-/** The section `where` is in (none for Needs you, Later and Done) and its stage. */
-export function placeOf(where: Where): { section: Section | null; stage: string | null } {
-  const [section, stage] = where.split(":") as [string, string | undefined];
-  return SECTIONS.some((one) => one.key === section) ? { section: section as Section, stage: stage ?? null } : { section: null, stage: null };
+/** The place an item is listed in: ideas in Ideas, scripts and edits in Videos. */
+export const placeOfSection = (section: Section): Place => (section === "ideas" ? "ideas" : "videos");
+
+/** The place `where` is in (none for Needs you, Thumbnails, Later and Done) and its stage. */
+export function placeOf(where: Where): { place: Place | null; stage: string | null } {
+  const [place, stage] = where.split(":") as [string, string | undefined];
+  return PLACES.some((one) => one.key === place) ? { place: place as Place, stage: stage ?? null } : { place: null, stage: null };
 }
 
-/** What `where` is called: "Needs you", "Edits", "Edits / In review". */
+/** What `where` is called: "Needs you", "Videos", "Videos / In review". */
 export function nameOf(where: Where): { parent: string | null; name: string } {
-  const { section, stage } = placeOf(where);
-  if (section === null) return { parent: null, name: where === "needs" ? "Needs you" : where === "later" ? "Later" : "Done" };
-  const found = SECTIONS.find((one) => one.key === section)!;
+  const { place, stage } = placeOf(where);
+  if (place === null) return { parent: null, name: where === "needs" ? "Needs you" : where === "thumbnails" ? "Thumbnails" : where === "later" ? "Later" : "Done" };
+  const found = PLACES.find((one) => one.key === place)!;
   return stage === null ? { parent: null, name: found.label } : { parent: found.label, name: found.stages.find((one) => one.key === stage)?.label ?? stage };
 }
 
-export function HomeSidebar({ sections, counts, where, onChoose, open, onClose }: { sections: Section[]; counts: (where: Where) => number; where: Where; onChoose: (where: Where) => void; open: boolean; onClose: () => void }) {
+export function HomeSidebar({ places, thumbnails, needs, where, onChoose, open, onClose }: { places: Place[]; thumbnails: boolean; needs: number; where: Where; onChoose: (where: Where) => void; open: boolean; onClose: () => void }) {
   // No spring on the first frame: a sidebar remembered closed doesn't open and close as Home appears.
   const [moving, setMoving] = useState(false);
   useEffect(() => {
     const frame = requestAnimationFrame(() => setMoving(true));
     return () => cancelAnimationFrame(frame);
   }, []);
+  // A place stays lit on any of its stages (they're steps over its list now).
   const item = (to: Where, label: string, Icon: LucideIcon | null, extra?: string) => {
-    const count = counts(to);
-    const on = where === to;
+    const count = to === "needs" ? needs : 0;
+    const on = where === to || (placeOf(where).place !== null && placeOf(where).place === to);
     return (
       <button
         key={to}
@@ -123,23 +137,12 @@ export function HomeSidebar({ sections, counts, where, onChoose, open, onClose }
         <AppMenu row />
         <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pb-2">
           {item("needs", "Needs you", Inbox)}
-          {SECTIONS.filter((section) => sections.includes(section.key)).map((section) => (
-            <Fragment key={section.key}>
-              <div className="mt-2.5 flex flex-col gap-0.5">
-                {item(section.key, section.label, section.icon)}
-                {section.stages.map((stage) => item(`${section.key}:${stage.key}`, stage.label, null))}
-              </div>
-              {/* Thumbnails (Nov 2): their own screen, for the same people as ideas, right after them (Sphe, Nov 2: "ideas first then thumbnails, scripts edits"). */}
-              {section.key === "ideas" && (
-                <button onClick={() => navigate("/thumbnails")} className="mt-2.5 flex h-8 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium text-secondary transition-colors hover:bg-hover hover:text-fg">
-                  <ImageIcon size={15} className="shrink-0 text-muted" />
-                  <span className="min-w-0 flex-1 truncate">Thumbnails</span>
-                </button>
-              )}
-            </Fragment>
-          ))}
-          {/* Space, not a rule, before Later and Done (Sphe, Nov 2: "less borders"). */}
-          <div className="mt-6" />
+          {/* Only the places, no stages (Sphe, Nov 2: "the sidebar on the left is MESSY"): Ideas, Videos, Thumbnails. */}
+          <div className="mt-2.5 flex flex-col gap-0.5">
+            {PLACES.filter((place) => places.includes(place.key)).map((place) => item(place.key, place.label, place.icon))}
+            {thumbnails && item("thumbnails", "Thumbnails", ImageIcon)}
+          </div>
+          <div className="flex-1" />
           {item("later", "Later", Clock)}
           {item("done", "Done", Check)}
         </nav>

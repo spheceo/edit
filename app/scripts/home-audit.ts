@@ -47,9 +47,15 @@ const post = (body: unknown) => fetch(`${API}/api/later`, { method: "POST", head
 const projects = (await (await fetch(`${API}/api/projects`, { headers: { host: "localhost:7700" } })).json()) as { projects: { id: string; name: string; subtitles?: boolean }[] };
 const scripts = (await (await fetch(`${API}/api/writer/scripts`, { headers: { host: "localhost:7700" } })).json()) as { id: string; title: string }[];
 const ideas = (await (await fetch(`${API}/api/ideas`, { headers: { host: "localhost:7700" } })).json()) as { ideas: { id: string; summary: { title: string } }[] };
-const keys = [`edit:${projects.projects.find((p) => p.name.startsWith("(DRAFT) Cop Beats"))!.id}`, `script:${scripts[0]!.id}`, `idea:${ideas.ideas.find((i) => i.summary.title.startsWith("Entitled"))!.id}`];
-const backKey = `edit:${projects.projects.find((p) => p.name.startsWith("Off-Duty"))!.id}`;
-const doneKey = `edit:${projects.projects.find((p) => p.name.startsWith("R3:"))!.id}`;
+// Whatever this Mac has (named projects went with the test data, Nov 2), never one already in Later: bringing it back would clear someone's.
+const taken = new Set(((await (await fetch(`${API}/api/later`, { headers: { host: "localhost:7700" } })).json()) as { entries: { key: string }[] }).entries.map((e) => e.key));
+const inCloud = ((await (await fetch(`${API}/api/cloud/projects`, { headers: { host: "localhost:7700" } })).json()) as { projects?: { id: string }[] }).projects ?? [];
+const edits = [...new Set([...projects.projects, ...inCloud].map((p) => `edit:${p.id}`))].filter((key) => !taken.has(key));
+const firstFree = (list: string[], what: string) => { const found = list.find((key) => !taken.has(key)); if (found === undefined) throw new Error(`no ${what} to set aside`); return found; };
+if (edits.length < 3) throw new Error("the audit needs three edits not in Later");
+const keys = [edits[0]!, firstFree(scripts.map((one) => `script:${one.id}`), "script"), ...(ideas.ideas.length > 0 ? [firstFree(ideas.ideas.map((one) => `idea:${one.id}`), "idea")] : [])];
+const backKey = edits[1]!;
+const doneKey = edits[2]!;
 for (const key of keys) console.log("aside", key, (await post({ key })).status);
 console.log("done", doneKey, (await post({ key: doneKey, done: true })).status);
 console.log("back soon", backKey, (await post({ key: backKey, until: Date.now() + 15_000 })).status);
@@ -102,8 +108,17 @@ const AUDIT = `(() => {
   if (island && island.scrollWidth > island.clientWidth + 1) problems.push("list scrolls sideways by " + (island.scrollWidth - island.clientWidth) + "px");
   return problems;
 })()`;
-const VIEWS = ["Needs you", "Ideas", "Drafts", "On the board", "Scripts", "Importing", "Ready to script", "Scripting", "Ready to edit", "Edits", "Editing", "In review", "Subtitled", "Later", "Done"];
-const nav = (text: string) => js(`(() => { const b = [...document.querySelectorAll("aside nav button")].find((x) => x.querySelector("span")?.textContent.trim() === ${JSON.stringify(text)}); b?.click(); return !!b; })()`);
+// The sidebar's places (prototype C, Nov 2), and a place's stages as the steps over its list ("Videos/Editing").
+const VIEWS = ["Needs you", "Ideas", "Ideas/Drafts", "Ideas/On the board", "Videos", "Videos/Importing", "Videos/Ready to script", "Videos/Scripting", "Videos/Ready to edit", "Videos/Editing", "Videos/In review", "Videos/Subtitled", "Thumbnails", "Later", "Done"];
+const navPlace = (text: string) => js(`(() => { const b = [...document.querySelectorAll("aside nav button")].find((x) => x.querySelector("span")?.textContent.trim() === ${JSON.stringify(text)}); b?.click(); return !!b; })()`);
+const navStep = (text: string) => js(`(() => { const b = [...document.querySelectorAll("main button")].find((x) => x.firstChild?.textContent?.trim() === ${JSON.stringify(text)} && !x.disabled); b?.click(); return !!b; })()`);
+const nav = async (view: string) => {
+  const [place, step] = view.split("/") as [string, string | undefined];
+  if (!(await navPlace(place))) return false;
+  if (step === undefined) return true;
+  await sleep(200);
+  return navStep(step);
+};
 const pill = (text: string) => js(`[...document.querySelectorAll("main button")].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
 const setSearch = (text: string) => js(`(() => { const el = document.querySelector('main input[placeholder^="Search"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, ${JSON.stringify(text)}); el.dispatchEvent(new Event("input", { bubbles: true })); return true; })()`);
 let total = 0;
@@ -123,7 +138,7 @@ try {
         await sleep(350);
         report(`${width} ${mode} ${view}`, await js(AUDIT));
         checked++;
-        if ((width === 1440 || width === 960) && ["Needs you", "Later", "Ideas", "Edits", "Subtitled", "Done"].includes(view)) await shot(`${width}-${mode}-${view.replace(/ /g, "-")}`);
+        if ((width === 1440 || width === 960) && ["Needs you", "Later", "Ideas", "Videos", "Videos/Subtitled", "Thumbnails", "Done"].includes(view)) await shot(`${width}-${mode}-${view.replace(/[ /]/g, "-")}`);
         if ((width === 1440 || width === 960) && view === "Later") {
           const at = await js(`(() => { const row = document.querySelectorAll('main [role="table"] [role="row"]')[1]; if (!row) return null; const b = row.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()`);
           if (at) { await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] }); await shot(`${width}-${mode}-Later-hover`); await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5 }); }
@@ -138,11 +153,11 @@ try {
   // Menus: the ⋯ of a row of each kind, then its Set aside submenu, inside the window and beside each other.
   await size(960);
   await pill("Everyone");
-  for (const view of ["Edits", "Scripts", "Ideas", "Later", "Needs you"]) {
+  for (const view of ["Videos/Editing", "Videos/Ready to edit", "Ideas", "Later", "Needs you"]) {
     await nav(view); await sleep(400);
     const count = await js(`document.querySelectorAll('main [role="table"] [role="row"]').length - 1`);
     for (const index of [1, count]) {
-      if (index < 1) continue;
+      if (index < 1 || index > count) continue; // an empty list (Needs you often is, since Nov 2) has no rows
       await js(`(() => { const row = [...document.querySelectorAll('main [role="table"] [role="row"]')][${index}]; row.scrollIntoView({ block: "center" }); return true; })()`);
       await sleep(250);
       await js(`[...[...document.querySelectorAll('main [role="table"] [role="row"]')][${index}].querySelectorAll("button")].find((b) => b.title === "More")?.click()`);

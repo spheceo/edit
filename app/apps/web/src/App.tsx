@@ -30,7 +30,9 @@ export function App() {
   const ideaId = path.match(/^\/ideas\/([\w-]+)/)?.[1];
   // Thumbnails (Nov 2): /thumbnails (the list) and /thumbnails/<id> (one, with its conversation).
   const thumbId = path.match(/^\/thumbnails\/([\w-]+)/)?.[1];
-  const thumbs = path === "/thumbnails";
+  // With the sidebar Home on, the list is Home's Thumbnails, in its panel (Sphe, Nov 2), so it's Home's screen too.
+  const sidebarHome = useBeta((beta) => tabHome ?? beta.home);
+  const thumbs = path === "/thumbnails" && !sidebarHome;
   const screen = projectId ?? (scripts ? "scripts" : ideaId !== undefined ? `idea-${ideaId}` : thumbId !== undefined ? `thumb-${thumbId}` : thumbs ? "thumbnails" : "home");
   return (
     // The kit: respect reduced motion (movement goes, fades stay).
@@ -53,8 +55,8 @@ export function App() {
       </AnimatePresence>
       <ServerDown />
       <Toasts />
-      {/* Edit's exports, on Home and in the editor; a script page has none of its own, and the pill sat over its top bar (the user, Oct 31). */}
-      {!scripts && ideaId === undefined && thumbId === undefined && !thumbs && <ExportActivity />}
+      {/* Edit's exports, in the editor and the Home everyone has (the sidebar Home has them in its header); a script page has none of its own, and the pill sat over its top bar (the user, Oct 31). */}
+      {!scripts && ideaId === undefined && thumbId === undefined && !thumbs && !(sidebarHome && screen === "home") && <ExportActivity />}
       <AppDialogs />
       <ContextMenuHost />
     </MotionConfig>

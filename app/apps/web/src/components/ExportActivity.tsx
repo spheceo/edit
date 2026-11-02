@@ -20,8 +20,10 @@ export function exportLabel(job: Activity): string {
 
 /** Lives above project routes: Close and changing projects never hide jobs.
  * Polling also restores activity after a reload/reconnection without needing
- * to have witnessed that project's websocket events. */
-export function ExportActivity() {
+ * to have witnessed that project's websocket events. `inline`: in a header's
+ * row (the sidebar Home's: floating, it sat over Mine and Everyone), its list
+ * opening under it. */
+export function ExportActivity({ inline = false }: { inline?: boolean } = {}) {
   const [jobs, setJobs] = useState<Activity[]>([]);
   const [open, setOpen] = useState(false);
   const [hidden, setHidden] = useState<Record<string, number>>({});
@@ -61,14 +63,14 @@ export function ExportActivity() {
     finally { setStopping(null); }
   };
   return (
-    <div ref={root} className="fixed top-14 right-3 z-40 max-w-[calc(100vw-24px)]">
+    <div ref={root} className={inline ? "relative" : "fixed top-14 right-3 z-40 max-w-[calc(100vw-24px)]"}>
       <button type="button" aria-expanded={open} aria-controls="export-activity" onClick={() => setOpen(!open)}
-        className="ml-auto flex h-9 items-center gap-2 rounded-lg border border-line bg-panel px-3 text-[12px] text-fg shadow-lg hover:bg-raised">
+        className={inline ? "flex h-[34px] items-center gap-2 rounded-lg border border-line px-3 text-[12px] text-fg hover:bg-hover" : "ml-auto flex h-9 items-center gap-2 rounded-lg border border-line bg-panel px-3 text-[12px] text-fg shadow-lg hover:bg-raised"}>
         {active ? <Spinner /> : failed ? <CircleAlert size={14} className="text-danger" /> : completed ? <Check size={14} className="text-success" /> : <Film size={14} />}
         {active ? [rendering ? `${rendering} exporting` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" · ") : failed ? "Export needs attention" : completed ? "Exports ready" : "Export activity"}
         <ChevronDown size={13} />
       </button>
-      {open && <section id="export-activity" aria-label="Export activity" className="mt-2 w-[360px] max-w-full overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
+      {open && <section id="export-activity" aria-label="Export activity" className={inline ? "absolute top-full right-0 z-50 mt-2 w-[360px] max-w-[calc(100vw-24px)] overflow-hidden rounded-xl border border-line bg-panel shadow-2xl" : "mt-2 w-[360px] max-w-full overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"}>
         <div className="border-b border-line px-3 py-2.5">
           <h2 className="text-[13px] font-semibold">Exports</h2>
           <p className="mt-0.5 text-[11px] text-muted">Keep editing or open another project. Local exports render one at a time.</p>

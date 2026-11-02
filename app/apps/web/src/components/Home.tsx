@@ -1,4 +1,4 @@
-import { Archive, Check, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, ChevronRight, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
@@ -20,12 +20,14 @@ import { useKept } from "../lib/kept";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { AsideStatus, BackMark, BY, Category, CATEGORY, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, LENGTH, LengthCell, layoutFor, NAME, PILL, ROW, RowButtons, StatusCell, TableShape, Updated, useAside, withAside } from "./HomeTable";
-import { HomeSidebar, nameOf, OpenSidebar, placeOf, SECTIONS, useSidebarOpen, type Section, type Where } from "./HomeSidebar";
+import { HomeSidebar, nameOf, OpenSidebar, placeOf, placeOfSection, PLACES, useSidebarOpen, type Place as Spot, type Section, type Where } from "./HomeSidebar";
+import { ThumbnailGrid, useMakeThumbnail } from "../thumbnails/list";
 import { Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, Spinner, spring } from "./ui";
+import { ExportActivity } from "./ExportActivity";
 import { DevBadge, DevControl, promoteItem, useDevTools, useShowDev } from "./DevProjects";
 
 // Every project is 1080p at 30 fps.
@@ -55,6 +57,8 @@ interface Item {
   /** Started by the signed-in person (a board card is everyone's). */
   mine: boolean;
   needs: boolean;
+  /** Started by the signed-in person in the last three days and not done: first in Videos, under New. */
+  fresh?: boolean;
   row: () => ReactNode;
 }
 
@@ -119,11 +123,13 @@ export function Home() {
   const ideasAllowed = makesIdeas(account);
   const [ideasHome, refreshIdeas, ideasError] = useIdeasHome(ideasAllowed);
   const [ideaOpen, setIdeaOpen] = useState(false);
-  // The sections this person works in: ideas with the permission, scripts when they write them, edits always.
-  const sections: Section[] = [...(ideasAllowed ? (["ideas"] as const) : []), ...(writesScripts(account) || scripts.length > 0 ? (["scripts"] as const) : []), "edits"];
+  // The places this person works in: Ideas (and Thumbnails) with the permission, Videos always.
+  const places: Spot[] = [...(ideasAllowed ? (["ideas"] as const) : []), "videos"];
   // One place at a time, remembered on this browser; /ideas is Home on its Ideas (the idea page's way back).
-  const [where, setWhere] = useState<Where>(() => (window.location.pathname === "/ideas" ? "ideas" : savedWhere()));
-  const shownWhere: Where = placeOf(where).section !== null && !sections.includes(placeOf(where).section!) ? "needs" : where;
+  // /thumbnails is Home on its Thumbnails (a thumbnail's way back), as /ideas is on its Ideas.
+  const [where, setWhere] = useState<Where>(() => (window.location.pathname === "/ideas" ? "ideas" : window.location.pathname === "/thumbnails" ? "thumbnails" : savedWhere()));
+  const shownWhere: Where = (placeOf(where).place !== null && !places.includes(placeOf(where).place!)) || (where === "thumbnails" && !ideasAllowed) ? "needs" : where;
+  const thumbnail = useMakeThumbnail();
   // Yours, or everyone's (remembered on this browser); nobody signed in has nothing of their own.
   const [mineOnly, setMineOnly] = useState(() => localStorage.getItem(MINE) !== "0");
   const mine = mineOnly && account?.person != null;
@@ -277,11 +283,13 @@ export function Home() {
   const justStarted = (row: Listed) => isMe(starter(row)) && Date.now() - startedMs(row) < NEW_FOR_MS;
   const needsYou = new Set(projectRows.filter((row) => {
     // A script whose Claude run failed (the user, Oct 30: "projects that have failed like this deserve a needs you").
-    if (row.local === null && row.cloud === null) return (Boolean(row.script.runFailed) && !row.writing && !row.importing) || justStarted(row);
+    // Only what waits on someone (Sphe, Nov 2: Needs you was always red, its 29 all just started); what you just started is first in Videos instead, under New.
+    if (row.local === null && row.cloud === null) return Boolean(row.script.runFailed) && !row.writing && !row.importing;
     const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
     const stage = stageOf(row, state);
-    return stage === "review" || Boolean(state?.importing?.error) || (justStarted(row) && stage !== "done");
+    return stage === "review" || Boolean(state?.importing?.error);
   }));
+  const fresh = (row: Listed) => justStarted(row) && stageOf(row, row.local === null && row.cloud === null ? undefined : statuses[row.local?.id ?? row.cloud?.id ?? ""]) !== "done";
   const cardProps = (project: ProjectSummary) => ({
     project,
     onChanged: refresh,
@@ -307,6 +315,7 @@ export function Home() {
         title: script.title,
         mine: isMe(script.createdBy),
         needs: needsYou.has(row),
+        fresh: fresh(row),
         row: () => <ScriptTableRow script={script} importing={row.importing} writing={row.writing === true} sharing={row.sharing === true} here={row.here === true} onChanged={refresh} onImport={row.importing ? () => setWatching(script.id) : undefined} />,
       });
       continue;
@@ -322,6 +331,7 @@ export function Home() {
       title: row.local?.name ?? row.cloud?.name ?? "",
       mine: isMe(starter(row)),
       needs: needsYou.has(row),
+      fresh: fresh(row),
       row: () => (row.local !== null ? <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} /> : <CloudTableRow project={row.cloud!} script={row.script} onChanged={refresh} />),
     });
   }
@@ -357,8 +367,8 @@ export function Home() {
     if (markedDone(item)) return place === "done";
     if (place === "needs") return item.needs || backAt(item) !== null;
     if (place === "done") return item.stage === "done";
-    const { section, stage } = placeOf(place);
-    return item.section === section && (stage === null ? item.stage !== "done" : item.stage === stage);
+    const { place: at, stage } = placeOf(place);
+    return at !== null && placeOfSection(item.section) === at && (stage === null ? item.stage !== "done" : item.stage === stage);
   };
   const ours = items.filter((item) => !mine || item.mine);
   const countOf = (place: Where) => ours.filter((item) => isIn(item, place)).length;
@@ -369,14 +379,19 @@ export function Home() {
   let groups: { key: string; label: string | null; items: Item[] }[];
   if (searching) {
     const found = items.filter((item) => item.title.toLowerCase().includes(words)).sort(newest);
-    const placeName = (item: Item) => (aside(item) ? "later" : item.stage === "done" || markedDone(item) ? "done" : item.section);
-    groups = [...SECTIONS.map((section) => section.key), "later", "done"].map((key) => ({ key, label: key === "later" ? "Later" : key === "done" ? "Done" : SECTIONS.find((one) => one.key === key)!.label, items: found.filter((item) => placeName(item) === key) })).filter((group) => group.items.length > 0);
+    const placeName = (item: Item) => (aside(item) ? "later" : item.stage === "done" || markedDone(item) ? "done" : placeOfSection(item.section));
+    groups = [...PLACES.map((place) => place.key), "later", "done"].map((key) => ({ key, label: key === "later" ? "Later" : key === "done" ? "Done" : PLACES.find((one) => one.key === key)!.label, items: found.filter((item) => placeName(item) === key) })).filter((group) => group.items.length > 0);
   } else {
     const here = ours.filter((item) => isIn(item, shownWhere));
-    const { section, stage } = placeOf(shownWhere);
-    if (section !== null && stage === null) {
-      const stages = SECTIONS.find((one) => one.key === section)!.stages;
-      groups = stages.map((one) => ({ key: one.key, label: one.label, items: here.filter((item) => item.stage === one.key).sort(newest) })).filter((group) => group.items.length > 0);
+    const { place, stage } = placeOf(shownWhere);
+    if (place !== null && stage === null) {
+      // What you just started first, under New (the user, Oct 30: "it's confusing to add a new project and not have it right in front of you"), then by stage.
+      const stages = PLACES.find((one) => one.key === place)!.stages;
+      const isFresh = (item: Item) => item.fresh === true && item.mine;
+      groups = [
+        { key: "new", label: "New", items: here.filter(isFresh).sort(newest) },
+        ...stages.map((one) => ({ key: one.key, label: one.label, items: here.filter((item) => !isFresh(item) && item.stage === one.key).sort(newest) })),
+      ].filter((group) => group.items.length > 0);
     } else if (shownWhere === "needs") {
       // What's back from Later first, the latest back on top; then the rest, newest first.
       groups = [{ key: "needs", label: null, items: here.sort((a, b) => (backAt(b) ?? -1) - (backAt(a) ?? -1) || newest(a, b)) }];
@@ -397,7 +412,11 @@ export function Home() {
   const cross = searching || shownWhere === "needs" || shownWhere === "later" || shownWhere === "done";
   const solo = mine && !searching;
   const title = searching ? { parent: null, name: "Search" } : nameOf(shownWhere);
-  const inIdeas = !searching && placeOf(shownWhere).section === "ideas";
+  const inIdeas = !searching && placeOf(shownWhere).place === "ideas";
+  const inThumbnails = !searching && shownWhere === "thumbnails";
+  // The open place's stages, steps over its list (empty ones greyed, so the order still reads).
+  const shownPlace = searching ? null : placeOf(shownWhere).place;
+  const steps = shownPlace === null ? [] : PLACES.find((one) => one.key === shownPlace)!.stages.map((one) => ({ ...one, count: countOf(`${shownPlace}:${one.key}`) }));
   const nothingAtAll = projects !== null && items.length === 0 && !ideasAllowed;
   const loading = projects === null;
   const choose = (place: Where) => {
@@ -405,8 +424,9 @@ export function Home() {
     setWhere(place);
     setQuery("");
     setAllDone(false);
-    if (placeOf(place).section === "ideas") navigate("/ideas", true);
-    else if (window.location.pathname === "/ideas") navigate("/", true);
+    if (placeOf(place).place === "ideas") navigate("/ideas", true);
+    else if (place === "thumbnails") navigate("/thumbnails", true);
+    else if (window.location.pathname === "/ideas" || window.location.pathname === "/thumbnails") navigate("/", true);
   };
   const chooseMine = (value: boolean) => {
     localStorage.setItem(MINE, value ? "1" : "0");
@@ -417,7 +437,7 @@ export function Home() {
   const empty = searching
     ? { title: "Nothing matches", text: `Nothing anywhere is called “${query.trim()}”.` }
     : shownWhere === "needs"
-      ? { title: "You’re all caught up", text: "Stopped imports, edits waiting on review and ideas waiting on changes show up here." }
+      ? { title: "You’re all caught up", text: "Stopped imports, failed runs, edits in review and ideas waiting on changes show up here. What you just started is first in Videos." }
       : shownWhere === "later"
         ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back. On its day it’s back, at the top of Needs you." }
         : mine && others > 0
@@ -427,7 +447,7 @@ export function Home() {
   return (
     <LaterContext.Provider value={later}>
       <div className="flex h-full bg-black p-2">
-        <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        <HomeSidebar places={places} thumbnails={ideasAllowed} needs={countOf("needs")} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
           {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
           <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
@@ -439,14 +459,19 @@ export function Home() {
                 </>
               )}
               <span className="truncate">{title.name}</span>
-              {!loading && <span className="ml-1 text-[13px] font-normal text-faint tabular">{total}</span>}
+              {!loading && !inThumbnails && <span className="ml-1 text-[13px] font-normal text-faint tabular">{total}</span>}
             </h1>
             <div className="ml-auto flex items-center gap-1.5">
               <UpdateButton />
+              <ExportActivity inline />
               {/* One main action a screen, in white (the user, Oct 30). */}
               {inIdeas ? (
                 <Button variant="light" onClick={() => setIdeaOpen(true)}>
                   <Plus size={15} strokeWidth={2.2} /> New idea
+                </Button>
+              ) : inThumbnails ? (
+                <Button variant="light" disabled={thumbnail.making} onClick={thumbnail.make}>
+                  {thumbnail.making ? <Spinner size={13} /> : <Plus size={15} strokeWidth={2.2} />} New thumbnail
                 </Button>
               ) : (
                 <Button variant="light" onClick={() => setCreating(true)}>
@@ -457,6 +482,13 @@ export function Home() {
           </header>
           <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3", sidebarOpen ? "pb-6" : "pb-14")}>
             <SetupCard />
+            {/* Thumbnails in the panel (Sphe, Nov 2: they "should sort of happen on that right hand side"), not a page of their own. */}
+            {inThumbnails ? (
+              <div className="-mx-4 -mt-3">
+                <ThumbnailGrid making={thumbnail.making} onMake={thumbnail.make} />
+              </div>
+            ) : (
+            <>
             <div className="mb-3 flex items-center gap-2">
               {/* Inset in black on the grey panel, as the chat's box is; an edge only in focus. */}
               <label className="flex h-[34px] min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent bg-black px-2.5 text-muted focus-within:border-line-strong">
@@ -490,6 +522,9 @@ export function Home() {
               )}
               <DevControl count={all.filter((project) => project.dev === true).length} show={showDev} onShow={setShowDev} onChanged={refresh} />
             </div>
+            {steps.length > 0 && (
+              <StageSteps place={shownPlace!} steps={steps} stage={placeOf(shownWhere).stage} onChoose={choose} />
+            )}
             {cloud?.on && cloud.error && (
               <p className="mb-2 px-3 text-[12px] text-warning" title={cloud.error}>
                 {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
@@ -523,6 +558,8 @@ export function Home() {
                 <p className="mt-1.5 text-[13px] text-muted">{empty.text}</p>
               </div>
             )}
+            </>
+            )}
           </div>
         </main>
       </div>
@@ -533,14 +570,52 @@ export function Home() {
   );
 }
 
+/**
+ * A place's stages as steps over its list (prototype C, Nov 2): All, then each
+ * stage in order with what's in it; an empty one greyed, not hidden, so the
+ * order still reads. The open step again goes back to All.
+ */
+function StageSteps({ place, steps, stage, onChoose }: { place: Spot; steps: { key: string; label: string; count: number }[]; stage: string | null; onChoose: (where: Where) => void }) {
+  const step = (key: string | null, label: string, count: number | null) => {
+    const on = stage === key;
+    const empty = count === 0 && !on;
+    return (
+      <button
+        key={key ?? "all"}
+        disabled={empty}
+        onClick={() => onChoose(key === null || on ? place : `${place}:${key}`)}
+        className={cx("flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[12.5px] font-medium whitespace-nowrap transition-colors", on ? "bg-active text-fg" : empty ? "text-faint" : "text-muted hover:bg-hover hover:text-fg")}
+      >
+        {label}
+        {count !== null && count > 0 && <span className={cx("tabular", on ? "text-secondary" : "text-faint")}>{count}</span>}
+      </button>
+    );
+  };
+  return (
+    <div className="mb-3 flex shrink-0 flex-wrap items-center gap-0.5">
+      {step(null, "All", null)}
+      <span className="mx-1 h-4 w-px shrink-0 bg-line" />
+      {steps.map((one, index) => (
+        <Fragment key={one.key}>
+          {/* The arrows go first when it's narrow (960 px: Subtitled ran off the panel). */}
+          {index > 0 && <ChevronRight size={12} className="shrink-0 text-faint/60 max-[1100px]:hidden" />}
+          {step(one.key, one.label, one.count)}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
 /** Which place Home shows (remembered on this browser), from before too ("subtitled" and "ideas" were tabs). */
 function savedWhere(): Where {
   const saved = localStorage.getItem(VIEW) ?? "";
-  if (saved === "subtitled") return "edits:subtitled";
-  if (saved === "needs" || saved === "later" || saved === "done") return saved;
-  const { section, stage } = placeOf(saved as Where);
-  if (section === null) return "needs";
-  return stage === null || SECTIONS.find((one) => one.key === section)!.stages.some((one) => one.key === stage) ? (saved as Where) : section;
+  if (saved === "subtitled") return "videos:subtitled";
+  if (saved === "needs" || saved === "later" || saved === "done" || saved === "thumbnails") return saved;
+  // Scripts and Edits were two places until Nov 2; both are Videos now.
+  const [first, stage] = saved.split(":") as [string, string | undefined];
+  const place: Spot | null = first === "ideas" ? "ideas" : first === "videos" || first === "scripts" || first === "edits" ? "videos" : null;
+  if (place === null) return "needs";
+  return stage !== undefined && PLACES.find((one) => one.key === place)!.stages.some((one) => one.key === stage) ? `${place}:${stage}` : place;
 }
 
 /** An empty Home: the way to the first edit. */

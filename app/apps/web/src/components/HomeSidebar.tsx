@@ -5,11 +5,12 @@
 // way more organised"), after the team's "having to scroll through a long,
 // tedious" list of ideas, scripts and edits together.
 
-import { Check, Clock, FileText, Film, Image as ImageIcon, Lightbulb, PanelLeftClose, PanelLeftOpen, type LucideIcon } from "lucide-react";
+import { Check, Clock, FileText, Film, Image as ImageIcon, Lightbulb, type LucideIcon } from "lucide-react";
 import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { AppMenu } from "./AppMenu";
+import { LayoutLeftIcon } from "./HugeIcons";
 import { whenBack } from "../lib/time";
 import { cx, IconButton } from "./ui";
 
@@ -38,7 +39,7 @@ export function useSidebarOpen(): [boolean, (open: boolean) => void] {
 export function OpenSidebar({ onOpen }: { onOpen: () => void }) {
   return (
     <IconButton label="Show the sidebar" onClick={onOpen} className="-ml-2 size-8 shrink-0">
-      <PanelLeftOpen size={17} />
+      <LayoutLeftIcon size={18} />
     </IconButton>
   );
 }
@@ -139,7 +140,7 @@ export function HomeSidebar({ places, thumbnails, later, done, where, onChoose, 
             <AppMenu row />
           </div>
           <IconButton label="Hide the sidebar" onClick={onClose} className="size-8 shrink-0">
-            <PanelLeftClose size={16} />
+            <LayoutLeftIcon size={18} />
           </IconButton>
         </div>
         <nav className="mt-4 flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto pb-2">

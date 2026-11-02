@@ -1,11 +1,13 @@
-// "Ready for changes" on the fixing computer (accounts/docs/fixing.md): Edit
-// checks in, takes a waiting request for a project here, sets the agent on its
-// notes, says how it's going, and shares only when the edit changed.
+// "Ready for changes" asked of this computer: Edit checks in (saying whether
+// it's busy), takes a request asked of it for a project here, sets the agent
+// on its notes, says how it's going, and shares only when the edit changed; a
+// request it can't do here is declined with why, and a busy one waits.
 
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
+import { readOnly } from "../src/cloud_projects.ts";
 import { optionsKey, timelineHash } from "../src/exports.ts";
 import * as machine from "../src/machine.ts";
 import { native } from "../src/native/index.ts";
@@ -22,6 +24,8 @@ beforeAll(() => {
   reviews.followEveryForTests(20);
 });
 
+beforeEach(() => reviews.resetCheckInForTests());
+
 afterAll(() => {
   reviews.followEveryForTests(5_000);
   restore();
@@ -30,6 +34,11 @@ afterAll(() => {
 
 type Call = { path: string; args: Record<string, unknown> };
 
+/** A Convex function's own error, as the relay passes it on. */
+class Refused {
+  constructor(readonly message: string) {}
+}
+
 /** Repack's reviews functions as the relay answers them; every call kept. */
 function convex(answers: Record<string, (args: Record<string, unknown>) => unknown>): Call[] {
   const calls: Call[] = [];
@@ -37,25 +46,139 @@ function convex(answers: Record<string, (args: Record<string, unknown>) => unkno
     const { path, args } = request.json<{ path: string; args: Record<string, unknown> }>();
     calls.push({ path, args });
     const answer = answers[path];
-    return Response.json({ status: "success", value: answer ? answer(args) : null });
+    const value = answer ? answer(args) : null;
+    if (value instanceof Refused) return Response.json({ status: "error", errorMessage: value.message });
+    return Response.json({ status: "success", value });
   });
   return calls;
 }
 
-test("off the fixing computer it only checks in", async () => {
-  const { app, cleanup } = fixtureHome("ready-not-chosen");
+/** The services a check-in reads to tell whether this computer is busy: nothing running, unless a test says so. */
+function idle(app: unknown, agents: Record<string, unknown> = {}): void {
+  (app as { exports: unknown }).exports = { running: () => false };
+  (app as { agents: unknown }).agents = { hasRunningTurns: () => false, chat: () => ({ running: false }), ...agents };
+}
+
+const request = (sourceId: string, extra: Record<string, unknown> = {}) => ({ reviewId: "r1", sourceId, title: "Judge", version: 1, by: "JJ", requestedAt: 1, ...extra });
+
+test("with nothing asked of it, it only checks in, saying it isn't busy", async () => {
+  const { app, cleanup } = fixtureHome("ready-not-asked");
+  idle(app);
   try {
     const calls = convex({ "reviews:checkIn": () => ({ chosen: false, requests: [] }) });
     expect(await reviews.checkIn(app)).toEqual([]);
-    expect(reviews.fixesHere()).toBe(false);
+    expect(reviews.askedHere()).toBe(false);
     expect(calls.map((call) => call.path)).toEqual(["reviews:checkIn"]);
-    expect(calls[0]!.args).toMatchObject({ machine: machine.id(), name: machine.name() });
+    expect(calls[0]!.args).toMatchObject({ machine: machine.id(), name: machine.name(), busy: false });
   } finally {
     cleanup();
   }
 });
 
-test("on the fixing computer it takes the request, follows the agent's turn and, with nothing changed, says so without sharing", async () => {
+test("a check-in says busy while an agent turn runs on any project here", async () => {
+  const { app, cleanup } = fixtureHome("ready-busy-flag");
+  idle(app, { hasRunningTurns: () => true });
+  try {
+    const calls = convex({ "reviews:checkIn": () => ({ chosen: false, requests: [] }) });
+    await reviews.checkIn(app);
+    expect(calls[0]!.args.busy).toBe(true);
+    // An export alone is busy too.
+    idle(app);
+    (app as unknown as { exports: unknown }).exports = { running: () => true };
+    await reviews.checkIn(app);
+    expect(calls[1]!.args.busy).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a database that doesn't take busy yet gets the check-in without it, and isn't asked with it again for a while", async () => {
+  const { app, cleanup } = fixtureHome("ready-busy-refused");
+  idle(app);
+  try {
+    const calls = convex({
+      "reviews:checkIn": (args) => ("busy" in args ? new Refused("ArgumentValidationError: Object contains extra field `busy` that is not in the validator.") : { chosen: false, requests: [] }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([]);
+    await reviews.checkIn(app);
+    expect(calls.map((call) => "busy" in call.args)).toEqual([true, false, false]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a request for a project that isn't here, with the cloud off, is declined with why, once", async () => {
+  const { app, cleanup } = fixtureHome("ready-decline-missing");
+  idle(app);
+  try {
+    let asked = [request("p-elsewhere")];
+    const calls = convex({
+      "reviews:checkIn": () => ({ chosen: true, requests: asked }),
+      "reviews:changes": () => ({ notes: [], cursor: 0, more: false }),
+      "reviews:open": () => [],
+      "reviews:declineFix": () => ({ ok: true }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([]);
+    expect(reviews.askedHere()).toBe(true);
+    const declines = () => calls.filter((call) => call.path === "reviews:declineFix").map((call) => call.args);
+    expect(declines()).toEqual([{ machine: machine.id(), reviewId: "r1", reason: "the project isn't on this computer, and Edit's cloud projects are off here" }]);
+    expect(calls.some((call) => call.path === "reviews:takeFix")).toBe(false);
+    // Still listed (the database hadn't moved it yet): not declined again.
+    await reviews.checkIn(app);
+    expect(declines()).toHaveLength(1);
+    // Asked again later: a new request, declined again.
+    asked = [request("p-elsewhere", { requestedAt: 2 })];
+    await reviews.checkIn(app);
+    expect(declines()).toHaveLength(2);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a request for a project another computer holds is declined, naming it", async () => {
+  const { app, cleanup } = fixtureHome("ready-decline-held");
+  idle(app);
+  const live = app.store.createAs("Judge", "courtroom", { width: 1920, height: 1080, fps: 30 });
+  (app.store as unknown as { mayWrite: unknown }).mayWrite = async () => {
+    throw new Error(readOnly("Sphe's MacBook Air"));
+  };
+  try {
+    const calls = convex({
+      "reviews:checkIn": () => ({ chosen: true, requests: [request(live.project.id)] }),
+      "reviews:changes": () => ({ notes: [], cursor: 0, more: false }),
+      "reviews:open": () => [],
+      "reviews:declineFix": () => ({ ok: true }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([]);
+    expect(calls.find((call) => call.path === "reviews:declineFix")?.args).toEqual({ machine: machine.id(), reviewId: "r1", reason: "the project is open on Sphe's MacBook Air" });
+    expect(calls.some((call) => call.path === "reviews:takeFix")).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a request whose project is busy here waits: never declined, never taken", async () => {
+  const { app, cleanup } = fixtureHome("ready-busy-waits");
+  const live = app.store.createAs("Judge", "courtroom", { width: 1920, height: 1080, fps: 30 });
+  idle(app, { hasRunningTurns: () => true, chat: () => ({ running: true }) });
+  try {
+    const calls = convex({
+      "reviews:checkIn": () => ({ chosen: true, requests: [request(live.project.id)] }),
+      "reviews:changes": () => ({ notes: [], cursor: 0, more: false }),
+      "reviews:open": () => [],
+      "reviews:declineFix": () => ({ ok: true }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([]);
+    expect(await reviews.checkIn(app)).toEqual([]);
+    expect(calls.filter((call) => call.path === "reviews:checkIn").map((call) => call.args.busy)).toEqual([true, true]);
+    expect(calls.some((call) => call.path === "reviews:declineFix" || call.path === "reviews:takeFix")).toBe(false);
+    expect(reviews.askedHere()).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
+test("asked of this computer it takes the request, follows the agent's turn and, with nothing changed, says so without sharing", async () => {
   const { app, home, cleanup } = fixtureHome("ready-chosen");
   const live = app.store.createAs("Judge", "courtroom", { width: 1920, height: 1080, fps: 30 });
   const id = live.project.id;
@@ -86,7 +209,7 @@ test("on the fixing computer it takes the request, follows the agent's turn and,
       "reviews:fixProgress": () => ({ ok: true }),
     });
     expect(await reviews.checkIn(app)).toEqual([id]);
-    expect(reviews.fixesHere()).toBe(true);
+    expect(reviews.askedHere()).toBe(true);
     // fixReady runs on by itself: wait for its last word.
     const end = Date.now() + 15_000;
     while (!calls.some((call) => call.path === "reviews:fixProgress" && call.args.state === "done") && Date.now() < end) await Bun.sleep(50);

@@ -1,4 +1,4 @@
-// This computer, as accounts.spheceo.com's Fixing page knows it: a stable id
+// This computer, as the review page's choice of computer for Ready for changes knows it: a stable id
 // and its name. The id hashes the Mac's hardware UUID (`IOPlatformUUID`), so
 // Edit and Writer on one Mac are one computer; Writer works it out the same
 // way (`src-tauri/src/machine.rs`). Linux (`edit serve`) uses /etc/machine-id;

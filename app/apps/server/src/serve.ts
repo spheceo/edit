@@ -223,7 +223,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   });
   optional("cloud", () => seams.cloudProjects.start(app));
   // A trial server (EDIT_TRIALS=1, the teaching loop's: app/scripts/trial-server.sh) signs in and syncs
-  // cloud projects but takes no team work: this Mac's id is the fixing computer's, and two servers on
+  // cloud projects but takes no team work: this Mac's id is the one Ready for changes is asked of, and two servers on
   // it would both fix the same review notes and Writer jobs (Oct 31, the user: a server for training
   // agents and trials that other sessions' saves never restart).
   const trials = process.env.EDIT_TRIALS === "1";

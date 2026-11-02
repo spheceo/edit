@@ -2,8 +2,9 @@
 // an export shared to a Repack link, where anyone with it comments at a
 // moment of the video (as on Frame.io, which it replaces); the notes followed
 // here while Edit runs; the agent set on them when a reviewer clicks "Ready
-// for changes", on the one computer chosen on accounts.spheceo.com's Fixing
-// page, and the next cut exported and shared after (accounts/docs/fixing.md);
+// for changes" and picks this computer on the review page (their own, where
+// they're signed in to Edit, or another that's on and not busy), and the next
+// cut exported and shared after;
 // and each fix's changed stretch of the timeline kept
 // with its note, so the timeline shows what the agent changed for whom and
 // why ("did the agent actually do what we said we wanted it to do?").
@@ -22,6 +23,7 @@ import { Deferred, Effect, Exit } from "effect";
 import type { App } from "./app.ts";
 import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
+import { ConvexFailure } from "./cloud.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
@@ -31,6 +33,7 @@ import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
+import * as remote from "./remote_actions.ts";
 import { chunkFolder, clipMap, deleteExport, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport } from "./exports.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
@@ -52,7 +55,7 @@ import * as tools from "./tools.ts";
 const FILE = "reviews.json";
 /** How often Repack is asked for new notes while Edit runs. */
 export const POLL_MS = 45_000;
-/** How often the fixing computer checks for "Ready for changes"; others check in at POLL_MS. */
+/** How often a computer that has Ready for changes asked of it checks in; others check in at POLL_MS. */
 export const CHECK_IN_CHOSEN_MS = 15_000;
 /** The longest a Ready for changes turn is waited for before it's given up on. */
 const FIX_TURN_MS = 3 * 60 * 60_000;
@@ -1137,7 +1140,7 @@ let checkTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * Starts following the reviews: every `every` ms (POLL_MS), whenever the cloud
  * is on; and checks in as this computer (`checkIn`), every POLL_MS, or
- * CHECK_IN_CHOSEN_MS on the fixing computer. It ticks from the start, signed in or not:
+ * CHECK_IN_CHOSEN_MS while Ready for changes is asked of it. It ticks from the start, signed in or not:
  * the sign-in is read from the Keychain after this runs (and can come later),
  * and a start that waited for the cloud to be on never followed a review after
  * sign-in moved to accounts (Marc's 5 notes on Judge EXPLODES v2, Oct 23).
@@ -1161,12 +1164,12 @@ export function start(app: App, every = POLL_MS): void {
   const check = () => {
     const next = () => {
       if (timer === null) return;
-      checkTimer = setTimeout(check, chosen ? CHECK_IN_CHOSEN_MS : every);
+      checkTimer = setTimeout(check, asked ? CHECK_IN_CHOSEN_MS : every);
       checkTimer.unref?.();
     };
     if (!cloud.enabled()) return next();
     void checkIn(app)
-      .catch((error: unknown) => diag.warn("review", `checking in for fixing: ${diag.messageOf(error)}`))
+      .catch((error: unknown) => diag.warn("review", `checking in for Ready for changes: ${diag.messageOf(error)}`))
       .finally(next);
   };
   checkTimer = setTimeout(check, Math.min(6_000, every));
@@ -1301,30 +1304,36 @@ export async function boxStills(home: string, projectId: string, shared: Shared 
 }
 
 // ---------------------------------------------------------------------------
-// Ready for changes, on the fixing computer
+// Ready for changes, asked of this computer
+//
+// The reviewer picks the computer on the review page: their own (where
+// they're signed in to Edit) by default, or another that's on and not busy
+// (Nov 2: JJ's Ready for changes sat on "No computer is on" because the one
+// fixing computer chosen for everyone was Sphe's MacBook Air, off, while JJ's
+// own Mac had Edit open and idle). Each check-in says whether this computer
+// is busy, so the page greys it out, and hands back the requests asked of it;
+// one it can't do here (another computer holds the project, the project isn't
+// here and can't come down) is declined with why, so the page says so and
+// the reviewer picks again. A merely busy project waits.
 
-/** This computer is the fixing computer, as its last check-in said. */
-let chosen = false;
+/** Ready for changes is asked of this computer, as its last check-in said. */
+let asked = false;
 /** Projects whose Ready for changes is being worked here. */
 const readying = new Set<string>();
 
-/** This computer fixes notes (accounts' Fixing page), as of its last check-in. */
-export function fixesHere(): boolean {
-  return chosen;
+/** Ready for changes is asked of this computer, as of its last check-in. */
+export function askedHere(): boolean {
+  return asked;
 }
 
-/** A review waiting for the fixing computer, as `reviews:checkIn` lists it. */
+/** A review waiting on this computer, as `reviews:checkIn` lists it. */
 interface Request {
   reviewId: string;
   sourceId: string;
   title: string;
+  requestedAt?: number;
 }
 
-/**
- * Says this computer is open (for accounts' Fixing page) and, on the fixing
- * computer, takes each waiting "Ready for changes" for a project here:
- * `reviews:takeFix`, then `fixReady` runs on by itself. The requests it took.
- */
 /** Why each request waits, as last said: said again only when it changes (the check-in runs every few seconds). */
 const waitingFix = new Map<string, string>();
 function waits(review: string, why: string): void {
@@ -1333,44 +1342,121 @@ function waits(review: string, why: string): void {
   diag.info("review", why);
 }
 
+/** Requests declined here (review and when it was asked), so one is never declined twice; asked again later, it's a new one. */
+const declined = new Set<string>();
+const requestKey = (request: Request) => `${request.reviewId}:${request.requestedAt ?? ""}`;
+
+/**
+ * Hands a request back (`reviews:declineFix`): it can't be done on this
+ * computer, and `reason` (short, for the reviewer: "the project is open on
+ * Sphe's MacBook Air") says why. Not marked declined when the call fails, so
+ * the next check-in tries again.
+ */
+async function decline(request: Request, reason: string): Promise<void> {
+  const key = requestKey(request);
+  if (declined.has(key)) return;
+  const name = request.title || request.sourceId;
+  try {
+    await cloud.mutation("reviews:declineFix", { machine: machine.id(), reviewId: request.reviewId, reason });
+  } catch (error) {
+    waits(request.reviewId, `${name}: Ready for changes can't be done here (${reason}), and handing it back failed: ${diag.messageOf(error)}`);
+    return;
+  }
+  declined.add(key);
+  waitingFix.delete(request.reviewId);
+  diag.info("review", `${name}: Ready for changes handed back: ${reason}`);
+}
+
+/** Something runs in Edit on this computer: an agent turn, a fix, a share, an export, an import, Claude on a script (remote_actions' list). */
+export function busyHere(app: App): boolean {
+  if (readying.size > 0 || sharing.size > 0) return true;
+  try {
+    return remote.busyWith(app).length > 0;
+  } catch (error) {
+    // A test's stubbed services: nothing of theirs is running.
+    if (!seams.isUnavailable(error)) diag.warn("review", `telling whether this computer is busy: ${diag.messageOf(error)}`);
+    return false;
+  }
+}
+
+/** The database refused `busy` (not deployed yet): left out until then, asked again after this long. */
+const BUSY_AGAIN_MS = 30 * 60_000;
+let busyRefusedAt: number | null = null;
+const refusesBusy = (error: unknown) => error instanceof ConvexFailure && error.kind === "function" && /extra field `?busy/iu.test(error.said);
+
+/** Tests: forget what earlier check-ins learnt. */
+export function resetCheckInForTests(): void {
+  asked = false;
+  busyRefusedAt = null;
+  declined.clear();
+  waitingFix.clear();
+}
+
+/**
+ * Says this computer is open and whether it's busy (for the review page's
+ * choice of computer), and takes each "Ready for changes" asked of it whose
+ * project can be done here: `reviews:takeFix`, then `fixReady` runs on by
+ * itself. One that can't be done here is declined; a busy one waits. The
+ * requests it took.
+ */
 export async function checkIn(app: App): Promise<string[]> {
   const email = accounts.status().person as { email?: string } | null;
-  const answer = (await cloud.mutation("reviews:checkIn", { machine: machine.id(), name: machine.name(), email: email?.email ?? null })) as { chosen?: boolean; requests?: Request[] };
-  const now = answer.chosen === true;
-  if (now !== chosen) diag.info("review", now ? "this computer is the fixing computer: it takes Ready for changes" : "this computer isn't the fixing computer");
-  chosen = now;
-  if (!chosen) return [];
-  const took: string[] = [];
+  const base = { machine: machine.id(), name: machine.name(), email: email?.email ?? null };
+  const withBusy = busyRefusedAt === null || Date.now() - busyRefusedAt >= BUSY_AGAIN_MS;
+  let answer: { chosen?: boolean; requests?: Request[] };
+  try {
+    answer = (await cloud.mutation("reviews:checkIn", withBusy ? { ...base, busy: busyHere(app) } : base)) as typeof answer;
+    if (withBusy) busyRefusedAt = null;
+  } catch (error) {
+    if (!withBusy || !refusesBusy(error)) throw error;
+    if (busyRefusedAt === null) diag.info("review", "the database doesn't take busy on a check-in yet: checking in without it");
+    busyRefusedAt = Date.now();
+    answer = (await cloud.mutation("reviews:checkIn", base)) as typeof answer;
+  }
   const requests = (answer.requests ?? []).filter((one) => typeof one.reviewId === "string" && typeof one.sourceId === "string");
+  const now = requests.length > 0;
+  if (now !== asked) diag.info("review", now ? "Ready for changes is asked of this computer" : "no Ready for changes is asked of this computer now");
+  asked = now;
+  const took: string[] = [];
   if (requests.length === 0) return took;
   // The notes it fixes are read from what Edit has heard: hear them first.
   await poll(app).catch((error: unknown) => diag.warn("review", `hearing the notes before a fix: ${diag.messageOf(error)}`));
   for (const request of requests) {
+    if (declined.has(requestKey(request))) continue;
     const project = request.sourceId;
+    const name = request.title || project;
     const live = app.store.get(project);
     const busy = readying.has(project) || sharing.has(project) || (live !== null && (seams.agentPanel(app).chat(project) as { running?: boolean }).running === true);
-    // A project only in the cloud comes down, and the next check-in takes it
-    // (Oct 29: two Ready for changes waited all evening on the fixing
-    // computer because their projects weren't on it). A busy one waits.
-    if (live === null && !busy && cloudProjects.cloudOf(app)?.on()) {
-      try {
-        await cloudProjects.open(app, project, "fixing");
-        waits(request.reviewId, `${request.title || project}: Ready for changes: the project came down from the cloud; its fix starts at the next check-in`);
-        continue;
-      } catch (error) {
-        waits(request.reviewId, `${request.title || project}: Ready for changes waits: the project didn't come down from the cloud (${diag.messageOf(error)})`);
+    // A busy project waits for a later check-in: not a reason to hand it back.
+    if (busy) {
+      waits(request.reviewId, `${live?.project.name ?? name}: Ready for changes waits: the project is busy`);
+      continue;
+    }
+    if (live === null) {
+      // A project only in the cloud comes down, and the next check-in takes it
+      // (Oct 29: two Ready for changes waited all evening because their
+      // projects weren't on the computer).
+      if (cloudProjects.cloudOf(app)?.on() !== true) {
+        await decline(request, "the project isn't on this computer, and Edit's cloud projects are off here");
         continue;
       }
-    }
-    // A project not here, or busy, waits for a later check-in.
-    if (live === null || busy) {
-      waits(request.reviewId, `${request.title || project}: Ready for changes waits: the project ${live === null ? "isn't on this computer" : "is busy"}`);
+      try {
+        await cloudProjects.open(app, project, "fixing");
+        waits(request.reviewId, `${name}: Ready for changes: the project came down from the cloud; its fix starts at the next check-in`);
+      } catch (error) {
+        // Not in the cloud, or not a kind of video this person works on: handed back. A network failure waits.
+        const message = diag.messageOf(error);
+        if (error instanceof ApiError || message === "no such project") await decline(request, error instanceof ApiError ? `the project can't be opened here: ${message}` : "the project isn't on this computer or in the cloud");
+        else waits(request.reviewId, `${name}: Ready for changes waits: the project didn't come down from the cloud (${message})`);
+      }
       continue;
     }
     try {
       await app.store.mayWrite(project);
-    } catch {
-      waits(request.reviewId, `${live.project.name}: Ready for changes waits: another computer holds the project`);
+    } catch (error) {
+      const holder = cloudProjects.heldBy(diag.messageOf(error));
+      if (holder !== null) await decline(request, `the project is open on ${holder}`);
+      else waits(request.reviewId, `${live.project.name}: Ready for changes waits: ${diag.messageOf(error)}`);
       continue;
     }
     waitingFix.delete(request.reviewId);

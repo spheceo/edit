@@ -68,8 +68,8 @@ const REVIEW_CALLS = new Map<string, string>([
   ["reviews:reply", "mutation"], ["reviews:status", "mutation"], ["reviews:approve", "mutation"], ["reviews:note", "mutation"], ["reviews:deleteNote", "mutation"], ["reviews:setMeta", "mutation"],
   // The person sharing makes the newest export the only version, v1 (Edit's review/compress).
   ["reviews:compress", "mutation"],
-  // Fixing on the one computer chosen on accounts' Fixing page (accounts/docs/fixing.md).
-  ["reviews:checkIn", "mutation"], ["reviews:takeFix", "mutation"], ["reviews:fixProgress", "mutation"], ["reviews:check", "mutation"],
+  // Ready for changes asked of a computer: it checks in (busy or not), takes or declines what's asked of it, and says how it's going.
+  ["reviews:checkIn", "mutation"], ["reviews:takeFix", "mutation"], ["reviews:declineFix", "mutation"], ["reviews:fixProgress", "mutation"], ["reviews:check", "mutation"],
   // Deleting a review link for good: only who may share reviews, or an admin (Sphe, Nov 1).
   ["reviews:remove", "mutation"],
 ]);

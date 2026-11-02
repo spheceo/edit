@@ -133,6 +133,12 @@ export function readOnly(holder: string): string {
   return `${holder} is editing this project, so it's read-only here until they close it (or you take over in the editor).`;
 }
 
+/** Who holds the project, from a write refused with `readOnly`'s words; null for any other refusal. */
+export function heldBy(message: string): string | null {
+  const found = / is editing this project, so it's read-only here/u.exec(message);
+  return found === null ? null : message.slice(0, found.index).trim() || null;
+}
+
 /** Something to tell the user about a project. */
 export type Note = { kind: "conflict"; message: string } | { kind: "error"; message: string };
 

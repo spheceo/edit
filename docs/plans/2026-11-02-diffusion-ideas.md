@@ -41,9 +41,33 @@ over 3,008 sheets:
 | check_shots | 13 | 2,064 | 1,179 | −43 % |
 | all | 3,008 | 1,388 | 983 | −29 % |
 
-Still to measure on a run: the tokens a look costs in the agent's own usage,
-and that its answers about a sheet don't get worse (describe_shots on a known
-stretch).
+Planned within Claude Code's own edge: it sends a picture wider than 2,000 px
+shrunk to 2,000 (a 2,184 px sheet reached the model at 1,999), so sheets stop
+at 1,988 px (27eaccd3); with that the same 3,010 requests cost 960 tokens a
+look against 1,388 (−31 %).
+
+ON A RUN (Nov 3, 01:03, R2 on the dev server, one read-only turn of the
+in-app agent, Claude Code, Opus 5.5): a 12-frame contact_sheet of 0–120 s and
+a look_at_media cost ~1,080 tokens each in its own usage (two looks and the
+export's text moved its input from 82,205 to 85,417 tokens). Its answers held
+against the same stretch described from single 960 px frames in an earlier
+turn: the close shot of Lola at ~45 s, the grey room with the countdown at
+~65–70 s, the raw wide room at ~100 s, the burned-in captions read word for
+word ("s****** her with my pocket knife."); what it lost is the fine print a
+whole frame gives ("a small timer in the corner", where the single frame read
+"INTERROGATION STARTS IN 00:12"): what `detail: "fine"` is for.
+
+Item 4 on the same turn: the 30 s export (frames 0–900) said how long it had
+left, the agent called `wait` once (waited ~40 s, done) and read nothing
+again: 0 repeated reads, against up to 9 in a turn before.
+
+One thing it showed: R2's chat had loaded look_at_media's schema before `pick`
+existed, and a resumed Claude Code conversation keeps the schema it already
+has, so it said "look_at_media has no pick option" and didn't try it. A new
+argument on a tool a chat has already used reaches that chat when it starts
+afresh (a reset, or its compaction near 150k tokens); new tools (`wait`) are
+seen at once. Open: whether Edit should say new arguments in the turn's
+context, or start the agent's session afresh on a new build.
 
 ## 2. Frames that follow the footage (code done; waits for the same build)
 

@@ -261,3 +261,30 @@ test("research images are pooled once and the pool keeps only what a project lin
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+test.skipIf(ffmpeg === null || Bun.which("ffprobe") === null)("collect_images keeps the other queries' pictures when one page never loads", async () => {
+  // Loop 7's holdout on a busy Mac: one slow page failed the whole call twice.
+  const { app, cleanup } = fixtureHome("research-collect-slow");
+  try {
+    app.store.create("Case", { width: 1920, height: 1080, fps: 30 });
+    const asked: string[] = [];
+    hooks.dump = async (url) => {
+      asked.push(url);
+      if (url.includes("slow")) throw new Error("the page took too long to load");
+      return url.endsWith("first=1")
+        ? `<a class="iusc" m="{&quot;purl&quot;:&quot;https://news.example/Scene&quot;,&quot;murl&quot;:&quot;${mock.url}/img/photo.jpg&quot;,&quot;t&quot;:&quot;Scene&quot;}">`
+        : "";
+    };
+    const got = await call(app, "collect_images", { queries: ["slow query", "good query"], per_query: 1 });
+    expect(got.isError).toBe(false);
+    expect(got.text.startsWith("added 1 new images")).toBe(true);
+    // The slow page was asked twice before its query was passed over.
+    expect(asked.filter((url) => url.includes("slow")).length).toBe(2);
+    hooks.dump = async () => {
+      throw new Error("the page took too long to load");
+    };
+    expect((await call(app, "collect_images", { queries: ["slow a", "slow b"], per_query: 1 })).text).toContain("took too long");
+  } finally {
+    cleanup();
+  }
+}, 60_000);

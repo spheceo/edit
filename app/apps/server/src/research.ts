@@ -660,7 +660,12 @@ async function collectInner(home: string, project: string, queries: string[], pe
         first === 1
           ? `https://www.bing.com/images/search?q=${encoded}&first=1`
           : `https://www.bing.com/images/async?q=${encoded}&first=${first}&count=${PAGE}&mmasync=1`;
-      const page = await hooks.dump(url);
+      // A page that ran out of time (a busy Mac, Bing slow) is asked once more before the query gives up.
+      const page = await hooks.dump(url).catch(async (error: unknown) => {
+        if (isBug(error)) throw error;
+        await Bun.sleep(5_000);
+        return hooks.dump(url);
+      });
       const before = hits.length;
       hits.push(...imageHits(page));
       if (hits.length === before) break;
@@ -677,13 +682,21 @@ async function collectInner(home: string, project: string, queries: string[], pe
   let added = 0;
   let had = 0;
   let failed = 0;
+  // A query that still fails is passed over: the others' pictures are kept
+  // (loop 7's holdout, on a busy Mac: two calls failed whole on one slow page,
+  // "Image search keeps timing out, so I'm building the bridges from room
+  // shots, maps, Notepads"). Only every query failing fails the call.
+  let lastError: unknown = null;
+  let missed = 0;
   for (let at = 0; at < queries.length; at += 3) {
     const results = await Promise.allSettled(queries.slice(at, at + 3).map(one));
     for (const result of results) {
       if (result.status === "rejected") {
         const error = result.reason as unknown;
         if (isBug(error)) throw new Error("a search crashed");
-        throw error;
+        lastError = error;
+        missed += 1;
+        continue;
       }
       const [n, a, b] = result.value;
       added += n;
@@ -691,6 +704,8 @@ async function collectInner(home: string, project: string, queries: string[], pe
       failed += b;
     }
   }
+  if (missed === queries.length && lastError !== null) throw lastError;
+  if (missed > 0) diag.warn("research", `${project}: ${missed} of ${queries.length} image searches failed (${diag.messageOf(lastError)}); the others' pictures are kept`);
   return [added, had, failed];
 }
 

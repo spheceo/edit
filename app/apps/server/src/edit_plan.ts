@@ -41,6 +41,7 @@ import {
 import { isBug } from "./guard.ts";
 import { asInt, compareStrings, f32Saved as f32, idiv, jsonForSerde, round, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
+import { framingAt } from "./frames_fill.ts";
 import { HIT } from "./sfx.ts";
 import { readStruct, SerdeError, type Struct } from "./serde.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
@@ -1714,6 +1715,22 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       if (after.length > 0) {
         issues.push({ kind: "end_new_picture", clips: after, at: lastPage, fix: "end on the last page held (its picture and words) to the last word, fading out; take the picture after it away" });
       }
+    }
+  }
+  // A pause that doesn't start at the zoom of the shot it cuts from (Jones JJ,
+  // OnlyFans: "we cut over to the clip, and then we have a zoom in a weird
+  // way"; the pause op does it right, but a shot laid in front of a pause
+  // afterwards breaks it: loop 7 R5, 1.65 → 1.43).
+  for (const pause of project.clips) {
+    if (pause.type !== "video" || pause.name !== "Pause" || !visible(pause.track)) continue;
+    const before = project.clips
+      .filter((clip): clip is Extract<Clip, { type: "video" }> => clip.type === "video" && clip !== pause && clip.media === pause.media && visible(clip.track) && Math.abs(clipEnd(clip) - pause.start) <= 1 && clip.name !== "Pause")
+      .sort((a, b) => project.tracks.findIndex((track) => track.id === b.track) - project.tracks.findIndex((track) => track.id === a.track))[0];
+    if (before === undefined) continue;
+    const from = framingAt(before, before.duration - 1).scale;
+    const to = framingAt(pause, 0).scale;
+    if (Math.abs(from - to) / Math.max(from, to) > 0.05) {
+      issues.push({ kind: "pause_jump", clip: pause.id, at: pause.start, from: round(from * 100) / 100, to: round(to * 100) / 100, fix: `start the pause at the shot's zoom: its scale keys from ${round(from * 1000) / 1000} to about ${round(from * 1.08 * 1000) / 1000}` });
     }
   }
   // The same picture stacked on itself: one clip copied onto other tracks at

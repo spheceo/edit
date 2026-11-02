@@ -235,6 +235,16 @@ test("the_same_picture_brought_in_twice_is_one_picture", () => {
   expect(kinds(p, "repeated_picture").map((issue) => issue.at)).toEqual([[100, 2000]]);
 });
 
+test("a_pause_starting_off_the_zoom_of_the_shot_before_is_flagged", () => {
+  const p = project("plan");
+  p.media.push(footage());
+  apply(p, [
+    { op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 0, start: 0, duration: 78, transform: { x: 0, y: 0, scale: 1.6, rotation: 0 }, keyframes: { scale: [{ frame: 0, value: 1.63, ease: "linear" }, { frame: 77, value: 1.65, ease: "linear" }] } } },
+    { op: "add", clip: { type: "video", track: "new", media: "m1", source_in: 4, speed: 0.05, start: 78, duration: 90, name: "Pause", transform: { x: 0, y: 0, scale: 1.43, rotation: 0 } } },
+  ]);
+  expect(kinds(p, "pause_jump").map((issue) => [issue.from, issue.to])).toEqual([[1.65, 1.43]]);
+});
+
 test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {
   const p = project("plan");
   p.media.push(footage(), media({ id: "m2", name: "g", path: "/g.mp4", kind: "video", duration: 600, width: 1920, height: 1080 }));

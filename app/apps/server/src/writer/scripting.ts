@@ -367,6 +367,8 @@ export async function reviseWith(data: string, id: string, request: string, said
   }
   now.corrections = done.corrections;
   now.proposals = done.proposals;
+  // Footage a revision brings in gets the editor's mute notes too (loop 7: the fresh read's new clips had none).
+  house.withMuteNotes(now);
   save(dir, before, now);
   chat.add(dir, "editor", answer + noted, done.costUsd);
   return [answer + noted, done.costUsd];

@@ -64,6 +64,15 @@ describe("explain", () => {
     expect(explain("write failed: ENOSPC: no space left on device").title).toBe("Your Mac's disk is full");
   });
 
+  // Nov 2, JJ's Exports: "Native encoder stalled" read "The download was cut off … Check your connection".
+  it("tells an export's stalled encoder from a download cut off", () => {
+    for (const message of ["Mom Secretly Has a Baby With Her Daughter's Boyfriend: Native encoder stalled", "Native sound encoder stalled", "Native encoder: The operation could not be completed"]) {
+      expect(explain(message).title).toBe("The export's encoder stopped answering");
+    }
+    expect(explain("The download ended early. Retry to start it again.").title).toBe("The download was cut off");
+    expect(explain("Download stopped ((28) Google Drive sent nothing for 60 s). It resumes where it left off when you retry.").title).toBe("The download was cut off");
+  });
+
   it("names the reused script that can't be read, whole", () => {
     const said = explain("Couldn't read the reused script https://docs.google.com/document/d/1Abc/edit: Couldn't read that Google Doc. Share it so anyone with the link can view, then try again.");
     expect(said.title).toBe("A script linked in this one can't be read");

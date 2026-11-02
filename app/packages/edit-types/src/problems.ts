@@ -209,7 +209,14 @@ const RULES: Rule[] = [
     title: "Edit can't read that video",
     fix: "The file may be damaged or only partly downloaded. Download it again from where it came from, then import it again.",
   })],
-  [/The download ended early|Download stopped|stood still|stalled/i, () => ({
+  // An export's encoder, before the downloads: "stalled" alone said "The
+  // download was cut off" for "Native encoder stalled" (Nov 2, JJ's Mom
+  // Secretly v2, in Exports), sending him to check a connection that was fine.
+  [/Native (sound )?encoder|encoder stopped early|encoder pixel buffer/i, () => ({
+    title: "The export's encoder stopped answering",
+    fix: "Your Mac was too busy (often two exports at once, or little free memory). Export again once nothing else is exporting; quitting Edit and opening it again first helps.",
+  })],
+  [/The download ended early|Download stopped|stood still|download stalled/i, () => ({
     title: "The download was cut off",
     fix: "Edit tried again several times. Check your connection.",
   })],

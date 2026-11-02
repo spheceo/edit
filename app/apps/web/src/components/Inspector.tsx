@@ -17,6 +17,7 @@ import {
   toggleAnimated,
   toggleKeyframe,
 } from "../lib/edit";
+import { fillsFrame, graphicOf, holdGraphic, moveGraphic, resizeGraphic, shiftGraphic } from "../lib/graphic";
 import { recolourPerson } from "../lib/people";
 import { FONTS, playhead } from "../lib/playback";
 import { useEditor } from "../lib/store";
@@ -258,6 +259,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
     <>
       <Header icon={clipIcon(clip)} title={clipTitle(project, clip)} color={CLIP_HEX[clip.color]} subtitle={shortDuration(clip.duration / fps)} />
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <GraphicKnobs clip={clip} project={project} />
         {clip.type === "text" && (
           <>
             <Section title="Text">
@@ -911,6 +913,71 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
         </Section>
       </div>
     </>
+  );
+}
+
+/**
+ * The whole house graphic a clip is part of (lib/graphic.ts): its pieces
+ * moved, sized and timed together, the values written where the agent reads
+ * them. Shown only when the clip has company under its name.
+ */
+function GraphicKnobs({ clip, project }: { clip: Clip; project: Project }) {
+  const group = graphicOf(project, clip);
+  if (group === null) return null;
+  const fps = rate(project.settings);
+  const ids = new Set(group.map((own) => own.id));
+  const moves = (own: Clip) => "transform" in own && !fillsFrame(own);
+  const placed = group.find((own) => own.id === clip.id && moves(own)) ?? group.find(moves);
+  const lettered = group.find((own) => own.id === clip.id && own.type === "text") ?? group.find((own) => own.type === "text");
+  const state = useEditor.getState;
+  const onGroup = (recipe: (clips: Clip[], anchor: (id: string | undefined) => Clip | undefined) => void) =>
+    state().gesture((draft) => {
+      const clips = (draft.clips as Clip[]).filter((own) => ids.has(own.id));
+      recipe(clips, (id) => clips.find((own) => own.id === id));
+    });
+  const start = Math.min(...group.map((own) => own.start));
+  const end = Math.max(...group.map((own) => own.start + own.duration));
+  const scrub = (label: string, value: number, change: (next: number) => void, options: { step?: number; min?: number; precision?: number; suffix?: string } = {}) => (
+    <Row key={label} label={label}>
+      <Scrub value={value} step={options.step ?? 1} min={options.min} precision={options.precision ?? 0} suffix={options.suffix} onStart={() => state().beginGesture()} onEnd={() => state().endGesture()} onChange={change} />
+    </Row>
+  );
+  return (
+    <Section title={`Graphic · ${group.length} pieces`}>
+      {placed && "transform" in placed && (
+        <>
+          {scrub("Move X", placed.transform.x, (next) =>
+            onGroup((clips, anchor) => {
+              const own = anchor(placed.id);
+              if (own && "transform" in own) moveGraphic(clips, next - own.transform.x, 0);
+            }),
+          )}
+          {scrub("Move Y", placed.transform.y, (next) =>
+            onGroup((clips, anchor) => {
+              const own = anchor(placed.id);
+              if (own && "transform" in own) moveGraphic(clips, 0, next - own.transform.y);
+            }),
+          )}
+        </>
+      )}
+      {lettered?.type === "text" &&
+        scrub("Text size", lettered.style.size, (next) =>
+          onGroup((clips, anchor) => {
+            const own = anchor(lettered.id);
+            if (own?.type === "text" && own.style.size > 0) resizeGraphic(clips, next / own.style.size);
+          }),
+        { min: 4, suffix: "px" })}
+      {scrub("Starts", start / fps, (next) =>
+        onGroup((clips) => shiftGraphic(clips, Math.round(next * fps) - Math.min(...clips.map((own) => own.start)))),
+      { step: 0.1, min: 0, precision: 2, suffix: "s" })}
+      {scrub("Holds", (end - start) / fps, (next) =>
+        onGroup((clips) => {
+          const from = Math.min(...clips.map((own) => own.start));
+          const to = Math.max(...clips.map((own) => own.start + own.duration));
+          holdGraphic(clips, Math.round(next * fps) - (to - from));
+        }),
+      { step: 0.1, min: 0.1, precision: 2, suffix: "s" })}
+    </Section>
   );
 }
 

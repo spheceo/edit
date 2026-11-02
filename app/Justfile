@@ -226,8 +226,11 @@ dev: wasm web-install (native "debug")
     export EDIT_RELAY_URL="${EDIT_RELAY_URL:-https://edit-relay-dev.sphe-g-personal.workers.dev}"
     # Whole cloud edits export on Modal when this Mac is busy or it's long (modal_exports.ts).
     export EDIT_MODAL_EXPORTS="${EDIT_MODAL_EXPORTS:-1}" EDIT_WORKER_ROOT="${EDIT_WORKER_ROOT:-$PWD}"
-    # bun --watch restarts the server on its own files and on the addon it loads.
-    bun --watch apps/server/src/main.ts serve &
+    # bun --watch keeps a handle on every file it watches: macOS's default 256 ran out (EMFILE) on Nov 2 and the
+    # server stopped, Vite serving a page with nothing behind it ("i just get a blank screen").
+    ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+    # bun --watch restarts the server on its own files and on the addon it loads; if it stops anyway, it's started again.
+    (while true; do bun --watch apps/server/src/main.ts serve; echo "dev: the server stopped (exit $?); starting it again" >&2; sleep 2; done) &
     SERVER=$!
     # The engine and its bindings: a new addon (the server restarts onto it).
     cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-engine -w crates/edit-native/src -s 'just native debug' &
@@ -235,7 +238,7 @@ dev: wasm web-install (native "debug")
     # The browser engine shares edit-core/edit-render: rebuild it too (Vite reloads it).
     cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-wasm -s 'just wasm' &
     ENGINE=$!
-    trap 'kill $SERVER $NATIVE $ENGINE 2>/dev/null || true' EXIT INT TERM
+    trap 'pkill -P $SERVER 2>/dev/null; kill $SERVER $NATIVE $ENGINE 2>/dev/null || true' EXIT INT TERM
     bun run --cwd apps/web dev
 
 # Copy a prod cloud project into dev (scripts/copy_to_dev.py): `just copy-to-dev --list`, then `just copy-to-dev <id or name>`

@@ -23,8 +23,8 @@ import { cx } from "./ui";
 /** A row takes up the table's columns (subgrid), so they line up row to row. */
 export const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
 
-/** A row: the kit's list row (56 px, no hairlines: the hover a grey step, rounded); lit too while its menu is open. */
-export const ROW = "group min-h-14 cursor-pointer rounded-lg px-3 py-2 transition-colors hover:bg-hover data-[menu-open]:bg-hover has-[[data-menu-open]]:bg-hover";
+/** A row: the kit's list row (56 px, a hairline above it, the hover a grey step); lit too while its menu is open. */
+export const ROW = "group min-h-14 cursor-pointer border-t border-line px-3 py-2 transition-colors hover:bg-hover data-[menu-open]:bg-hover has-[[data-menu-open]]:bg-hover";
 
 /** A row's hover button: shown on hover, and kept while its row's menu is open (the user, Oct 31: "when i click on thrree dots then a dropdown the three dots dissaper"). */
 const HOVER_BUTTON = "opacity-0 group-hover:opacity-100 group-data-[menu-open]:opacity-100 group-has-[[data-menu-open]]:opacity-100 data-[menu-open]:bg-active data-[menu-open]:text-fg";

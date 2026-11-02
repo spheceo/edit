@@ -430,7 +430,7 @@ export function Home() {
         <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-panel">
           {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
-          <header className="flex h-[52px] shrink-0 items-center gap-3 px-5">
+          <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
             <h1 className="flex min-w-0 items-center gap-1.5 text-[15px] font-semibold tracking-[-0.01em] whitespace-nowrap">
               {title.parent !== null && (
                 <>
@@ -629,7 +629,7 @@ function HomeList({ groups, solo, cross, lengthLabel }: { groups: { key: string;
           <Fragment key={group.key}>
             {group.label !== null && (
               // The kit's section label: sentence case, 13/500, muted.
-              <div className="col-span-full flex items-center gap-1.5 px-3 pt-5 pb-2 text-[13px] font-medium text-muted">
+              <div className="col-span-full flex items-center gap-1.5 border-t border-line px-3 pt-5 pb-2 text-[13px] font-medium text-muted">
                 {group.label} <span className="font-normal text-faint tabular">{group.items.length}</span>
               </div>
             )}

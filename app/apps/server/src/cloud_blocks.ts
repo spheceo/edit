@@ -27,6 +27,8 @@ const AT_ONCE = 6;
 interface Meta {
   size: number;
   type: string;
+  /** The object's key, so the cleaner knows whose it is (absent in folders from before Nov 2). */
+  key?: string;
 }
 
 const reading = new Map<string, Promise<Uint8Array>>();
@@ -80,7 +82,7 @@ function block(root: string, key: string, index: number, url: () => Promise<stri
     const total = Number(/\/(\d+)$/.exec(answer.headers.get("content-range") ?? "")?.[1] ?? NaN);
     const bytes = new Uint8Array(await answer.arrayBuffer());
     fs.mkdirSync(folder, { recursive: true });
-    if (Number.isFinite(total) && metaOf(folder) === null) writeAtomic(join(folder, "meta.json"), JSON.stringify({ size: total, type: answer.headers.get("content-type") ?? "video/mp4" }));
+    if (Number.isFinite(total) && metaOf(folder) === null) writeAtomic(join(folder, "meta.json"), JSON.stringify({ size: total, type: answer.headers.get("content-type") ?? "video/mp4", key }));
     writeAtomic(path, bytes);
     return bytes;
   }).finally(() => reading.delete(id));

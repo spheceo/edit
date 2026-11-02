@@ -45,6 +45,7 @@ import * as diag from "./diag.ts";
 import { inArea, runtime } from "./effect/runtime.ts";
 import * as researchCloud from "./research_cloud.ts";
 import { readState as readStateFile } from "./files.ts";
+import { markOpened } from "./opened.ts";
 import { crashed, isBug } from "./guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
@@ -1876,6 +1877,8 @@ async function postOpen(context: RouteContext<App>): Promise<Response> {
   const { app } = context;
   const id = context.params.id ?? "";
   const given = await client(context);
+  // The cache keeps what's open and was open lately (cache_cleanup.ts).
+  markOpened(app.store.home, id);
   const cloudProjects = cloudOf(app);
   if (given.heartbeat && cloudProjects !== null) {
     cloudProjects.viewing(id, given.client);

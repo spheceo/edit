@@ -1,7 +1,10 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { cleanCache, cleanCloudPreviews } from "../src/cache_cleanup.ts";
+import { createHash } from "node:crypto";
+
+import { cleanCache, cleanCloudPreviews, ownerToken } from "../src/cache_cleanup.ts";
+import { forget, markOpened } from "../src/opened.ts";
 import { playbackPath } from "../src/cloud_playback.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -322,4 +325,57 @@ test("smoothed shots, YouTube downloads and library sounds nobody uses go after 
   } finally {
     cleanup();
   }
+});
+
+test("past the budget, cloud copies go by project: footage nobody uses, then a done project's, then the one opened longest ago; an edit in progress keeps its own", async () => {
+  const { app, store, cleanup } = fixtureHome("cache-by-project");
+  try {
+    const cache = store.cacheDir();
+    const hour = 3600 * 1000;
+    const old = (Date.now() - 5 * 24 * hour) / 1000;
+    const put = (path: string, bytes: number) => {
+      fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+      fs.writeFileSync(path, Buffer.alloc(bytes));
+      fs.utimesSync(path, old, old);
+    };
+    const ids: Record<string, string> = {};
+    for (const name of ["open", "stale", "done"]) {
+      const live = store.create(name, { width: 1920, height: 1080, fps: 30 });
+      const project = structuredClone(live.project);
+      const proxy = `edit/proxies/drive/${name}File01.mp4`;
+      project.media = [{ id: "m1", name: `${name}.mp4`, path: `/nowhere/${name}.mp4`, kind: "video", duration: 1, width: 2, height: 2, fps: 30, has_audio: true,
+        cloud: { source: `drive:${name}File01`, original: `edit/originals/drive/${name}File01/${name}.mp4`, proxy, size: 1 } }];
+      await store.replace(project.id, null, project, "test");
+      ids[name] = project.id;
+      // Its sound copy and two blocks of its proxy (one folder named by the key, one from before keys were kept).
+      put(`${cache}/cloud/sound/originals/drive/${name}File01/${name}.mp4.mov`, 1000);
+      put(`${cache}/cloud/blocks/${createHash("sha1").update(proxy).digest("hex")}/0`, 1000);
+    }
+    put(`${cache}/cloud/sound/originals/drive/nobodysFile1/x.mp4.mov`, 1000);
+    // Opened here 1 hour and 3 days ago; "done" was opened 2 hours ago but is marked done.
+    markOpened(store.home, ids.open!, Date.now() - hour);
+    markOpened(store.home, ids.stale!, Date.now() - 72 * hour);
+    markOpened(store.home, ids.done!, Date.now() - 2 * hour);
+    const done = new Set([ids.done!]);
+    const gone = (name: string) => !fs.existsSync(`${cache}/cloud/sound/originals/drive/${name}File01/${name}.mp4.mov`);
+    // Over by a little: only the footage nobody uses.
+    const total = 7000;
+    let report = cleanCache(app, false, Date.now(), { cacheBytes: total - 500, freeBytes: 0, free: 1e12 }, done);
+    expect(report.bytes).toBe(1000);
+    expect(fs.existsSync(`${cache}/cloud/sound/originals/drive/nobodysFile1/x.mp4.mov`)).toBe(false);
+    // Over by more: the done project's, then the stale one's; never the one open an hour ago.
+    report = cleanCache(app, false, Date.now(), { cacheBytes: 0, freeBytes: 0, free: 1e12 }, done);
+    expect(report.bytes).toBe(4000);
+    expect(gone("done") && gone("stale")).toBe(true);
+    expect(gone("open")).toBe(false);
+    expect(fs.existsSync(`${cache}/cloud/blocks/${createHash("sha1").update("edit/proxies/drive/openFile01.mp4").digest("hex")}/0`)).toBe(true);
+    // The disk nearly full: an edit opened an hour ago gives its copies back too.
+    report = cleanCache(app, false, Date.now(), { cacheBytes: 1e12, freeBytes: 1e9, free: 0 }, done);
+    expect(gone("open")).toBe(true);
+    // A block whose meta says its key is known by it.
+    expect(ownerToken("edit/sound/originals/drive/abcFile01/x.mp4.mov")).toBe("drive/abcFile01");
+    expect(ownerToken("edit/excerpts/drive/abcFile01/0-1000.mov")).toBe("drive/abcFile01");
+    expect(ownerToken("edit/playback/p123/abc.mp4")).toBe("playback:p123");
+    expect(ownerToken("edit/reviews/p/x.mp4")).toBe(null);
+  } finally { forget(store.home); cleanup(); }
 });

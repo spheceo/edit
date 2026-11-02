@@ -57,7 +57,7 @@ interface Item {
   /** Started by the signed-in person (a board card is everyone's). */
   mine: boolean;
   needs: boolean;
-  /** Started by the signed-in person in the last three days and not done: first in Videos, under New. */
+  /** Started by the signed-in person in the last three days and not done: first in its Scripts or Edits, under New. */
   fresh?: boolean;
   row: () => ReactNode;
 }
@@ -123,8 +123,8 @@ export function Home() {
   const ideasAllowed = makesIdeas(account);
   const [ideasHome, refreshIdeas, ideasError] = useIdeasHome(ideasAllowed);
   const [ideaOpen, setIdeaOpen] = useState(false);
-  // The places this person works in: Ideas (and Thumbnails) with the permission, Videos always.
-  const places: Spot[] = [...(ideasAllowed ? (["ideas"] as const) : []), "videos"];
+  // The places this person works in: Ideas (and Thumbnails) with the permission, Scripts when they write them, Edits always.
+  const places: Spot[] = [...(ideasAllowed ? (["ideas"] as const) : []), ...(writesScripts(account) || scripts.length > 0 ? (["scripts"] as const) : []), "edits"];
   // One place at a time, remembered on this browser; /ideas is Home on its Ideas (the idea page's way back).
   // /thumbnails is Home on its Thumbnails (a thumbnail's way back), as /ideas is on its Ideas.
   const [where, setWhere] = useState<Where>(() => (window.location.pathname === "/ideas" ? "ideas" : window.location.pathname === "/thumbnails" ? "thumbnails" : savedWhere()));
@@ -283,7 +283,7 @@ export function Home() {
   const justStarted = (row: Listed) => isMe(starter(row)) && Date.now() - startedMs(row) < NEW_FOR_MS;
   const needsYou = new Set(projectRows.filter((row) => {
     // A script whose Claude run failed (the user, Oct 30: "projects that have failed like this deserve a needs you").
-    // Only what waits on someone (Sphe, Nov 2: Needs you was always red, its 29 all just started); what you just started is first in Videos instead, under New.
+    // Only what waits on someone (Sphe, Nov 2: Needs you was always red, its 29 all just started); what you just started is first in its Scripts or Edits instead, under New.
     if (row.local === null && row.cloud === null) return Boolean(row.script.runFailed) && !row.writing && !row.importing;
     const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
     const stage = stageOf(row, state);
@@ -437,7 +437,7 @@ export function Home() {
   const empty = searching
     ? { title: "Nothing matches", text: `Nothing anywhere is called “${query.trim()}”.` }
     : shownWhere === "needs"
-      ? { title: "You’re all caught up", text: "Stopped imports, failed runs, edits in review and ideas waiting on changes show up here. What you just started is first in Videos." }
+      ? { title: "You’re all caught up", text: "Stopped imports, failed runs, edits in review and ideas waiting on changes show up here. What you just started is first in Scripts or Edits." }
       : shownWhere === "later"
         ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back. On its day it’s back, at the top of Needs you." }
         : mine && others > 0
@@ -449,8 +449,8 @@ export function Home() {
       <div className="flex h-full bg-black p-2">
         <HomeSidebar places={places} thumbnails={ideasAllowed} needs={countOf("needs")} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
-          {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
           <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
+            {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
             <h1 className="flex min-w-0 items-center gap-1.5 text-[15px] font-semibold tracking-[-0.01em] whitespace-nowrap">
               {title.parent !== null && (
                 <>
@@ -480,7 +480,7 @@ export function Home() {
               )}
             </div>
           </header>
-          <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3", sidebarOpen ? "pb-6" : "pb-14")}>
+          <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3 pb-6")}>
             <SetupCard />
             {/* Thumbnails in the panel (Sphe, Nov 2: they "should sort of happen on that right hand side"), not a page of their own. */}
             {inThumbnails ? (
@@ -609,11 +609,12 @@ function StageSteps({ place, steps, stage, onChoose }: { place: Spot; steps: { k
 /** Which place Home shows (remembered on this browser), from before too ("subtitled" and "ideas" were tabs). */
 function savedWhere(): Where {
   const saved = localStorage.getItem(VIEW) ?? "";
-  if (saved === "subtitled") return "videos:subtitled";
+  if (saved === "subtitled") return "edits:subtitled";
   if (saved === "needs" || saved === "later" || saved === "done" || saved === "thumbnails") return saved;
-  // Scripts and Edits were two places until Nov 2; both are Videos now.
+  // Videos (Scripts and Edits together) for an evening on Nov 2: its stage says which it was.
   const [first, stage] = saved.split(":") as [string, string | undefined];
-  const place: Spot | null = first === "ideas" ? "ideas" : first === "videos" || first === "scripts" || first === "edits" ? "videos" : null;
+  const fromVideos: Spot = stage !== undefined && PLACES.find((one) => one.key === "scripts")!.stages.some((one) => one.key === stage) ? "scripts" : "edits";
+  const place: Spot | null = first === "ideas" || first === "scripts" || first === "edits" ? first : first === "videos" ? fromVideos : null;
   if (place === null) return "needs";
   return stage !== undefined && PLACES.find((one) => one.key === place)!.stages.some((one) => one.key === stage) ? `${place}:${stage}` : place;
 }

@@ -230,7 +230,9 @@ dev: wasm web-install (native "debug")
     # server stopped, Vite serving a page with nothing behind it ("i just get a blank screen").
     ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
     # bun --watch restarts the server on its own files and on the addon it loads; if it stops anyway, it's started again.
-    (while true; do bun --watch apps/server/src/main.ts serve; echo "dev: the server stopped (exit $?); starting it again" >&2; sleep 2; done) &
+    # `set +e` in the loop: under the recipe's `set -e` the server's exit ended the loop instead (Nov 2, 21:34: it died of
+    # EMFILE mid-reload, holding 10,245 files after five hours of reloads, and nothing started it again).
+    (set +e; while true; do bun --watch apps/server/src/main.ts serve; echo "dev: the server stopped (exit $?); starting it again" >&2; sleep 2; done) &
     SERVER=$!
     # The engine and its bindings: a new addon (the server restarts onto it).
     cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-engine -w crates/edit-native/src -s 'just native debug' &

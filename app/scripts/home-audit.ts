@@ -108,8 +108,8 @@ const AUDIT = `(() => {
   if (island && island.scrollWidth > island.clientWidth + 1) problems.push("list scrolls sideways by " + (island.scrollWidth - island.clientWidth) + "px");
   return problems;
 })()`;
-// The sidebar's places (prototype C, Nov 2), and a place's stages as the steps over its list ("Videos/Editing").
-const VIEWS = ["Needs you", "Ideas", "Ideas/Drafts", "Ideas/On the board", "Videos", "Videos/Importing", "Videos/Ready to script", "Videos/Scripting", "Videos/Ready to edit", "Videos/Editing", "Videos/In review", "Videos/Subtitled", "Thumbnails", "Later", "Done"];
+// The sidebar's places (prototype C, Nov 2), and a place's stages as the steps over its list ("Edits/Editing").
+const VIEWS = ["Needs you", "Ideas", "Ideas/Drafts", "Ideas/On the board", "Thumbnails", "Scripts", "Scripts/Importing", "Scripts/Ready to script", "Scripts/Scripting", "Scripts/Ready to edit", "Edits", "Edits/Editing", "Edits/In review", "Edits/Subtitled", "Later", "Done"];
 const navPlace = (text: string) => js(`(() => { const b = [...document.querySelectorAll("aside nav button")].find((x) => x.querySelector("span")?.textContent.trim() === ${JSON.stringify(text)}); b?.click(); return !!b; })()`);
 const navStep = (text: string) => js(`(() => { const b = [...document.querySelectorAll("main button")].find((x) => x.firstChild?.textContent?.trim() === ${JSON.stringify(text)} && !x.disabled); b?.click(); return !!b; })()`);
 const nav = async (view: string) => {
@@ -138,7 +138,7 @@ try {
         await sleep(350);
         report(`${width} ${mode} ${view}`, await js(AUDIT));
         checked++;
-        if ((width === 1440 || width === 960) && ["Needs you", "Later", "Ideas", "Videos", "Videos/Subtitled", "Thumbnails", "Done"].includes(view)) await shot(`${width}-${mode}-${view.replace(/[ /]/g, "-")}`);
+        if ((width === 1440 || width === 960) && ["Needs you", "Later", "Ideas", "Scripts", "Edits", "Edits/Subtitled", "Thumbnails", "Done"].includes(view)) await shot(`${width}-${mode}-${view.replace(/[ /]/g, "-")}`);
         if ((width === 1440 || width === 960) && view === "Later") {
           const at = await js(`(() => { const row = document.querySelectorAll('main [role="table"] [role="row"]')[1]; if (!row) return null; const b = row.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()`);
           if (at) { await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] }); await shot(`${width}-${mode}-Later-hover`); await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5 }); }
@@ -153,7 +153,7 @@ try {
   // Menus: the ⋯ of a row of each kind, then its Set aside submenu, inside the window and beside each other.
   await size(960);
   await pill("Everyone");
-  for (const view of ["Videos/Editing", "Videos/Ready to edit", "Ideas", "Later", "Needs you"]) {
+  for (const view of ["Edits/Editing", "Scripts/Ready to edit", "Ideas", "Later", "Needs you"]) {
     await nav(view); await sleep(400);
     const count = await js(`document.querySelectorAll('main [role="table"] [role="row"]').length - 1`);
     for (const index of [1, count]) {

@@ -27,6 +27,10 @@ export async function evalScript(input: Input): Promise<{ ops: Op[]; notes: stri
   const { api, ops, notes, lines } = runtime(input.context, input.run, lineOf);
   const scope = globalThis as Record<string, unknown>;
   for (const [name, value] of Object.entries(api)) scope[name] = value;
+  // The script's own frame can sit deeper than the default ten an error keeps
+  // (the API's calls on top of it): its line was lost under a loaded test run.
+  const limit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 200;
   try {
     for (const lib of input.library) {
       const file = join(dir, `lib-${lib.name}.ts`);
@@ -48,6 +52,7 @@ export async function evalScript(input: Input): Promise<{ ops: Op[]; notes: stri
     }
     return { ops: [...ops], notes, lines };
   } finally {
+    Error.stackTraceLimit = limit;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }

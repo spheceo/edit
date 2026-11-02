@@ -205,6 +205,8 @@ export type ThumbSummary = {
   run: ThumbRun["state"] | null;
   step: string | null;
   render: string | null;
+  /** How many layers it has: one with any is drawn for the list even when no drawing was kept. */
+  layers?: number;
   images: number;
 };
 
@@ -243,6 +245,7 @@ export function summarize(thumb: Thumbnail): ThumbSummary {
     run: thumb.run?.state ?? null,
     step: thumb.run?.state === "running" || thumb.run?.state === "queued" ? (thumb.run.step ?? null) : (thumb.run?.error ?? null),
     render: thumb.render?.key ?? null,
+    layers: thumb.design.layers.length,
     images: thumb.images.length,
   };
 }

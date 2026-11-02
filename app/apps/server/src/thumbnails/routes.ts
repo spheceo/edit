@@ -18,6 +18,7 @@ import { designOf, record, step } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
+import { canonical } from "./run.ts";
 import { sizeOf } from "./size.ts";
 
 type Context = RouteContext<App>;
@@ -285,8 +286,18 @@ export function routes(router: Router<App>): void {
       guard();
       try {
         const found = await cloud.get(params.id!);
-        if (found?.thumb.render == null) throw notFound("Not drawn yet.");
-        return picture(await assets.cached(app.store.cacheDir(), found.thumb.render.key), assets.typeOf(found.thumb.render.key));
+        if (found === null) throw notFound("This thumbnail was deleted.");
+        const { thumb } = found;
+        if (thumb.render !== null) return picture(await assets.cached(app.store.cacheDir(), thumb.render.key), assets.typeOf(thumb.render.key));
+        // Changed with nobody's page open to draw it (Claude's undo, another Mac): drawn here, the canvas as it is, and kept.
+        if (thumb.design.layers.length === 0) throw notFound("Nothing on it yet.");
+        const { bytes } = await render.draw(contextOf(app).origin, thumb.id, thumb.design);
+        const key = await cloud.put(thumb.id, bytes, "image/png", "png");
+        await cloud.change(thumb.id, by(), (fresh) => {
+          if (fresh.render !== null || canonical(fresh.design) !== canonical(thumb.design)) return false;
+          fresh.render = { key, at: Date.now() };
+        });
+        return picture(bytes, "image/png", "private, no-cache");
       } catch (error) {
         failed(error);
       }

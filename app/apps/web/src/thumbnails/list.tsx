@@ -73,8 +73,8 @@ export function ThumbnailsScreen() {
             {rows.map((row) => (
               <button key={row.id} onClick={() => navigate(`/thumbnails/${row.id}`)} className="group flex flex-col gap-2 rounded-xl p-1.5 text-left transition-colors hover:bg-hover">
                 <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-panel ring-1 ring-line">
-                  {row.summary.render !== null ? (
-                    <img src={renderUrl(row.id, row.updatedAt)} alt="" loading="lazy" className="size-full object-cover" />
+                  {row.summary.render !== null || (row.summary.layers ?? 1) > 0 ? (
+                    <Drawing id={row.id} at={row.updatedAt} />
                   ) : (
                     <div className="flex size-full items-center justify-center text-[12px] text-faint">Nothing drawn yet</div>
                   )}
@@ -95,4 +95,12 @@ export function ThumbnailsScreen() {
       </main>
     </div>
   );
+}
+
+/** The thumbnail as its canvas is now: the drawing kept, or drawn by the server when none was. */
+function Drawing({ id, at }: { id: string; at: number }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [at]);
+  if (failed) return <div className="flex size-full items-center justify-center text-[12px] text-faint">Nothing drawn yet</div>;
+  return <img src={renderUrl(id, at)} alt="" loading="lazy" onError={() => setFailed(true)} className="size-full object-cover" />;
 }

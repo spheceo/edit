@@ -4,12 +4,13 @@
 // board and making the changes reviewers ask for there. Claude's tools are
 // served at /mcp/ideas/<token> (run.ts), for the runs on this Mac only.
 
-import { WORKSPACE_NAMES, WORKSPACES, type Workspace } from "@edit/types/ideas";
+import { footageIn, footageKind, footageLine, WORKSPACE_NAMES, WORKSPACES, type IdeaFootage, type Workspace } from "@edit/types/ideas";
 import type { ChangeCard, Idea, IdeaImage, IdeaPlace, IdeaRow, IdeaSource, IdeasHome, IdeaTitle } from "@edit/types/ideas";
 
 import { creator } from "../accounts.ts";
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import * as imports from "../writer/imports.ts";
 import { ApiError, bad, empty, json, notFound } from "../http/errors.ts";
 import { readBytes, readJson, type RouteContext, type Router } from "../http/router.ts";
 import * as kinds from "../kinds.ts";
@@ -162,7 +163,7 @@ type Patch = {
   main?: string | null;
   thumbnailGuide?: string;
   summary?: string;
-  footage?: string;
+  footage?: { id?: string; url: string; reuse?: boolean; title?: string }[];
   notes?: string;
   steer?: string;
   wantsSummary?: boolean;
@@ -201,13 +202,29 @@ export function applyPatch(idea: Idea, patch: Patch, who: string): void {
     idea.thumbnailGuide = patch.thumbnailGuide.trim() === "" ? "" : cleanGuide(patch.thumbnailGuide);
     idea.guideBy = who;
   }
-  for (const [key, max] of [["summary", 600], ["footage", 2000], ["notes", 8000], ["steer", 600]] as const) {
+  for (const [key, max] of [["summary", 600], ["notes", 8000], ["steer", 600]] as const) {
     const value = patch[key];
     if (value === undefined) continue;
     if (typeof value !== "string" || value.length > max) throw bad(`${key} is at most ${max} characters.`);
     idea[key] = value.trim();
   }
-  if (patch.footage !== undefined && idea.footage !== "" && !/^https:\/\/(drive|docs)\.google\.com\//.test(idea.footage)) throw bad("The footage is a Google Drive link.");
+  if (patch.footage !== undefined) {
+    if (!Array.isArray(patch.footage) || patch.footage.length > 30) throw bad("footage is a list of at most 30 links.");
+    const before = new Map(idea.footage.map((one) => [one.id, one]));
+    const next: IdeaFootage[] = [];
+    for (const given of patch.footage) {
+      const url = typeof given?.url === "string" ? given.url.trim() : "";
+      const kind = footageKind(url);
+      if (kind === null || url.length > 2000) throw bad(`${url || "That"} isn't a YouTube or Google Drive link.`);
+      if (next.some((one) => one.url === url)) continue;
+      const was = given.id === undefined ? undefined : before.get(given.id);
+      const title = typeof given.title === "string" && given.title.trim() !== "" ? given.title.trim().slice(0, 300) : was?.url === url ? was.title : undefined;
+      const problem = was?.url === url ? was.problem : undefined;
+      // A script's Doc is only ever a reuse (its case, as written).
+      next.push({ id: was?.id ?? shortId(), url, kind, reuse: kind === "doc" || given.reuse === true, ...(title !== undefined ? { title } : {}), ...(problem !== undefined ? { problem } : {}) });
+    }
+    idea.footage = next;
+  }
   if (patch.wantsSummary !== undefined) idea.wantsSummary = patch.wantsSummary === true;
   if (patch.images !== undefined) {
     if (!Array.isArray(patch.images)) throw bad("images must be the pictures' ids, in order.");
@@ -240,6 +257,43 @@ export function readiness(idea: Idea): string[] {
 }
 
 const IMAGE_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" };
+
+/** Ideas whose footage is being named now. */
+const naming = new Set<string>();
+
+/**
+ * Footage not yet checked, named as Script mode reads it (the video's title,
+ * the Drive folder's name) or marked with why it can't be imported, in the
+ * background: YouTube's details take ~20 s through the proxy, and the page
+ * that added it may be gone by then (Nov 2: closed early, nothing was named).
+ */
+export function nameFootage(app: App, id: string, who: string, idea: Idea | null = null): void {
+  if (naming.has(id) || (idea !== null && !idea.footage.some(unchecked))) return;
+  naming.add(id);
+  void (async () => {
+    const found = idea ?? (await cloud.get(id))?.idea ?? null;
+    const wanted = found?.footage.filter(unchecked) ?? [];
+    if (wanted.length === 0) return;
+    const checked = await imports.checkVideos(app, wanted.map(footageLine));
+    const byUrl = new Map(checked.map((one) => [one.url, one]));
+    await cloud.change(id, who, (fresh) => {
+      let changed = false;
+      for (const one of fresh.footage) {
+        const check = byUrl.get(one.url);
+        if (check === undefined || !unchecked(one)) continue;
+        if (check.title !== "") one.title = check.title.slice(0, 300);
+        else if (check.problem !== null) one.problem = check.problem.slice(0, 300);
+        else continue;
+        changed = true;
+      }
+      return changed;
+    });
+  })()
+    .catch((error: unknown) => diag.warn("ideas", `${id}: naming its footage: ${diag.messageOf(error)}`))
+    .finally(() => naming.delete(id));
+}
+
+const unchecked = (one: IdeaFootage) => one.title === undefined && one.problem === undefined;
 
 /** A picture uploaded to the idea's folder on R2. */
 async function upload(id: string, bytes: Uint8Array, type: string, name: string): Promise<IdeaImage> {
@@ -290,7 +344,7 @@ async function fromCard(given: string, workspace: Workspace): Promise<string> {
   const lane = lanes.find((one) => one.name === card.list)?.key ?? "";
   const pictures = card.attachments.filter((one) => one.image);
   const images: IdeaImage[] = (card.cover !== null ? [...pictures].sort((a, b) => Number(b.url === card.cover) - Number(a.url === card.cover)) : pictures).slice(0, 8).map((one) => ({ id: shortId(), name: one.name.replace(/\.[a-z0-9]{2,5}$/i, "").slice(0, 80) || "picture", url: one.url, from: "card" as const }));
-  const idea = run.fresh(newId(), who, { workspace, sources: found, steer: "", wantsSummary: parsed.summary !== "", images, footage: parsed.footage });
+  const idea = run.fresh(newId(), who, { workspace, sources: found, steer: "", wantsSummary: parsed.summary !== "", images, footage: footageIn(parsed.footage, shortId).footage });
   idea.titles = parsed.titles.map((text) => ({ id: shortId(), text, by: "the card", at: Date.now() }));
   idea.main = idea.titles[0]?.text ?? null;
   idea.thumbnailGuide = parsed.guide === "" ? "" : cleanGuide(parsed.guide);
@@ -326,8 +380,9 @@ export function routes(router: Router<App>): void {
       if (links.length === 0) throw bad("Paste a YouTube video or an article's link.");
       if (links.length > 20) throw bad("Twenty links at most at once.");
       const steer = typeof body.steer === "string" ? body.steer.trim().slice(0, 600) : "";
-      const footage = typeof body.footage === "string" ? body.footage.trim() : "";
-      if (footage !== "" && !/^https:\/\/(drive|docs)\.google\.com\//.test(footage)) throw bad("The footage is a Google Drive link.");
+      const pasted = footageIn(typeof body.footage === "string" ? body.footage : "", shortId);
+      if (pasted.refused.length > 0) throw bad(`The footage is YouTube or Google Drive links: ${pasted.refused[0]} isn't one.`);
+      const footage = pasted.footage;
       const who = by();
       const made: { id: string; link: string }[] = [];
       const refused: { link: string; why: string; id?: string }[] = [];
@@ -345,7 +400,7 @@ export function routes(router: Router<App>): void {
               return;
             }
             const source = await sourceOf(link);
-            const idea = run.fresh(newId(), who, { workspace, sources: [source], steer, wantsSummary: body.summary === true, footage: links.length === 1 ? footage : "" });
+            const idea = run.fresh(newId(), who, { workspace, sources: [source], steer, wantsSummary: body.summary === true, footage: links.length === 1 ? footage : [] });
             await cloud.commit(idea, 0, who);
             made.push({ id: idea.id, link });
           } catch (error) {
@@ -355,6 +410,7 @@ export function routes(router: Router<App>): void {
       );
       const order = (link: string) => links.indexOf(link);
       made.sort((a, b) => order(a.link) - order(b.link));
+      if (footage.length > 0) for (const one of made) nameFootage(context.app, one.id, who);
       for (const one of made) await run.repackage(contextOf(context.app), one.id).catch((error: unknown) => diag.warn("ideas", `${one.id}: ${diag.messageOf(error)}`));
       return json({ ideas: made, refused });
     })
@@ -370,11 +426,14 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
-    .get("/api/ideas/{id}", async ({ params }: Context) => {
+    .get("/api/ideas/{id}", async ({ params, app }: Context) => {
       guard();
       await guardId(params.id!);
       try {
-        return json(await page(params.id!));
+        const shown = await page(params.id!);
+        // Footage nobody has checked (an idea from before Nov 2, a card's), named as it's opened.
+        nameFootage(app, shown.idea.id, by(), shown.idea);
+        return json(shown);
       } catch (error) {
         failed(error);
       }
@@ -387,6 +446,7 @@ export function routes(router: Router<App>): void {
       const who = by();
       try {
         const { idea, rev } = await cloud.change(context.params.id!, who, (idea) => applyPatch(idea, patch, who));
+        if (patch.footage !== undefined) nameFootage(context.app, idea.id, who, idea);
         return json({ idea, rev });
       } catch (error) {
         failed(error);

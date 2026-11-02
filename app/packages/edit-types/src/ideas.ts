@@ -59,6 +59,62 @@ export type IdeaImage = {
 /** What a frame of the case's video is for (Sphe, Nov 2: "we pick the base frame e.g outside the house… and we pick the subjects, e.g the father, the child"). */
 export type IdeaFrame = { at: number; use: "base" | "subject" | "base_and_subject"; who?: string };
 
+/**
+ * A piece of the footage for the script, as New project takes it (Sphe, Nov 2:
+ * "we can allow for many options added each item a footage link and we detect
+ * youtube and drive. so we are able to mark a case as reuse etc. basically how
+ * things we would expect for us to start a script"): a YouTube or Drive video
+ * to write from, or a case the channel already covered, reused as it was (a
+ * video, or its script's Doc).
+ */
+export type IdeaFootage = {
+  id: string;
+  url: string;
+  kind: FootageKind;
+  reuse: boolean;
+  /** As Script mode reads it: the video's title, the Drive folder's name (named by the server once it's added). */
+  title?: string;
+  /** Why Script mode couldn't import it ("That Drive link has no recordings."), when it was checked and can't. */
+  problem?: string;
+};
+export type FootageKind = "youtube" | "drive" | "doc";
+
+/** What a footage link is: a YouTube or Drive video, a Google Doc (a script, reused), or null. */
+export function footageKind(url: string): FootageKind | null {
+  const text = url.trim();
+  if (!/^https?:\/\//i.test(text)) return null;
+  if (/^https?:\/\/(?:www\.|m\.)?(?:youtube\.com|youtu\.be)\//i.test(text)) return "youtube";
+  if (/^https?:\/\/docs\.google\.com\/document\//i.test(text)) return "doc";
+  if (/^https?:\/\/(?:drive|docs)\.google\.com\//i.test(text)) return "drive";
+  return null;
+}
+
+/**
+ * Footage as pasted: each link on its own, a reuse when its line says so
+ * ("REUSE <link>", "reused: <link>", Script mode's way), a Doc always a reuse.
+ * Links that are neither YouTube nor Drive are given back apart.
+ */
+export function footageIn(text: string, newId: () => string): { footage: IdeaFootage[]; refused: string[] } {
+  const footage: IdeaFootage[] = [];
+  const refused: string[] = [];
+  for (const line of text.split(/\n+/)) {
+    for (const found of line.matchAll(/https?:\/\/[^\s)\]"'<>]+/g)) {
+      const url = found[0].replace(/[.,;]+$/, "");
+      const kind = footageKind(url);
+      if (kind === null) {
+        refused.push(url);
+        continue;
+      }
+      if (footage.some((one) => one.url === url)) continue;
+      footage.push({ id: newId(), url, kind, reuse: kind === "doc" || /\breuse/i.test(line.replace(url, "")) });
+    }
+  }
+  return { footage, refused };
+}
+
+/** A footage line as Script mode reads it (writer/trello.ts `line`): "REUSE <link>" for a reuse. */
+export const footageLine = (one: Pick<IdeaFootage, "url" | "reuse">): string => (one.reuse ? `REUSE ${one.url}` : one.url);
+
 /** A thumbnail that already worked (an approved card's cover), the guide's starting point. */
 export type IdeaBase = { title: string; cardUrl: string; image: string };
 
@@ -125,8 +181,8 @@ export type Idea = {
   base: IdeaBase | null;
   images: IdeaImage[];
   summary: string;
-  /** The footage's Drive folder, when someone has it. */
-  footage: string;
+  /** What the script is written from (a Drive folder until Nov 2, now a list): videos, and cases reused as they were. */
+  footage: IdeaFootage[];
   notes: string;
   status: "draft" | "ready" | "sent";
   /** Why Claude didn't repackage it (no transcript, a link it couldn't read). */

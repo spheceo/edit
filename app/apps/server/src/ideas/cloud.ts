@@ -5,7 +5,7 @@
 // another Mac's (or this Mac's own run), it reads again and makes the change
 // on top, so neither is lost.
 
-import type { Idea, IdeaRow, IdeaSummary } from "@edit/types/ideas";
+import { footageIn, type Idea, type IdeaRow, type IdeaSummary } from "@edit/types/ideas";
 
 import * as diag from "../diag.ts";
 import * as cloudStorage from "../cloud.ts";
@@ -40,7 +40,13 @@ export async function list(): Promise<Omit<IdeaRow, "place">[]> {
 /** One idea and the rev it's at, or null. */
 export async function get(id: string): Promise<{ idea: Idea; rev: number } | null> {
   const found = (await call("query", "ideas:get", { ideaId: id })) as { body: Idea; rev: number } | null;
-  return found === null ? null : { idea: { ...found.body, workspace: found.body.workspace ?? "interrogation" }, rev: found.rev };
+  return found === null ? null : { idea: { ...found.body, workspace: found.body.workspace ?? "interrogation", footage: footageOf(found.body.footage) }, rev: found.rev };
+}
+
+/** An idea's footage as a list: until Nov 2 it was one Drive folder's link. */
+function footageOf(given: unknown): Idea["footage"] {
+  if (Array.isArray(given)) return given as Idea["footage"];
+  return typeof given === "string" ? footageIn(given, () => Math.random().toString(36).slice(2, 10)).footage : [];
 }
 
 /** Commits `idea` as the next rev after `baseRev`; the new rev. */

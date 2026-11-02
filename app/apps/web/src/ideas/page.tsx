@@ -7,7 +7,7 @@
 // the editor's own chat (AgentPanel's turns and composer, the same components). One main action: send the idea to the
 // board, or update its card once the reviewers' changes are made.
 
-import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, Image as ImageIcon, Loader, MoreHorizontal, Plus, RotateCw, Send, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, Loader, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer, ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
@@ -16,7 +16,7 @@ import { StartedBy } from "../components/StartedBy";
 import { Button, cx, Modal, Spinner } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
 import { buildTurns } from "../lib/agentTurns";
-import { WORKSPACE_NAMES, type IdeaImage } from "@edit/types/ideas";
+import { footageIn, footageLine, WORKSPACE_NAMES, type IdeaFootage, type IdeaImage } from "@edit/types/ideas";
 import { ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
@@ -53,7 +53,7 @@ function cardMarkdown(idea: Idea): string {
     "",
     "Case:",
     ...idea.sources.map((one) => one.url),
-    ...(idea.footage ? ["", "Footage:", idea.footage] : []),
+    ...(idea.footage.length > 0 ? ["", "Footage:", ...idea.footage.map(footageLine)] : []),
   ]
     .filter((line, index) => line !== "" || index > 0)
     .join("\n")
@@ -435,7 +435,7 @@ function Changes({ page, busy, onMake }: { page: Page; busy: string | null; onMa
 
 // ---------------------------------------------------------------- the form (Sphe Research's thread form)
 
-type Section = "summary" | "titles" | "guide" | "case" | "footage" | "notes";
+type Section = "summary" | "titles" | "guide" | "case" | "notes";
 
 function SectionHeader({ label, section, editing, onToggle, action, hint }: { label: string; section: Section; editing: Section | null; onToggle: (section: Section | null) => void; action?: ReactNode; hint?: string }) {
   const active = editing === section;
@@ -475,7 +475,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
     focus.current = null;
   }, [titles.length, editing]);
 
-  const value = (section: Section) => (section === "summary" ? idea.summary : section === "guide" ? idea.thumbnailGuide : section === "footage" ? idea.footage : section === "notes" ? idea.notes : "");
+  const value = (section: Section) => (section === "summary" ? idea.summary : section === "guide" ? idea.thumbnailGuide : section === "notes" ? idea.notes : "");
   /** Opens a section (saving the one open before), or closes it saving what was written. */
   const toggle = (next: Section | null) => {
     setMenuFor(null);
@@ -493,7 +493,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
     }
     if (section === "case") return;
     if (text.trim() === value(section).trim()) return;
-    const patch: IdeaChange = section === "summary" ? { summary: text } : section === "guide" ? { thumbnailGuide: text } : section === "footage" ? { footage: text } : { notes: text };
+    const patch: IdeaChange = section === "summary" ? { summary: text } : section === "guide" ? { thumbnailGuide: text } : { notes: text };
     void onChange(patch);
   };
   const done = () => toggle(null);
@@ -630,21 +630,104 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
         </div>
       </section>
 
-      <section>
-        <SectionHeader label="Footage" section="footage" editing={editing} onToggle={toggle} />
-        {editing === "footage" ? (
-          <input autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => saveOnEnter(event, done)} placeholder="https://drive.google.com/drive/folders/…" aria-label="Footage folder" className={cx(FIELD, "mt-2")} />
-        ) : idea.footage ? (
-          <a href={idea.footage} target="_blank" rel="noreferrer" className="mt-2 block break-all text-[14.5px] text-amber-200/85 underline decoration-amber-300/30 underline-offset-2 hover:decoration-amber-300/70">
-            {idea.footage}
-          </a>
-        ) : (
-          <p className="mt-2 text-[14.5px] text-white/25">No footage folder</p>
-        )}
-      </section>
+      <Footage idea={idea} onChange={onChange} />
 
       {/* Notes (idea.notes, the team's, never on the card) are hidden for now: Sphe, Nov 2, "remove this for now". */}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- the footage
+
+const FOOTAGE_ICON = { youtube: SquarePlay, drive: FolderOpen, doc: FileText } as const;
+const FOOTAGE_KIND = { youtube: "YouTube", drive: "Drive", doc: "Script Doc" } as const;
+
+/**
+ * What the script is written from, as New project takes it (Sphe, Nov 2: "we
+ * can allow for many options added each item a footage link and we detect
+ * youtube and drive. so we are able to mark a case as reuse etc. basically how
+ * things we would expect for us to start a script"): links added one or many
+ * at a time, each a YouTube or Drive video (or a script's Doc, a reuse), named
+ * as Script mode reads it, ticked Reuse for a case the channel already
+ * covered. Start the script opens New project with them and the main title.
+ */
+function Footage({ idea, onChange }: { idea: Idea; onChange: (patch: IdeaChange) => Promise<unknown> }) {
+  const [adding, setAdding] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
+  // The server names each link as Script mode reads it once it's saved (YouTube's details take ~20 s); the page shows it on its next look.
+  const save = (footage: IdeaFootage[]) => onChange({ footage: footage.map(({ id, url, reuse, title }) => ({ id, url, reuse, ...(title !== undefined ? { title } : {}) })) });
+  const add = async (text: string) => {
+    const { footage, refused } = footageIn(text, () => Math.random().toString(36).slice(2, 10));
+    setProblem(refused.length > 0 ? `${refused[0]} isn't a YouTube or Google Drive link.` : null);
+    const fresh = footage.filter((one) => !idea.footage.some((had) => had.url === one.url));
+    if (fresh.length === 0) return;
+    setAdding("");
+    await save([...idea.footage, ...fresh]);
+  };
+  const startScript = () => {
+    // The case's own video goes in too when no footage of the case is listed (a bodycam repost is its own footage).
+    const own = idea.footage.some((one) => !one.reuse) ? [] : idea.sources.flatMap((one) => (one.kind === "youtube" ? [one.url] : []));
+    const text = [...own, ...idea.footage.map(footageLine)].join("\n");
+    sessionStorage.setItem("edit.newProject", JSON.stringify({ title: idea.main ?? idea.titles[0]?.text ?? "", text, style: idea.workspace === "bodycam" ? "bodycam" : "interrogation" }));
+    navigate("/");
+  };
+  const canStart = idea.footage.length > 0 || idea.sources.some((one) => one.kind === "youtube");
+  return (
+    <section>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className={LABEL}>Footage</h3>
+        {canStart && (
+          <button type="button" onClick={startScript} className="rounded-lg px-2 py-1 text-[12px] text-white/55 transition-colors hover:bg-white/[0.05] hover:text-white">
+            Start the script
+          </button>
+        )}
+      </div>
+      {idea.footage.length > 0 && (
+        <ul className="mt-2 flex flex-col divide-y divide-white/[0.05] rounded-xl border border-white/[0.06]">
+          {idea.footage.map((one) => {
+            const Icon = FOOTAGE_ICON[one.kind];
+            return (
+              <li key={one.id} className="group/footage flex items-center gap-3 px-3 py-2">
+                <Icon size={15} strokeWidth={1.8} className={cx("shrink-0", one.kind === "youtube" ? "text-red-300/70" : "text-white/40")} aria-label={FOOTAGE_KIND[one.kind]} />
+                <span className="min-w-0 flex-1">
+                  <a href={one.url} target="_blank" rel="noreferrer" title={one.url} className="block truncate text-[14px] text-white/85 hover:text-white">
+                    {one.title ?? one.url}
+                  </a>
+                  {one.title === undefined && one.problem === undefined && <span className="shimmer block text-[11.5px] text-white/30">Checking…</span>}
+                  {one.problem !== undefined && !one.reuse && <span className="block truncate text-[11.5px] text-red-200/70">{one.problem}</span>}
+                </span>
+                <label className={cx("flex shrink-0 items-center gap-1.5 text-[12px]", one.kind === "doc" ? "text-white/30" : "cursor-pointer text-white/50")} title="A case the channel already covered: put in as it was, not written again">
+                  <input type="checkbox" checked={one.reuse} disabled={one.kind === "doc"} onChange={(event) => void save(idea.footage.map((other) => (other.id === one.id ? { ...other, reuse: event.target.checked } : other)))} />
+                  Reuse
+                </label>
+                <button type="button" aria-label="Remove this footage" title="Remove" onClick={() => void save(idea.footage.filter((other) => other.id !== one.id))} className="grid size-6 shrink-0 place-items-center rounded-md text-white/25 opacity-0 transition-opacity group-hover/footage:opacity-100 hover:bg-white/[0.06] hover:text-white/70">
+                  <X size={13} strokeWidth={2} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <input
+        value={adding}
+        onChange={(event) => setAdding(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          void add(adding);
+        }}
+        onPaste={(event) => {
+          const pasted = event.clipboardData.getData("text/plain");
+          if (!/https?:\/\//.test(pasted)) return;
+          event.preventDefault();
+          void add(pasted);
+        }}
+        placeholder={idea.footage.length === 0 ? "Paste the footage: YouTube or Drive links, one or many" : "Add footage"}
+        aria-label="Add footage"
+        className={cx(FIELD, "mt-2 text-[13.5px]")}
+      />
+      {problem !== null && <p className="mt-1.5 text-[12px] text-red-200/70">{problem}</p>}
+    </section>
   );
 }
 

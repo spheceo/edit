@@ -4,7 +4,7 @@
 // on changes, and an idea's card written as the board writes one (Sphe
 // Research's Titles, Thumbnail Guide, Case).
 
-import type { ChangeCard, Idea, IdeaCard, IdeaComment, IdeaPlace, Workspace } from "@edit/types/ideas";
+import { footageLine, type ChangeCard, type Idea, type IdeaCard, type IdeaComment, type IdeaPlace, type Workspace } from "@edit/types/ideas";
 
 import * as relay from "../relay.ts";
 import { cleanTitle } from "./policy.ts";
@@ -75,7 +75,8 @@ export function cardText(idea: Idea): string {
   lines.push("Titles:", ...orderedTitles(idea).map((one) => `- ${one}`), "");
   lines.push("Thumbnail Guide:", idea.thumbnailGuide.trim(), ...idea.images.map(() => "[image]"), "");
   lines.push("Case:", ...idea.sources.map((one) => one.url), "");
-  if (idea.footage.trim() !== "") lines.push("Footage:", idea.footage.trim());
+  // As Script mode reads a card's footage: a reuse on its own "REUSE <link>" line.
+  if (idea.footage.length > 0) lines.push("Footage:", ...idea.footage.map(footageLine));
   return lines.join("\n").trim();
 }
 
@@ -111,6 +112,7 @@ export async function update(idea: Idea): Promise<{ url: string; labelled: boole
 
 /** What a card's description says, read as the board writes it (and as people write it by hand). */
 export type Parsed = { titles: string[]; guide: string; links: string[]; footage: string; summary: string; pictures: string[] };
+// `footage`: the Footage section's lines as written, read into a list with footageIn.
 
 const HEADING = /^\s*\**\s*(titles?|thumbnail guide|thumb(?:nail)?|case|footage|summary|context(?: and more)?|guide \d+.*?)\s*\**\s*:\s*(.*)$/i;
 
@@ -118,6 +120,7 @@ export function parseCard(name: string, desc: string): Parsed {
   // Trello's Markdown: zero-width joiners on empty lines, escaped underscores, links as [url](url "title").
   const text = desc.replace(/[​-‍﻿]/g, "").replace(/\\_/g, "_");
   const out: Parsed = { titles: [], guide: "", links: [], footage: "", summary: "", pictures: [] };
+  const footage: string[] = [];
   const guide: string[] = [];
   let section = "";
   for (const raw of text.split("\n")) {
@@ -131,7 +134,8 @@ export function parseCard(name: string, desc: string): Parsed {
       const rest = heading[2]!.trim();
       if (rest === "") continue;
       if (section === "summary") out.summary = rest;
-      else if (section === "case" || section === "footage") collect(rest, section, out);
+      else if (section === "case") collect(rest, out);
+      else if (section === "footage") footage.push(rest);
       else if (section === "guide") guide.push(rest);
       continue;
     }
@@ -142,8 +146,10 @@ export function parseCard(name: string, desc: string): Parsed {
     } else if (section === "guide") {
       const words = bare.replace(/^[-*•]+\s*/, "").trim();
       if (words !== "" && !/^text\s*:?$/i.test(words) && !/^https?:\/\//.test(words)) guide.push(words);
-    } else if (section === "case" || section === "footage") collect(bare, section, out);
+    } else if (section === "case") collect(bare, out);
+    else if (section === "footage") footage.push(bare);
   }
+  out.footage = footage.join("\n");
   if (out.links.length === 0) for (const link of text.matchAll(/https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\s)\]"']+/g)) if (!out.links.includes(link[0])) out.links.push(link[0]);
   const cleanName = name.replace(/^\s*\d+\)\s*/, "").trim();
   if (out.titles.length === 0 && /\p{L}/u.test(cleanName) && !/^https?:\/\//.test(cleanName)) out.titles.push(cleanName);
@@ -151,11 +157,10 @@ export function parseCard(name: string, desc: string): Parsed {
   return out;
 }
 
-function collect(text: string, section: string, out: Parsed): void {
+function collect(text: string, out: Parsed): void {
   for (const link of text.matchAll(/https?:\/\/[^\s)\]"']+/g)) {
     const url = link[0].replace(/[.,]+$/, "");
-    if (section === "footage") out.footage ||= url;
-    else if (!out.links.includes(url)) out.links.push(url);
+    if (!out.links.includes(url)) out.links.push(url);
   }
 }
 

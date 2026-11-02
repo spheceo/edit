@@ -745,7 +745,7 @@ export function fresh(id: string, by: string, given: Pick<Idea, "sources" | "ste
     base: null,
     images,
     summary: "",
-    footage: given.footage ?? "",
+    footage: given.footage ?? [],
     notes: "",
     status: "draft",
     skipped: null,

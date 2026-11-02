@@ -6,7 +6,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import type { Idea } from "@edit/types/ideas";
+import { footageIn, footageKind, footageLine, type Idea } from "@edit/types/ideas";
 
 import * as board from "../src/ideas/board.ts";
 import * as cloud from "../src/ideas/cloud.ts";
@@ -114,14 +114,14 @@ test("the closest approved titles share the act and the rare words, and never bo
 });
 
 test("a card is written as the board writes one, and read back from the shapes people write by hand", () => {
-  const idea = run.fresh("i1-test", "Sphe", { sources: [{ kind: "youtube", url: "https://www.youtube.com/watch?v=JcAHmNKiHic", videoId: "JcAHmNKiHic", title: "Dad Realizes", channel: "C", views: 1, outlier: "1x", publishedAt: null, durationSeconds: 1, thumbnail: "https://i.ytimg.com/vi/JcAHmNKiHic/maxresdefault.jpg" }], steer: "", wantsSummary: false, footage: "https://drive.google.com/drive/folders/abc" });
+  const idea = run.fresh("i1-test", "Sphe", { sources: [{ kind: "youtube", url: "https://www.youtube.com/watch?v=JcAHmNKiHic", videoId: "JcAHmNKiHic", title: "Dad Realizes", channel: "C", views: 1, outlier: "1x", publishedAt: null, durationSeconds: 1, thumbnail: "https://i.ytimg.com/vi/JcAHmNKiHic/maxresdefault.jpg" }], steer: "", wantsSummary: false, footage: [{ id: "f1", url: "https://drive.google.com/drive/folders/abc", kind: "drive", reuse: false }, { id: "f2", url: "https://youtu.be/old1", kind: "youtube", reuse: true }] });
   idea.titles = [{ id: "1", text: "First Title", by: "claude", at: 0 }, { id: "2", text: "Main Title", by: "claude", at: 0 }];
   idea.main = "Main Title";
   idea.thumbnailGuide = "we use the interrogation room and have the mom in the middle";
   // The video's thumbnail isn't put on by itself (the user, Nov 1: "just automatically passed through").
   expect(idea.images).toEqual([]);
   idea.images = [{ id: "t", name: "thumbnail", url: "https://i.ytimg.com/vi/JcAHmNKiHic/maxresdefault.jpg", from: "video" }];
-  expect(board.cardText(idea)).toBe("Titles:\n- Main Title\n- First Title\n\nThumbnail Guide:\nwe use the interrogation room and have the mom in the middle\n[image]\n\nCase:\nhttps://www.youtube.com/watch?v=JcAHmNKiHic\n\nFootage:\nhttps://drive.google.com/drive/folders/abc");
+  expect(board.cardText(idea)).toBe("Titles:\n- Main Title\n- First Title\n\nThumbnail Guide:\nwe use the interrogation room and have the mom in the middle\n[image]\n\nCase:\nhttps://www.youtube.com/watch?v=JcAHmNKiHic\n\nFootage:\nhttps://drive.google.com/drive/folders/abc\nREUSE https://youtu.be/old1");
   expect(board.cardImages(idea)).toEqual([{ name: "thumbnail", url: "https://i.ytimg.com/vi/JcAHmNKiHic/maxresdefault.jpg" }]);
   // Sphe Research's own cards.
   const sphe = board.parseCard("18 Year Old Killer", "Titles:\n\n- 18 Year Old Killer Realizes\n- 18 Year Old Has No Idea\n\nThumbnail Guide:\n\nwe use the interrogation room and have the detective showing her the footage\n\n![shot](https://trello.com/1/cards/a/attachments/b/download/shot.png)\n\nCase:\n\n[https://youtu.be/XfGOTlci\\_-Q](https://youtu.be/XfGOTlci\\_-Q \"smartCard-inline\")");
@@ -169,7 +169,26 @@ test("a person's change: their reworded title stays the main one, theirs by name
   expect([idea.thumbnailGuide, idea.guideBy]).toEqual(["we use the interrogation room and have the mom in the middle", "Sphe"]);
   applyPatch(idea, { status: "ready" }, "Sphe");
   expect(idea.status).toBe("ready");
-  expect(() => applyPatch(idea, { footage: "https://evil.example/x" }, "Sphe")).toThrow("Google Drive");
+  expect(() => applyPatch(idea, { footage: [{ url: "https://evil.example/x" }] }, "Sphe")).toThrow("isn't a YouTube or Google Drive link");
+  // A list of links, each kept by its id with its name; a script's Doc only ever a reuse.
+  idea.footage = [{ id: "f1", url: "https://drive.google.com/drive/folders/abc", kind: "drive", reuse: false }];
+  applyPatch(idea, { footage: [{ id: "f1", url: "https://drive.google.com/drive/folders/abc", title: "Bodycam folder" }, { url: "https://docs.google.com/document/d/xyz/edit" }, { url: "https://youtu.be/new1", reuse: true }, { url: "https://youtu.be/new1" }] }, "Sphe");
+  expect(idea.footage.map((one) => [one.id === "f1", one.kind, one.reuse, one.title ?? null])).toEqual([[true, "drive", false, "Bodycam folder"], [false, "doc", true, null], [false, "youtube", true, null]]);
+});
+
+test("footage is read from a paste or a card as Script mode reads it: YouTube and Drive links, a reuse when its line says so", () => {
+  let n = 0;
+  const read = footageIn("https://drive.google.com/drive/folders/1y9\nREUSE https://www.youtube.com/watch?v=abc123\nreused: https://docs.google.com/document/d/doc1/edit\nhttps://vimeo.com/1\nhttps://youtu.be/xyz.", () => `f${++n}`);
+  expect(read.footage).toEqual([
+    { id: "f1", url: "https://drive.google.com/drive/folders/1y9", kind: "drive", reuse: false },
+    { id: "f2", url: "https://www.youtube.com/watch?v=abc123", kind: "youtube", reuse: true },
+    { id: "f3", url: "https://docs.google.com/document/d/doc1/edit", kind: "doc", reuse: true },
+    { id: "f4", url: "https://youtu.be/xyz", kind: "youtube", reuse: false },
+  ]);
+  expect(read.refused).toEqual(["https://vimeo.com/1"]);
+  expect(footageKind("https://drive.google.com/file/d/1/view")).toBe("drive");
+  expect(footageKind("drive.google.com/x")).toBeNull();
+  expect(read.footage.map(footageLine)).toEqual(["https://drive.google.com/drive/folders/1y9", "REUSE https://www.youtube.com/watch?v=abc123", "REUSE https://docs.google.com/document/d/doc1/edit", "https://youtu.be/xyz"]);
 });
 
 test("a change overtaken by another Mac's is made again on top of it", async () => {

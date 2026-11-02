@@ -203,7 +203,7 @@ const KIND: Record<Workspace, { what: string; angle: string }> = {
   bodycam: { what: "YouTube bodycam videos or articles", angle: "e.g. what officers find inside, the moment she plays the victim" },
 };
 
-/** New idea: links (one idea each), interrogation or bodycam, the angle, a summary or not, the footage folder. */
+/** New idea: links (one idea each), interrogation or bodycam, the angle, a summary or not, the footage. */
 export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () => void; onMade: () => void }) {
   const [links, setLinks] = useState("");
   // The kinds this person works on (both: they choose; the last choice is remembered on this Mac).
@@ -301,11 +301,11 @@ export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () 
         </label>
         {count <= 1 && (
           <label className="mt-3 block text-[12px] text-muted">
-            Footage folder <span className="text-faint">(optional, Google Drive)</span>
+            Footage <span className="text-faint">(optional: YouTube or Drive links; the idea's page adds more and marks reuses)</span>
             <input
               value={footage}
               onChange={(event) => setFootage(event.target.value)}
-              placeholder="https://drive.google.com/drive/folders/…"
+              placeholder="https://drive.google.com/drive/folders/…  https://youtu.be/…"
               className="mt-1 h-[34px] w-full rounded-lg border border-line-strong bg-bg px-3 text-[13px] text-fg outline-none placeholder:text-faint focus:border-muted"
             />
           </label>

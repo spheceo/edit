@@ -50,7 +50,7 @@ export type IdeaChange = {
   main?: string | null;
   thumbnailGuide?: string;
   summary?: string;
-  footage?: string;
+  footage?: { id?: string; url: string; reuse?: boolean; title?: string }[];
   notes?: string;
   steer?: string;
   wantsSummary?: boolean;

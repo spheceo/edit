@@ -92,7 +92,11 @@ export function guideProblem(guide: string, frames = 0): string | null {
   // Acronyms (POV, CCTV, GPS) are fine; a capitalized word is a name or a sentence's start.
   const named = outside.match(/\b[A-Z][a-z]+\b/g);
   if (named !== null) return `has ${named.slice(0, 3).join(", ")} in capitals: write it in lowercase (only the caption, in quotes, keeps its own)`;
-  if (/\b(?:crop|close-?up|camera angle|lighting|lens|zoom)\b/i.test(outside)) return "gives camera, crop or lighting directions, which a guide never does";
+  // On an approved thumbnail's base, never; on a frame of the video, the bodycam's angle may need moving to show the
+  // subject (Sphe, Nov 2: "move the camera angle up so that we can see the upper body of the mom and baby").
+  if (frames === 0 && /\b(?:crop|close-?up|camera angle|lighting|lens|zoom)\b/i.test(outside)) return "gives camera, crop or lighting directions, which a guide never does";
+  // "for thumbnails we shouldnt have faces blurred": a person is described as they should look.
+  if (/\bblurr(?:ed|y|ing)\b/i.test(outside)) return "has someone blurred, and thumbnails never have blurred faces: describe them as they should look (“holding the baby”)";
   // Sphe, Nov 2: "we never want subjects looking into the camera, instead we have them "look into the eyes of the POV" or "look just above the camera"".
   if (/\b(?:look|looks|looking|stare|stares|staring|gaze|gazes|gazing)\s+(?:straight\s+|directly\s+|right\s+)?(?:in(?:to)?|at|down)\s+(?:the\s+)?(?:camera|lens|viewer)\b/i.test(outside))
     return "has the subject looking into the camera, which the team never wants: have them “look into the eyes of the POV” or “look just above the camera”";

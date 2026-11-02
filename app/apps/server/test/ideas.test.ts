@@ -396,6 +396,10 @@ test("a guide with frames names each by its place on the card, and keeps the tea
   expect(guideProblem("use the first frame. remove the video's subtitles.", 1)).toContain("the editor always does");
   expect(guideProblem("use the first frame. add “SHE ADMITTED IT” text.", 1)).toContain("“She admitted it”");
   expect(guideProblem("use the first frame. add “She admitted it” text.", 1)).toBeNull();
+  // Faces never blurred; the bodycam's angle moved on a frame, never on an approved thumbnail's base.
+  expect(guideProblem("use the first frame as the base. take the mom from the second frame, holding the blurred baby.", 2)).toContain("never have blurred faces");
+  expect(guideProblem("use the first frame as the base. move the camera angle up so that we can see the upper body of the mom and baby.", 1)).toBeNull();
+  expect(guideProblem("find an image of the mom. move the camera angle up.")).toContain("camera");
   // Repack's base caption is quoted as it is on the base.
   expect(guideProblem("find an image of the man. remove the current “CAUGHT” text.")).toBeNull();
 });

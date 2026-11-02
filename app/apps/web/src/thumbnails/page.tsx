@@ -6,7 +6,7 @@
 // dropped or pasted anywhere join the thumbnail and go to Claude with the
 // next message.
 
-import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Paperclip, Plus, Trash2, Type, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Paperclip, Plus, SlidersHorizontal, Trash2, Type, Upload, X } from "lucide-react";
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatComposer, ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
@@ -84,6 +84,8 @@ export function ThumbnailScreen({ id }: { id: string }) {
   const [missing, setMissing] = useState<string | null>(null);
   const [design, setDesign] = useState<Design | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // The layer whose Camera Raw (a picture) or text dialog is open.
+  const [openLayer, setOpenLayer] = useState<string | null>(null);
   const [library, setLibrary] = useState<Asset[]>([]);
   const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(0);
@@ -248,6 +250,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
   };
 
   const layer = design?.layers.find((one) => one.id === selected) ?? null;
+  const opened = design?.layers.find((one) => one.id === openLayer) ?? null;
   return (
     <div
       className="flex h-full flex-col bg-black"
@@ -283,7 +286,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
         <aside className="flex w-[244px] shrink-0 flex-col gap-2 overflow-y-auto pt-2">
           {thumb !== null && design !== null && (
             <>
-              <LayersPanel design={design} selected={selected} onSelect={setSelected} onChange={change} onAddText={() => addLayer(newText())} />
+              <LayersPanel design={design} selected={selected} onSelect={setSelected} onOpen={setOpenLayer} onChange={change} onAddText={() => addLayer(newText())} />
               <PicturesPanel
                 thumb={thumb}
                 uploading={uploading}
@@ -316,13 +319,27 @@ export function ThumbnailScreen({ id }: { id: string }) {
             </>
           )}
         </aside>
-        <main className="flex min-w-0 flex-1 flex-col gap-2 overflow-y-auto pt-2">
+        <main className="flex min-w-0 flex-1 flex-col gap-2 pt-2">
           {thumb === null || design === null ? (
             <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
           ) : (
             <>
-              <Stage canvas={canvas} design={design} selected={selected} onSelect={setSelected} onMove={(layerId, patch, keep) => changeLayer(layerId, patch, keep)} running={running} step={thumb.run?.step} />
-              {layer !== null ? <Inspector key={layer.id} layer={layer} onChange={(patch, keep) => changeLayer(layer.id, patch, keep)} /> : <Hint empty={design.layers.length === 0} />}
+              <Stage canvas={canvas} design={design} selected={selected} onSelect={setSelected} onOpen={(layerId) => setOpenLayer(layerId)} onMove={(layerId, patch, keep) => changeLayer(layerId, patch, keep)} running={running} step={thumb.run?.step} />
+              <LayerBar layer={layer} empty={design.layers.length === 0} onOpen={() => layer !== null && setOpenLayer(layer.id)} onDelete={() => layer !== null && (change({ layers: design.layers.filter((one) => one.id !== layer.id) }), setSelected(null))} />
+              {opened !== null && (
+                <LayerDialog
+                  key={opened.id}
+                  layer={opened}
+                  design={design}
+                  picture={picture}
+                  tick={tick}
+                  onClose={() => setOpenLayer(null)}
+                  onApply={(next) => {
+                    setOpenLayer(null);
+                    change({ layers: design.layers.map((one) => (one.id === next.id ? next : one)) });
+                  }}
+                />
+              )}
             </>
           )}
         </main>
@@ -414,19 +431,26 @@ function Header({ thumb, saving, credits, onTitle, onDownload, onDelete }: { thu
 
 // ---------------------------------------------------------------- the canvas
 
-function Stage({ canvas, design, selected, onSelect, onMove, running, step }: { canvas: React.RefObject<HTMLCanvasElement | null>; design: Design; selected: string | null; onSelect: (id: string | null) => void; onMove: (id: string, patch: Partial<ImageLayer> | Partial<TextLayer>, keep: boolean) => void; running: boolean; step?: string }) {
+function Stage({ canvas, design, selected, onSelect, onOpen, onMove, running, step }: { canvas: React.RefObject<HTMLCanvasElement | null>; design: Design; selected: string | null; onSelect: (id: string | null) => void; onOpen: (id: string) => void; onMove: (id: string, patch: Partial<ImageLayer> | Partial<TextLayer>, keep: boolean) => void; running: boolean; step?: string }) {
+  const area = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(0.5);
+  // The canvas as big as the space allows, at 16:9.
+  const [size, setSize] = useState({ width: 640, height: 360 });
   useEffect(() => {
-    const node = frame.current;
+    const node = area.current;
     if (node === null) return;
-    const observer = new ResizeObserver(() => setScale(node.clientWidth / WIDTH));
+    const observer = new ResizeObserver(() => {
+      const width = Math.min(node.clientWidth, (node.clientHeight * WIDTH) / HEIGHT);
+      setSize({ width, height: (width * HEIGHT) / WIDTH });
+    });
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+  const scale = size.width / WIDTH;
   const drag = useRef<{ id: string; mode: "move" | "resize"; x: number; y: number; start: Layer; kept: boolean } | null>(null);
   const layer = design.layers.find((one) => one.id === selected) ?? null;
-  const box = layer !== null ? boundsOf(layer) : null;
+  // Only something smaller than the canvas shows where it is (a caption, a sticker): the picture and full overlays never do.
+  const box = layer !== null && !covers(layer) ? boundsOf(layer) : null;
   const pointAt = (event: ReactPointerEvent) => {
     const rect = frame.current!.getBoundingClientRect();
     return { x: (event.clientX - rect.left) / scale, y: (event.clientY - rect.top) / scale };
@@ -434,9 +458,9 @@ function Stage({ canvas, design, selected, onSelect, onMove, running, step }: { 
   const pick = (x: number, y: number): Layer | null => {
     for (const one of [...design.layers].reverse()) {
       if (one.hidden) continue;
-      const bounds = boundsOf(one);
       // A full-canvas overlay isn't picked by a click through it: what's under it is.
-      if (one.kind === "image" && one.source.startsWith("asset:") && bounds.width >= WIDTH && bounds.height >= HEIGHT) continue;
+      if (one.kind === "image" && one.source.startsWith("asset:") && covers(one)) continue;
+      const bounds = boundsOf(one);
       if (x >= bounds.x && x <= bounds.x + bounds.width && y >= bounds.y && y <= bounds.y + bounds.height) return one;
     }
     return null;
@@ -454,16 +478,16 @@ function Stage({ canvas, design, selected, onSelect, onMove, running, step }: { 
     const dx = point.x - state.x;
     const dy = point.y - state.y;
     if (!state.kept && Math.abs(dx) + Math.abs(dy) < 2) return;
+    const start = state.start;
+    // The picture under everything isn't dragged about by a click on it.
+    if (state.mode === "move" && covers(start)) return;
     const keep = !state.kept;
     state.kept = true;
-    const start = state.start;
     if (state.mode === "move") onMove(state.id, { x: Math.round(start.x + dx), y: Math.round(start.y + dy) }, keep);
     else if (start.kind === "image") {
       // From the bottom-right corner; the picture keeps its shape unless Shift is held.
-      let width = Math.max(20, start.width + dx);
-      let height = Math.max(20, start.height + dy);
-      if (!event.shiftKey) height = (width * start.height) / start.width;
-      else width = Math.max(20, width);
+      const width = Math.max(20, start.width + dx);
+      const height = event.shiftKey ? Math.max(20, start.height + dy) : (width * start.height) / start.width;
       onMove(state.id, { width: Math.round(width), height: Math.round(height) }, keep);
     } else {
       const bounds = boundsOf(start);
@@ -472,24 +496,30 @@ function Stage({ canvas, design, selected, onSelect, onMove, running, step }: { 
     }
   };
   return (
-    <div className="relative">
+    <div ref={area} className="flex min-h-0 flex-1 items-center justify-center">
       <div
         ref={frame}
-        className="relative aspect-video w-full overflow-hidden rounded-lg bg-[#0d0d0d] ring-1 ring-line select-none"
+        style={{ width: size.width, height: size.height }}
+        className="relative shrink-0 overflow-hidden rounded-lg bg-[#0d0d0d] select-none"
         onPointerDown={(event) => {
           const point = pointAt(event);
           const hit = pick(point.x, point.y);
           onSelect(hit?.id ?? null);
           if (hit !== null) begin(event, "move", hit);
         }}
+        onDoubleClick={(event) => {
+          const rect = frame.current!.getBoundingClientRect();
+          const hit = pick((event.clientX - rect.left) / scale, (event.clientY - rect.top) / scale);
+          if (hit !== null) onOpen(hit.id);
+        }}
         onPointerMove={move}
         onPointerUp={() => (drag.current = null)}
       >
         <canvas ref={canvas} width={WIDTH} height={HEIGHT} className="block size-full" />
         {box !== null && layer !== null && (
-          <div className="pointer-events-none absolute border border-sky-400" style={{ left: box.x * scale, top: box.y * scale, width: box.width * scale, height: box.height * scale }}>
+          <div className="pointer-events-none absolute outline outline-1 outline-white/45 outline-dashed" style={{ left: box.x * scale, top: box.y * scale, width: box.width * scale, height: box.height * scale }}>
             <div
-              className="pointer-events-auto absolute -right-1.5 -bottom-1.5 size-3 cursor-nwse-resize rounded-sm border border-sky-400 bg-white"
+              className="pointer-events-auto absolute -right-1 -bottom-1 size-2 cursor-nwse-resize rounded-full bg-white shadow"
               onPointerDown={(event) => begin(event, "resize", layer)}
               onPointerMove={move}
               onPointerUp={() => (drag.current = null)}
@@ -512,8 +542,25 @@ function Stage({ canvas, design, selected, onSelect, onMove, running, step }: { 
   );
 }
 
-function Hint({ empty }: { empty: boolean }) {
-  return <p className="px-1 text-[12px] text-faint">{empty ? "Ask Claude in the chat, or drop a picture in and choose Use as base." : "Click a layer on the canvas or in Layers to change it. Drag to move, the corner to resize; arrows nudge, ⌘Z undoes."}</p>;
+/** Whether a layer covers the whole canvas (the picture, a full overlay). */
+const covers = (layer: Layer): boolean => layer.kind === "image" && layer.x <= 0 && layer.y <= 0 && layer.x + layer.width >= WIDTH && layer.y + layer.height >= HEIGHT;
+
+/** Under the canvas: the selected layer, and the way into its dialog. */
+function LayerBar({ layer, empty, onOpen, onDelete }: { layer: Layer | null; empty: boolean; onOpen: () => void; onDelete: () => void }) {
+  if (layer === null)
+    return <p className="flex h-9 shrink-0 items-center px-1 text-[12px] text-faint">{empty ? "Ask Claude in the chat, or drop a picture in and choose Use as base." : "Claude does the adjusting: ask in the chat. To do it by hand, choose a layer and open its settings."}</p>;
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-2 px-1">
+      {layer.kind === "text" ? <Type size={13} className="text-faint" /> : <ImageIcon size={13} className="text-faint" />}
+      <span className="min-w-0 truncate text-[13px] text-secondary">{layer.kind === "text" ? layer.text : layer.name}</span>
+      <Button variant="subtle" size="sm" onClick={onOpen}>
+        <SlidersHorizontal size={13} /> {layer.kind === "text" ? "Text settings" : "Camera Raw"}
+      </Button>
+      <IconButton label="Delete layer" onClick={onDelete}>
+        <Trash2 size={14} />
+      </IconButton>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------- the panels
@@ -531,7 +578,7 @@ function Panel({ title, icon, action, children }: { title: string; icon: ReactNo
   );
 }
 
-function LayersPanel({ design, selected, onSelect, onChange, onAddText }: { design: Design; selected: string | null; onSelect: (id: string | null) => void; onChange: (design: Design) => void; onAddText: () => void }) {
+function LayersPanel({ design, selected, onSelect, onOpen, onChange, onAddText }: { design: Design; selected: string | null; onSelect: (id: string | null) => void; onOpen: (id: string) => void; onChange: (design: Design) => void; onAddText: () => void }) {
   const move = (index: number, by: number) => {
     const layers = [...design.layers];
     const [one] = layers.splice(index, 1);
@@ -555,7 +602,7 @@ function LayersPanel({ design, selected, onSelect, onChange, onAddText }: { desi
           .map((layer, index) => ({ layer, index }))
           .reverse()
           .map(({ layer, index }) => (
-            <div key={layer.id} onClick={() => onSelect(layer.id)} className={cx("group flex h-8 cursor-default items-center gap-1.5 rounded-md px-1.5 text-[12px]", selected === layer.id ? "bg-active text-fg" : "text-secondary hover:bg-hover")}>
+            <div key={layer.id} onClick={() => onSelect(layer.id)} onDoubleClick={() => onOpen(layer.id)} className={cx("group flex h-8 cursor-default items-center gap-1.5 rounded-md px-1.5 text-[12px]", selected === layer.id ? "bg-active text-fg" : "text-secondary hover:bg-hover")}>
               {layer.kind === "text" ? <Type size={12} className="shrink-0 text-faint" /> : <ImageIcon size={12} className="shrink-0 text-faint" />}
               <span className={cx("min-w-0 flex-1 truncate", layer.hidden && "opacity-40")}>{layer.kind === "text" ? layer.text : layer.name}</span>
               <span className="hidden items-center group-hover:flex">
@@ -731,24 +778,24 @@ function AssetDialog({ file, onClose, onAdded }: { file: File | null; onClose: (
   );
 }
 
-// ---------------------------------------------------------------- the inspector
+// ---------------------------------------------------------------- a layer's dialog (Camera Raw for a picture)
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label className="flex h-7 items-center gap-2 text-[12px]">
-      <span className="w-[86px] shrink-0 text-muted">{label}</span>
+    <label className="flex h-8 items-center gap-3 text-[12px]">
+      <span className="w-[92px] shrink-0 text-muted">{label}</span>
       <div className="flex min-w-0 flex-1 items-center gap-2">{children}</div>
     </label>
   );
 }
 
-/** A Photoshop slider: drag the bar, or scrub the number. */
-function Slider({ label, value, min, max, onChange, onEnd, suffix }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void; onEnd: () => void; suffix?: string }) {
+/** Camera Raw's slider: drag the bar, or scrub the number; double-click the bar to put it back. */
+function Slider({ label, value, min, max, onChange, suffix, reset = 0 }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void; suffix?: string; reset?: number }) {
   return (
     <Row label={label}>
-      <input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} onPointerUp={onEnd} onKeyUp={onEnd} className="h-1 min-w-0 flex-1 accent-white" />
-      <div className="w-14 shrink-0">
-        <Scrub value={value} min={min} max={max} onChange={onChange} onEnd={onEnd} suffix={suffix} />
+      <input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} onDoubleClick={() => onChange(reset)} className="h-1 min-w-0 flex-1 accent-white" />
+      <div className="w-16 shrink-0">
+        <Scrub value={value} min={min} max={max} onChange={onChange} suffix={suffix} />
       </div>
     </Row>
   );
@@ -765,140 +812,183 @@ function ColorInput({ value, onChange }: { value: string; onChange: (value: stri
   );
 }
 
-function Group({ title, on, onToggle, children }: { title: string; on?: boolean; onToggle?: (on: boolean) => void; children?: ReactNode }) {
+/** One of the dialog's sections, as Camera Raw's panels: a title (and a switch for an effect that can be off). */
+function Section({ title, on, onToggle, children }: { title: string; on?: boolean; onToggle?: (on: boolean) => void; children?: ReactNode }) {
   return (
-    <div className="flex flex-col gap-0.5 rounded-lg border border-line bg-panel px-3 py-2">
-      <div className="flex h-6 items-center justify-between text-[12px] font-medium text-secondary">
+    <div className="flex flex-col border-b border-line px-4 py-3 last:border-b-0">
+      <div className="flex h-6 items-center justify-between text-[12px] font-semibold tracking-[0.02em] text-fg uppercase">
         {title}
         {onToggle !== undefined && <Switch checked={on === true} onChange={onToggle} />}
       </div>
-      {(on === undefined || on) && children}
+      {(on === undefined || on) && <div className="mt-1 flex flex-col">{children}</div>}
     </div>
   );
 }
 
-const ADJUSTMENTS: { key: keyof Adjust; label: string; min: number }[] = [
+const BASIC: { key: keyof Adjust; label: string; min: number }[] = [
   { key: "exposure", label: "Exposure", min: -100 },
   { key: "contrast", label: "Contrast", min: -100 },
-  { key: "saturation", label: "Saturation", min: -100 },
-  { key: "warmth", label: "Warmth", min: -100 },
-  { key: "shadows", label: "Shadows", min: -100 },
   { key: "highlights", label: "Highlights", min: -100 },
+  { key: "shadows", label: "Shadows", min: -100 },
+];
+const COLOUR: { key: keyof Adjust; label: string; min: number }[] = [
+  { key: "warmth", label: "Temperature", min: -100 },
+  { key: "saturation", label: "Saturation", min: -100 },
+];
+const EFFECTS: { key: keyof Adjust; label: string; min: number }[] = [
+  { key: "sharpen", label: "Sharpening", min: 0 },
   { key: "vignette", label: "Vignette", min: 0 },
-  { key: "sharpen", label: "Sharpen", min: 0 },
 ];
 
 const DEFAULT_SHADOW: Shadow = { color: "#000000", opacity: 75, angle: 120, distance: 6, spread: 20, size: 18 };
 
-function ShadowGroup({ shadow, set }: { shadow: Shadow | undefined; set: (shadow: Shadow | undefined, keep: boolean) => void }) {
+function ShadowSection({ shadow, set }: { shadow: Shadow | undefined; set: (shadow: Shadow | undefined) => void }) {
   const value = shadow ?? DEFAULT_SHADOW;
   const one = (key: keyof Shadow, label: string, min: number, max: number, suffix?: string) => (
-    <Slider label={label} value={value[key] as number} min={min} max={max} suffix={suffix} onChange={(next) => set({ ...value, [key]: next }, false)} onEnd={() => set({ ...value }, true)} />
+    <Slider label={label} value={value[key] as number} min={min} max={max} suffix={suffix} reset={DEFAULT_SHADOW[key] as number} onChange={(next) => set({ ...value, [key]: next })} />
   );
   return (
-    <Group title="Drop shadow" on={shadow !== undefined} onToggle={(on) => set(on ? DEFAULT_SHADOW : undefined, true)}>
+    <Section title="Drop shadow" on={shadow !== undefined} onToggle={(on) => set(on ? DEFAULT_SHADOW : undefined)}>
       <Row label="Colour">
-        <ColorInput value={value.color} onChange={(color) => set({ ...value, color }, true)} />
+        <ColorInput value={value.color} onChange={(color) => set({ ...value, color })} />
       </Row>
       {one("opacity", "Opacity", 0, 100, "%")}
       {one("angle", "Angle", -180, 180, "°")}
       {one("distance", "Distance", 0, 100, "px")}
       {one("spread", "Spread", 0, 100, "%")}
       {one("size", "Size", 0, 150, "px")}
-    </Group>
+    </Section>
   );
 }
 
-function Inspector({ layer, onChange }: { layer: Layer; onChange: (patch: Partial<ImageLayer> | Partial<TextLayer>, keep: boolean) => void }) {
-  // A slider's drag changes the canvas as it moves; one step of undo when it's let go.
-  const started = useRef(false);
-  const live = (patch: Partial<ImageLayer> | Partial<TextLayer>) => {
-    onChange(patch, !started.current);
-    started.current = true;
-  };
-  const done = () => (started.current = false);
-  const set = (patch: Partial<ImageLayer> | Partial<TextLayer>, keep: boolean) => (keep ? (done(), onChange(patch, true)) : live(patch));
+/**
+ * A layer's settings in a big dialog, as Photoshop's Camera Raw Filter (Sphe,
+ * Nov 2: "the adjustments and what not should be on a sort of camera raw
+ * filter dialog box menu thats big but the agent mainly controls this"): the
+ * thumbnail large on the left with the change on it as it's made, the panels
+ * on the right; OK keeps it (one step of undo), Cancel leaves it as it was.
+ */
+function LayerDialog({ layer, design, picture, tick, onClose, onApply }: { layer: Layer; design: Design; picture: (source: string) => HTMLImageElement | null; tick: number; onClose: () => void; onApply: (layer: Layer) => void }) {
+  const [draft, setDraft] = useState<Layer>(layer);
+  const preview = useRef<HTMLCanvasElement>(null);
+  const set = (patch: Partial<ImageLayer> | Partial<TextLayer>) => setDraft((last) => ({ ...last, ...patch }) as Layer);
+  useEffect(() => {
+    if (preview.current === null) return;
+    const frame = requestAnimationFrame(() => draw(preview.current!, { layers: design.layers.map((one) => (one.id === draft.id ? draft : one)) }, picture));
+    return () => cancelAnimationFrame(frame);
+  }, [draft, design, picture, tick]);
+  const width = Math.min(1320, window.innerWidth - 48);
   return (
-    <div className="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-2 pb-2">
-      <Group title={layer.kind === "text" ? "Text" : "Picture"}>
-        {layer.kind === "text" ? (
+    <Modal open onClose={onClose} width={width}>
+      <div className="flex h-[min(820px,calc(100vh-48px))] flex-col">
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
+          <SlidersHorizontal size={15} className="text-muted" />
+          <h2 className="text-[14px] font-semibold">{draft.kind === "image" ? "Camera Raw" : "Text settings"}</h2>
+          <span className="truncate text-[13px] text-muted">· {draft.kind === "text" ? draft.text : draft.name}</span>
+          <span className="ml-auto text-[12px] text-faint">Claude usually sets these: ask it in the chat.</span>
+        </div>
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-w-0 flex-1 items-center justify-center bg-black p-5">
+            <canvas ref={preview} width={WIDTH} height={HEIGHT} className="max-h-full max-w-full rounded-md" style={{ aspectRatio: `${WIDTH} / ${HEIGHT}` }} />
+          </div>
+          <div className="w-[340px] shrink-0 overflow-y-auto border-l border-line">
+            {draft.kind === "image" ? <PictureSections layer={draft} set={set} /> : <TextSections layer={draft} set={set} />}
+            <ShadowSection shadow={draft.shadow} set={(shadow) => set({ shadow })} />
+          </div>
+        </div>
+        <div className="flex h-14 shrink-0 items-center justify-end gap-2 border-t border-line px-4">
+          <Button variant="ghost" className="mr-auto" onClick={() => setDraft(layer)}>
+            Reset
+          </Button>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant="light" onClick={() => onApply(draft)}>
+            OK
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PictureSections({ layer, set }: { layer: ImageLayer; set: (patch: Partial<ImageLayer>) => void }) {
+  const adjust = (key: keyof Adjust, value: number) => set({ adjust: { ...NO_ADJUST, ...layer.adjust, [key]: value } });
+  const sliders = (list: typeof BASIC) => list.map((one) => <Slider key={one.key} label={one.label} value={layer.adjust?.[one.key] ?? 0} min={one.min} max={100} onChange={(value) => adjust(one.key, value)} />);
+  return (
+    <>
+      <Section title="Basic">{sliders(BASIC)}</Section>
+      <Section title="Colour">{sliders(COLOUR)}</Section>
+      <Section title="Detail and effects">{sliders(EFFECTS)}</Section>
+      <Section title="Crop">
+        <Row label="Fit">
+          <Select value={layer.fit} options={[{ value: "cover", label: "Fill (crop)" }, { value: "contain", label: "Fit inside" }, { value: "stretch", label: "Stretch" }]} onChange={(fit) => set({ fit })} />
+        </Row>
+        {layer.fit === "cover" && (
           <>
-            <textarea value={layer.text} rows={2} onChange={(event) => live({ text: event.target.value })} onBlur={done} className="mb-1 rounded-md border border-line bg-bg px-2 py-1.5 text-[13px] text-fg outline-none focus:border-line-strong" />
-            <Row label="Font">
-              <Select value={layer.font} options={FONTS.map((one) => ({ value: one.family as string, label: one.family }))} onChange={(font) => set({ font }, true)} />
-            </Row>
-            <Row label="Weight">
-              <Select value={layer.weight} options={[400, 500, 600, 700, 800, 900].map((one) => ({ value: one, label: String(one) }))} onChange={(weight) => set({ weight }, true)} />
-            </Row>
-            <Slider label="Size" value={layer.size} min={12} max={240} suffix="px" onChange={(size) => live({ size })} onEnd={done} />
-            <Slider label="Wraps at" value={layer.width} min={100} max={1280} suffix="px" onChange={(width) => live({ width })} onEnd={done} />
-            <Row label="Colour">
-              <ColorInput value={layer.color} onChange={(color) => set({ color }, true)} />
-            </Row>
-            <Row label="Align">
-              <Select value={layer.align} options={[{ value: "left", label: "Left" }, { value: "center", label: "Centre" }, { value: "right", label: "Right" }]} onChange={(align) => set({ align }, true)} />
-            </Row>
-            <Row label="Capitals">
-              <Switch checked={layer.uppercase === true} onChange={(uppercase) => set({ uppercase }, true)} />
-            </Row>
-          </>
-        ) : (
-          <>
-            <Row label="Fit">
-              <Select value={layer.fit} options={[{ value: "cover", label: "Fill (crop)" }, { value: "contain", label: "Fit inside" }, { value: "stretch", label: "Stretch" }]} onChange={(fit) => set({ fit }, true)} />
-            </Row>
-            {layer.fit === "cover" && (
-              <>
-                <Slider label="Zoom" value={Math.round((layer.zoom ?? 1) * 100)} min={100} max={400} suffix="%" onChange={(zoom) => live({ zoom: zoom / 100 })} onEnd={done} />
-                <Slider label="Across" value={Math.round((layer.focusX ?? 0.5) * 100)} min={0} max={100} suffix="%" onChange={(focus) => live({ focusX: focus / 100 })} onEnd={done} />
-                <Slider label="Down" value={Math.round((layer.focusY ?? 0.5) * 100)} min={0} max={100} suffix="%" onChange={(focus) => live({ focusY: focus / 100 })} onEnd={done} />
-              </>
-            )}
-            <Row label="Flip">
-              <Switch checked={layer.flip === true} onChange={(flip) => set({ flip }, true)} />
-            </Row>
+            <Slider label="Zoom" value={Math.round((layer.zoom ?? 1) * 100)} min={100} max={400} suffix="%" reset={100} onChange={(zoom) => set({ zoom: zoom / 100 })} />
+            <Slider label="Across" value={Math.round((layer.focusX ?? 0.5) * 100)} min={0} max={100} suffix="%" reset={50} onChange={(focus) => set({ focusX: focus / 100 })} />
+            <Slider label="Down" value={Math.round((layer.focusY ?? 0.5) * 100)} min={0} max={100} suffix="%" reset={50} onChange={(focus) => set({ focusY: focus / 100 })} />
           </>
         )}
-        <Slider label="Opacity" value={layer.opacity} min={0} max={100} suffix="%" onChange={(opacity) => live({ opacity })} onEnd={done} />
-        <Slider label="Rotation" value={layer.rotation ?? 0} min={-180} max={180} suffix="°" onChange={(rotation) => live({ rotation })} onEnd={done} />
-      </Group>
-      {layer.kind === "image" ? (
-        <Group title="Adjustments">
-          {ADJUSTMENTS.map((one) => (
-            <Slider key={one.key} label={one.label} value={layer.adjust?.[one.key] ?? 0} min={one.min} max={100} onChange={(value) => live({ adjust: { ...NO_ADJUST, ...layer.adjust, [one.key]: value } })} onEnd={done} />
-          ))}
-          <button onClick={() => set({ adjust: undefined }, true)} className="self-start rounded px-1 text-[12px] text-faint hover:text-fg">
-            Reset
-          </button>
-        </Group>
-      ) : (
-        <>
-          <Group title="Box behind" on={layer.box !== undefined} onToggle={(on) => set({ box: on ? { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 } : undefined }, true)}>
-            {layer.box !== undefined && (
-              <>
-                <Row label="Colour">
-                  <ColorInput value={layer.box.color} onChange={(color) => set({ box: { ...layer.box!, color } }, true)} />
-                </Row>
-                <Slider label="Opacity" value={layer.box.opacity} min={0} max={100} suffix="%" onChange={(opacity) => live({ box: { ...layer.box!, opacity } })} onEnd={done} />
-                <Slider label="Padding" value={layer.box.padX} min={0} max={80} suffix="px" onChange={(padX) => live({ box: { ...layer.box!, padX, padY: Math.round(padX * 0.45) } })} onEnd={done} />
-                <Slider label="Rounding" value={layer.box.radius} min={0} max={60} suffix="px" onChange={(radius) => live({ box: { ...layer.box!, radius } })} onEnd={done} />
-              </>
-            )}
-          </Group>
-          <Group title="Stroke" on={layer.stroke !== undefined} onToggle={(on) => set({ stroke: on ? { color: "#000000", width: 4 } : undefined }, true)}>
-            {layer.stroke !== undefined && (
-              <>
-                <Row label="Colour">
-                  <ColorInput value={layer.stroke.color} onChange={(color) => set({ stroke: { ...layer.stroke!, color } }, true)} />
-                </Row>
-                <Slider label="Width" value={layer.stroke.width} min={0} max={30} suffix="px" onChange={(width) => live({ stroke: { ...layer.stroke!, width } })} onEnd={done} />
-              </>
-            )}
-          </Group>
-        </>
-      )}
-      <ShadowGroup shadow={layer.shadow} set={(shadow, keep) => set({ shadow }, keep)} />
-    </div>
+        <Row label="Flip">
+          <Switch checked={layer.flip === true} onChange={(flip) => set({ flip })} />
+        </Row>
+        <Slider label="Rotation" value={layer.rotation ?? 0} min={-180} max={180} suffix="°" onChange={(rotation) => set({ rotation })} />
+        <Slider label="Opacity" value={layer.opacity} min={0} max={100} suffix="%" reset={100} onChange={(opacity) => set({ opacity })} />
+      </Section>
+    </>
+  );
+}
+
+function TextSections({ layer, set }: { layer: TextLayer; set: (patch: Partial<TextLayer>) => void }) {
+  return (
+    <>
+      <Section title="Words">
+        <textarea value={layer.text} rows={2} onChange={(event) => set({ text: event.target.value })} className="my-1 rounded-md border border-line bg-bg px-2 py-1.5 text-[13px] text-fg outline-none focus:border-line-strong" />
+        <Row label="Font">
+          <Select value={layer.font} options={FONTS.map((one) => ({ value: one.family as string, label: one.family }))} onChange={(font) => set({ font })} />
+        </Row>
+        <Row label="Weight">
+          <Select value={layer.weight} options={[400, 500, 600, 700, 800, 900].map((one) => ({ value: one, label: String(one) }))} onChange={(weight) => set({ weight })} />
+        </Row>
+        <Slider label="Size" value={layer.size} min={12} max={240} suffix="px" reset={72} onChange={(size) => set({ size })} />
+        <Slider label="Wraps at" value={layer.width} min={100} max={1280} suffix="px" reset={900} onChange={(width) => set({ width })} />
+        <Row label="Colour">
+          <ColorInput value={layer.color} onChange={(color) => set({ color })} />
+        </Row>
+        <Row label="Align">
+          <Select value={layer.align} options={[{ value: "left", label: "Left" }, { value: "center", label: "Centre" }, { value: "right", label: "Right" }]} onChange={(align) => set({ align })} />
+        </Row>
+        <Row label="Capitals">
+          <Switch checked={layer.uppercase === true} onChange={(uppercase) => set({ uppercase })} />
+        </Row>
+        <Slider label="Rotation" value={layer.rotation ?? 0} min={-180} max={180} suffix="°" onChange={(rotation) => set({ rotation })} />
+        <Slider label="Opacity" value={layer.opacity} min={0} max={100} suffix="%" reset={100} onChange={(opacity) => set({ opacity })} />
+      </Section>
+      <Section title="Box behind" on={layer.box !== undefined} onToggle={(on) => set({ box: on ? { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 } : undefined })}>
+        {layer.box !== undefined && (
+          <>
+            <Row label="Colour">
+              <ColorInput value={layer.box.color} onChange={(color) => set({ box: { ...layer.box!, color } })} />
+            </Row>
+            <Slider label="Opacity" value={layer.box.opacity} min={0} max={100} suffix="%" reset={100} onChange={(opacity) => set({ box: { ...layer.box!, opacity } })} />
+            <Slider label="Padding" value={layer.box.padX} min={0} max={80} suffix="px" reset={22} onChange={(padX) => set({ box: { ...layer.box!, padX, padY: Math.round(padX * 0.45) } })} />
+            <Slider label="Rounding" value={layer.box.radius} min={0} max={60} suffix="px" onChange={(radius) => set({ box: { ...layer.box!, radius } })} />
+          </>
+        )}
+      </Section>
+      <Section title="Stroke" on={layer.stroke !== undefined} onToggle={(on) => set({ stroke: on ? { color: "#000000", width: 4 } : undefined })}>
+        {layer.stroke !== undefined && (
+          <>
+            <Row label="Colour">
+              <ColorInput value={layer.stroke.color} onChange={(color) => set({ stroke: { ...layer.stroke!, color } })} />
+            </Row>
+            <Slider label="Width" value={layer.stroke.width} min={0} max={30} suffix="px" reset={4} onChange={(width) => set({ stroke: { ...layer.stroke!, width } })} />
+          </>
+        )}
+      </Section>
+    </>
   );
 }
 

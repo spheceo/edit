@@ -524,7 +524,7 @@ test("subtitles spell the case's names as the case does", () => {
 
 test("caption_speakers asks Claude to look when Codex is out of credit", async () => {
   // Loop 7, Nov 2: "You've hit your usage limit… try again at Nov 4th", and the intro's captions failed.
-  const { app, dir, store, cleanup } = fixtureHome("captions-claude");
+  const { app, dir, cleanup } = fixtureHome("captions-claude");
   const { standIn } = await import("../src/ai_claude.ts");
   const was = standIn.post;
   try {

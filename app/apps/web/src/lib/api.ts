@@ -166,6 +166,8 @@ export interface ExportActivity {
   error?: string;
   /** Said beside it: "Trying again after the update". */
   note?: string;
+  /** Queued: what it waits for ("waiting for the encoder (this Mac has one)"). */
+  waiting?: string;
 }
 
 export const api = {

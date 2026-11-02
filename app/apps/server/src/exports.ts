@@ -119,6 +119,8 @@ interface Running {
   queued: boolean;
   share?: boolean;
   note?: string;
+  /** What it waits for while queued (export_capacity.ts `noRoom`). */
+  waiting?: string;
   /** Rendered on Modal and kept in the cloud there (never copied here): its key and size. */
   inCloud?: { key: string; bytes: number | null };
   cancelQueued?: () => void;
@@ -137,6 +139,8 @@ export interface ExportActivity {
   error?: string;
   /** Said beside it: "Trying again after the update". */
   note?: string;
+  /** Queued: what it waits for ("waiting for the encoder (this Mac has one)", export_capacity.ts). */
+  waiting?: string;
 }
 
 /**
@@ -541,7 +545,7 @@ export class ExportRegistry implements seams.Exports {
   }
 
   private publish(store: Store, project: Project, running: Running, state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}): void {
-    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, backend: running.backend, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }) });
+    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, backend: running.backend, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }), ...(state === "queued" && running.waiting !== undefined ? { waiting: running.waiting } : {}) });
     // Keep every active job and only the latest completed outcomes.
     const ended = [...this.recent.values()].filter(one => one.state !== "queued" && one.state !== "running").sort((a, b) => b.updated_ms - a.updated_ms);
     for (const old of ended.slice(20)) this.recent.delete(old.id);
@@ -554,6 +558,7 @@ export class ExportRegistry implements seams.Exports {
     while (this.localQueue.length > 0) {
       const why = capacity.noRoom(this.localActive);
       if (why !== null) {
+        for (const one of this.localQueue) one.running.waiting = why;
         // Waiting on room rather than on an export to end: looked at again in a while.
         if (this.localActive < capacity.mostAtOnce() && this.recheck === null) {
           this.recheck = setTimeout(() => {

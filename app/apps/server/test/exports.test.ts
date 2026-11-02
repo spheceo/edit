@@ -530,7 +530,7 @@ test("a Mac with room exports several at once, and the rest wait for room", asyn
     expect(started).toEqual(["one", "two", "three"]);
     // Short of memory, one at a time again: nothing starts beside a running export.
     free.mockReturnValue(20);
-    expect(capacity.noRoom(1)).toContain("memory is short");
+    expect(capacity.noRoom(1)).toContain("waiting for memory");
     expect(capacity.noRoom(0)).toBeNull();
     releases.get("two")!();
     releases.get("three")!();
@@ -550,18 +550,20 @@ test("a Mac with room exports several at once, and the rest wait for room", asyn
   }
 });
 
-test("how many exports a Mac runs at once, and when there's room for another", () => {
-  const mac = (gb: number, percent: number | null, load = 1, cores = 12): capacity.Machine => ({ totalBytes: gb * 1024 ** 3, cores, availablePercent: () => percent, load: () => load });
-  expect(capacity.mostAtOnce(mac(8, 50), {})).toBe(1);
-  expect(capacity.mostAtOnce(mac(16, 50), {})).toBe(1);
-  expect(capacity.mostAtOnce(mac(24, 50), {})).toBe(2);
-  expect(capacity.mostAtOnce(mac(64, 50), {})).toBe(3);
-  expect(capacity.mostAtOnce(mac(8, 50), { EDIT_LOCAL_EXPORTS: "2" })).toBe(2);
-  expect(capacity.noRoom(0, mac(8, 5), {})).toBeNull();
-  expect(capacity.noRoom(1, mac(24, 60), {})).toBeNull();
-  expect(capacity.noRoom(2, mac(24, 60), {})).toBe("this Mac exports 2 at a time");
-  expect(capacity.noRoom(1, mac(16, 90), {})).toBe("this Mac exports one at a time");
-  expect(capacity.noRoom(1, mac(24, 30), {})).toContain("memory is short");
-  expect(capacity.noRoom(1, mac(24, 60, 10), {})).toContain("the Mac is busy");
-  expect(capacity.noRoom(1, mac(24, null), {})).toContain("can't be read");
+test("how many exports a Mac runs at once (one per encode engine), and when there's room for another", () => {
+  const mac = (chip: string, gb: number, percent: number | null, load = 1, cores = 12): capacity.Machine => ({ chip, totalBytes: gb * 1024 ** 3, cores, availablePercent: () => percent, load: () => load });
+  expect(capacity.mostAtOnce(mac("Apple M1", 8, 50), {})).toBe(1);
+  // JJ's: 24 GB, but one encoder (Nov 2, two exports there stalled it).
+  expect(capacity.mostAtOnce(mac("Apple M4 Pro", 24, 50), {})).toBe(1);
+  expect(capacity.mostAtOnce(mac("Apple M3 Max", 64, 50), {})).toBe(2);
+  expect(capacity.mostAtOnce(mac("Apple M2 Ultra", 128, 50), {})).toBe(4);
+  expect(capacity.mostAtOnce(mac("Intel(R) Xeon(R)", 64, 50), {})).toBe(1);
+  expect(capacity.mostAtOnce(mac("Apple M1", 8, 50), { EDIT_LOCAL_EXPORTS: "2" })).toBe(2);
+  expect(capacity.noRoom(0, mac("Apple M1", 8, 5), {})).toBeNull();
+  expect(capacity.noRoom(1, mac("Apple M4 Pro", 24, 90), {})).toBe("waiting for the encoder (this Mac has one)");
+  expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 60), {})).toBeNull();
+  expect(capacity.noRoom(2, mac("Apple M3 Max", 64, 60), {})).toBe("waiting for an encoder (this Mac has 2)");
+  expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 30), {})).toContain("waiting for memory");
+  expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 60, 10), {})).toContain("less busy");
+  expect(capacity.noRoom(1, mac("Apple M3 Max", 64, null), {})).toContain("can't be read");
 });

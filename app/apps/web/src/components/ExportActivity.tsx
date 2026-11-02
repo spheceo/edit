@@ -11,7 +11,7 @@ import { Button, IconButton, Spinner } from "./ui";
 
 export const exportActive = (job: Activity) => job.state === "queued" || job.state === "running";
 export function exportLabel(job: Activity): string {
-  if (job.state === "queued") return "Queued · waiting for the renderer";
+  if (job.state === "queued") return `Queued · ${job.waiting ?? "waiting for the renderer"}`;
   if (job.state === "running") return `Exporting · ${Math.round(job.progress * 100)}%`;
   if (job.state === "done") return "Export ready";
   if (job.state === "cancelled") return "Cancelled";

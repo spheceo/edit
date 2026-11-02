@@ -44,16 +44,20 @@ const shot = async (name: string) => { await sleep(300); const { result } = awai
 const post = (body: unknown) => fetch(`${API}/api/later`, { method: "POST", headers: { host: "localhost:7700", "content-type": "application/json" }, body: JSON.stringify(body) });
 
 // Something in Later of each kind, and one Back.
-const projects = (await (await fetch(`${API}/api/projects`, { headers: { host: "localhost:7700" } })).json()) as { projects: { id: string; name: string; subtitles?: boolean }[] };
-const scripts = (await (await fetch(`${API}/api/writer/scripts`, { headers: { host: "localhost:7700" } })).json()) as { id: string; title: string }[];
-const ideas = (await (await fetch(`${API}/api/ideas`, { headers: { host: "localhost:7700" } })).json()) as { ideas: { id: string; summary: { title: string } }[] };
+const projects = (await (await fetch(`${API}/api/projects`, { headers: { host: "localhost:7700" } })).json()) as { projects: { id: string; name: string; subtitles?: boolean; created_by?: { sub?: string } | null }[] };
+const scripts = (await (await fetch(`${API}/api/writer/scripts`, { headers: { host: "localhost:7700" } })).json()) as { id: string; title: string; createdBy?: { sub?: string } | null }[];
+const ideas = (await (await fetch(`${API}/api/ideas`, { headers: { host: "localhost:7700" } })).json()) as { ideas: { id: string; summary: { title: string }; createdBy?: { sub?: string } | null }[] };
 // Whatever this Mac has (named projects went with the test data, Nov 2), never one already in Later: bringing it back would clear someone's.
 const taken = new Set(((await (await fetch(`${API}/api/later`, { headers: { host: "localhost:7700" } })).json()) as { entries: { key: string }[] }).entries.map((e) => e.key));
-const inCloud = ((await (await fetch(`${API}/api/cloud/projects`, { headers: { host: "localhost:7700" } })).json()) as { projects?: { id: string }[] }).projects ?? [];
-const edits = [...new Set([...projects.projects, ...inCloud].map((p) => `edit:${p.id}`))].filter((key) => !taken.has(key));
+const inCloud = ((await (await fetch(`${API}/api/cloud/projects`, { headers: { host: "localhost:7700" } })).json()) as { projects?: { id: string; created_by?: { sub?: string } | null }[] }).projects ?? [];
+// Only the signed-in person's own: Later is the team's, and a run once set aside a teammate's project (put back after, Nov 2).
+const me = ((await (await fetch(`${API}/api/account`, { headers: { host: "localhost:7700" } })).json()) as { person?: { sub?: string } }).person?.sub ?? "";
+const mine = (p: { created_by?: { sub?: string } | null }) => me !== "" && p.created_by?.sub === me;
+const edits = [...new Set([...projects.projects, ...inCloud].filter(mine).map((p) => `edit:${p.id}`))].filter((key) => !taken.has(key));
 const firstFree = (list: string[], what: string) => { const found = list.find((key) => !taken.has(key)); if (found === undefined) throw new Error(`no ${what} to set aside`); return found; };
 if (edits.length < 3) throw new Error("the audit needs three edits not in Later");
-const keys = [edits[0]!, firstFree(scripts.map((one) => `script:${one.id}`), "script"), ...(ideas.ideas.length > 0 ? [firstFree(ideas.ideas.map((one) => `idea:${one.id}`), "idea")] : [])];
+const ours = <T extends { createdBy?: { sub?: string } | null }>(list: T[]) => list.filter((one) => me !== "" && one.createdBy?.sub === me);
+const keys = [edits[0]!, firstFree(ours(scripts).map((one) => `script:${one.id}`), "script"), ...(ours(ideas.ideas).length > 0 ? [firstFree(ours(ideas.ideas).map((one) => `idea:${one.id}`), "idea")] : [])];
 const backKey = edits[1]!;
 const doneKey = edits[2]!;
 for (const key of keys) console.log("aside", key, (await post({ key })).status);
@@ -109,7 +113,7 @@ const AUDIT = `(() => {
   return problems;
 })()`;
 // The sidebar's places (prototype C, Nov 2), and a place's stages as the steps over its list ("Edits/Editing").
-const VIEWS = ["Needs you", "Ideas", "Ideas/Drafts", "Ideas/On the board", "Thumbnails", "Scripts", "Scripts/Importing", "Scripts/Ready to script", "Scripts/Scripting", "Scripts/Ready to edit", "Edits", "Edits/Editing", "Edits/In review", "Edits/Subtitled", "Later", "Done"];
+const VIEWS = ["Ideas", "Ideas/Drafts", "Ideas/On the board", "Thumbnails", "Scripts", "Scripts/Importing", "Scripts/Ready to script", "Scripts/Scripting", "Scripts/Ready to edit", "Edits", "Edits/Editing", "Edits/In review", "Edits/Subtitled", "Later", "Done"];
 // The sidebar's rows, and the foot's Later and Done card (outside its nav since Nov 2).
 const navPlace = (text: string) => js(`(() => { const b = [...document.querySelectorAll("aside button")].find((x) => [...x.querySelectorAll("span")].some((one) => one.textContent.trim() === ${JSON.stringify(text)})); b?.click(); return !!b; })()`);
 const navStep = (text: string) => js(`(() => { const b = [...document.querySelectorAll("main button")].find((x) => x.firstChild?.textContent?.trim() === ${JSON.stringify(text)} && !x.disabled); b?.click(); return !!b; })()`);
@@ -139,7 +143,7 @@ try {
         await sleep(350);
         report(`${width} ${mode} ${view}`, await js(AUDIT));
         checked++;
-        if ((width === 1440 || width === 960) && ["Needs you", "Later", "Ideas", "Scripts", "Edits", "Edits/Subtitled", "Thumbnails", "Done"].includes(view)) await shot(`${width}-${mode}-${view.replace(/[ /]/g, "-")}`);
+        if ((width === 1440 || width === 960) && ["Later", "Ideas", "Scripts", "Edits", "Edits/Subtitled", "Thumbnails", "Done"].includes(view)) await shot(`${width}-${mode}-${view.replace(/[ /]/g, "-")}`);
         if ((width === 1440 || width === 960) && view === "Later") {
           const at = await js(`(() => { const row = document.querySelectorAll('main [role="table"] [role="row"]')[1]; if (!row) return null; const b = row.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()`);
           if (at) { await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: at[0], y: at[1] }); await shot(`${width}-${mode}-Later-hover`); await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5 }); }
@@ -154,11 +158,11 @@ try {
   // Menus: the ⋯ of a row of each kind, then its Set aside submenu, inside the window and beside each other.
   await size(960);
   await pill("Everyone");
-  for (const view of ["Edits/Editing", "Scripts/Ready to edit", "Ideas", "Later", "Needs you"]) {
+  for (const view of ["Edits/Editing", "Scripts/Ready to edit", "Ideas", "Later", "Edits"]) {
     await nav(view); await sleep(400);
     const count = await js(`document.querySelectorAll('main [role="table"] [role="row"]').length - 1`);
     for (const index of [1, count]) {
-      if (index < 1 || index > count) continue; // an empty list (Needs you often is, since Nov 2) has no rows
+      if (index < 1 || index > count) continue; // an empty list has no rows
       await js(`(() => { const row = [...document.querySelectorAll('main [role="table"] [role="row"]')][${index}]; row.scrollIntoView({ block: "center" }); return true; })()`);
       await sleep(250);
       await js(`[...[...document.querySelectorAll('main [role="table"] [role="row"]')][${index}].querySelectorAll("button")].find((b) => b.title === "More")?.click()`);
@@ -182,8 +186,16 @@ try {
 } catch (error) {
   console.log("FAIL", (error as Error).message);
 } finally {
-  for (const key of [...keys, backKey, doneKey]) await post({ key, back: true });
-  console.log("left in Later:", JSON.stringify(((await (await fetch(`${API}/api/later`, { headers: { host: "localhost:7700" } })).json()) as { entries: { key: string }[] }).entries.map((e) => e.key)));
+  // Brought back even across a server restart (the dev server restarts on any saved file): tried for a minute each.
+  for (const key of [...keys, backKey, doneKey]) {
+    for (let tries = 0; tries < 20; tries++) {
+      const answer = await post({ key, back: true }).catch(() => null);
+      if (answer?.ok) break;
+      await sleep(3000);
+    }
+  }
+  const left = await fetch(`${API}/api/later`, { headers: { host: "localhost:7700" } }).then((r) => r.json() as Promise<{ entries: { key: string }[] }>).catch(() => null);
+  console.log("left in Later:", left === null ? "(the server didn't answer)" : JSON.stringify(left.entries.map((e) => e.key)));
   if (pageErrors.length) console.log("page errors:\n" + pageErrors.join("\n"));
   chrome.kill();
   process.exit(process.exitCode ?? 0);

@@ -1,8 +1,6 @@
 // Ideas on Home (Oct 31 2026): the team's ideas as rows of Home's table, in
-// its Ideas section (Drafts, On the board) and, when they need someone (the
-// changes reviewers asked for on the board, a run that stopped, a case already
-// on the board), in Needs you; the idea page a click away (the user: "one
-// tab, one mode, one page … i think thats better").
+// its Ideas section (Drafts, On the board); the idea page a click away (the
+// user: "one tab, one mode, one page … i think thats better").
 
 import { ArrowUpRight, CircleAlert, ExternalLink, Eye, Lightbulb, MessageSquare, Send, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -20,14 +18,6 @@ import { useEditor } from "../lib/store";
 export function ideaStage(row: IdeaRow): "drafts" | "board" | "done" {
   if (row.summary.status === "sent" && row.place?.approved === true) return "done";
   return row.summary.status === "sent" ? "board" : "drafts";
-}
-
-/** Whether an idea needs someone: changes asked for on its card, or a run that stopped, a case skipped or already on the board. */
-export function ideaNeeds(row: IdeaRow): boolean {
-  const { summary, place } = row;
-  if (place?.changes) return true;
-  if (summary.run === "running" || summary.run === "queued") return false;
-  return summary.status !== "sent" && (summary.run === "failed" || summary.run === "stopped" || summary.duplicate !== null || summary.skipped !== null);
 }
 
 /** Home's ideas, polled while Claude works (every few seconds) and otherwise now and then. */

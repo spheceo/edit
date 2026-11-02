@@ -12,7 +12,7 @@ import { navigate } from "../lib/route";
 import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
 import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
-import { CardTableRow, IdeaTableRow, ideaNeeds, ideaStage, NewIdea, NoIdeas, useIdeasHome } from "../ideas/home";
+import { CardTableRow, IdeaTableRow, ideaStage, NewIdea, NoIdeas, useIdeasHome } from "../ideas/home";
 import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
@@ -44,7 +44,7 @@ const DONE_SHOWN = 40;
 /**
  * One thing on Home: an edit, a subtitled video, a script, a stopped import,
  * an idea or a board card, where it is (its section and stage, "done" when
- * approved), whether it needs someone, and its row.
+ * approved), and its row.
  */
 interface Item {
   id: string;
@@ -56,7 +56,6 @@ interface Item {
   title: string;
   /** Started by the signed-in person (a board card is everyone's). */
   mine: boolean;
-  needs: boolean;
   /** Started by the signed-in person in the last three days and not done: first in its Scripts or Edits, under New. */
   fresh?: boolean;
   row: () => ReactNode;
@@ -64,7 +63,7 @@ interface Item {
 
 /**
  * The sidebar Home (Oct 31 2026, a beta in Settings → Beta: App.tsx shows
- * HomeClassic.tsx when it's off): a sidebar of what needs you, ideas,
+ * HomeClassic.tsx when it's off): a sidebar of ideas, thumbnails,
  * scripts and edits by stage, Later and Done, and one short list at a time
  * beside it, the study portal's look (the user, Oct 31: "We have ideas,
  * scripts, and edits ... complaints from the teams about having to scroll
@@ -128,7 +127,7 @@ export function Home() {
   // One place at a time, remembered on this browser; /ideas is Home on its Ideas (the idea page's way back).
   // /thumbnails is Home on its Thumbnails (a thumbnail's way back), as /ideas is on its Ideas.
   const [where, setWhere] = useState<Where>(() => (window.location.pathname === "/ideas" ? "ideas" : window.location.pathname === "/thumbnails" ? "thumbnails" : savedWhere()));
-  const shownWhere: Where = (placeOf(where).place !== null && !places.includes(placeOf(where).place!)) || (where === "thumbnails" && !ideasAllowed) ? "needs" : where;
+  const shownWhere: Where = (placeOf(where).place !== null && !places.includes(placeOf(where).place!)) || (where === "thumbnails" && !ideasAllowed) ? "edits" : where;
   const thumbnail = useMakeThumbnail();
   // Yours, or everyone's (remembered on this browser); nobody signed in has nothing of their own.
   const [mineOnly, setMineOnly] = useState(() => localStorage.getItem(MINE) !== "0");
@@ -262,14 +261,9 @@ export function Home() {
     ...all.filter((project) => project.subtitles).map((project): Listed => ({ at: project.modified_ms, local: project, cloud: null, script: null })),
     ...cloudOnly.filter((project) => project.summary?.subtitles === true).map((project): Listed => ({ at: project.updated_ms, local: null, cloud: project, script: null })),
   ].sort((a, b) => b.at - a.at);
-  // What needs someone: edits on a review link not approved yet, and edits
-  // whose import stopped; scripts whose import stopped, with their answers.
-  // Ordinary scripts and the edits being worked on wait in their stages (the
-  // user, Oct 30: "we shouldn't show just normal scripts in the main view").
-  // A project the signed-in person started in the last three days is in front
-  // of them until it goes to review (the user, Oct 30: "it's confusing to add a
-  // new project and not have it right in front of you"): importing, being
-  // drafted, or the first draft waiting for a look.
+  // A project the signed-in person started in the last three days is first
+  // in its list, under New (the user, Oct 30: "it's confusing to add a new
+  // project and not have it right in front of you").
   const me = account?.person?.name.trim().toLowerCase() ?? null;
   const meSub = account?.person?.sub ?? "";
   const startedMs = (row: Listed): number => {
@@ -281,14 +275,6 @@ export function Home() {
   // Whose it is: the same sign-in, else (older records) the same name.
   const isMe = (by: { sub?: string; name: string } | null | undefined) => by != null && (meSub !== "" && by.sub ? by.sub === meSub : me !== null && by.name.trim().toLowerCase() === me);
   const justStarted = (row: Listed) => isMe(starter(row)) && Date.now() - startedMs(row) < NEW_FOR_MS;
-  const needsYou = new Set(projectRows.filter((row) => {
-    // A script whose Claude run failed (the user, Oct 30: "projects that have failed like this deserve a needs you").
-    // Only what waits on someone (Sphe, Nov 2: Needs you was always red, its 29 all just started); what you just started is first in its Scripts or Edits instead, under New.
-    if (row.local === null && row.cloud === null) return Boolean(row.script.runFailed) && !row.writing && !row.importing;
-    const state = statuses[row.local?.id ?? row.cloud?.id ?? ""];
-    const stage = stageOf(row, state);
-    return stage === "review" || Boolean(state?.importing?.error);
-  }));
   const fresh = (row: Listed) => justStarted(row) && stageOf(row, row.local === null && row.cloud === null ? undefined : statuses[row.local?.id ?? row.cloud?.id ?? ""]) !== "done";
   const cardProps = (project: ProjectSummary) => ({
     project,
@@ -314,7 +300,6 @@ export function Home() {
         at: row.at,
         title: script.title,
         mine: isMe(script.createdBy),
-        needs: needsYou.has(row),
         fresh: fresh(row),
         row: () => <ScriptTableRow script={script} importing={row.importing} writing={row.writing === true} sharing={row.sharing === true} here={row.here === true} onChanged={refresh} onImport={row.importing ? () => setWatching(script.id) : undefined} />,
       });
@@ -330,26 +315,25 @@ export function Home() {
       at: row.at,
       title: row.local?.name ?? row.cloud?.name ?? "",
       mine: isMe(starter(row)),
-      needs: needsYou.has(row),
       fresh: fresh(row),
       row: () => (row.local !== null ? <TableRow {...cardProps(row.local)} subtitled={subtitled} script={row.script} /> : <CloudTableRow project={row.cloud!} script={row.script} onChanged={refresh} />),
     });
   }
-  // Script imports that stopped: each waits on someone's answer (the user, Oct 30: "the needs you be at the top").
+  // Script imports that stopped: each waits on someone's answer, under Importing.
   for (const issue of issues.filter((one) => !writing.some((going) => going.id === one.id))) {
-    items.push({ id: `issue-${issue.id}`, key: laterKey("script", issue.id), section: "scripts", stage: "importing", at: issue.createdAt ?? 0, title: issue.title, mine: isMe(issue.createdBy), needs: true, row: () => <ScriptIssue issue={issue} onOpen={setWatching} /> });
+    items.push({ id: `issue-${issue.id}`, key: laterKey("script", issue.id), section: "scripts", stage: "importing", at: issue.createdAt ?? 0, title: issue.title, mine: isMe(issue.createdBy), row: () => <ScriptIssue issue={issue} onOpen={setWatching} /> });
   }
   if (ideasAllowed && ideasHome !== null) {
     for (const row of ideasHome.ideas) {
-      items.push({ id: `idea-${row.id}`, key: laterKey("idea", row.id), section: "ideas", stage: ideaStage(row), at: row.updatedAt, title: row.summary.title, mine: isMe(row.createdBy), needs: ideaNeeds(row), row: () => <IdeaTableRow row={row} /> });
+      items.push({ id: `idea-${row.id}`, key: laterKey("idea", row.id), section: "ideas", stage: ideaStage(row), at: row.updatedAt, title: row.summary.title, mine: isMe(row.createdBy), row: () => <IdeaTableRow row={row} /> });
     }
-    // A card waiting on changes with no idea yet is the ideas team's, first in what needs them.
+    // A card waiting on changes with no idea yet is the ideas team's, on the board.
     for (const card of ideasHome.changes) {
-      items.push({ id: `card-${card.id}`, key: laterKey("card", card.id), section: "ideas", stage: "board", at: Number.MAX_SAFE_INTEGER, title: card.name, mine: true, needs: true, row: () => <CardTableRow card={card} onOpened={refreshIdeas} /> });
+      items.push({ id: `card-${card.id}`, key: laterKey("card", card.id), section: "ideas", stage: "board", at: Number.MAX_SAFE_INTEGER, title: card.name, mine: true, row: () => <CardTableRow card={card} onOpened={refreshIdeas} /> });
     }
   }
 
-  // Set aside still (in Later), or back on its day and not opened yet (marked Back, first in Needs you).
+  // Set aside still (in Later), or back on its day and not opened yet (marked Back, first in its list).
   const entryOf = (item: Item) => (item.key === null ? undefined : later.entries.get(item.key));
   const aside = (item: Item) => {
     const entry = entryOf(item);
@@ -365,7 +349,6 @@ export function Home() {
     if (place === "later") return aside(item);
     if (aside(item)) return false;
     if (markedDone(item)) return place === "done";
-    if (place === "needs") return item.needs || backAt(item) !== null;
     if (place === "done") return item.stage === "done";
     const { place: at, stage } = placeOf(place);
     return at !== null && placeOfSection(item.section) === at && (stage === null ? item.stage !== "done" : item.stage === stage);
@@ -394,14 +377,14 @@ export function Home() {
     if (place !== null && stage === null) {
       // What you just started first, under New (the user, Oct 30: "it's confusing to add a new project and not have it right in front of you"), then by stage.
       const stages = PLACES.find((one) => one.key === place)!.stages;
-      const isFresh = (item: Item) => item.fresh === true && item.mine;
+      // And above that what's back from Later, the latest back on top: Needs you's one job left (Sphe, Nov 2: "let's remove needs you").
+      const isBack = (item: Item) => backAt(item) !== null;
+      const isFresh = (item: Item) => !isBack(item) && item.fresh === true && item.mine;
       groups = [
+        { key: "back", label: "Back from Later", items: here.filter(isBack).sort((a, b) => backAt(b)! - backAt(a)!) },
         { key: "new", label: "New", items: here.filter(isFresh).sort(newest) },
-        ...stages.map((one) => ({ key: one.key, label: one.label, items: here.filter((item) => !isFresh(item) && item.stage === one.key).sort(newest) })),
+        ...stages.map((one) => ({ key: one.key, label: one.label, items: here.filter((item) => !isBack(item) && !isFresh(item) && item.stage === one.key).sort(newest) })),
       ].filter((group) => group.items.length > 0);
-    } else if (shownWhere === "needs") {
-      // What's back from Later first, the latest back on top; then the rest, newest first.
-      groups = [{ key: "needs", label: null, items: here.sort((a, b) => (backAt(b) ?? -1) - (backAt(a) ?? -1) || newest(a, b)) }];
     } else if (shownWhere === "later") {
       const until = (item: Item) => later.entries.get(item.key!)?.until ?? Number.MAX_SAFE_INTEGER;
       groups = [{ key: "later", label: null, items: here.sort((a, b) => until(a) - until(b)) }];
@@ -416,7 +399,7 @@ export function Home() {
   }
   const listed = groups.reduce((total, group) => total + group.items.length, 0);
   const total = searching ? listed : countOf(shownWhere);
-  const cross = searching || shownWhere === "needs" || shownWhere === "later" || shownWhere === "done";
+  const cross = searching || shownWhere === "later" || shownWhere === "done";
   const solo = mine && !searching;
   const title = searching ? { parent: null, name: "Search" } : nameOf(shownWhere);
   const inIdeas = !searching && placeOf(shownWhere).place === "ideas";
@@ -443,10 +426,8 @@ export function Home() {
   const others = items.filter((item) => !item.mine && isIn(item, shownWhere)).length;
   const empty = searching
     ? { title: "Nothing matches", text: `Nothing anywhere is called “${query.trim()}”.` }
-    : shownWhere === "needs"
-      ? { title: "You’re all caught up", text: "Stopped imports, failed runs, edits in review and ideas waiting on changes show up here. What you just started is first in Scripts or Edits." }
-      : shownWhere === "later"
-        ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back. On its day it’s back, at the top of Needs you." }
+    : shownWhere === "later"
+        ? { title: "Nothing set aside", text: "Press the clock on any row to set it aside until a day, or until you bring it back. On its day it’s back, at the top of its list." }
         : mine && others > 0
           ? { title: "Nothing of yours here", text: `Everyone shows the team’s ${others}.` }
           : { title: "Nothing here", text: shownWhere === "done" ? "Approved edits and ideas move here by themselves, and anything marked done from its ⋯ menu." : "Nothing is at this stage now." };
@@ -454,7 +435,7 @@ export function Home() {
   return (
     <LaterContext.Provider value={later}>
       <div className="flex h-full bg-black p-2">
-        <HomeSidebar places={places} thumbnails={ideasAllowed} needs={countOf("needs")} later={laterSummary} done={countOf("done")} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        <HomeSidebar places={places} thumbnails={ideasAllowed} later={laterSummary} done={countOf("done")} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
           <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
             {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
@@ -617,12 +598,13 @@ function StageSteps({ place, steps, stage, onChoose }: { place: Spot; steps: { k
 function savedWhere(): Where {
   const saved = localStorage.getItem(VIEW) ?? "";
   if (saved === "subtitled") return "edits:subtitled";
-  if (saved === "needs" || saved === "later" || saved === "done" || saved === "thumbnails") return saved;
+  // Needs you went on Nov 2 ("let's remove needs you"): Home opens on Edits.
+  if (saved === "later" || saved === "done" || saved === "thumbnails") return saved;
   // Videos (Scripts and Edits together) for an evening on Nov 2: its stage says which it was.
   const [first, stage] = saved.split(":") as [string, string | undefined];
   const fromVideos: Spot = stage !== undefined && PLACES.find((one) => one.key === "scripts")!.stages.some((one) => one.key === stage) ? "scripts" : "edits";
   const place: Spot | null = first === "ideas" || first === "scripts" || first === "edits" ? first : first === "videos" ? fromVideos : null;
-  if (place === null) return "needs";
+  if (place === null) return "edits";
   return stage !== undefined && PLACES.find((one) => one.key === place)!.stages.some((one) => one.key === stage) ? `${place}:${stage}` : place;
 }
 

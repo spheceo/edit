@@ -1,7 +1,7 @@
 // Home's Later (Oct 31 2026): what someone set aside, the team's (the server's
 // later.ts, mamagi's editLater). Set aside until tomorrow, Monday, a week or
 // until someone brings it back, it leaves its list for Later. On its day it's
-// back: in its list and at the top of Needs you, marked Back, until someone
+// back: at the top of its list, marked Back, until someone
 // opens it. The user, Oct 31: "we also need to be able to have ways to put
 // projects aside, say we want to come back to a project later"; then "does it
 // sort of get snoozed and comes back clearly formatted showing like this was

@@ -1313,15 +1313,21 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       .map((clip) => (clip as Extract<Clip, { type: "video" }>).media),
   );
   const shownAt = new Map<string, [number, number][]>();
+  const pictureOf = new Map<string, string>();
   for (const clip of project.clips) {
     if (clip.type !== "video" || !visible(clip.track)) continue;
     const media = mediaOf(project, clip.media);
     if (media === undefined || media.kind !== "image" || /[\\/]graphics[\\/]/.test(media.path) || faces.has(media.id)) continue;
-    const list = shownAt.get(media.id) ?? [];
+    // The same picture brought in twice is one picture (loop 7 R4: a news
+    // photo in five places as four media, each flagged once or not at all).
+    const same = `${media.name}|${media.width}x${media.height}`;
+    const list = shownAt.get(same) ?? [];
     list.push([clip.start, clipEnd(clip)]);
-    shownAt.set(media.id, list);
+    shownAt.set(same, list);
+    if (!pictureOf.has(same)) pictureOf.set(same, media.id);
   }
-  for (const [mediaId, spans] of shownAt) {
+  for (const [same, spans] of shownAt) {
+    const mediaId = pictureOf.get(same)!;
     spans.sort((a, b) => a[0] - b[0]);
     const places: [number, number][] = [];
     for (const [from, to] of spans) {

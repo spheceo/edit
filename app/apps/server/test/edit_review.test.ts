@@ -213,6 +213,17 @@ test("a_script_range_played_before_the_one_the_script_has_before_it_is_flagged",
   expect((scriptOrder(p) as Record<string, unknown>[]).map((issue) => [issue.kind, issue.range])).toEqual([["script_order", "first"]]);
 });
 
+test("one_range_played_late_doesnt_put_every_range_after_it_out_of_order", () => {
+  // Loop 7 R4 (Helpful Son): one range matched far along made 69 flags.
+  const p = footageProject();
+  const shot = p.clips[0] as Clip;
+  const at = (id: string, start: number, source: number) => ({ ...shot, id, start, duration: 60, source_in: source }) as Clip;
+  p.clips = [at("a", 0, 10), at("b", 900, 20), at("c", 120, 30), at("d", 240, 40), at("e", 360, 50)];
+  const range = (label: string, start: number) => ({ kind: "footage", url: "u", file: "f", start, end: start + 1, label, notes: [], media: "m7" });
+  p.script = { source: "doc", blocks: [range("A", 10), range("B", 20), range("C", 30), range("D", 40), range("E", 50)] } as unknown as Project["script"];
+  expect((scriptOrder(p) as Record<string, unknown>[]).map((issue) => issue.range)).toEqual(["B"]);
+});
+
 test("narration_coming_in_on_the_footages_last_word_is_flagged", () => {
   // The clips meet cleanly but the voice runs into the narration (Bookkeeper v5: "the voiceover starts before the real sound audio is finished").
   const p = footageProject();

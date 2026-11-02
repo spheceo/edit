@@ -222,6 +222,19 @@ test("a_clip_stacked_on_its_own_copy_is_flagged", () => {
   expect(kinds(p, "stacked_copies").map((issue) => issue.count)).toEqual([1]);
 });
 
+test("the_same_picture_brought_in_twice_is_one_picture", () => {
+  const p = project("plan");
+  p.media.push(footage());
+  p.media.push(media({ id: "n1", name: "An inside look.png", path: "/a.png", kind: "image", duration: 30, width: 1200, height: 800 }));
+  p.media.push(media({ id: "n2", name: "An inside look.png", path: "/b.png", kind: "image", duration: 30, width: 1200, height: 800 }));
+  apply(p, [
+    { op: "add", clip: { type: "video", track: "v1", media: "m1", source_in: 0, start: 0, duration: 3000 } },
+    { op: "add", clip: { type: "video", track: "new", media: "n1", source_in: 0, start: 100, duration: 90 } },
+    { op: "add", clip: { type: "video", track: "new", media: "n2", source_in: 0, start: 2000, duration: 90 } },
+  ]);
+  expect(kinds(p, "repeated_picture").map((issue) => issue.at)).toEqual([[100, 2000]]);
+});
+
 test("a_long_shot_seen_for_a_moment_is_a_glimpse", () => {
   const p = project("plan");
   p.media.push(footage(), media({ id: "m2", name: "g", path: "/g.mp4", kind: "video", duration: 600, width: 1920, height: 1080 }));

@@ -577,9 +577,8 @@ export function offScript(project: Project, transcripts: Map<string, Transcript>
 export function scriptOrder(project: Project): unknown[] {
   const fps = fpsOf(project);
   const base = project.tracks.find((track) => track.kind === "video")?.id;
-  const issues: unknown[] = [];
-  let at = 0;
-  let before: string | null = null;
+  // Each range's starts on the timeline, in the script's order.
+  const ranges: { label: string; starts: number[] }[] = [];
   for (const block of project.script?.blocks ?? []) {
     if (block.kind !== "footage" || block.media == null) continue;
     const offset = block.media_start ?? 0;
@@ -588,12 +587,39 @@ export function scriptOrder(project: Project): unknown[] {
       .filter((clip) => clip.type === "video" && clip.track === base && clip.media === block.media && clip.source_in < to - 0.1 && clip.source_in + (clip.duration / fps) * clip.speed > from + 0.1)
       .map((clip) => clip.start)
       .sort((a, b) => a - b);
-    if (starts.length === 0) continue;
-    const next = starts.find((start) => start >= at - fps);
-    if (next === undefined) issues.push({ kind: "script_order", range: block.label, plays_at_seconds: round((starts[0]! / fps) * 10) / 10, script_has_it_after: before, fix: "move it to where the script has it: after the range before it" });
-    else at = next;
-    before = block.label;
+    if (starts.length > 0) ranges.push({ label: block.label, starts });
   }
+  // The most ranges that play in the script's order (one start each), so one
+  // range matched late (its tape reused further on) doesn't make every range
+  // after it read as out of order (loop 7 R4, Helpful Son: 69 flags, the fresh
+  // read: "the audit is being thrown by the repeats").
+  const best: number[][] = ranges.map((range) => range.starts.map(() => 1));
+  const from: ([number, number] | null)[][] = ranges.map((range) => range.starts.map(() => null));
+  for (let i = 0; i < ranges.length; i++) {
+    for (let c = 0; c < ranges[i]!.starts.length; c++) {
+      const start = ranges[i]!.starts[c]!;
+      for (let j = Math.max(0, i - 400); j < i; j++) {
+        for (let d = 0; d < ranges[j]!.starts.length; d++) {
+          if (ranges[j]!.starts[d]! <= start + fps && best[j]![d]! + 1 > best[i]![c]!) {
+            best[i]![c] = best[j]![d]! + 1;
+            from[i]![c] = [j, d];
+          }
+        }
+      }
+    }
+  }
+  let end: [number, number] | null = null;
+  ranges.forEach((range, i) => range.starts.forEach((_, c) => {
+    if (end === null || best[i]![c]! > best[end[0]]![end[1]]!) end = [i, c];
+  }));
+  const kept = new Set<number>();
+  for (let at: [number, number] | null = end; at !== null; at = from[at[0]]![at[1]]!) kept.add(at[0]);
+  const issues: unknown[] = [];
+  let before: string | null = null;
+  ranges.forEach((range, i) => {
+    if (!kept.has(i)) issues.push({ kind: "script_order", range: range.label, plays_at_seconds: round((range.starts[0]! / fps) * 10) / 10, script_has_it_after: before, fix: "move it to where the script has it: after the range before it" });
+    else before = range.label;
+  });
   return issues;
 }
 

@@ -54,6 +54,8 @@ import * as thumbnails from "./thumbnails/routes.ts";
 import * as later from "./later.ts";
 import * as editNotes from "./edit_notes.ts";
 import * as lessonInbox from "./lesson_inbox.ts";
+// The agent's report_problem tool (registered as it loads).
+import "./agent_reports.ts";
 import * as presence from "./presence.ts";
 import * as devProjects from "./dev_projects.ts";
 import * as beta from "./beta.ts";

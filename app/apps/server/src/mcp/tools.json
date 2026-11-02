@@ -1384,6 +1384,42 @@
     "name": "note_lesson"
   },
   {
+    "name": "report_problem",
+    "description": "File a bug with Edit's team when one of its tools fails and you can't do the step it was for. Sent with this Mac's diagnostics to the team's problem reports, so it's fixed in Edit rather than worked around; once per tool and error a day. Then carry on, and say it's FAILED in your summary.",
+    "inputSchema": {
+      "properties": {
+        "tool": {
+          "description": "The tool that failed.",
+          "type": "string"
+        },
+        "error": {
+          "description": "What it said, word for word.",
+          "type": "string"
+        },
+        "asked": {
+          "description": "What you asked it (its arguments, short).",
+          "type": "string"
+        },
+        "instead": {
+          "description": "What you did instead, if anything.",
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "error"
+      ],
+      "type": "object"
+    }
+  },
+  {
     "description": "The feedback to fix, for the user's \"implement the new feedback\". Two kinds: the team's own notes left in Edit at the playhead ([app:id]: their moment now, the clip there, a box drawn on the picture), and the review's open notes from Repack (feedback.spheceo.com), when Edit hasn't handed them to you ([id], as Ready for changes gives them). Load the feedback skill, fix them, and call feedback_done / feedback_unfixed / feedback_answer after each, with the id as given. When your turn ends, a review's fixes are exported and shared on it as the next version; the team's own notes share nothing, and any you didn't answer go back in their queue.",
     "inputSchema": {
       "properties": {

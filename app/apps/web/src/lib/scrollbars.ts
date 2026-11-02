@@ -1,18 +1,19 @@
-// Scrollbars only while scrolling, in Script mode's screens: the native ones
-// are hidden (writer.css), and anything inside `.writer-root` that scrolls gets
-// a thin thumb, no track, over its edge while it moves, gone a moment after it
-// stops. The thumb can be dragged. Edit's own screens keep theirs.
-
-import { portalRoot } from "./portal";
+// Scrollbars only while scrolling, everywhere in Edit (Sphe, Nov 2: "all
+// scrollbars should be off by default across the app, only showing when we
+// start to scroll"; Script mode had it first). The native ones are hidden
+// (index.css), and anything that scrolls gets a thin thumb, no track, over its
+// edge while it moves, gone a moment after it stops. The thumb can be dragged.
 
 const IDLE_MS = 800;
 const MIN = 28;
 
-type Bar = { thumb: HTMLDivElement; axis: "y" | "x"; timer: number; held: boolean; hover: boolean };
+type Bar = { element: Element; thumb: HTMLDivElement; axis: "y" | "x"; timer: number; held: boolean; hover: boolean };
 const bars = new WeakMap<Element, { y?: Bar; x?: Bar }>();
 
-function scrolled(target: EventTarget | null): Element | null {
-  return target instanceof Element && target.closest(".writer-root") !== null ? target : null;
+/** Whether the person can scroll `element` along `axis`: an overflow-hidden box scrolled by code (a ruler kept in step) gets no thumb. */
+function scrollable(element: Element, axis: "y" | "x"): boolean {
+  const overflow = getComputedStyle(element)[axis === "y" ? "overflowY" : "overflowX"];
+  return overflow === "auto" || overflow === "scroll";
 }
 
 function bar(element: Element, axis: "y" | "x"): Bar {
@@ -21,8 +22,8 @@ function bar(element: Element, axis: "y" | "x"): Bar {
   if (existing?.thumb.isConnected) return existing;
   const thumb = document.createElement("div");
   thumb.className = `scroll-thumb ${axis}`;
-  portalRoot().append(thumb);
-  const made: Bar = { thumb, axis, timer: 0, held: false, hover: false };
+  document.body.append(thumb);
+  const made: Bar = { element, thumb, axis, timer: 0, held: false, hover: false };
   thumb.addEventListener("pointerenter", () => { made.hover = true; show(element, made); });
   thumb.addEventListener("pointerleave", () => { made.hover = false; later(made); });
   thumb.addEventListener("pointerdown", (event) => drag(event, element, made));
@@ -56,7 +57,10 @@ function show(element: Element, made: Bar) {
 function later(made: Bar) {
   clearTimeout(made.timer);
   made.timer = window.setTimeout(() => {
-    if (!made.held && !made.hover) made.thumb.classList.remove("on");
+    if (made.held || made.hover) return;
+    made.thumb.classList.remove("on");
+    // A list that's gone (a dialog closed, a page left) takes its thumb with it.
+    if (!made.element.isConnected) made.thumb.remove();
   }, IDLE_MS);
 }
 
@@ -92,9 +96,10 @@ export function startScrollbars() {
   document.addEventListener(
     "scroll",
     (event) => {
-      const element = scrolled(event.target);
-      if (!element) return;
+      const element = event.target;
+      if (!(element instanceof Element)) return;
       for (const axis of ["y", "x"] as const) {
+        if (!scrollable(element, axis)) continue;
         const [size, view] = axis === "y" ? [element.scrollHeight, element.clientHeight] : [element.scrollWidth, element.clientWidth];
         if (size > view + 1) show(element, bar(element, axis));
       }

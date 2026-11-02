@@ -64,12 +64,7 @@
 .writer-root h1, .writer-root h2, .writer-root h3, .writer-root p { margin: 0; }
 .writer-root button, .writer-root input, .writer-root textarea { font: inherit; color: inherit; }
 .writer-root ::selection { background: #ffffff33; }
-/* No native scrollbars, ever (macOS can draw them with a track): a thin thumb shows only while something scrolls (scrollbars.ts). */
-.writer-root * { scrollbar-width: none; }
-.writer-root ::-webkit-scrollbar { display: none; width: 0; height: 0; }
-.writer-root .scroll-thumb { position: fixed; z-index: 1000; width: 6px; height: 6px; border-radius: 99px; background: rgba(255, 255, 255, 0.28); opacity: 0; pointer-events: none; transition: opacity 0.25s; }
-.writer-root .scroll-thumb.on { opacity: 1; pointer-events: auto; cursor: default; }
-.writer-root .scroll-thumb.on:hover { background: rgba(255, 255, 255, 0.42); }
+/* Scrollbars: the app's, only while scrolling (index.css, lib/scrollbars.ts). */
 /* (Not the chat ported from Repack, .repack-chat: its own styles, as Repack has them.) */
 .writer-root button:not(:where(.repack-chat button)) {
   display: inline-flex;

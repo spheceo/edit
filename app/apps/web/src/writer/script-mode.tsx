@@ -14,7 +14,6 @@ import { openDialog } from "../lib/dialogs";
 import { useKept } from "../lib/kept";
 import { lastOpened } from "./opened";
 import { navigate, usePath } from "../lib/route";
-import { startScrollbars } from "./scrollbars";
 import "./writer.css";
 import type { ClaudeStatus, ImportProgress, Script, Summary } from "./types";
 
@@ -72,7 +71,6 @@ export function ScriptMode() {
   const route = useMemo(() => parse(path), [path]);
   useEffect(() => {
     markPointer();
-    startScrollbars();
   }, []);
   // The list as last seen shows at once; a script opened before opens at once (then catches up).
   const [scripts, setScripts] = useKept<Summary[]>("scripts.list", []);

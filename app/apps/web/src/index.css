@@ -110,9 +110,33 @@
   select {
     user-select: text;
   }
+  /* No native scrollbars, ever (macOS can draw them with a track): a thin thumb shows only while something scrolls (lib/scrollbars.ts; Sphe, Nov 2: "only showing when we start to scroll"). */
   * {
-    scrollbar-width: thin;
-    scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+    scrollbar-width: none;
+  }
+  ::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  .scroll-thumb {
+    position: fixed;
+    z-index: 1000;
+    width: 6px;
+    height: 6px;
+    border-radius: 99px;
+    background: rgb(255 255 255 / 0.28);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
+  }
+  .scroll-thumb.on {
+    opacity: 1;
+    pointer-events: auto;
+    cursor: default;
+  }
+  .scroll-thumb.on:hover {
+    background: rgb(255 255 255 / 0.42);
   }
   ::selection {
     background: #ffffff33;

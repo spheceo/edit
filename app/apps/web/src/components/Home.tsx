@@ -428,7 +428,7 @@ export function Home() {
     <LaterContext.Provider value={later}>
       <div className="flex h-full bg-black p-2">
         <HomeSidebar sections={sections} counts={countOf} where={searching ? ("" as Where) : shownWhere} onChoose={choose} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl bg-panel">
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel">
           {!sidebarOpen && <OpenSidebar onOpen={() => setSidebarOpen(true)} />}
           <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
             <h1 className="flex min-w-0 items-center gap-1.5 text-[15px] font-semibold tracking-[-0.01em] whitespace-nowrap">

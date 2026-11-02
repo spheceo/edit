@@ -372,7 +372,8 @@ function SettingsDialog() {
               value={status?.channel ?? "nightly"}
               options={[
                 { value: "nightly", label: "Nightly" },
-                { value: "stable", label: "Stable" },
+                // Shown, not pickable yet (Sphe, Nov 2: "you shouldnt be able to pick stable yet. it will be an option but you cant click it or enable it").
+                { value: "stable", label: "Stable", disabled: true, hint: "Soon" },
               ]}
               onChange={pick}
               className="h-[34px] min-w-[128px] shrink-0 justify-between rounded-lg border border-line-strong bg-bg pr-2.5 pl-3 text-[13px] hover:border-muted"

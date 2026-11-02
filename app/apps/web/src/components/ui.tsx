@@ -189,7 +189,8 @@ export function Select<T extends string | number>({
   className,
 }: {
   value: T;
-  options: { value: T; label: string }[];
+  /** `disabled`: shown, not pickable; `hint`: muted words after its label ("Soon"). */
+  options: { value: T; label: string; disabled?: boolean; hint?: string }[];
   onChange: (value: T) => void;
   /** Overrides the look (by default a compact right-aligned value, as in the Inspector). */
   className?: string;
@@ -201,7 +202,7 @@ export function Select<T extends string | number>({
       onClick={(event) =>
         toggleMenu(
           event.currentTarget,
-          options.map((option) => ({ label: option.label, checked: option.value === value, onSelect: () => onChange(option.value) })),
+          options.map((option) => ({ label: option.label, checked: option.value === value, ...(option.disabled ? { disabled: true } : {}), ...(option.hint ? { hint: option.hint } : {}), onSelect: () => onChange(option.value) })),
           { width: 150 },
         )
       }

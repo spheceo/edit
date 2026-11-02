@@ -7,7 +7,7 @@
 //
 // The logo goes on the timeline being exported, not into the project: a
 // locked top track over everything (subtitles too) with one picture clip
-// across the export, at 15%, its x and y keyframed in straight lines from
+// across the export, at 10%, its x and y keyframed in straight lines from
 // wall to wall, so this Mac, Modal and an export started again after a
 // restart (its snapshot) all draw the same thing. In the cloud the picture
 // goes up first like any other (cloud_media `importLocal`), so an edit whose
@@ -37,10 +37,10 @@ export const FOLDER = process.env.EDIT_WATERMARKS_FOLDER ?? "1E1I0ykeqXFqrjIcU8P
 /** What a channel's short name in its file stands for, when the team has said. */
 const NAMES: Record<string, string> = { SI: "Sams Interrogations" };
 
-/** How the logo looks and moves, as the team asked: 15%, a DVD player's bounce. */
+/** How the logo looks and moves, as the team asked: 10%, a DVD player's bounce. */
 export const LOOK = {
-  /** 20% at first; "try a little lower opacity" (Sphe, Nov 2). */
-  opacity: 0.15,
+  /** 20% at first, then 15% ("try a little lower opacity"), then "try 10%" (Sphe, Nov 2). */
+  opacity: 0.1,
   /** The logo's height, a share of the frame's. */
   height: 0.14,
   /** Its speed along each axis, frame heights a second (a 1080p frame: 43 px/s, about 40 s across). 0.1 was "TOO fast" (Sphe, Nov 2). */

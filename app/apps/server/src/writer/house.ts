@@ -312,7 +312,7 @@ export function paceFlags(script: Script, clips: Clip[], single: boolean): strin
   return flags;
 }
 
-const MUTE_WORDS = /\b(sex|sexual|sexually|rape|raped|raping|penis|vagina|molest(?:ed|ing)?|porn)\b/iu;
+const MUTE_WORDS = /\b(sex|sexual|sexually|rape|raped|raping|penis|vagina|molest\w*|porn\w*)\b/iu;
 
 /**
  * The editor's mute notes, put on by the app (a producer, Masseur, Oct 30:

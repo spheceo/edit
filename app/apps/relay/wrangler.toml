@@ -201,6 +201,11 @@ namespace_id = "8711"
 limit = 20
 period = 60
 
+# Thumbnails' OpenArt: the live relay, bound (openart.ts; a fetch by its address is refused, error 1042).
+[[env.dev.services]]
+binding = "OPENART_LIVE"
+service = "edit-relay"
+
 [[env.dev.durable_objects.bindings]]
 name = "BUDGET"
 class_name = "TranscriptionBudget"

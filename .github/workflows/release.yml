@@ -306,7 +306,10 @@ jobs:
           python3 -m venv /tmp/venv
           /tmp/venv/bin/pip install -q -r apps/worker/requirements.txt boto3==1.40.31
           /tmp/venv/bin/python apps/worker/deploy_cloud.py
+      # Even when Modal's deploy failed: nightly-48's Modal refused every image build (its spend limit) and the relay,
+      # which the Macs on that build needed, was skipped with it.
       - name: Deploy the live relay
+        if: ${{ !cancelled() }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -19,7 +19,8 @@
 // One sign-in for dev and prod (Sphe, Nov 2: "use the same openart sign in for
 // dev and prod"): with tokens that turn over, two relays can't each keep a
 // copy, so only the live relay holds it. The dev relay (OPENART_UPSTREAM, the
-// live relay's address) forwards each message there instead, with
+// live relay's address, reached through the OPENART_LIVE service binding)
+// forwards each message there instead, with
 // OPENART_RELAY_TOKEN (the same in both environments' Infisical), which the
 // live relay takes in place of a person's sign-in on this route alone; the
 // dev relay has already checked the person.
@@ -27,6 +28,8 @@
 export interface OpenArtEnv {
   /** The dev relay: the live relay's address, which holds the team's one sign-in. */
   OPENART_UPSTREAM?: string;
+  /** The dev relay: the live relay itself, bound (Cloudflare refuses a Worker fetching another of the account's by its address: error 1042). */
+  OPENART_LIVE?: { fetch(request: Request): Promise<Response> };
   /** Between the two relays: what the dev relay sends, and the live relay takes, on this route only. */
   OPENART_RELAY_TOKEN?: string;
   OPENART_CLIENT_ID?: string;
@@ -65,7 +68,8 @@ async function upstream(request: Request, url: URL, env: OpenArtEnv): Promise<Re
     if (value) headers[name] = value;
   }
   const target = `${env.OPENART_UPSTREAM!.replace(/\/+$/, "")}${url.pathname}`;
-  const answer = await fetch(target, { method: request.method, headers, body: request.method === "POST" ? await request.text() : null });
+  const asked = new Request(target, { method: request.method, headers, body: request.method === "POST" ? await request.text() : null });
+  const answer = env.OPENART_LIVE !== undefined ? await env.OPENART_LIVE.fetch(asked) : await fetch(asked);
   const back = new Headers();
   for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version"]) {
     const value = answer.headers.get(name);

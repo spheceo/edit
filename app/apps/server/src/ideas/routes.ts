@@ -262,20 +262,36 @@ const IMAGE_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": 
 const naming = new Set<string>();
 
 /**
- * Footage not yet checked, named as Script mode reads it (the video's title,
- * the Drive folder's name) or marked with why it can't be imported, in the
- * background: YouTube's details take ~20 s through the proxy, and the page
- * that added it may be gone by then (Nov 2: closed early, nothing was named).
+ * Footage not yet checked, named (the video's title, the Drive folder's name)
+ * or marked with why it can't be imported. A YouTube video from the YouTube
+ * Data API on the relay, as an idea's case is (about a second: yt-dlp through
+ * the proxy took 14–22 s a video, and Sphe, Nov 2: "checking is taking too
+ * long"); Drive and Docs as Script mode checks them. Done in the background,
+ * so a page gone before it ends still gets the names.
  */
-export function nameFootage(app: App, id: string, who: string, idea: Idea | null = null): void {
-  if (naming.has(id) || (idea !== null && !idea.footage.some(unchecked))) return;
+export function nameFootage(app: App, id: string, who: string, idea: Idea | null = null): Promise<void> {
+  if (naming.has(id) || (idea !== null && !idea.footage.some(unchecked))) return Promise.resolve();
   naming.add(id);
-  void (async () => {
+  return (async () => {
     const found = idea ?? (await cloud.get(id))?.idea ?? null;
     const wanted = found?.footage.filter(unchecked) ?? [];
     if (wanted.length === 0) return;
-    const checked = await imports.checkVideos(app, wanted.map(footageLine));
-    const byUrl = new Map(checked.map((one) => [one.url, one]));
+    const youtube = wanted.filter((one) => one.kind === "youtube");
+    const others = wanted.filter((one) => one.kind !== "youtube");
+    const [videos, checked] = await Promise.all([
+      Promise.all(
+        youtube.map(async (one): Promise<[string, { title: string; problem: string | null }]> => {
+          const video = sources.videoIdOf(one.url);
+          if (video === null) return [one.url, { title: "", problem: "That isn't a YouTube video's link." }];
+          return sources.video(video).then(
+            (found): [string, { title: string; problem: string | null }] => [one.url, { title: found.title, problem: null }],
+            (error: unknown): [string, { title: string; problem: string | null }] => [one.url, { title: "", problem: diag.messageOf(error) }],
+          );
+        }),
+      ),
+      others.length > 0 ? imports.checkVideos(app, others.map(footageLine)) : Promise.resolve([]),
+    ]);
+    const byUrl = new Map<string, { title: string; problem: string | null }>([...videos, ...checked.map((one): [string, { title: string; problem: string | null }] => [one.url, one])]);
     await cloud.change(id, who, (fresh) => {
       let changed = false;
       for (const one of fresh.footage) {
@@ -410,7 +426,7 @@ export function routes(router: Router<App>): void {
       );
       const order = (link: string) => links.indexOf(link);
       made.sort((a, b) => order(a.link) - order(b.link));
-      if (footage.length > 0) for (const one of made) nameFootage(context.app, one.id, who);
+      if (footage.length > 0) for (const one of made) void nameFootage(context.app, one.id, who);
       for (const one of made) await run.repackage(contextOf(context.app), one.id).catch((error: unknown) => diag.warn("ideas", `${one.id}: ${diag.messageOf(error)}`));
       return json({ ideas: made, refused });
     })
@@ -432,7 +448,7 @@ export function routes(router: Router<App>): void {
       try {
         const shown = await page(params.id!);
         // Footage nobody has checked (an idea from before Nov 2, a card's), named as it's opened.
-        nameFootage(app, shown.idea.id, by(), shown.idea);
+        void nameFootage(app, shown.idea.id, by(), shown.idea);
         return json(shown);
       } catch (error) {
         failed(error);
@@ -446,7 +462,14 @@ export function routes(router: Router<App>): void {
       const who = by();
       try {
         const { idea, rev } = await cloud.change(context.params.id!, who, (idea) => applyPatch(idea, patch, who));
-        if (patch.footage !== undefined) nameFootage(context.app, idea.id, who, idea);
+        // New footage named before the answer when it's quick (YouTube's are), so the page shows the names at once.
+        if (patch.footage !== undefined && idea.footage.some(unchecked)) {
+          const named = await Promise.race([nameFootage(context.app, idea.id, who, idea).then(() => true), Bun.sleep(8000).then(() => false)]);
+          if (named) {
+            const fresh = await cloud.get(idea.id);
+            if (fresh !== null) return json(fresh);
+          }
+        }
         return json({ idea, rev });
       } catch (error) {
         failed(error);

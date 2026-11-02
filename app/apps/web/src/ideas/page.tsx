@@ -80,13 +80,15 @@ export function IdeaScreen({ id }: { id: string }) {
     [id],
   );
   const active = page !== null && working(page.idea);
+  // Footage the server is still naming: looked at again soon.
+  const checking = page !== null && page.idea.footage.some((one) => one.title === undefined && one.problem === undefined);
   useEffect(() => {
     void load();
     const timer = setInterval(() => {
       if (!document.hidden) void load();
-    }, active ? 1_500 : 15_000);
+    }, active ? 1_500 : checking ? 2_000 : 15_000);
     return () => clearInterval(timer);
-  }, [load, active]);
+  }, [load, active, checking]);
   // The reviewers' comments, read fresh from the card when it's waiting on changes.
   const changesAsked = page?.place?.changes === true;
   useEffect(() => {
@@ -229,6 +231,12 @@ function Header({
             </button>
           ))}
         </div>
+      )}
+      {/* In the top bar beside the board's button, not under the footage where it was too easily clicked (Sphe, Nov 2). */}
+      {idea !== null && canStartScript(idea) && (
+        <Button size="sm" variant="subtle" disabled={active} onClick={() => startScript(idea)} title="New project, with this idea's title and footage">
+          Start the script
+        </Button>
       )}
       {idea !== null &&
         (sent ? (
@@ -639,6 +647,18 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
 
 // ---------------------------------------------------------------- the footage
 
+/** Whether a script can start from the idea: its footage, or the case's own video. */
+const canStartScript = (idea: Idea) => idea.footage.length > 0 || idea.sources.some((one) => one.kind === "youtube");
+
+/** New project on Home, opened with the idea's main title, its kind and its footage (the case's own video when none of it is listed). */
+function startScript(idea: Idea): void {
+  // A bodycam repost is its own footage: the case's video goes in when no footage of the case is listed.
+  const own = idea.footage.some((one) => !one.reuse) ? [] : idea.sources.flatMap((one) => (one.kind === "youtube" ? [one.url] : []));
+  const text = [...own, ...idea.footage.map(footageLine)].join("\n");
+  sessionStorage.setItem("edit.newProject", JSON.stringify({ title: idea.main ?? idea.titles[0]?.text ?? "", text, style: idea.workspace === "bodycam" ? "bodycam" : "interrogation" }));
+  navigate("/");
+}
+
 const FOOTAGE_ICON = { youtube: SquarePlay, drive: FolderOpen, doc: FileText } as const;
 const FOOTAGE_KIND = { youtube: "YouTube", drive: "Drive", doc: "Script Doc" } as const;
 
@@ -664,24 +684,9 @@ function Footage({ idea, onChange }: { idea: Idea; onChange: (patch: IdeaChange)
     setAdding("");
     await save([...idea.footage, ...fresh]);
   };
-  const startScript = () => {
-    // The case's own video goes in too when no footage of the case is listed (a bodycam repost is its own footage).
-    const own = idea.footage.some((one) => !one.reuse) ? [] : idea.sources.flatMap((one) => (one.kind === "youtube" ? [one.url] : []));
-    const text = [...own, ...idea.footage.map(footageLine)].join("\n");
-    sessionStorage.setItem("edit.newProject", JSON.stringify({ title: idea.main ?? idea.titles[0]?.text ?? "", text, style: idea.workspace === "bodycam" ? "bodycam" : "interrogation" }));
-    navigate("/");
-  };
-  const canStart = idea.footage.length > 0 || idea.sources.some((one) => one.kind === "youtube");
   return (
     <section>
-      <div className="flex items-center justify-between gap-3">
-        <h3 className={LABEL}>Footage</h3>
-        {canStart && (
-          <button type="button" onClick={startScript} className="rounded-lg px-2 py-1 text-[12px] text-white/55 transition-colors hover:bg-white/[0.05] hover:text-white">
-            Start the script
-          </button>
-        )}
-      </div>
+      <h3 className={LABEL}>Footage</h3>
       {idea.footage.length > 0 && (
         <ul className="mt-2 flex flex-col divide-y divide-white/[0.05] rounded-xl border border-white/[0.06]">
           {idea.footage.map((one) => {

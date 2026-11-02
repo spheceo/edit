@@ -203,11 +203,35 @@ export function Home() {
     const here = localScripts.find((local) => local.id === one.id);
     return { ...one, compilation: one.compilation ?? here?.compilation, runFailed: one.runFailed ?? here?.runFailed ?? null };
   };
-  const scriptOf = new Map(scripts.flatMap((one) => {
+  // An import running (or stopped) on this Mac isn't in the cloud's list until
+  // it's in: listed from here meanwhile, so it shows in Importing at once (JJ,
+  // Nov 2: "It's just confusing when you import and it doesn't get into the
+  // importing while it's in progress").
+  const cloudIds = new Set(scripts.map((one) => one.id));
+  const pending: WriterScriptRow[] = [
+    ...localScripts.filter((one) => !cloudIds.has(one.id) && (one.status === "processing" || one.status === "error" || one.status === "needs_choice" || one.firstBuild === true)),
+    ...writing.filter((one) => !cloudIds.has(one.id) && !localScripts.some((local) => local.id === one.id)).map((one) => ({ id: one.id, title: one.title, createdAt: one.startedAt })),
+  ].map((one): WriterScriptRow => ({
+    id: one.id,
+    title: one.title,
+    rev: 0,
+    updatedAt: ("createdAt" in one ? one.createdAt : undefined) ?? Date.now(),
+    updatedBy: null,
+    createdBy: "createdBy" in one ? (one.createdBy ?? null) : null,
+    project: null,
+    handoff: null,
+    clips: 0,
+    durationMs: 0,
+    built: false,
+    style: null,
+    ...("compilation" in one && one.compilation !== undefined ? { compilation: one.compilation } : {}),
+  }));
+  const listedScripts = [...scripts, ...pending];
+  const scriptOf = new Map(listedScripts.flatMap((one) => {
     const edit = editOf(one);
     return edit !== null ? [[edit, withKind(one)] as const] : [];
   }));
-  const scriptOnly = scripts.filter((one) => editOf(one) === null);
+  const scriptOnly = listedScripts.filter((one) => editOf(one) === null);
   // A script still importing (running, stopped or waiting on a choice) isn't
   // a script yet: it's in Importing, with how far it got (the user, Oct 30:
   // "until the first prompt is kicked off the project isn't a Script project

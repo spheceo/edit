@@ -15,6 +15,10 @@ use crate::render::{RgbaImage, downscale};
 pub const PATCH: u32 = 28;
 /// The longest side a model reads unresized.
 pub const LONG_EDGE: u32 = 2576;
+/// The longest side a sheet is planned to: Claude Code sends a picture wider
+/// than 2,000 px shrunk to 2,000 (a 2,184 px sheet reached the model at 1,999
+/// on Nov 3, its labels softened), so sheets stop at 71 patches.
+pub const SHEET_EDGE: u32 = 1988;
 /// The most tokens a picture is read at.
 pub const MAX_TOKENS: u32 = 4784;
 /// A sheet's tokens at most unless asked otherwise: twelve 16:9 frames at 360 px.
@@ -117,7 +121,7 @@ pub fn plan(
     let mut cheapest: Option<SheetPlan> = None;
     for cols in across {
         // Never wider than the picture itself (plus its gutter).
-        let widest = (LONG_EDGE / PATCH / cols)
+        let widest = (SHEET_EDGE / PATCH / cols)
             .min((source.0.max(1) + GUTTER) / PATCH)
             .max(1);
         for k in (1..=widest).rev() {
@@ -125,7 +129,7 @@ pub fn plan(
             if k == 1 && cheapest.is_none_or(|c| candidate.tokens < c.tokens) {
                 cheapest = Some(candidate);
             }
-            if candidate.tokens <= budget && candidate.height <= LONG_EDGE {
+            if candidate.tokens <= budget && candidate.height <= SHEET_EDGE {
                 if best.is_none_or(|b| better(&candidate, &b, count)) {
                     best = Some(candidate);
                 }
@@ -412,7 +416,7 @@ mod tests {
                     assert_eq!(p.height % PATCH, 0);
                     assert_eq!(p.tokens, tokens(p.width, p.height));
                     assert!(p.columns * p.rows >= count as u32);
-                    assert!(p.width <= LONG_EDGE && p.height <= LONG_EDGE);
+                    assert!(p.width <= SHEET_EDGE && p.height <= SHEET_EDGE);
                     if p.slot_width > PATCH {
                         assert!(p.tokens <= budget, "{count} {source:?} {budget}: {p:?}");
                     }

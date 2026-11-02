@@ -1384,6 +1384,23 @@
     "name": "note_lesson"
   },
   {
+    "description": "The review's open notes, for the user's \"implement the new feedback\". From Repack (feedback.spheceo.com), when Edit hasn't handed them to you. Each note comes with its [id], its moment on the export and its place on this timeline now, as Ready for changes gives them; load the feedback skill, fix them, and call feedback_done / feedback_unfixed / feedback_answer after each. When your turn ends Edit exports the edit and shares it on the review as the next version.",
+    "inputSchema": {
+      "properties": {
+        "again": {
+          "description": "Also take the notes you left before (feedback_unfixed), e.g. when the user says to try them again.",
+          "type": "boolean"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "pull_feedback"
+  },
+  {
     "description": "Marks a Repack review note fixed. Call it after each note Edit set you on, before the next: Edit works out what you changed since the note before (the clips and their stretch of the timeline), keeps it with the note so the timeline shows the change and the reviewer's words over it, and marks the note done on the review with your summary.",
     "inputSchema": {
       "properties": {

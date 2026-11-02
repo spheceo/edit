@@ -770,7 +770,7 @@ export function givenUp(state: State, project: string, now: number): Note[] {
 }
 
 /** The message that sets the agent on a project's notes. */
-export function fixMessage(project: Project, shared: Shared | undefined, notes: Note[], replies: Note[] = [], stills: Record<string, string> = {}): string {
+export function fixMessage(project: Project, shared: Shared | undefined, notes: Note[], replies: Note[] = [], stills: Record<string, string> = {}, asked = false): string {
   const fps = fpsOf(project);
   const lines = notes.map((note) => {
     // What the team said under it since (a "not fixed", more detail), not the agent's own replies.
@@ -809,10 +809,10 @@ export function fixMessage(project: Project, shared: Shared | undefined, notes: 
     return `- [${note.id}]${where}${said.length > 0 ? ` (${said.join("; ")})` : ""}: ${quoted(note.author, 60)}: ${quoted(note.text)}${under}`;
   });
   return (
-    `(Edit, automatically) New feedback on this edit's review${shared === undefined ? "" : ` (${shared.url})`}: ${notes.length} note${notes.length === 1 ? "" : "s"}. ` +
+    `${asked ? "Open" : "(Edit, automatically) New"} feedback on this edit's review${shared === undefined ? "" : ` (${shared.url})`}: ${notes.length} note${notes.length === 1 ? "" : "s"}. ` +
     "Load the feedback skill and fix them across the video, the team's words being what they want. " +
     'After each note, call feedback_done {note: "<its id>", summary: "<one line: what you changed>"}; for one you can\'t or shouldn\'t do, feedback_unfixed {note, reason}; a question (kind: question) gets feedback_answer {note, answer} and no change. A kind names the change wanted (a blur, a mute, music…): keep to it; "everywhere" means across the whole video. ' +
-    "Then mute_house_words once if subtitles changed, and finish with a line per note.\n" +
+    `Then mute_house_words once if subtitles changed, and finish with a line per note${asked ? "; when this turn ends Edit exports the edit and shares it on the review as the next version, so don't export or share it yourself" : ""}.\n` +
     `${UNTRUSTED_OPEN}\n` +
     lines.join("\n") +
     `\n${UNTRUSTED_CLOSE}`
@@ -1391,7 +1391,9 @@ export async function checkIn(app: App): Promise<string[]> {
 }
 
 /** How a Ready for changes is going, for its review page (`reviews:fixProgress`). Best effort. */
-async function progress(reviewId: string, given: { state?: "fixing" | "sharing" | "done" | "failed"; stage?: string; done?: number; total?: number; error?: string }): Promise<void> {
+async function progress(reviewId: string | null, given: { state?: "fixing" | "sharing" | "done" | "failed"; stage?: string; done?: number; total?: number; error?: string }): Promise<void> {
+  // A fix asked for in the chat (pull_feedback) has no request on the page to report to.
+  if (reviewId === null) return;
   await cloud.mutation("reviews:fixProgress", { machine: machine.id(), reviewId, ...given }).catch((error: unknown) => diag.warn("review", `saying how the fix is going: ${diag.messageOf(error)}`));
 }
 
@@ -1449,8 +1451,75 @@ export async function fixReady(app: App, project: string, reviewId: string, note
   }
 }
 
+/**
+ * The review's open notes, pulled now because the team asked in the chat
+ * ("implement the new feedback"; Sphe, Nov 2: feedback sat on
+ * feedback.spheceo.com and there was no way to just tell the agent to pull
+ * it): Repack asked for its latest, the open notes claimed by hand (any
+ * computer may), and handed back as Ready for changes hands them, so the
+ * agent fixes them in this turn. From here the turn is a review turn (the
+ * notes are guests' words); when it ends the edit is exported and shared as
+ * the next version, as after Ready for changes. `again`: notes the agent left
+ * before (feedback_unfixed) are taken too.
+ */
+export async function pullFeedback(app: App, projectId: string, again = false): Promise<string> {
+  const live = app.store.get(projectId);
+  if (live === null) throw new Error("no such project");
+  if (!cloud.enabled()) throw new Error("pulling a review's notes needs Edit's cloud (sign in)");
+  const home = app.store.home;
+  const shared = read(home).shared[projectId];
+  if (shared === undefined) throw new Error("this project hasn't been shared for review (Share), so it has no notes to pull");
+  if (readying.has(projectId)) throw new Error("its notes are being fixed already (a Ready for changes or an earlier pull): wait for that to end");
+  await poll(app);
+  const state = read(home);
+  const open = Object.values(state.notes)
+    .filter((note) => note.project === projectId && note.parentId === null && note.fromApp !== true && note.status === "open" && note.fix === undefined)
+    .filter((note) => note.asks?.intent !== "fyi")
+    .sort((a, b) => (a.ms ?? 0) - (b.ms ?? 0) || a.createdAt - b.createdAt);
+  const left = open.filter((note) => note.unfixed !== undefined);
+  const wanted = again ? open : open.filter((note) => note.unfixed === undefined);
+  if (wanted.length === 0) {
+    return `No open notes to fix on the review (${shared.url})${left.length > 0 ? `: ${left.length} you left before (feedback_unfixed); pull_feedback {again: true} takes those too` : ""}. Say so to the user.`;
+  }
+  const claimed = new Set<string>();
+  for (let at = 0; at < wanted.length; at += 100) {
+    const batch = wanted.slice(at, at + 100).map((note) => note.id);
+    const answer = (await cloud.mutation("reviews:claim", { noteIds: batch, by: app.machine, machine: machine.id(), manual: true })) as { claimed?: string[] };
+    for (const id of answer.claimed ?? []) claimed.add(id);
+  }
+  const mine = wanted.filter((note) => claimed.has(note.id));
+  const taken = wanted.length - mine.length;
+  if (mine.length === 0) throw new Error(`the review's ${wanted.length} open note(s) are being fixed by another run just now (on this or another computer): try again in half an hour, or once that run ends`);
+  update(home, (saved) => {
+    for (const note of mine) {
+      const own = saved.notes[note.id];
+      if (own === undefined) continue;
+      own.claimed = Date.now();
+      own.attempts = (own.attempts ?? 0) + 1;
+      if (again) delete own.unfixed;
+    }
+  });
+  const before = timelineHash(live.project);
+  checkpoints.set(projectId, structuredClone(live.project));
+  const replies = Object.values(state.notes).filter((note) => note.project === projectId && note.parentId !== null);
+  const stills = await boxStills(home, projectId, shared, mine);
+  reviewGuard.reviewTurnNow(projectId);
+  const ids = mine.map((note) => note.id);
+  readying.add(projectId);
+  noteFix(home, projectId, { reviewId: null, noteIds: ids, before, at: Date.now() });
+  diag.info("review", `${live.project.name}: asked in the chat: the agent is fixing ${mine.length} note(s)`);
+  void followFix(app, projectId, null, ids, before)
+    .catch((error: unknown) => diag.warn("review", `${live.project.name}: the pulled feedback: ${diag.messageOf(error)}`))
+    .finally(() => {
+      noteFix(home, projectId, null);
+      readying.delete(projectId);
+    });
+  const message = fixMessage(live.project, shared, mine, replies, stills, true);
+  return taken > 0 ? `${message}\n(${taken} more open note(s) are being fixed by another run and aren't yours.)` : message;
+}
+
 /** Fixes under way, by project: what a restart needs to follow one to its share (review-fixes.json). */
-type Taken = { reviewId: string; noteIds: string[]; before: string; at: number };
+type Taken = { reviewId: string | null; noteIds: string[]; before: string; at: number };
 const FIXES = "review-fixes.json";
 
 function takenFixes(home: string): Record<string, Taken> {
@@ -1510,7 +1579,7 @@ export function onLatest(home: string, project: string): Note[] {
  * goes as v3 and fixes those comments as well"). `round`: comments that came
  * in during the fix, sent to the agent after it (twice at most).
  */
-async function followFix(app: App, project: string, reviewId: string, noteIds: string[], before: string, every = followMs, round = 0): Promise<void> {
+async function followFix(app: App, project: string, reviewId: string | null, noteIds: string[], before: string, every = followMs, round = 0): Promise<void> {
   const home = app.store.home;
   const panel = seams.agentPanel(app);
   const mine = noteIds.flatMap((id) => (read(home).notes[id] ? [read(home).notes[id]!] : []));
@@ -1719,6 +1788,8 @@ registerTool("feedback_answer", async ({ app, args, projectId }: ToolCall) => {
   });
   return text(`answered ${note} on the review`);
 });
+
+registerTool("pull_feedback", async ({ app, args, projectId }: ToolCall) => text(await pullFeedback(app, projectId, args.again === true)));
 
 registerTool("share_for_review", async ({ app, args, projectId }: ToolCall) => {
   const shared = await share(app, projectId, str(args.path));

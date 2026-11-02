@@ -37,6 +37,11 @@ export function reviewTurnNext(project: string): void {
   pending.add(project);
 }
 
+/** The turn running on `project` is a review fix from here on (pull_feedback brought guests' notes into it). */
+export function reviewTurnNow(project: string): void {
+  active.add(project);
+}
+
 /**
  * A turn starts on `project` with `text`: a review fix if one was asked for;
  * Edit's own follow-up ("(Edit, automatically) …") keeps what the turn before

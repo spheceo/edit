@@ -890,3 +890,19 @@ test("two pop-ups opening together are flagged; a second apart they aren't", () 
   const together = (audit(p).issues as { kind: string; clips?: string[] }[]).filter((issue) => issue.kind === "popups_together");
   expect(together.map((issue) => issue.clips)).toEqual([["a", "b"]]);
 });
+
+test("a_tall_file_viewer_stays_on_screen", async () => {
+  // Loop 7's holdout: a portrait photo's window at y -194 ran its title strip ~95 px off the top.
+  const { fileViewerSize } = await import("../src/looks.ts");
+  const p = project("plan");
+  p.media.push(media({ id: "tall", name: "tall", path: "/tall.png", kind: "image", duration: 30, width: 1076, height: 1766 }));
+  const viewer = { op: "file_viewer", media: "tall", start: 0, end: 120, x: 345.6, y: -194.4, width: 0.3, name: "Christian" };
+  const [, w, h] = needs([viewer], p).screens![0]!;
+  p.media.push(media({ id: "fv", name: "fv", path: "/graphics/fv.png", kind: "image", duration: 30, width: w, height: h }));
+  applyWith(p, [viewer], { shutter: null, screen: { wallpaper: "fv", frames: { [frameKey("file_viewer", w, h)]: "fv" } } });
+  const window = p.clips.find((own) => own.name === "File Viewer")!;
+  const size = fileViewerSize(p, p.media[0]!, 0.3);
+  const ys = window.keyframes!.y!.map((key) => key.value);
+  expect(Math.min(...ys) - size.h / 2).toBeGreaterThanOrEqual(-540);
+  expect(Math.max(...ys) + size.h / 2).toBeLessThanOrEqual(540);
+});

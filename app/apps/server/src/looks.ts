@@ -350,8 +350,13 @@ export function fileViewer(project: Project, args: Args, frames: Record<string, 
   const drawn = [Math.round(w * FRAME_SCALE), Math.round(h * FRAME_SCALE)] as const;
   const frameMedia = mediaOf(project, frames[frameKey("file_viewer", drawn[0], drawn[1])] ?? "");
   if (frameMedia === undefined) throw new Error("file_viewer's frame wasn't prepared (run it through apply_edit_plan)");
-  const cx = num(args.x) ?? 0.18 * W;
-  const cy = num(args.y) ?? -0.18 * H;
+  // The whole window stays on screen, its drift up included: a tall portrait
+  // photo at the default height ran its title strip ~95 px off the top (loop
+  // 7's holdout, Christian's File Viewer at 0:12).
+  const margin = 0.03 * H;
+  const keepIn = (at: number, half: number, size: number, low: number) => (half * 2 >= size - 2 * margin ? 0 : Math.min(Math.max(at, -size / 2 + margin + half + low), size / 2 - margin - half));
+  const cx = keepIn(num(args.x) ?? 0.18 * W, w / 2, W, 0);
+  const cy = keepIn(num(args.y) ?? -0.18 * H, h / 2, H, 0.015 * H);
   const total = end - start;
   const made: string[] = [];
   const add = adder(project, made, "file_viewer");

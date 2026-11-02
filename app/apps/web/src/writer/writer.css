@@ -976,8 +976,7 @@
 .writer-root .composer textarea:focus { border: 0; }
 .writer-root .composer-footer { display: flex; align-items: center; gap: 8px; padding-left: 12px; font-size: 12px; }
 .writer-root .model { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
-.writer-root .claude-spark { display: block; flex-shrink: 0; color: #d97757; }
-.writer-root .send { flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 8px; background: var(--text); color: #000; }
+.writer-root .send { flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: #000; }
 .writer-root .send:hover:not(:disabled) { background: #fff; border: 0; }
 .writer-root .send:disabled { background: var(--hover); color: var(--faint); opacity: 1; }
 .writer-root .sources { flex: 1; min-height: 0; overflow: auto; padding: 6px; }

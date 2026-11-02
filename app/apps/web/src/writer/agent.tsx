@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ClaudeMark } from "../components/ClaudeMark";
 import { openPage } from "./api";
 import { clock } from "./clips";
 import { Spinner } from "../components/ui";
@@ -244,9 +245,8 @@ export function Composer({
       />
       <div className="composer-footer">
         <span className="model" title={`${model} through your Claude login`}>
-          <svg className="claude-spark" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-            <path d="M6 .5v11M.5 6h11M2.1 2.1l7.8 7.8M9.9 2.1l-7.8 7.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-          </svg>
+          {/* Anthropic's Claude mark, as in the editor's chat (Sphe, Nov 2), not a drawn asterisk. */}
+          <ClaudeMark size={12} />
           {model}
         </span>
         {onNewChat && (

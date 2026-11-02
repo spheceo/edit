@@ -1,10 +1,11 @@
 // A note being left on the player (lib/notes.ts): at the playhead's frame (or
 // the In–Out span when the playhead is in it), with a box dragged on the
-// picture if wanted, written in the player's bar. Enter queues it in the row
-// above the chat's composer; Esc lets it go. The agent gets the queue when someone tells it to
+// picture if wanted, written in a small bubble at the player's bottom left.
+// Enter queues it in the row above the chat's composer; Esc lets it go. The agent gets the queue when someone tells it to
 // implement the feedback.
 
-import { CornerDownLeft, SquareDashed, X } from "lucide-react";
+import { ArrowUp, SquareDashed } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
 import { inOutSpan, useInOut } from "../lib/inOut";
@@ -67,14 +68,19 @@ export function NoteBoxLayer({ wrap }: { wrap: HTMLDivElement | null }) {
 }
 
 /**
- * The note, written in the player's own bar while it's open (Sphe, Nov 2: "it
- * makes no sense to have the comment box be HUGE and have so many details and
- * be in FRONT of the thing we're giving feedback for"): one line at the
- * transport's height in place of the transport, so the picture stays whole and
- * nothing moves. The time, the note, a box to mark the spot, Queue; Enter
- * queues, Esc lets it go.
+ * The note, in a small bubble that pops out of the player's bottom left, just
+ * above the playhead's time (Sphe, Nov 2: first "it makes no sense to have the
+ * comment box be HUGE … and be in FRONT of the thing we're giving feedback
+ * for", then "like a poped out buble but maybe have it more on the left but
+ * make it minimal and animate in and out well"). One line: the time, the
+ * note, a box to mark the spot, send. Enter queues, Esc lets it go.
  */
 export function NoteDraft() {
+  const draft = useNotes((state) => state.draft);
+  return <AnimatePresence>{draft !== null && <NoteBubble key="note" />}</AnimatePresence>;
+}
+
+function NoteBubble() {
   const draft = useNotes((state) => state.draft);
   const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
   const duration = useEditor((state) => (state.project ? projectDuration(state.project) : 0));
@@ -83,17 +89,15 @@ export function NoteDraft() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  const open = draft !== null;
-  useEffect(() => {
-    if (!open) return;
-    setText("");
-    setError(null);
-    input.current?.focus();
-  }, [open]);
-  if (draft === null) return null;
-  const inSpan = span !== null && draft.frame >= span[0] && draft.frame < span[1];
-  const where = inSpan ? `${clock(span[0], fps)}–${clock(span[1], fps)}` : clock(draft.frame, fps);
-  const boxed = draft.drawing || draft.box !== null;
+  useEffect(() => input.current?.focus(), []);
+  // Kept while it animates out, after the draft is gone.
+  const last = useRef(draft);
+  if (draft !== null) last.current = draft;
+  const shown = draft ?? last.current;
+  if (shown === null) return null;
+  const inSpan = span !== null && shown.frame >= span[0] && shown.frame < span[1];
+  const where = inSpan ? `${clock(span[0], fps)}–${clock(span[1], fps)}` : clock(shown.frame, fps);
+  const boxed = shown.drawing || shown.box !== null;
   const queue = async () => {
     if (text.trim() === "" || busy) return;
     setBusy(true);
@@ -102,54 +106,62 @@ export function NoteDraft() {
     if (failed !== null) setError(failed);
   };
   return (
-    <form
-      className="@container flex h-11 shrink-0 items-center gap-2 border-t border-line px-3"
+    <motion.form
+      initial={{ opacity: 0, y: 10, scale: 0.94 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 6, scale: 0.97, transition: { duration: 0.12 } }}
+      transition={{ type: "spring", stiffness: 520, damping: 34, mass: 0.7 }}
+      style={{ transformOrigin: "16px 100%" }}
+      className="@container absolute bottom-3 left-3 z-10 w-[min(360px,calc(100%-24px))]"
       onSubmit={(event) => {
         event.preventDefault();
         void queue();
       }}
     >
-      {/* A narrow player (the editor squeezes it to ~140 px at 1100) keeps the note, the box and Queue: the time and × go first; Esc still cancels. */}
-      <span className="flex shrink-0 items-center gap-1.5 font-mono text-[12px] text-fg tabular @max-[320px]:hidden" title={inSpan ? "The note is on the In–Out span" : "The note is at the playhead"}>
-        <span className="size-1.5 rounded-full bg-warning" />
-        {where}
-      </span>
-      <input
-        ref={input}
-        aria-label="The note"
-        value={text}
-        placeholder={error ?? "What should change here?"}
-        onChange={(event) => {
-          setText(event.target.value);
-          setError(null);
-        }}
-        onKeyDown={(event) => {
-          event.stopPropagation();
-          if (event.key === "Escape") {
-            event.preventDefault();
-            cancelNote();
-          }
-        }}
-        className={cx("h-7 min-w-0 flex-1 rounded-md bg-black/60 px-2.5 text-[13px] text-fg outline-none placeholder:text-faint", error !== null && "placeholder:text-danger")}
-      />
-      {error !== null && text !== "" && <span className="max-w-[40%] shrink truncate text-[11px] text-danger" title={error}>{error}</span>}
-      <button
-        type="button"
-        aria-pressed={boxed}
-        aria-label={draft.box !== null ? "Remove the box" : "Mark the spot on the picture"}
-        title={draft.box !== null ? "Remove the box" : draft.drawing ? "Drag on the picture to mark the spot" : "Mark the spot on the picture"}
-        onClick={() => (draft.box !== null ? setDraftBox(null) : setDraftBox(null, !draft.drawing))}
-        className={cx("flex size-7 shrink-0 items-center justify-center rounded-md transition-colors", boxed ? "bg-warning-soft text-warning" : "text-muted hover:bg-hover hover:text-fg")}
-      >
-        <SquareDashed size={14} />
-      </button>
-      <button type="submit" aria-label="Queue" title="Queue it for the agent (Enter)" disabled={text.trim() === "" || busy} className="flex h-7 shrink-0 items-center rounded-md bg-white px-2.5 text-[12px] font-medium text-black transition-opacity disabled:opacity-30 @max-[320px]:px-1.5">
-        <span className="@max-[320px]:hidden">Queue</span>
-        <CornerDownLeft size={14} className="hidden @max-[320px]:block" />
-      </button>
-      <button type="button" aria-label="Cancel the note" title="Cancel (Esc)" onClick={cancelNote} className="flex size-7 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg @max-[320px]:hidden">
-        <X size={14} />
-      </button>
-    </form>
+      <div className="flex h-10 items-center gap-1 rounded-full border border-line-strong bg-[#161616]/95 py-1 pr-1 pl-3 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur">
+        <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-muted tabular @max-[260px]:hidden" title={inSpan ? "On the In–Out span" : "At the playhead"}>
+          <span className="size-1.5 rounded-full bg-warning" />
+          {where}
+        </span>
+        <input
+          ref={input}
+          aria-label="The note"
+          value={text}
+          placeholder={error ?? "Add a note…"}
+          title={error ?? undefined}
+          onChange={(event) => {
+            setText(event.target.value);
+            setError(null);
+          }}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") {
+              event.preventDefault();
+              cancelNote();
+            }
+          }}
+          className={cx("h-8 min-w-0 flex-1 bg-transparent px-1.5 text-[13px] text-fg outline-none placeholder:text-faint", error !== null && "placeholder:text-danger")}
+        />
+        <button
+          type="button"
+          aria-pressed={boxed}
+          aria-label={shown.box !== null ? "Remove the box" : "Mark the spot on the picture"}
+          title={shown.box !== null ? "Remove the box" : shown.drawing ? "Drag on the picture to mark the spot" : "Mark the spot on the picture"}
+          onClick={() => (shown.box !== null ? setDraftBox(null) : setDraftBox(null, !shown.drawing))}
+          className={cx("flex size-8 shrink-0 items-center justify-center rounded-full transition-colors", boxed ? "bg-warning-soft text-warning" : "text-muted hover:bg-hover hover:text-fg")}
+        >
+          <SquareDashed size={14} />
+        </button>
+        <button
+          type="submit"
+          aria-label="Queue"
+          title={error ?? "Queue it for the agent (Enter) · Esc to cancel"}
+          disabled={text.trim() === "" || busy}
+          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-[transform,opacity] active:scale-90 disabled:opacity-25"
+        >
+          <ArrowUp size={14} strokeWidth={2.4} />
+        </button>
+      </div>
+    </motion.form>
   );
 }

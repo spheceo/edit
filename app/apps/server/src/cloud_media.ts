@@ -1756,7 +1756,8 @@ export async function forExport(project: Project, start: number, end: number, ca
   }
   // The picture is read from excerpts cut to this machine (export_excerpts.ts),
   // made while the sound copies come.
-  const excerpts = exportExcerpts.prepare(project, start, end, cache, urls, new Map(needed), cancelled).catch((error: unknown) => {
+  // EDIT_EXPORT_EXCERPTS=0 reads the originals over HTTPS as before (to compare the two).
+  const excerpts = (process.env.EDIT_EXPORT_EXCERPTS === "0" ? Promise.resolve([]) : exportExcerpts.prepare(project, start, end, cache, urls, new Map(needed), cancelled)).catch((error: unknown) => {
     diag.warn("export", `${project.id}: excerpts: ${diag.messageOf(error)}; the originals are read from the cloud`);
     return [];
   });

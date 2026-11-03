@@ -2224,6 +2224,14 @@ impl ChunkSink {
     }
 
     fn write(&mut self, frame: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
+        // EDIT_EXPORT_SINK=null (a measurement: off Modal, step 7): every frame
+        // rendered and read back as ever, none encoded, so a run's "waited on
+        // encoding" against an encoded run's says what the encoder's side
+        // costs. Its chunks aren't made: the join after fails, as it should.
+        if null_sink() {
+            let _ = (frame, pixels, stride);
+            return Ok(());
+        }
         // A frame outside the open chunk is the next chunk's: after it, or
         // before it in a focused export (the playhead's chunks first, then
         // those before: Nov 2, the last chunk took frame 0 into its encoder
@@ -2276,6 +2284,12 @@ impl ChunkSink {
     }
 
     fn finish(mut self) -> Result<(), String> {
+        if null_sink() {
+            return Err(
+                "a measurement into the null sink (EDIT_EXPORT_SINK=null): nothing encoded"
+                    .to_owned(),
+            );
+        }
         self.close()?;
         if self.todo.is_empty() {
             Ok(())
@@ -2345,6 +2359,11 @@ impl Sink {
 /// Decoder threads per export: one plays the current clip while the others
 /// open and seek the next ones.
 const DECODERS: usize = 3;
+/// Whether frames go nowhere (`EDIT_EXPORT_SINK=null`, a measurement).
+fn null_sink() -> bool {
+    std::env::var("EDIT_EXPORT_SINK").as_deref() == Ok("null")
+}
+
 /// A focused export renders this much from the playhead before the sound's mix (seconds).
 const FOCUS_AHEAD_SECONDS: f64 = 60.0;
 /// Frames the planner (and so the decoders) may run ahead of the compositor.

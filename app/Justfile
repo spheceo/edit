@@ -242,7 +242,24 @@ dev: wasm web-install (native "debug")
     # bun --watch restarts the server on its own files and on the addon it loads; if it stops anyway, it's started again.
     # `set +e` in the loop: under the recipe's `set -e` the server's exit ended the loop instead (Nov 2, 21:34: it died of
     # EMFILE mid-reload, holding 10,245 files after five hours of reloads, and nothing started it again).
-    (set +e; while true; do bun --watch apps/server/src/main.ts serve; echo "dev: the server stopped (exit $?); starting it again" >&2; sleep 2; done) &
+    # A watch can also hang instead of exiting (Nov 3: EMFILE resolving modules mid-reload, the process alive and 7700
+    # closed for good): a server that stops answering for a minute is killed, and the loop starts it again.
+    (set +e; while true; do
+        bun --watch apps/server/src/main.ts serve &
+        BUN=$!
+        misses=0
+        while kill -0 "$BUN" 2>/dev/null; do
+            sleep 10
+            if curl -sf -m 5 -o /dev/null "http://127.0.0.1:7700/api/health"; then misses=0; else misses=$((misses + 1)); fi
+            if [ "$misses" -ge 6 ]; then
+                echo "dev: the server stopped answering for a minute; restarting it" >&2
+                kill "$BUN" 2>/dev/null; sleep 3; kill -9 "$BUN" 2>/dev/null
+            fi
+        done
+        wait "$BUN"
+        echo "dev: the server stopped (exit $?); starting it again" >&2
+        sleep 2
+    done) &
     SERVER=$!
     # The engine and its bindings aren't rebuilt on every save any more: run `just native` after a Rust change and the
     # server restarts onto the new addon. A watch rebuilt it (debug) on every save of a Rust file, over the release

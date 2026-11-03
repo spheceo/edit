@@ -667,8 +667,8 @@ export function routes(router: Router<App>): void {
       readFor(data, id(context));
       const path = store.proxyPath(store.scriptDir(data, id(context)));
       if (isFile(path)) return serveFile(context.request, path);
-      // Made on another Mac: played from the cloud.
-      const streamed = await cloud.stream(context.request, data, id(context));
+      // Made on another Mac: played from the cloud, through the shared block cache.
+      const streamed = await cloud.stream(context.request, data, id(context), join(context.app.store.cacheDir(), "cloud", "blocks"));
       if (streamed === null) throw notFound("No preview here.");
       return streamed;
     })

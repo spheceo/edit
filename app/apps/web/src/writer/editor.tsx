@@ -12,7 +12,7 @@ import { scriptText } from "./doc-export";
 import { FootageDoc } from "./footage-doc";
 import { ReusedCases } from "./reused-cases";
 import { Monitor } from "./monitor";
-import { CutPlayer, clipStarts, editedPosition, Playhead } from "./playback";
+import { clipStarts, editedPosition, newPlayer, Playhead } from "./playback";
 import { Timeline } from "./timeline";
 import { type Picked, ResearchList, Transcript, useSpeakers } from "./transcript";
 import type { BuildStatus, ChatTurn, Clip, Highlight, Kind, Research, Script } from "./types";
@@ -170,14 +170,18 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   const [resolving, setResolving] = useState(false);
   const split = useSplit();
 
+  // The footage's length in the address: a reused case joined onto it is a new file at the same path.
+  // Played from this Mac or straight from the cloud, never waiting on a download (stream.rs).
+  const src = script.proxyPath || script.status === "ready" ? previewSrc(script.id, script.durationMs) : "";
   // One playhead per player, made together, so a reload of the code keeps them paired.
   const [{ player, playhead }] = useState(() => {
     const playhead = new Playhead();
-    return { playhead, player: new CutPlayer(null, clips, playhead) };
+    return { playhead, player: newPlayer(clips, playhead) };
   });
   useEffect(() => () => player.dispose(), [player]);
   useEffect(() => player.update(clips), [player, clips]);
-  const onVideo = useCallback((video: HTMLVideoElement | null) => player.attach(video), [player]);
+  useEffect(() => player.setSource(src, script.durationMs), [player, src, script.durationMs]);
+  const onVideo = useCallback((element: HTMLVideoElement | HTMLCanvasElement | null) => player.attach(element), [player]);
 
   useEffect(() => {
     void getResearch(script.id).then(setResearch).catch(() => {});
@@ -194,9 +198,6 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   const speakers = useSpeakers(script.words, script.speakers);
   const labels = useMemo(() => purposes(script), [script]);
   const cueCount = clips.filter(isCutIn).length;
-  // The footage's length in the address: a reused case joined onto it is a new file at the same path.
-  // Played from this Mac or straight from the cloud, never waiting on a download (stream.rs).
-  const src = script.proxyPath || script.status === "ready" ? previewSrc(script.id, script.durationMs) : "";
   // Claude (or a restore) is at work; an archived script is read-only as well.
   const working = started !== null;
   const archived = !!script.archive;

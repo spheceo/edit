@@ -23,6 +23,7 @@ import * as diag from "../diag.ts";
 import { idle, inArea, runtime } from "../effect/runtime.ts";
 import * as service from "../effect/service.ts";
 import { ConvexAnswer } from "../cloud.ts";
+import * as cloudBlocks from "../cloud_blocks.ts";
 import * as archive from "./archive.ts";
 import * as storage from "./storage.ts";
 import { writeAtomic } from "../files.ts";
@@ -451,15 +452,37 @@ export async function fetchFile(data: string, id: string, name: string): Promise
 /** The script's preview on this Mac, brought down from the cloud first when it was cleared from here or made on another Mac. */
 export const fetchPreview = (data: string, id: string): Promise<string> => fetchFile(data, id, "proxy.mp4");
 
+/** Presigned read addresses, kept until they near their hour: a block read costs R2's round trip, not the relay's too. */
+const signedReads = new Map<string, { url: string; until: number }>();
+
+/** The address `key`'s bytes are read from, presigned once an hour. */
+async function streamUrl(key: string): Promise<string> {
+  const known = signedReads.get(key);
+  if (known !== undefined && Date.now() < known.until) return known.url;
+  const url = await presign(key, "GET");
+  signedReads.set(key, { url, until: Date.now() + 50 * 60_000 });
+  return url;
+}
+
 /**
  * A script's preview that's only in the cloud (another Mac made it), played
- * from there a range at a time; null when the cloud has none.
+ * from there a range at a time; null when the cloud has none. Bounded ranges
+ * come from the shared block cache (cloud_blocks.ts, as Edit's previews):
+ * each 2 MiB block is fetched once and the next two read ahead, so a seek is
+ * a look at disk, not two round trips a block.
  */
-export async function stream(request: Request, data: string, id: string): Promise<Response | null> {
+export async function stream(request: Request, data: string, id: string, blocks?: string): Promise<Response | null> {
   const kept = fileKey(data, id, "proxy.mp4");
   if (kept === null) return null;
   const range = request.headers.get("range");
-  const answer = await fetch(await presign(kept.key, "GET"), { headers: range ? { range } : {} });
+  if (blocks !== undefined) {
+    const served = await cloudBlocks.serve(blocks, kept.key, range, () => streamUrl(kept.key)).catch((error: unknown) => {
+      diag.warn("writer", `reading ${id.slice(0, 8)}'s preview in blocks: ${diag.messageOf(error)}`);
+      return null;
+    });
+    if (served !== null) return served;
+  }
+  const answer = await fetch(await streamUrl(kept.key), { headers: range ? { range } : {} });
   const headers = new Headers({ "content-type": "video/mp4", "accept-ranges": "bytes", "cache-control": "no-store" });
   for (const name of ["content-length", "content-range", "etag"]) {
     const value = answer.headers.get(name);

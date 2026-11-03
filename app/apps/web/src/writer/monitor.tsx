@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { isCutIn } from "./clips";
-import { type CutPlayer, clipStarts, editedPosition, type Playhead, usePlayheadValue, usePlaying } from "./playback";
+import { type Player, clipStarts, editedPosition, type Playhead, usePlayheadValue, usePlaying } from "./playback";
 import { captionAt, captionCues } from "./captions";
 import type { Clip, Word } from "./types";
 import { Icon } from "./ui";
@@ -27,7 +27,7 @@ function Caption({ clips, cues, corrections, playhead, frameRatio }: { frameRati
 }
 
 /** Split's seek bar: the cut end to end, cut-ins marked, the playhead on it. */
-function SeekBar({ clips, playhead, player }: { clips: Clip[]; playhead: Playhead; player: CutPlayer | null }) {
+function SeekBar({ clips, playhead, player }: { clips: Clip[]; playhead: Playhead; player: Player | null }) {
   const bar = useRef<HTMLDivElement>(null);
   const fill = useRef<HTMLSpanElement>(null);
   const starts = clipStarts(clips);
@@ -93,11 +93,11 @@ export function Monitor({
   clips: Clip[];
   labels: string[];
   playhead: Playhead;
-  player: CutPlayer | null;
+  player: Player | null;
   seekBar: boolean;
   expanded?: boolean;
   onExpand?: (expanded: boolean) => void;
-  onVideo: (video: HTMLVideoElement | null) => void;
+  onVideo: (element: HTMLVideoElement | HTMLCanvasElement | null) => void;
   empty?: ReactNode;
 }) {
   const cues = useMemo(() => captionCues(words ?? []), [words]);
@@ -116,6 +116,9 @@ export function Monitor({
   const total = clipStarts(clips)[clips.length] ?? 0;
   const card = showing && isCutIn(showing) ? showing : null;
   const cueNumber = card ? clips.filter(isCutIn).findIndex((item) => item.id === card.id) : -1;
+  // The player's own status (a decode error, the picture's shape) moves this.
+  const [, setStatus] = useState(0);
+  useEffect(() => player?.onStatus(() => setStatus((n) => n + 1)), [player]);
 
   useEffect(() => {
     player?.setVolume(volume);
@@ -126,13 +129,16 @@ export function Monitor({
   return (
     <section className="panel monitor" aria-label="Program monitor">
       <div className="screen">
-        {multi ? (
+        {player?.kind === "canvas" ? (
+          <canvas ref={onVideo} aria-label="Script preview" onClick={() => player?.toggle()} />
+        ) : multi ? (
           <video onLoadedMetadata={measureVideo} ref={onVideo} playsInline preload="auto" aria-label="Script preview" onClick={() => player?.toggle()} />
         ) : src ? (
           <video onLoadedMetadata={measureVideo} ref={onVideo} src={src} playsInline preload="auto" aria-label="Edited video preview" onClick={() => player?.toggle()} />
         ) : (
           <div className="none">{empty ?? "No preview yet."}</div>
         )}
+        {player?.error && <div className="none">{player.error}</div>}
         {card && describe?.(card) ? (
           <div className="cut-in-card described">
             <strong>{describe(card)?.title}</strong>
@@ -147,7 +153,7 @@ export function Monitor({
             {card.narration?.trim() ? <p>{card.narration.trim()}</p> : <p className="faint">No narration yet.</p>}
           </div>
         )}
-        {captions && words && <Caption clips={clips} cues={cues} corrections={corrections ?? {}} playhead={playhead} frameRatio={frameRatio} />}
+        {captions && words && <Caption clips={clips} cues={cues} corrections={corrections ?? {}} playhead={playhead} frameRatio={player?.frameRatio ?? frameRatio} />}
         {auditioning && <span className="screen-badge">Source</span>}
       </div>
       {seekBar && <SeekBar clips={clips} playhead={playhead} player={player} />}

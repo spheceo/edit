@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clock, cutInCard, insertAfter, isCutIn, moveItems, nearestEdge, range, recordingSpans, splitClip, trimClip } from "./clips";
-import { type CutPlayer, clipStarts, editedPosition, type Playhead } from "./playback";
+import { type Player, clipStarts, editedPosition, type Playhead } from "./playback";
 import type { Clip, Part, Word } from "./types";
 import { resizeTimelineWindow } from "./timeline-zoom";
 import { Icon } from "./ui";
@@ -51,7 +51,7 @@ export function Timeline({
   /** Each cut-in's purpose, in order. */
   labels: string[];
   playhead: Playhead;
-  player: CutPlayer | null;
+  player: Player | null;
   selected: string[];
   disabled: boolean;
   onSelect: (ids: string[]) => void;

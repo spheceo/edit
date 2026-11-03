@@ -8,7 +8,7 @@ import { seen, useSplit, useView, type View, ViewTabs } from "./editor";
 import { Monitor } from "./monitor";
 import { type HoverClip, useHoverPreview } from "./hover-preview";
 import { A4, Grow, Paper, pageInView, useScale, useZoom, ZoomTools } from "./paper";
-import { CutPlayer, clipStarts, editedPosition, type Item, Playhead, usePlayheadValue } from "./playback";
+import { clipStarts, editedPosition, type Item, newPlayer, Playhead, usePlayheadValue } from "./playback";
 import type { Adding, BuildStatus, Cite, Draft, Feedback, Finds, Footage, LearnStep, Pacing, Paragraph, Role, Script, Source, Summary, ChatTurn } from "./types";
 import { FoundClips } from "./found-clips";
 import { FeedbackPanel } from "./feedback-panel";
@@ -245,11 +245,11 @@ export function CommentaryEditor({
   };
   const [{ player, playhead }] = useState(() => {
     const playhead = new Playhead();
-    return { playhead, player: new CutPlayer(null, cut.items, playhead) };
+    return { playhead, player: newPlayer(cut.items, playhead) };
   });
   useEffect(() => () => player.dispose(), [player]);
   useEffect(() => player.update(cut.items), [player, cut.items]);
-  const onVideo = useCallback((video: HTMLVideoElement | null) => player.attach(video), [player]);
+  const onVideo = useCallback((element: HTMLVideoElement | HTMLCanvasElement | null) => player.attach(element), [player]);
   const preview = (id: string) => {
     const index = cut.items.findIndex((item) => item.id === id);
     if (index < 0) return;

@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { message, researchAgain } from "./api";
 import { clock, covers, lines, partAt } from "./clips";
-import type { CutPlayer, Playhead } from "./playback";
+import type { Player, Playhead } from "./playback";
 import type { Clip, Part, Research, Word } from "./types";
 import { Icon } from "./ui";
 
@@ -45,7 +45,7 @@ export const Transcript = memo(function Transcript({
   parts?: Part[];
   speakers: Map<string, { name: string; colour: string }>;
   playhead: Playhead;
-  player: CutPlayer | null;
+  player: Player | null;
   noSpeech?: boolean;
   onPick: (picked: Picked | null) => void;
 }) {

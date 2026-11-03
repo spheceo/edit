@@ -348,6 +348,8 @@ test("a share follows the export already running for the same picture, and waits
   const live = app.store.createAs("Helpful Son", "bodycam", { width: 1920, height: 1080, fps: 30 });
   const id = live.project.id;
   const house = native().exportDefaults();
+  // A share always asks for YouTube, even with no options (Sphe, Nov 3). The export it follows has those settings.
+  const shareOptions = { ...house, preset: "youtube" as const };
   let busy: { output: string; timeline: string; options: string } | null = null;
   const started: string[] = [];
   (app as unknown as { exports: unknown }).exports = {
@@ -358,7 +360,7 @@ test("a share follows the export already running for the same picture, and waits
     start: async (_store: unknown, _library: unknown, _project: unknown, _options: unknown, path: string) => {
       if (busy !== null) throw new Error("this project already has an export running");
       started.push(path);
-      busy = { output: path, timeline: timelineHash(live.project), options: optionsKey(house) };
+      busy = { output: path, timeline: timelineHash(live.project), options: optionsKey(shareOptions) };
       setTimeout(() => {
         busy = null;
         app.store.emit({ type: "export", id, state: "done", progress: 1, path });
@@ -371,8 +373,8 @@ test("a share follows the export already running for the same picture, and waits
     app.store.emit({ type: "export", id, state: "done", progress: 1, path });
   };
   try {
-    // The same picture and settings: followed to its file, no second export.
-    busy = { output: "/out/resumed.mp4", timeline: timelineHash(live.project), options: optionsKey(house) };
+    // The same picture and the YouTube settings a share asks for: followed to its file, no second export.
+    busy = { output: "/out/resumed.mp4", timeline: timelineHash(live.project), options: optionsKey(shareOptions) };
     const same = reviews.exportAndShare(app, id, {});
     setTimeout(() => finish("/out/resumed.mp4"), 50);
     // No such export on record in the fixture, so the share itself stops after: past the export is what's tested.

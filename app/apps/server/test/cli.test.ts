@@ -9,11 +9,13 @@ import { scratch } from "./helpers/home.ts";
 const MAIN = nodePath.join(import.meta.dir, "../src/main.ts");
 
 function edit(args: string[], env: Record<string, string> = {}) {
+  // The words, not the terminal: a parent FORCE_COLOR makes Bun color console.error, and the help is compared byte for byte.
+  const { FORCE_COLOR: _forced, ...plain } = process.env;
   const run = Bun.spawnSync([process.execPath, MAIN, ...args], {
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...env },
+    env: { ...plain, NO_COLOR: "1", ...env },
   });
   return { code: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
 }

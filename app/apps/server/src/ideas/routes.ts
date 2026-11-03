@@ -320,6 +320,18 @@ async function upload(id: string, bytes: Uint8Array, type: string, name: string)
   return { id: shortId(), name: name.replace(/\.[a-z0-9]{2,5}$/i, "").replace(/[^\p{L}\p{N} _-]+/gu, " ").trim().slice(0, 80) || "picture", key, from: "upload" };
 }
 
+/** The pictures a chat message carries: ones uploaded to this idea's folder (chat-images), at most eight. */
+function chatImages(id: string, given: unknown): IdeaImage[] {
+  if (given === undefined || given === null) return [];
+  if (!Array.isArray(given)) throw bad("images must be the attached pictures.");
+  if (given.length > 8) throw bad("Eight pictures at most with one message.");
+  return given.map((item) => {
+    const fields = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+    if (typeof fields.id !== "string" || typeof fields.key !== "string" || !fields.key.startsWith(`edit/ideas/${id}/`)) throw bad("An attached picture isn't this idea's.");
+    return { id: fields.id, name: typeof fields.name === "string" ? fields.name.slice(0, 80) : "picture", key: fields.key, from: "upload" as const };
+  });
+}
+
 /** A picture's bytes for the page. */
 async function picture(image: IdeaImage): Promise<Response> {
   if (image.key !== undefined) {
@@ -509,9 +521,9 @@ export function routes(router: Router<App>): void {
     .post("/api/ideas/{id}/chat", async (context: Context) => {
       guard();
       await guardId(context.params.id!);
-      const body = await readJson<{ text?: unknown }>(context);
+      const body = await readJson<{ text?: unknown; images?: unknown }>(context);
       try {
-        await run.chat(contextOf(context.app), context.params.id!, typeof body.text === "string" ? body.text : "");
+        await run.chat(contextOf(context.app), context.params.id!, typeof body.text === "string" ? body.text : "", chatImages(context.params.id!, body.images));
         return json({ ok: true });
       } catch (error) {
         if (error instanceof Error && /^(Write what|Keep the message|Claude is)/.test(error.message)) throw bad(error.message);
@@ -615,6 +627,34 @@ export function routes(router: Router<App>): void {
       },
       { bodyLimit: 16 * 1024 * 1024 },
     )
+    // A picture attached to a chat message (Sphe, Nov 3): stored as the idea's are, but not one of its eight.
+    .post(
+      "/api/ideas/{id}/chat-images",
+      async (context: Context) => {
+        guard();
+        await guardId(context.params.id!);
+        const type = (context.request.headers.get("content-type") ?? "").split(";")[0]!.trim();
+        const bytes = await readBytes(context.request, 16 * 1024 * 1024);
+        try {
+          return json({ image: await upload(context.params.id!, bytes, type, context.query.get("name") ?? "picture") });
+        } catch (error) {
+          failed(error);
+        }
+      },
+      { bodyLimit: 16 * 1024 * 1024 },
+    )
+    .get("/api/ideas/{id}/chat-images/{image}", async ({ params }: Context) => {
+      guard();
+      await guardId(params.id!);
+      try {
+        const found = await cloud.get(params.id!);
+        const image = found?.idea.chat.flatMap((turn) => turn.images ?? []).find((one) => one.id === params.image);
+        if (image === undefined) throw notFound("That picture isn't in this idea's chat.");
+        return await picture(image);
+      } catch (error) {
+        failed(error);
+      }
+    })
     .get("/api/ideas/{id}/images/{image}", async ({ params }: Context) => {
       guard();
       await guardId(params.id!);

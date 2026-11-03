@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import { NICHES, type Idea, type IdeaFrame, type IdeaImage, type IdeaRun, type IdeaTool, type IdeaTurn, type Niche, type Workspace } from "@edit/types/ideas";
 
 import { ideasGuide } from "../agent_text.ts";
+import * as cloudStorage from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
 import * as claude from "../writer/claude.ts";
@@ -510,6 +511,25 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
   return { caseText: ["# The case", ...parts].join("\n"), examples: approvedText, style, folder, bases, caseThumbnail, pictures: pictureText };
 }
 
+/** The pictures attached to the latest message, saved in `folder` for Claude to Read: their paths. */
+async function attachedPictures(idea: Idea, folder: string): Promise<string[]> {
+  const last = [...idea.chat].reverse().find((turn) => turn.role === "you");
+  const out: string[] = [];
+  for (const [index, image] of (last?.images ?? []).entries()) {
+    if (image.key === undefined) continue;
+    try {
+      const answer = await fetch(await cloudStorage.presign(image.key, "GET"), { signal: AbortSignal.timeout(60_000) });
+      if (!answer.ok) throw new Error(`the cloud answered ${answer.status}`);
+      const path = join(folder, `attached-${index + 1}${image.key.slice(image.key.lastIndexOf("."))}`);
+      fs.writeFileSync(path, new Uint8Array(await answer.arrayBuffer()));
+      out.push(`“${image.name}”: ${path}`);
+    } catch (error) {
+      diag.warn("ideas", `an attached picture (${image.name}) for ${idea.id}: ${diag.messageOf(error)}`);
+    }
+  }
+  return out;
+}
+
 /** The idea as it stands, for a chat turn or changes: its titles (who wrote each), the main one, the guide, the summary. */
 function ideaText(idea: Idea): string {
   return [
@@ -549,13 +569,13 @@ export async function repackage(context: Context, id: string, options: { improve
 }
 
 /** A turn of the conversation about an idea. */
-export async function chat(context: Context, id: string, text: string): Promise<void> {
-  const asked = text.trim();
+export async function chat(context: Context, id: string, text: string, images: IdeaImage[] = []): Promise<void> {
+  const asked = text.trim() || (images.length > 0 ? "Here are the pictures I've attached." : "");
   if (asked === "") throw new Error("Write what you'd like changed.");
   if ([...asked].length > 4000) throw new Error("Keep the message under 4,000 characters.");
   if (runs.has(id)) throw new Error("Claude is already working on this idea: wait for it, or stop it.");
   await begin(context, id, "chat", (idea) => {
-    idea.chat = [...idea.chat, { role: "you" as const, text: asked, at: Date.now(), by: context.by }].slice(-KEPT_TURNS);
+    idea.chat = [...idea.chat, { role: "you" as const, text: asked, at: Date.now(), by: context.by, ...(images.length > 0 ? { images } : {}) }].slice(-KEPT_TURNS);
   });
   void work(context, id, "chat", {}, asked);
 }
@@ -614,6 +634,8 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         return { state: "done" as const, text: prepared };
       }
       folder = prepared.folder;
+      // The pictures attached to this message, beside the run's own (Read them).
+      const attached = what === "chat" ? await attachedPictures(idea, prepared.folder) : [];
       await step(what === "chat" ? "Claude is working" : "Writing titles");
       const youtube = idea.sources.find((one) => one.kind === "youtube");
       const session: Session = {
@@ -642,6 +664,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         idea.duplicate !== null && options.improve ? `# Already on the board\nThe card is “${idea.duplicate.name}” (${idea.duplicate.list}). The person wants this case improved: that title is the bad version.` : "",
         options.changes && idea.changes !== null ? `# The reviewers' comments on its card\n${idea.changes.comments.map((one) => `- ${one.author}: ${one.text}`).join("\n")}` : "",
         recent.length > 0 ? `# The conversation so far\n${recent.join("\n\n")}` : "",
+        attached.length > 0 ? `# Pictures the person attached to this message (Read them)\n${attached.map((one) => `- ${one}`).join("\n")}` : "",
         what === "chat"
           ? `# The person asks\n${asked}`
           : `# The task\n${options.changes ? "Make the changes the reviewers asked for." : "Repackage this case."} Steer: ${idea.steer.trim() || "none"}. Summary: ${idea.wantsSummary ? "asked for" : "not asked for"}.`,

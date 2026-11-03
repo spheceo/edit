@@ -129,6 +129,8 @@ export type IdeaTurn = {
   tools?: IdeaTool[];
   workedMs?: number;
   failed?: boolean;
+  /** Pictures the person attached to the message (in R2 under the idea's folder, apart from its eight). */
+  images?: IdeaImage[];
 };
 
 /** Claude's work on an idea: a repackaging or a chat turn, run on one Mac. */

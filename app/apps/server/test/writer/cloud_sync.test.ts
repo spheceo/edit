@@ -45,12 +45,16 @@ beforeAll(() => {
         return Response.json({});
       }
       if (body.path === "writer:listScripts") return Response.json({ status: "success", value: [...rows.values()] });
+      if (body.path === "writer:getScript") return Response.json({ status: "success", value: rows.get(body.args.scriptId) ?? null });
       if (body.path === "writer:commitScript") {
         const args = body.args;
-        const rev = Number(rows.get(args.scriptId)?.rev ?? 0);
+        const row = rows.get(args.scriptId);
+        const rev = Number(row?.rev ?? 0);
         if (args.baseRev !== rev) return Response.json({ status: "error", errorData: { code: "conflict" } });
-        rows.set(args.scriptId, { ...args, rev: rev + 1 });
-        return Response.json({ status: "success", value: { rev: rev + 1 } });
+        const kept = new Set([args.bodyKey, ...(args.files as { key: string }[]).map((file) => file.key)]);
+        const stale = [row?.bodyKey, ...((row?.files as { key: string }[] | undefined) ?? []).map((file) => file.key)].filter((key): key is string => typeof key === "string" && !kept.has(key));
+        rows.set(args.scriptId, { ...args, scriptId: args.scriptId, rev: rev + 1 });
+        return Response.json({ status: "success", value: { rev: rev + 1, stale } });
       }
       return Response.json({ status: "error", errorData: { message: `no ${body.path}` } });
     },
@@ -104,6 +108,65 @@ function here(body: Script, rev: number | null): string {
 }
 
 const copies = (data: string): string[] => store.ids(data).filter((id) => id !== ID).map((id) => store.read(store.scriptDir(data, id)).title);
+
+/** This Mac's ledger for the script, at `rev`, naming `files` (the body hash is stale, so a sync pushes). */
+function ledger(data: string, rev: number, files: Record<string, { key: string; size: number; mtime: number }>): void {
+  fs.writeFileSync(join(data, "cloud", "ledger.json"), JSON.stringify({ scripts: { [ID]: { rev, body: "what this Mac pushed last", files, summary: 2 } } }));
+}
+
+const cloudFiles = (): { name: string; key: string }[] => (rows.get(ID)?.files as { name: string; key: string }[] | undefined) ?? [];
+
+// Nov 3, Predator Dad: playback 404'd because a Mac that didn't hold the
+// preview pushed the script, and the commit took the preview out of the
+// cloud's list (then deleted it from R2). The local copy was already gone.
+test("a save from a Mac that doesn't hold the preview keeps the cloud's copy", async () => {
+  const preview = "the preview";
+  inCloud(4, script({ title: "Predator Dad", revision: 4 }), [{ name: "proxy.mp4", bytes: preview }]);
+  const key = `writer/scripts/${ID}/files/r4/proxy.mp4`;
+  const data = here(script({ title: "Predator Dad", revision: 5 }), 4);
+  // At the cloud's rev, but the ledger never recorded the preview (an older
+  // Edit left footage out of it), and the file isn't on this Mac.
+  ledger(data, 4, {});
+
+  await cloud.syncOnceForTests(data);
+
+  expect(cloudFiles().find((file) => file.name === "proxy.mp4")?.key).toBe(key);
+  expect(new TextDecoder().decode(objects.get(key)!)).toBe(preview);
+});
+
+test("saving this Mac's built script over an unbuilt cloud rev keeps that rev's preview", async () => {
+  const preview = "the preview";
+  inCloud(7, script({ title: "Predator Dad", clips: [], revision: 7 }), [{ name: "proxy.mp4", bytes: preview }]);
+  const key = `writer/scripts/${ID}/files/r7/proxy.mp4`;
+  const data = here(script({ title: "Predator Dad", clips: builtClips, revision: 6 }), 5);
+
+  await cloud.syncOnceForTests(data);
+
+  expect(cloudFiles().find((file) => file.name === "proxy.mp4")?.key).toBe(key);
+  expect(new TextDecoder().decode(objects.get(key)!)).toBe(preview);
+});
+
+test("a file removed on this Mac stays removed, and one left to the cloud stays listed", async () => {
+  inCloud(4, script({ revision: 4 }), [
+    { name: "chat.json", bytes: "[]" },
+    { name: "research.json", bytes: "{}" },
+  ]);
+  const data = here(script({ revision: 5 }), 4);
+  ledger(data, 4, {
+    "chat.json": { key: `writer/scripts/${ID}/files/r4/chat.json`, size: 2, mtime: 0 },
+    "research.json": { key: `writer/scripts/${ID}/files/r4/research.json`, size: 2, mtime: 0 },
+  });
+  fs.mkdirSync(join(data, "cloud"), { recursive: true });
+  fs.writeFileSync(join(data, "cloud", "storage.json"), JSON.stringify({ [ID]: ["research.json"] }));
+
+  await cloud.syncOnceForTests(data);
+
+  const names = cloudFiles().map((file) => file.name);
+  expect(names).not.toContain("chat.json");
+  expect(names).toContain("research.json");
+  expect(objects.has(`writer/scripts/${ID}/files/r4/research.json`)).toBe(true);
+  expect(objects.has(`writer/scripts/${ID}/files/r4/chat.json`)).toBe(false);
+});
 
 // Oct 31: Predator Tutor's rev 7 named an edit-shared.json no longer in the
 // cloud, so a Mac pulling it kept its own version as a conflicted copy, failed

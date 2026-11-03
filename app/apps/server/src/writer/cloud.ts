@@ -6,10 +6,13 @@
 //
 // Saves land on disk as always. A loop pushes what changed a few seconds
 // later (the changed files, then a new body, then a commit naming the rev it
-// began from) and pulls what other Macs pushed. A commit another Mac overtook
-// is refused; then this Mac's version is kept as a "(conflicted copy)" and the
-// cloud's taken, never an overwrite. Scripts importing or being written wait
-// until they're done. Deleting a script deletes it everywhere. Footage isn't
+// began from) and pulls what other Macs pushed. A file the cloud already
+// holds and this Mac doesn't (the preview, once it was left to the cloud) is
+// named again: leaving it out of the commit deletes it for every Mac. A
+// commit another Mac overtook is refused; then this Mac's version is kept as
+// a "(conflicted copy)" and the cloud's taken, never an overwrite. Scripts
+// importing or being written wait until they're done. Deleting a script
+// deletes it everywhere. Footage isn't
 // downloaded: a script another Mac made plays its preview from the cloud.
 
 import * as fs from "node:fs";
@@ -728,11 +731,10 @@ async function tick(data: string, pull: boolean): Promise<number> {
     }
     const known = ledger.scripts[id];
     const files = localFiles(dir, script);
-    // Footage cleared from this Mac once the cloud held it, or left there by a pull: still the script's file in the cloud, so an edit never drops it.
-    for (const name of purgedNames(data, id)) {
-      const kept = known?.files[name];
-      if (kept !== undefined && !(name in files)) files[name] = kept;
-    }
+    // What this Mac's ledger already recorded as the cloud's. The row itself is
+    // read again at the push: a ledger from an older Edit can be at the cloud's
+    // rev and still be missing the preview (Nov 3, Predator Dad).
+    carryCloudFiles(dir, files, known?.files ?? {}, new Set(purgedNames(data, id)));
     if (known !== undefined && known.body === hash(body) && sameFiles(known.files, files) && (known.summary ?? 0) >= SUMMARY_VERSION) continue;
     changed.push([id, dir, script, body, known, files]);
   }
@@ -741,7 +743,7 @@ async function tick(data: string, pull: boolean): Promise<number> {
   for (const [id, dir, script, body, known, files] of changed) {
     Object.assign(status, { state: "syncing", pending: left + waiting });
     try {
-      const pushed = await push(id, dir, script, body, known, files);
+      const pushed = await push(data, id, dir, script, body, known, files);
       if (pushed === "overtaken") {
         // Another Mac saved it first: theirs comes down, then this waits a
         // little longer each time, so a newer copy that can't come down (its
@@ -921,7 +923,13 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
         ? `${jobs.named(id, title)}: rev ${rev}'s body isn't in the cloud, so this Mac's copy is saved as the next revision`
         : `${jobs.named(id, title)}: rev ${rev} from another Mac isn't built and this Mac's is, so this Mac's is saved as the next revision`,
     );
-    ledger.scripts[id] = { rev, body: "", files: known?.files ?? {}, summary: 0 };
+    // The cloud rev's files come too. This Mac then saves its own body as the
+    // next rev, and a file list made only of what it holds would delete the
+    // preview the cloud rev had (Nov 3, Predator Dad, once a Mac's ledger
+    // predated the rev it was saving over).
+    const files = { ...(known?.files ?? {}) };
+    for (const [name, file] of Object.entries(rowFiles(row))) if (!files[name]?.key) files[name] = file;
+    ledger.scripts[id] = { rev, body: "", files, summary: 0 };
     syncSoon();
     return;
   }
@@ -987,9 +995,61 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   store.libraryChanged();
 }
 
+/** The cloud row's files, as this Mac would keep them. */
+function rowFiles(row: Record<string, unknown>): Record<string, Kept> {
+  const files: Record<string, Kept> = {};
+  for (const file of (Array.isArray(row.files) ? row.files : []) as Record<string, unknown>[]) {
+    const name = String(file.name ?? "");
+    const key = String(file.key ?? "");
+    if (name === "" || key === "") continue;
+    files[name] = { key, size: Number(file.size ?? 0), mtime: 0 };
+  }
+  return files;
+}
+
+/**
+ * A cloud file a push must still name when this Mac doesn't have it. Leaving
+ * it out is the commit that deletes it from R2. Footage and a transcription's
+ * pieces play from the cloud; a recording now in Edit's originals is named
+ * there, not here. Anything else removed on this Mac (a cleared chat) stays
+ * removed.
+ */
+function heldInCloud(name: string, purged: ReadonlySet<string>, shared: ReadonlySet<string>): boolean {
+  if (purged.has(name)) return true;
+  return (storage.isFootage(name) || /(^|\/)pieces\//u.test(name)) && !shared.has(name);
+}
+
+/** Copies cloud files this Mac doesn't have into `files`, so the commit still names them. */
+function carryCloudFiles(dir: string, files: Record<string, Kept>, cloud: Record<string, Kept>, purged: ReadonlySet<string>): void {
+  const shared = new Set(readJson<{ file?: unknown }[]>(join(dir, "edit-shared.json"), []).flatMap((entry) => (typeof entry?.file === "string" ? [entry.file] : [])));
+  for (const [name, kept] of Object.entries(cloud)) {
+    if (name in files || kept.key === "") continue;
+    const path = inside(dir, name);
+    if (path !== null && isFile(path)) continue;
+    if (!heldInCloud(name, purged, shared)) continue;
+    files[name] = kept;
+  }
+}
+
+/** The cloud's current files, folded into a push that would otherwise replace them. A ledger at the same rev can be missing one. */
+async function keepCloudFiles(data: string, id: string, dir: string, base: number, files: Record<string, Kept>): Promise<void> {
+  let listed: Awaited<ReturnType<typeof convex>>;
+  try {
+    listed = await convex("query", "writer:getScript", { scriptId: id });
+  } catch (error) {
+    if (error instanceof Problem && error.offline) throw error;
+    return;
+  }
+  if (!listed.ok || listed.value === null || typeof listed.value !== "object") return;
+  const row = listed.value as Record<string, unknown>;
+  if (Number(row.rev ?? 0) !== base) return;
+  carryCloudFiles(dir, files, rowFiles(row), new Set(purgedNames(data, id)));
+}
+
 /** Sends a script's changed files and its body, then commits them. */
-async function push(id: string, dir: string, script: Script, body: Uint8Array, known: Known | undefined, files: Record<string, Kept>): Promise<Known | "overtaken"> {
+async function push(data: string, id: string, dir: string, script: Script, body: Uint8Array, known: Known | undefined, files: Record<string, Kept>): Promise<Known | "overtaken"> {
   const base = known?.rev ?? 0;
+  await keepCloudFiles(data, id, dir, base, files);
   const kept: Record<string, Kept> = {};
   const began = Date.now();
   let [sent, sentBytes] = [0, 0];
@@ -1003,6 +1063,12 @@ async function push(id: string, dir: string, script: Script, body: Uint8Array, k
       continue;
     }
     const path = inside(dir, name);
+    // Carried from the cloud's list (no copy here). Naming that key again is
+    // what keeps it; there is nothing on disk to upload in its place.
+    if ((path === null || !isFile(path)) && local.key !== "") {
+      kept[name] = local;
+      continue;
+    }
     if (path === null) continue;
     const key = `${PREFIX}/${id}/files/r${base + 1}-${pushId}/${name}`;
     try {
@@ -1013,8 +1079,13 @@ async function push(id: string, dir: string, script: Script, body: Uint8Array, k
       kept[name] = { key, size, mtime: local.mtime };
     } catch (error) {
       if (error instanceof Problem && error.offline) throw error;
-      // A file that vanished while it went up (a temp piece) is left out.
-      if (!fs.existsSync(path)) continue;
+      // Gone before it went up. A temp piece is left out. A file the cloud
+      // already holds stays: a purge while the push reads it must not delete
+      // that copy for every Mac.
+      if (!fs.existsSync(path)) {
+        if (previous !== undefined && previous.key !== "") kept[name] = previous;
+        continue;
+      }
       await remove(uploaded);
       throw error;
     }

@@ -138,6 +138,16 @@ export interface ExportStart {
   cacheDir: string;
   /** Media id → a local copy of its sound to mix instead of its file (a cloud original's). */
   sounds?: Record<string, string>;
+  /** Stretches of cloud originals cut to this Mac, read instead of their URLs (export_excerpts.ts). */
+  excerpts?: ExportExcerpt[];
+}
+
+/** Seconds `from..to` of the cloud object `object` (its URL without the query), in `path`, whose time 0 is `from`. */
+export interface ExportExcerpt {
+  object: string;
+  from: number;
+  to: number;
+  path: string;
 }
 
 export interface TrackRequest {

@@ -58,6 +58,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as cloudBlocks from "./cloud_blocks.ts";
+import * as exportExcerpts from "./export_excerpts.ts";
 import * as cloud from "./cloud.ts";
 import { playbackKey, playbackPath } from "./cloud_playback.ts";
 import { proxyJob, requestProxy } from "./cloud_proxy.ts";
@@ -70,7 +71,7 @@ import { mediaHooks, mediaKey, Semaphore } from "./media.ts";
 import * as finished from "./finished.ts";
 import * as youtube from "./youtube.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
-import { native } from "./native/index.ts";
+import { native, type ExportExcerpt } from "./native/index.ts";
 import { canonical, extension, fileStem, isFile, join, parent } from "./paths.ts";
 import { libraryKindOf, mediaOf } from "./project.ts";
 import { charCount, debugStr, takeChars, trim } from "./rust.ts";
@@ -1584,10 +1585,14 @@ async function preparePlayback(app: App, id: string, round = 0): Promise<void> {
 class ExportOriginals implements Originals {
   readonly dirs: string[] = [];
   readonly sounds: Record<string, string> = {};
+  excerpts: ExportExcerpt[] = [];
+  /** Lets the cleaner have the excerpts again. */
+  unpin: () => void = () => {};
 
   release(): void {
     for (const dir of this.dirs) fs.rmSync(dir, { recursive: true, force: true });
     this.dirs.length = 0;
+    this.unpin();
   }
 }
 
@@ -1616,7 +1621,7 @@ function clipSource(clip: Clip): string | null {
  * to the native renderer and encoder. Sounds and pictures whose own file is
  * here are used as they are.
  */
-export async function forExport(project: Project, start: number, end: number, cache: string): Promise<[Project, Originals]> {
+export async function forExport(project: Project, start: number, end: number, cache: string, cancelled: () => boolean = () => false): Promise<[Project, Originals]> {
   const out = structuredClone(project) as Project;
   const originals = new ExportOriginals();
   const needed: [string, string][] = [];
@@ -1655,6 +1660,34 @@ export async function forExport(project: Project, start: number, end: number, ca
   if (onDisk.size > 0) diag.info("export", `${project.id}: reading ${onDisk.size} cloud originals from this machine's copies`);
   if (needed.length === 0) return [out, originals];
   if (!cloud.enabled()) throw new Error("this edit's footage is in the cloud: exporting it needs the cloud: sign in to Edit");
+  // Stills come to this machine (they're small): ImageIO reads files, not
+  // URLs, and a still read through its URL failed the whole export (Nov 2:
+  // Kroger, its saved paths another machine's cache, 17 min in: "ImageIO
+  // couldn't decode the image").
+  const stills = needed.filter(([mediaId]) => mediaOf(project, mediaId)?.kind === "image");
+  const fetching = new Semaphore(4);
+  const fetchedStills = await Promise.all(
+    stills.map(async ([mediaId, key]): Promise<string | null> => {
+      const release = await fetching.acquire();
+      try {
+        const local = localPath(cache, key);
+        await fetchKey(key, local);
+        const media = out.media.find((item) => item.id === mediaId);
+        if (media !== undefined) media.path = local;
+        return mediaId;
+      } catch (error) {
+        diag.warn("export", `${project.id}: fetching the still ${mediaOf(project, mediaId)?.name ?? mediaId}: ${failure(error)}`);
+        return null;
+      } finally {
+        release();
+      }
+    }),
+  );
+  const local = new Set(fetchedStills.filter((one): one is string => one !== null));
+  const missingStills = stills.filter(([mediaId]) => !local.has(mediaId)).map(([mediaId]) => mediaOf(project, mediaId)?.name ?? mediaId);
+  if (missingStills.length > 0) throw new Error(`the edit's pictures couldn't be fetched from the cloud (${missingStills.join(", ")}): try again`);
+  needed.splice(0, needed.length, ...needed.filter(([mediaId]) => !local.has(mediaId)));
+  if (needed.length === 0) return [out, originals];
   const urls = new Map<string, string>();
   for (const [mediaId, key] of needed) {
     // Long enough for any export (the relay's most for footage).
@@ -1663,6 +1696,12 @@ export async function forExport(project: Project, start: number, end: number, ca
     const media = out.media.find((item) => item.id === mediaId);
     if (media !== undefined) media.path = url;
   }
+  // The picture is read from excerpts cut to this machine (export_excerpts.ts),
+  // made while the sound copies come.
+  const excerpts = exportExcerpts.prepare(project, start, end, cache, urls, new Map(needed), cancelled).catch((error: unknown) => {
+    diag.warn("export", `${project.id}: excerpts: ${diag.messageOf(error)}; the originals are read from the cloud`);
+    return [];
+  });
   // The sound is mixed from each original's sound copy, on this machine.
   const heard = needed.filter(([mediaId]) => mediaOf(project, mediaId)?.has_audio === true);
   const copies = new Semaphore(3);
@@ -1692,7 +1731,9 @@ export async function forExport(project: Project, start: number, end: number, ca
       // Drawn without levels.
     }
   });
-  diag.info("export", `${project.id}: reading ${needed.length} cloud originals straight from the cloud`);
+  originals.excerpts = await excerpts;
+  originals.unpin = exportExcerpts.pin(originals.excerpts.map((one) => one.path));
+  diag.info("export", `${project.id}: reading ${needed.length} cloud originals from ${originals.excerpts.length} excerpts here, the rest from the cloud`);
   return [out, originals];
 }
 

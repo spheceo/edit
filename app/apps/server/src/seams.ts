@@ -55,7 +55,7 @@ import type {
 } from "./model.ts";
 import * as libraryModule from "./library.ts";
 import * as markersModule from "./markers.ts";
-import type { Box } from "./native/index.ts";
+import type { Box, ExportExcerpt } from "./native/index.ts";
 import * as researchModule from "./research.ts";
 import * as scriptModule from "./script_tools.ts";
 import "./commentary_sources.ts";
@@ -168,6 +168,8 @@ export interface Originals {
   release(): void;
   /** Media id → a local copy of its sound, mixed instead of the original (cloud_media `soundCopy`). */
   sounds?: Record<string, string>;
+  /** Stretches of the originals cut to this Mac, read instead of their URLs (export_excerpts.ts). */
+  excerpts?: ExportExcerpt[];
 }
 
 export interface CloudMediaSeam {
@@ -190,7 +192,7 @@ export interface CloudMediaSeam {
   /** A finished video of ours (`review:<project>/<version>`) among the originals, fetched from its review once; the local copy too (the caller removes it). */
   reviewOriginal(file: string, scratch: string, progress: (bytes: number, total: number | null, name: string) => void): Promise<[Original, string | null]>;
   /** `project` as an export of frames start..end reads it: cloud media pointing at their originals (presigned URLs). */
-  forExport(project: Project, start: number, end: number, cache: string): Promise<[Project, Originals]>;
+  forExport(project: Project, start: number, end: number, cache: string, cancelled?: () => boolean): Promise<[Project, Originals]>;
   /** The cloud stills a render of `project` reads, fetched again where the cache dropped them. */
   restoreStills(app: App, project: Project): Promise<void>;
   forWorker(project: Project, start: number, end: number): Promise<{ project: Project; assets: import("@edit/types/worker").WorkerAsset[] }>;

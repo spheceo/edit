@@ -40,6 +40,7 @@ import * as later from "./later.ts";
 import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { createHash } from "node:crypto";
 
+import { pinned } from "./export_excerpts.ts";
 import { openedTimes } from "./opened.ts";
 import { join } from "./paths.ts";
 import * as research from "./research.ts";
@@ -605,7 +606,7 @@ export function cleanCache(
           try {
             const stat = fs.statSync(path);
             if (stat.isDirectory()) collect(path);
-            else if (now - stat.mtimeMs >= fresh && name !== "meta.json") {
+            else if (now - stat.mtimeMs >= fresh && name !== "meta.json" && !pinned(path)) {
               const worked = inUse === null ? Number.POSITIVE_INFINITY : copyUsed(path, cache, inUse, times);
               // An edit in progress keeps its own (with the disk nearly full, only one open now).
               if (now - worked < (full ? OPEN_NOW : SESSION)) continue;

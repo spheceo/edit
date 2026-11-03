@@ -13,6 +13,7 @@
 pub mod censor;
 pub mod chunks;
 pub mod desktop;
+pub mod excerpts;
 pub mod export;
 pub mod faces;
 pub mod log;

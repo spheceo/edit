@@ -124,6 +124,12 @@ pub(crate) struct VideoReader {
     position: Option<f64>,
     /// A still has been copied out since it was decoded.
     copied: bool,
+    /// A cloud original's stretches cut to this Mac (`crate::excerpts`), read instead of the URL where they reach.
+    excerpts: Option<Arc<Vec<crate::excerpts::Excerpt>>>,
+    /// The excerpt being read (its index) and its reader.
+    excerpt: Option<(usize, Box<VideoReader>)>,
+    /// Excerpts that wouldn't read: the URL for those stretches.
+    broken: Vec<usize>,
 }
 
 impl VideoReader {
@@ -147,6 +153,7 @@ impl VideoReader {
         let (width, height) = (source.key.width, source.key.height);
         #[cfg(target_os = "macos")]
         let url = crate::util::is_url(&source.key.path);
+        let excerpts = crate::excerpts::of(&source.key.path);
         Self {
             source,
             width,
@@ -165,6 +172,45 @@ impl VideoReader {
             spare: Vec::new(),
             position: None,
             copied: false,
+            excerpts,
+            excerpt: None,
+            broken: Vec::new(),
+        }
+    }
+
+    /// The frame at `time` from a local excerpt that holds it, into `out`;
+    /// None when none does (or the one that does won't read: it's left out
+    /// after, and the URL read instead).
+    fn read_excerpt(&mut self, time: f64, out: &mut [u8], if_changed: bool) -> Option<bool> {
+        let excerpts = self.excerpts.clone()?;
+        loop {
+            let index = crate::excerpts::covering(&excerpts, time, &self.broken)?;
+            let excerpt = excerpts.get(index)?;
+            if self.excerpt.as_ref().is_none_or(|(at, _)| *at != index) {
+                if !excerpt.path.is_file() {
+                    self.broken.push(index);
+                    continue;
+                }
+                let mut source = self.source.clone();
+                source.key.path = excerpt.path.clone();
+                self.excerpt = Some((index, Box::new(VideoReader::open(source))));
+            }
+            let (_, reader) = self.excerpt.as_mut()?;
+            // A new reader has copied nothing out yet: it always says the picture changed.
+            match reader.frame_into((time - excerpt.from).max(0.0), out, if_changed) {
+                Ok(changed) => return Some(changed),
+                Err(error) => {
+                    crate::log::warn(
+                        "render",
+                        format!(
+                            "excerpt {} won't read ({error}); reading the cloud original there",
+                            excerpt.path.display()
+                        ),
+                    );
+                    self.excerpt = None;
+                    self.broken.push(index);
+                }
+            }
         }
     }
 
@@ -281,6 +327,15 @@ impl VideoReader {
             }
             return Ok(&self.frame);
         }
+        if self.excerpts.is_some() {
+            let mut frame = std::mem::take(&mut self.frame);
+            frame.resize(self.source.bytes(), 0);
+            let read = self.read_excerpt(time, &mut frame, false);
+            self.frame = frame;
+            if read.is_some() {
+                return Ok(&self.frame);
+            }
+        }
         #[cfg(target_os = "macos")]
         if !self.native_failed {
             let mut frame = std::mem::take(&mut self.frame);
@@ -311,6 +366,25 @@ impl VideoReader {
             self.copied = true;
             return Ok(true);
         }
+        if self.excerpts.is_some() {
+            if let Some(changed) = self.read_excerpt(time, out, if_changed) {
+                return Ok(changed);
+            }
+            // Off the excerpts: what `out` holds is the excerpt's, not this reader's last picture.
+            if self.excerpt.take().is_some() {
+                return self.frame_into_url(time, out, false);
+            }
+        }
+        self.frame_into_url(time, out, if_changed)
+    }
+
+    /// `frame_into` from the reader's own file (the URL of a cloud original).
+    fn frame_into_url(
+        &mut self,
+        time: f64,
+        out: &mut [u8],
+        if_changed: bool,
+    ) -> Result<bool, String> {
         #[cfg(target_os = "macos")]
         if !self.native_failed {
             if let Ok(changed) = self.native_frame(time, out, if_changed) {
@@ -3267,6 +3341,143 @@ mod tests {
     fn counted(frame: &[u8]) -> i64 {
         // Limited-range grey 16 + 3n is full-range 3n × 255 / 219.
         (f64::from(frame[0]) * 219.0 / 255.0 / 3.0).round() as i64
+    }
+
+    /// A cloud original's reader reads a local excerpt where one holds the
+    /// time, frame for frame: an excerpt cut off a keyframe, from a source
+    /// with B-frames, shows the original's frame at `t` at `t - from`.
+    #[test]
+    fn readers_read_a_cloud_original_from_its_local_excerpt() {
+        let dir = temp_dir("excerpt");
+        let path = dir.join("counter-b.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("color=c=black:size=64x36:rate=30:duration=2,format=yuv420p,geq=lum='16+3*N':cb=128:cr=128")
+            .args(["-c:v", "libx264", "-qp", "4", "-g", "12", "-bf", "3"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        // Frame 21 (0.7 s) is no keyframe: the copy starts at 12's and hides 12–20.
+        let excerpt = dir.join("excerpt.mp4");
+        let cut = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-ss", "0.7", "-i"])
+            .arg(&path)
+            .args(["-t", "0.8", "-map", "0:v:0", "-c:v", "copy", "-an"])
+            .arg(&excerpt)
+            .status()
+            .unwrap();
+        assert!(cut.success());
+        let object = "https://r2.invalid/edit/originals/drive/counterB/counter-b.mp4";
+        crate::excerpts::add(
+            object,
+            [crate::excerpts::Excerpt {
+                from: 0.7,
+                to: 1.5,
+                path: excerpt.clone(),
+            }],
+        );
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": format!("{object}?sig=1"), "kind": "video",
+            "duration": 2.0, "width": 64, "height": 36, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, PathBuf::from(&media.path), (64, 36), Order::Rgba);
+        let mut reader = VideoReader::open(source.clone());
+        for n in 21..=44_i64 {
+            let got = counted(reader.frame_at(n as f64 / 30.0).unwrap());
+            assert_eq!(got, n, "frame {n} read on");
+        }
+        let mut out = vec![0; source.bytes()];
+        for n in [40_i64, 22, 33] {
+            let mut fresh = VideoReader::open(source.clone());
+            assert!(fresh.frame_into(n as f64 / 30.0, &mut out, false).unwrap());
+            assert_eq!(counted(&out), n, "frame {n} from a fresh reader");
+        }
+        // Through AVFoundation, not FFmpeg's fallback.
+        #[cfg(target_os = "macos")]
+        assert!(reader
+            .excerpt
+            .as_ref()
+            .is_some_and(|(_, inner)| !inner.native_failed));
+        // Outside it the URL is read (one that doesn't answer here).
+        assert!(reader.frame_at(1.8).is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The same with NTSC's 30000/1001 and a GOP longer than a cell (CCTV,
+    /// screen recordings): a cell begins on the frame grid, ⌊30·n·fps⌋, well
+    /// past the keyframe before it, and every frame read from the excerpt is
+    /// the very picture read from the original.
+    #[test]
+    fn excerpts_of_long_gops_at_ntsc_rates_read_as_the_original() {
+        let dir = temp_dir("excerpt-ntsc");
+        let path = dir.join("long-gop.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("testsrc2=size=96x54:rate=30000/1001:duration=40")
+            .args([
+                "-c:v", "libx264", "-g", "1200", "-bf", "2", "-pix_fmt", "yuv420p",
+            ])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let fps = 30000.0 / 1001.0;
+        // Cell 1: frame ⌊30 × 29.97⌋ = 899 on; the only keyframe before it is frame 0.
+        let from = (30.0_f64 * fps + 1e-6).floor() / fps;
+        let excerpt = dir.join("cell-1.mp4");
+        let cut = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-ss", &format!("{from:.6}"), "-i"])
+            .arg(&path)
+            .args([
+                "-t",
+                &format!("{:.6}", 40.0 - from),
+                "-map",
+                "0:v:0",
+                "-c:v",
+                "copy",
+                "-an",
+            ])
+            .arg(&excerpt)
+            .status()
+            .unwrap();
+        assert!(cut.success());
+        let object = "https://r2.invalid/edit/originals/drive/ntscLongGop/long-gop.mp4";
+        crate::excerpts::add(
+            object,
+            [crate::excerpts::Excerpt {
+                from,
+                to: 40.0,
+                path: excerpt.clone(),
+            }],
+        );
+        let media = |at: &str| -> Media {
+            serde_json::from_value(json!({
+                "id": "m", "name": "m", "path": at, "kind": "video",
+                "duration": 40.0, "width": 96, "height": 54, "fps": fps
+            }))
+            .unwrap()
+        };
+        let original = media(path.to_str().unwrap());
+        let cloud = media(&format!("{object}?sig=1"));
+        let source =
+            |media: &Media| Source::new(media, PathBuf::from(&media.path), (96, 54), Order::Rgba);
+        let (mut here, mut there) = (
+            VideoReader::open(source(&original)),
+            VideoReader::open(source(&cloud)),
+        );
+        for n in [899_i64, 900, 901, 950, 1100, 1180] {
+            let time = n as f64 / fps;
+            let want = here.frame_at(time).unwrap().to_vec();
+            assert_eq!(there.frame_at(time).unwrap(), &want[..], "frame {n}");
+        }
+        #[cfg(target_os = "macos")]
+        assert!(there
+            .excerpt
+            .as_ref()
+            .is_some_and(|(_, inner)| !inner.native_failed));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     /// FFmpeg's reader (cloud originals, URL sources) shows the frame nearest

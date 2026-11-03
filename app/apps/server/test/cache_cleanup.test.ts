@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import { createHash } from "node:crypto";
 
 import { cleanCache, cleanCloudPreviews, ownerToken } from "../src/cache_cleanup.ts";
+import { pin } from "../src/export_excerpts.ts";
 import { forget, markOpened } from "../src/opened.ts";
 import { playbackPath } from "../src/cloud_playback.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
@@ -378,4 +379,22 @@ test("past the budget, cloud copies go by project: footage nobody uses, then a d
     expect(ownerToken("edit/playback/p123/abc.mp4")).toBe("playback:p123");
     expect(ownerToken("edit/reviews/p/x.mp4")).toBe(null);
   } finally { forget(store.home); cleanup(); }
+});
+
+test("past the budget, an excerpt an export is reading stays; it goes once let go", () => {
+  const { app, store, cleanup } = fixtureHome("cache-pinned");
+  try {
+    const cache = store.cacheDir();
+    const old = (Date.now() - 5 * 24 * 3600 * 1000) / 1000;
+    const path = `${cache}/cloud/excerpts/originals/drive/nobodysFile1/x.mp4/cells-30-30.000/0.mp4`;
+    fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+    fs.writeFileSync(path, Buffer.alloc(1000));
+    fs.utimesSync(path, old, old);
+    const release = pin([path]);
+    cleanCache(app, false, Date.now(), { cacheBytes: 0, freeBytes: 0, free: 1e12 });
+    expect(fs.existsSync(path)).toBe(true);
+    release();
+    cleanCache(app, false, Date.now(), { cacheBytes: 0, freeBytes: 0, free: 1e12 });
+    expect(fs.existsSync(path)).toBe(false);
+  } finally { cleanup(); }
 });

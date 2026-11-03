@@ -109,6 +109,17 @@ pub struct ExportStart {
     pub cache_dir: String,
     /// Media id → a local copy of its sound to mix instead of its file (a cloud original's).
     pub sounds: Option<std::collections::HashMap<String, String>>,
+    /// Stretches of cloud originals cut to this Mac, read instead of their URLs (`edit_engine::excerpts`).
+    pub excerpts: Option<Vec<ExportExcerpt>>,
+}
+
+/// Seconds `from..to` of the cloud object `object` (its URL without the query), in `path`, whose time 0 is `from`.
+#[napi(object)]
+pub struct ExportExcerpt {
+    pub object: String,
+    pub from: f64,
+    pub to: f64,
+    pub path: String,
 }
 
 #[napi(object)]
@@ -149,6 +160,21 @@ impl ExportJob {
             .into_iter()
             .map(|(media, path)| (media, PathBuf::from(path)))
             .collect();
+        let mut excerpts: std::collections::HashMap<String, Vec<edit_engine::excerpts::Excerpt>> =
+            std::collections::HashMap::new();
+        for excerpt in job.excerpts.unwrap_or_default() {
+            excerpts
+                .entry(excerpt.object)
+                .or_default()
+                .push(edit_engine::excerpts::Excerpt {
+                    from: excerpt.from,
+                    to: excerpt.to,
+                    path: PathBuf::from(excerpt.path),
+                });
+        }
+        for (object, list) in excerpts {
+            edit_engine::excerpts::add(&object, list);
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         {
             let mut running = RUNNING.lock();

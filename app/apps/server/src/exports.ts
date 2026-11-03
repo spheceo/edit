@@ -799,7 +799,7 @@ export class ExportRegistry implements seams.Exports {
             let exported = project;
             let originals: seams.Originals | null = null;
             try {
-              [exported, originals] = await seams.cloudMedia.forExport(project, plan.start, plan.end, store.cacheDir());
+              [exported, originals] = await seams.cloudMedia.forExport(project, plan.start, plan.end, store.cacheDir(), () => running.cancelled);
             } catch (error) {
               if (!seams.isUnavailable(error)) throw error;
             }

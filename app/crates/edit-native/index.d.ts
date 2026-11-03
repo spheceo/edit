@@ -117,6 +117,14 @@ export interface ExportDone {
   bytes: number
 }
 
+/** Seconds `from..to` of the cloud object `object` (its URL without the query), in `path`, whose time 0 is `from`. */
+export interface ExportExcerpt {
+  object: string
+  from: number
+  to: number
+  path: string
+}
+
 /**
  * What exporting `project` as `options` ask will cover, or why it can't:
  * an empty timeline, an invalid project, no sound for a sound-only format,
@@ -144,6 +152,8 @@ export interface ExportStart {
   cacheDir: string
   /** Media id → a local copy of its sound to mix instead of its file (a cloud original's). */
   sounds?: Record<string, string>
+  /** Stretches of cloud originals cut to this Mac, read instead of their URLs (`edit_engine::excerpts`). */
+  excerpts?: Array<ExportExcerpt>
 }
 
 /** Frames looked at per second of source when finding faces. */

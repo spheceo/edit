@@ -51,7 +51,9 @@ async function list(prefix: string): Promise<{ key: string; size: number; at: nu
 
 /** The source a footage key belongs to (`drive/<id>`, `sha256/<hex>`, `youtube/<id>`), as projects and scripts name it. */
 function sourceOf(key: string): string | null {
-  const parts = key.split("/");
+  let parts = key.split("/");
+  // An export's cells of an original (`edit/excerpts/originals/<source>/…`, export_excerpts.ts) go with that original.
+  if (parts[1] === "excerpts" && parts[2] === "originals") parts = ["edit", "excerpts", ...parts.slice(3)];
   // Only footage's own sources: a review's proxy (`edit/proxies/review/…`) or a job's manifest isn't one.
   if (parts.length < 4 || !["drive", "sha256", "youtube"].includes(parts[2]!)) return null;
   return `${parts[2]}/${parts[3]!.replace(/\.mp4$/u, "")}`;

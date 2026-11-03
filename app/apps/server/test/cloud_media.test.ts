@@ -402,6 +402,30 @@ test("cloud playback ignores obsolete local previews and repeated ranges never d
   } finally { cleanup(); }
 });
 
+test("an export's cloud stills come to this machine first: ImageIO reads files, not URLs", async () => {
+  // Nov 2: Kroger's export failed 17 minutes in ("ImageIO couldn't decode the image"): its stills' saved paths were another machine's cache, so they went to the engine as presigned URLs.
+  const fixture = home("cloud-export-stills");
+  const { store, cleanup } = fixture;
+  try {
+    const cache = store.cacheDir();
+    const key = "edit/originals/sha256/cc/badge.png";
+    mock.cloud.objects.set(key, new TextEncoder().encode("png bytes"));
+    const project = projectWith([
+      { ...media("m1", "/Users/someone-else/.edit/cache/cloud/originals/sha256/cc/badge.png", { kind: "image", name: "badge.png" }), cloud: { source: "sha256:cc", original: key, proxy: key, size: 9 } },
+    ]);
+    project.clips.push({ id: "c1", track: "v1", start: 0, duration: 30, type: "video", media: "m1", source_in: 0, speed: 1 } as Project["clips"][number]);
+    const [out] = await cloudMedia.forExport(project, 0, 30, cache);
+    expect(out.media[0]!.path).toBe(cloudMedia.localPath(cache, key));
+    expect(fs.readFileSync(out.media[0]!.path, "utf8")).toBe("png bytes");
+    // Not in the cloud either: the export says which picture, before it renders.
+    project.media[0]!.cloud = { source: "sha256:dd", original: "edit/originals/sha256/dd/gone.png", proxy: "edit/originals/sha256/dd/gone.png", size: 1 };
+    project.media[0]!.name = "gone.png";
+    await expect(cloudMedia.forExport(project, 0, 30, cache)).rejects.toThrow("the edit's pictures couldn't be fetched from the cloud (gone.png)");
+  } finally {
+    cleanup();
+  }
+});
+
 test("exports read the originals through presigned URLs, share the proxy's waveform, and refuse a file only another machine has", async () => {
   const fixture = home("cloud-export");
   const { dir, store, cleanup } = fixture;

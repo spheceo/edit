@@ -9,6 +9,7 @@ describe("media host", () => {
     // Off this Mac (Tailscale), or the Vite dev UI (proxied, no cross-origin answers): same host as the page.
     expect(mediaHostFor("/api/projects/p/media/m/proxy", "kenobi.tailnet.ts.net", "7700")).toBe("/api/projects/p/media/m/proxy");
     expect(mediaHostFor("/api/projects/p/media/m/proxy", "127.0.0.1", "5173")).toBe("/api/projects/p/media/m/proxy");
+    expect(mediaHostFor("/api/projects/p/media/m/proxy", "127.0.0.1", "")).toBe("/api/projects/p/media/m/proxy");
     // No page (tests, workers without a location): untouched, and mediaUrl with it.
     expect(mediaUrl("p", "m", "proxy")).toBe("/api/projects/p/media/m/proxy");
   });

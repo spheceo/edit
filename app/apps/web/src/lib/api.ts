@@ -440,7 +440,9 @@ export interface MediaDrive {
  * serves them, as before.
  */
 export function mediaHostFor(path: string, hostname: string, port: string): string {
-  if (port === "5173") return path;
+  // No port in the page's address (a default-port serve): the sibling's
+  // address can't be named for certain, so the page's own host serves it.
+  if (port === "" || port === "5173") return path;
   const sibling = hostname === "127.0.0.1" ? "localhost" : hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "::1" || hostname === "[::1]" ? "127.0.0.1" : null;
   if (sibling === null) return path;
   return `http://${sibling}${port === "" ? "" : `:${port}`}${path}`;

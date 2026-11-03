@@ -221,6 +221,11 @@ export function holdExport(path: string): () => void {
   };
 }
 
+/** Whether something is reading the export at `path` now (a share making its copies). */
+export function beingRead(path: string): boolean {
+  return reading.has(path);
+}
+
 /**
  * Holds `path` for the scope it's in (docs/plans/2026-11-01-effect.md, round
  * 3): let go however the work ends (done, failed, interrupted), so an archive

@@ -36,7 +36,12 @@ import * as cloud from "./cloud.ts";
 import { playbackPath } from "./cloud_playback.ts";
 import { Semaphore } from "./media.ts";
 import * as diag from "./diag.ts";
+import * as drive from "./drive.ts";
+import { beingRead } from "./exports.ts";
+import * as retention from "./export_retention.ts";
 import * as later from "./later.ts";
+import { defaultExportsDir } from "./media_drive/layout.ts";
+import * as reviews from "./reviews.ts";
 import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { createHash } from "node:crypto";
 
@@ -647,6 +652,45 @@ export function cleanCache(
   return report;
 }
 
+/**
+ * Older exports of each project that are no longer wanted (export_retention.ts):
+ * with `dryRun` only logged ("would delete …").
+ */
+export function cleanExports(app: App, dryRun: boolean, now = Date.now()): { files: number; bytes: number; decisions: retention.Decision[] } {
+  const home = app.store.home;
+  let records: Record<string, retention.Kept[]> = {};
+  try {
+    records = JSON.parse(fs.readFileSync(join(home, "exports.json"), "utf8")) as Record<string, retention.Kept[]>;
+  } catch {
+    return { files: 0, bytes: 0, decisions: [] };
+  }
+  const roots = new Set([defaultExportsDir(), join(home, "exports")]);
+  try {
+    roots.add(app.store.layout().exportsDir());
+  } catch {
+    // The media drive isn't connected: its Exports aren't looked at.
+  }
+  const shared = reviews.read(home).shared;
+  const free = freeSpace(app.store.cacheDir());
+  const decisions = retention.decide(records, {
+    now,
+    roots: [...roots],
+    reviewed: (id, path) => shared[id]?.versions.find((version) => version.path === path)?.n ?? null,
+    onDrive: (id) => app.store.get(id)?.project.drive?.uploaded_ms ?? null,
+    busy: (id, path) => {
+      let exporting = false;
+      try {
+        exporting = app.exports.runningFor?.(id)?.output === path;
+      } catch {
+        // No exports here (tests).
+      }
+      return exporting || beingRead(path) || reviews.sharingNow(id) || drive.uploading(id);
+    },
+    short: Number.isFinite(free) ? FREE_FLOOR - free : 0,
+  });
+  return { ...retention.apply(home, decisions, dryRun), decisions };
+}
+
 /** Cleans now and then: a few minutes after the start, then hourly (a day of imports and exports filled the disk). */
 export function startCleaning(app: App): () => void {
   let running = false;
@@ -663,6 +707,9 @@ export function startCleaning(app: App): () => void {
         // Later unreachable: ordered by last open alone.
       }
       const report = cleanCache(app, false, Date.now(), undefined, done);
+      const old = cleanExports(app, false);
+      report.bytes += old.bytes;
+      report.files += old.files;
       report.bytes += cloud.bytes;
       report.files += cloud.files;
       if (report.files > 0) {

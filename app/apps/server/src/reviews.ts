@@ -157,6 +157,11 @@ function update<T>(home: string, change: (state: State) => T): T {
 /** Shares in progress (project id → what it's doing), for the UI. */
 const sharing = new Map<string, string>();
 
+/** Whether project `id` is being shared now (its exports are being read and copied). */
+export function sharingNow(id: string): boolean {
+  return sharing.has(id);
+}
+
 /**
  * Shares one of `project`'s whole exports for review: a 720p copy and a
  * poster to R2, then Repack's review (made the first time, a new version

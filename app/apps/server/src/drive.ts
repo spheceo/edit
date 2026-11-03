@@ -110,9 +110,9 @@ export function wanted(project: Project, options: ExportOptions, plan: Plan): bo
   );
 }
 
-/** Whether any upload is running (an update waits for it). */
-export function uploading(): boolean {
-  return uploads.size > 0;
+/** Whether any upload is running (an update waits for it), or project `id`'s. */
+export function uploading(id?: string): boolean {
+  return id === undefined ? uploads.size > 0 : uploads.has(id);
 }
 
 export function mime(path: string): string {

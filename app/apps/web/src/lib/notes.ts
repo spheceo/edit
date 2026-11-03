@@ -69,6 +69,12 @@ export function cancelNote(): void {
   useNotes.setState({ draft: null });
 }
 
+/** The note button: opens a note, or closes the one open (Sphe, Nov 3: no reaching for Escape). */
+export function toggleNote(): void {
+  if (useNotes.getState().draft === null) startNote();
+  else cancelNote();
+}
+
 export function setDraftBox(box: NoteBox | null, drawing = false): void {
   const draft = useNotes.getState().draft;
   if (draft !== null) useNotes.setState({ draft: { ...draft, box, drawing } });

@@ -12,7 +12,7 @@ import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
-import { startNote } from "../lib/notes";
+import { toggleNote, useNotes } from "../lib/notes";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
@@ -275,6 +275,7 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
   const duration = useEditor((state) => (state.project ? projectDuration(state.project) : 0));
   const points = useInOut();
   const span = inOutSpan(duration, points);
+  const noting = useNotes((state) => state.draft !== null);
   return (
     <div className="flex flex-col">
       {fullscreen && <ScrubBar frame={frame} duration={duration} />}
@@ -304,7 +305,7 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
       </div>
       <div className="flex w-[180px] items-center justify-end gap-2">
         {!fullscreen && (
-          <IconButton label="Leave a note here (Q)" onClick={startNote}>
+          <IconButton label={noting ? "Close the note" : "Leave a note here (Q)"} active={noting} aria-pressed={noting} onClick={toggleNote}>
             <MessageSquarePlus size={15} />
           </IconButton>
         )}

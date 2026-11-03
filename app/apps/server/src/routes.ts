@@ -17,7 +17,7 @@ import * as problemReports from "./problem_reports.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
-import { PLAYBACK_ROUTE } from "./cloud_playback.ts";
+import { PLAYBACK_ROUTE, previewable } from "./cloud_playback.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -148,7 +148,7 @@ export function buildRouter(): Router<App> {
   router
     .get(PLAYBACK_ROUTE, async ({ request, query }) => {
       const key = query.get("key") ?? "";
-      if (!cloud.validKey(key) || !/^edit\/(proxies|originals|excerpts)\//.test(key)) throw bad("invalid cloud preview key");
+      if (!cloud.validKey(key) || !previewable(key)) throw bad("invalid cloud preview key");
       const response = await cloudMedia.streamFromCloud(request, { proxy: key }, "proxy");
       if (response === null) throw new ApiError(503, "cloud previews need Edit's cloud connection");
       // FFmpeg seeks by reopening the loopback HTTP input. Closing each

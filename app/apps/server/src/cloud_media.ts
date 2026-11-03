@@ -59,8 +59,9 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as cloudBlocks from "./cloud_blocks.ts";
 import * as exportExcerpts from "./export_excerpts.ts";
+import * as pieces from "./proxy_pieces.ts";
 import * as cloud from "./cloud.ts";
-import { playbackKey, playbackPath } from "./cloud_playback.ts";
+import { PLAYBACK_ROUTE, playbackKey, playbackPath } from "./cloud_playback.ts";
 import { proxyJob, requestProxy } from "./cloud_proxy.ts";
 import * as diag from "./diag.ts";
 import * as endpoints from "./endpoints.ts";
@@ -112,9 +113,29 @@ const previewPath = (cache: string, key: string) => playbackPath(key, playbackPo
 /** Where cloud previews' blocks are kept (cloud_blocks.ts), once playback is configured. */
 let playbackBlocks: string | null = null;
 
+/** This Mac's pieced proxies (proxy_pieces.ts): where they're kept and what reads them, by cache. */
+const piecesContexts = new Map<string, pieces.Context>();
+
+/** What a pieced proxy's pieces are made from: the original's file while it's on this Mac and unchanged, else R2's. */
+function originalFor(cache: string, key: string): Promise<string> {
+  const here = localOriginal(cache, key);
+  return here !== null ? Promise.resolve(here) : getUrl(key, 6 * HOUR);
+}
+
+function piecesContext(cache: string): pieces.Context {
+  let context = piecesContexts.get(cache);
+  if (context === undefined) {
+    context = pieces.cloudContext(cache, (key) => localPath(cache, key), (key) => originalFor(cache, key), fetchKey, () => false);
+    piecesContexts.set(cache, context);
+  }
+  return context;
+}
+
 export function configurePlayback(app: App): void {
   playbackPorts.set(app.store.cacheDir(), app.port);
   playbackBlocks = join(app.store.cacheDir(), "cloud", "blocks");
+  const cache = app.store.cacheDir();
+  piecesContexts.set(cache, pieces.cloudContext(cache, (key) => localPath(cache, key), (key) => originalFor(cache, key), fetchKey, () => app.exports.localRunning?.() ?? false));
   app.store.setMediaResolver((project) => {
     for (const media of project.media) {
       if (media.kind === "image" || media.cloud == null) continue;
@@ -728,6 +749,22 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
   rememberLocalOriginal(cache, originalKey, path);
   if (probe.has_audio) shareSound(cache, path, originalKey);
   const ready = readyProxy(record);
+  // EDIT_PROXY_PIECES=1: a long file's proxy made a piece at a time (proxy_pieces.ts), read from this file while it's here; its upload goes on behind.
+  if (ready === null && pieces.enabled() && probe.kind === "video" && probe.duration >= PIECED_FROM) {
+    const layout = await pieces.tryCreate(piecesContext(cache), source, originalKey, probe);
+    if (layout !== null) {
+      if (needOriginal && later !== null) {
+        uploadLater(later, { file: path, source, size, duration: probe.duration, originalKey, uploadOriginal: true, proxy: null, local: null });
+      } else if (needOriginal) {
+        await cloud.uploadFile(path, originalKey);
+        await putRecord({ source, originalReady: true, size, duration: probe.duration });
+      }
+      const pieced = pieces.proxyKeyOf(source);
+      const made = previewPath(cache, pieced);
+      carryAnalysis(cache, path, made);
+      return { path: made, name, probe, cloud: { source, original: originalKey, proxy: pieced, size } };
+    }
+  }
   const proxy = ready ?? proxyKey(source);
   if (proxy === null) throw new Error("no proxy key");
   const local = localPath(cache, proxy);
@@ -1127,12 +1164,25 @@ export async function driveExcerpts(
 
 /** Excerpts of one file made at once. */
 const EXCERPTS_AT_ONCE = 3;
+/** Files at least this long (seconds) get a pieced proxy with EDIT_PROXY_PIECES=1 (a shorter one's whole proxy takes a minute or two). */
+const PIECED_FROM = Number(process.env.EDIT_PROXY_PIECES_FROM ?? 1200);
 
 /** The whole Drive file as one media: its proxy made straight from R2. */
 async function wholeMedia(cache: string, original: Original, url: string): Promise<Made> {
   const probe = await probeUrl(url);
   const record = await getRecord(original.source);
   const ready = readyProxy(record);
+  // EDIT_PROXY_PIECES=1: a long file's proxy made a piece at a time as it's
+  // read (proxy_pieces.ts), unless a whole one is there already; the whole
+  // one, as before, when that can't be made. The registry keeps no pieced
+  // key: a Mac without the setting still makes its own whole proxy.
+  if (ready === null && pieces.enabled() && probe.kind === "video" && probe.duration >= PIECED_FROM) {
+    const layout = await pieces.tryCreate(piecesContext(cache), original.source, original.key, probe);
+    if (layout !== null) {
+      const proxy = pieces.proxyKeyOf(original.source);
+      return { path: previewPath(cache, proxy), name: original.name, probe, cloud: { source: original.source, original: original.key, proxy, size: original.size } };
+    }
+  }
   const proxy = ready ?? proxyKey(original.source);
   if (proxy === null) throw new Error("no proxy key");
   const local = localPath(cache, proxy);
@@ -1353,6 +1403,17 @@ async function streamingUrl(key: string): Promise<string> {
 export async function streamFromCloud(request: Request, cloudMedia: { proxy?: string } | null | undefined, kind: string): Promise<Response | null> {
   const key = streamKey(cloudMedia, kind);
   if (key === null || !cloud.enabled()) return null;
+  // A pieced proxy (proxy_pieces.ts) is answered from its pieces, made as they're read.
+  const pieced = pieces.baseOf(key);
+  if (pieced !== null && playbackBlocks !== null) {
+    const context = piecesContext(parent(parent(playbackBlocks)!)!);
+    // The page's reads (not the preview path's, FFmpeg's) are answered 503 past 15 s, and ask again.
+    const native = new URL(request.url).pathname === PLAYBACK_ROUTE;
+    return pieces.serve(context, request, pieced, native ? null : 15_000).catch((error: unknown) => {
+      diag.warn("pieces", `reading ${key}: ${diag.scrub(diag.messageOf(error))}`);
+      return new Response(diag.scrub(diag.messageOf(error)), { status: 503, headers: { "retry-after": "5" } });
+    });
+  }
   const range = request.headers.get("range");
   // The page's bounded reads come from big blocks read once and kept a while (cloud_blocks.ts); anything else straight from R2.
   if (playbackBlocks !== null) {
@@ -1409,6 +1470,19 @@ export async function prefetchProject(app: App, id: string, from = 0): Promise<n
   const clips = project.clips
     .filter((clip): clip is Extract<Clip, { type: "video" | "audio" }> => (clip.type === "video" || clip.type === "audio") && clip.start + clip.duration > from && clip.start < until)
     .sort((a, b) => a.start - b.start);
+  // Pieced proxies: their pieces the whole timeline plays, in its order from `from`, made behind the viewer.
+  const wants: { base: string; seconds: number }[] = [];
+  for (const clip of [...project.clips].sort((a, b) => a.start - b.start)) {
+    if ((clip.type !== "video" && clip.type !== "audio") || clip.start + clip.duration <= from) continue;
+    const media = mediaOf(project, clip.media);
+    const base = pieces.baseOf(streamKey(media?.cloud, "proxy") ?? "");
+    if (base === null) continue;
+    const speed = clip.speed ?? 1;
+    for (let frame = Math.max(clip.start, from); frame < clip.start + clip.duration; frame += 60 * fps) {
+      wants.push({ base, seconds: (clip.source_in ?? 0) + ((frame - clip.start) / fps) * speed });
+    }
+  }
+  if (wants.length > 0) void pieces.fill(piecesContext(app.store.cacheDir()), wants, stop).catch((error: unknown) => diag.warn("pieces", `${id}: ${diag.messageOf(error)}`));
   const sizes = new Map<string, number | null>();
   let bytes = 0;
   for (const clip of clips) {

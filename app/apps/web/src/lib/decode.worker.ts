@@ -1,4 +1,4 @@
-import { ALL_FORMATS, AudioSampleSink, EncodedPacketSink, Input, StreamSource, VideoSampleSink, type VideoSample } from "mediabunny";
+import { ALL_FORMATS, AudioSampleSink, EncodedPacketSink, Input, StreamSource, VideoSampleSink, type InputVideoTrack, type VideoSample } from "mediabunny";
 import { stretchAudio } from "./audio-stretch";
 import { forgetBlocks, network, onRead, rangeReader, setStreaming } from "./range-source";
 import { AUDIO_CHUNK_SECONDS, type DecodeJob, type DecodeRequest, type DecodeResponse, type PcmChunk } from "./decoder.protocol";
@@ -101,8 +101,22 @@ async function videoSink(file: File) {
   return file.video ??= (async () => {
     const track = await file.input.getPrimaryVideoTrack();
     if (!track || !await track.canDecode()) throw new Error("This video codec cannot be decoded by this browser. Wait for its H.264 proxy.");
-    return { sink: new VideoSampleSink(track, { optimizeForLatency: true }), packets: new EncodedPacketSink(track), first: await track.getFirstTimestamp() };
+    const packets = new EncodedPacketSink(track);
+    return { sink: new VideoSampleSink(track, { optimizeForLatency: true }), packets, first: await firstTimestamp(track, packets) };
   })();
+}
+
+/**
+ * A video's first timestamp: its first key packet's, found through the
+ * file's index. mediabunny's own getFirstTimestamp walks a fragmented file's
+ * fragments from the start until one has the track, and a pieced proxy's
+ * picture comes after all of its sound's (server proxy_pieces.ts): the
+ * viewer waited for the whole sound to be made. A key packet at 0 is the
+ * first frame (footage starts there); any other file asks mediabunny.
+ */
+async function firstTimestamp(track: InputVideoTrack, packets: EncodedPacketSink): Promise<number> {
+  const key = await packets.getKeyPacket(0, { metadataOnly: true });
+  return key !== null && key.timestamp === 0 ? 0 : await track.getFirstTimestamp();
 }
 
 async function audioSink(file: File) {

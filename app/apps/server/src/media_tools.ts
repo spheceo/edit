@@ -6,6 +6,7 @@
 
 import type { App } from "./app.ts";
 import * as broll from "./broll.ts";
+import { readAttached, type Attached } from "./chat_attachments.ts";
 import { subKey } from "./agent.ts";
 import * as diag from "./diag.ts";
 import * as drive from "./drive.ts";
@@ -486,9 +487,16 @@ async function agentRetryClaudeRoute(context: RouteContext<App>): Promise<Respon
 async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
   const { app } = context;
   const id = context.params.id ?? "";
-  const given = await body(context, "AgentMessage", ["text"], ["effort", "model", "playhead"]);
+  const given = await body(context, "AgentMessage", ["text"], ["attachments", "effort", "model", "playhead"]);
   const said = given.text!.trim();
   if (said === "") throw bad("say something");
+  // Files attached to it, already in the project (chat_attachments.ts): a JSON list, as the fields here are strings.
+  let attached: Attached[];
+  try {
+    attached = readAttached(given.attachments ?? null);
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
   // The agent edits the project: a cloud project needs this machine's lock.
   try {
     await app.store.mayWrite(id);
@@ -501,7 +509,7 @@ async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
   const live = Number.isFinite(frame) ? app.store.get(id) : null;
   const where = live === null ? "" : playheadContext(live.project, frame, cachedTranscripts(app, live.project, false));
   try {
-    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null, where);
+    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null, where, attached);
   } catch (error) {
     failed(error);
   }

@@ -13,6 +13,7 @@
 // here: call it directly.
 
 import type { App } from "./app.ts";
+import type { Attached } from "./chat_attachments.ts";
 import type { Router } from "./http/router.ts";
 import * as appModule from "./app_seam.ts";
 import * as brollModule from "./broll.ts";
@@ -853,7 +854,7 @@ export interface AgentPanel extends Agents {
   /** A project's chat: its entries, whether a turn is running, its model and effort. */
   chat(project: string): Json;
   /** Sends the user's (or Edit's: the script's research) message to a project's chat, starting its turn. */
-  send(project: string, text: string, model: string | null, effort: string | null, context?: string): Promise<void>;
+  send(project: string, text: string, model: string | null, effort: string | null, context?: string, attached?: Attached[]): Promise<void>;
   /** Stops a project's running turn. */
   stop(project: string): Promise<void>;
   /** Forgets a project's chat (and its Codex thread). */

@@ -272,6 +272,19 @@ export async function ask(
   }
 }
 
+/** A user message as the SDK takes it (for a prompt with pictures). */
+export type UserMessage = Sdk.SDKUserMessage;
+
+/** One user message: the pictures, then the words (attached to a chat message, chat_attachments.ts). */
+export function withPictures(text: string, pictures: { data: string; mime: string }[]): AsyncIterable<Sdk.SDKUserMessage> {
+  return (async function* (): AsyncGenerator<Sdk.SDKUserMessage> {
+    yield { type: "user", parent_tool_use_id: null, session_id: "", message: { role: "user", content: [
+      ...pictures.map((one) => ({ type: "image" as const, source: { type: "base64" as const, media_type: one.mime as "image/jpeg", data: one.data } })),
+      { type: "text" as const, text },
+    ] } } as Sdk.SDKUserMessage;
+  })();
+}
+
 /** An Edit tool as the chat names it: `mcp__edit__get_edit_context` → `get_edit_context`. */
 export function toolName(name: string): string {
   return name.replace(/^mcp__edit__/, "");

@@ -10,6 +10,7 @@ import { Agents, editToolsFailed, EXITED, STALL_MS, timing } from "../src/agent.
 import * as claude from "../src/claude.ts";
 import * as toolChanges from "../src/tool_changes.ts";
 import { fixtureHome } from "./helpers/home.ts";
+import { media } from "./helpers/model.ts";
 
 const MODELS = [
   { value: "default", displayName: "Default (recommended)", description: "" },
@@ -80,7 +81,7 @@ async function settle(): Promise<void> {
 
 function agentsWith(home: ReturnType<typeof fixtureHome>, hangs = false) {
   const agents = new Agents(home.store, home.home, 7700);
-  const asked: { prompt: string; options: claude.Options }[] = [];
+  const asked: { prompt: string | AsyncIterable<claude.UserMessage>; options: claude.Options }[] = [];
   const queries: ReturnType<typeof fakeQuery>[] = [];
   agents.findClaude = async () => "/test/claude";
   agents.listClaudeModels = async () => MODELS;
@@ -633,6 +634,49 @@ test("a resumed session is told once what changed in the tools; a fresh one isn'
     await agents.send(project, "And the outro", null, null);
     expect(asked[2]!.prompt).toBe("And the outro");
     expect(toolChanges.changes(now, now)).toBe("");
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("files attached to a message: pictures go to Claude as pictures, the rest named, and the chat keeps them", async () => {
+  const home = fixtureHome("claude-attached");
+  try {
+    const project = home.store.create("Attached test", { width: 1920, height: 1080, fps: 30 }).project.id;
+    // A real picture for sips to scale (1×1 PNG).
+    const picture = `${home.dir}/shot.png`;
+    fs.writeFileSync(picture, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64"));
+    await home.store.update(project, "test", (edited) => {
+      edited.media.push(media({ id: "m1", name: "shot.png", path: picture, kind: "image", duration: 5 }));
+    });
+    const { agents, asked } = agentsWith(home);
+
+    await agents.send(project, "what do you see here?", null, null, "", [
+      { name: "shot.png", kind: "image", media: "m1" },
+      { name: "brief.pdf", kind: "file", file: "brief.pdf" },
+    ]);
+    const prompt = asked[0]!.prompt;
+    expect(typeof prompt).not.toBe("string");
+    const messages: claude.UserMessage[] = [];
+    for await (const message of prompt as AsyncIterable<claude.UserMessage>) messages.push(message);
+    const content = messages[0]!.message.content as { type: string; text?: string; source?: { data: string; media_type: string } }[];
+    expect(content[0]!.type).toBe("image");
+    expect(content[0]!.source!.media_type).toBe("image/jpeg");
+    expect(Buffer.from(content[0]!.source!.data, "base64").subarray(0, 2)).toEqual(Buffer.from([0xff, 0xd8]));
+    const words = content[1]!.text!;
+    expect(words).toStartWith("what do you see here?");
+    expect(words).toContain('"shot.png": image media m1, the picture above');
+    expect(words).toContain('"brief.pdf": a file (read_upload name "brief.pdf")');
+
+    // The chat shows the message as it was written, with its files; kept across a restart.
+    const user = agents.withChat(project).entries.find((item) => item.kind === "user")!;
+    expect(user.text).toBe("what do you see here?");
+    expect(user.attachments).toEqual([
+      { name: "shot.png", kind: "image", media: "m1" },
+      { name: "brief.pdf", kind: "file", file: "brief.pdf" },
+    ]);
+    const saved = JSON.parse(JSON.stringify(agents.chat(project))) as { entries: { attachments?: unknown }[] };
+    expect(saved.entries[0]!.attachments).toEqual(user.attachments);
   } finally {
     home.cleanup();
   }

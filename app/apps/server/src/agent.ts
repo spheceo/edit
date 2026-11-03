@@ -14,6 +14,7 @@
 
 import * as fs from "node:fs";
 
+import { attachedText, pictures as attachedPictures, savedAttached, type Attached, type Picture } from "./chat_attachments.ts";
 import * as claude from "./claude.ts";
 import { ClaudeSupport, type SupportAction, type SupportStatus } from "./claude_support.ts";
 import * as diag from "./diag.ts";
@@ -62,6 +63,8 @@ export interface Entry {
   /** When it appeared and last changed (ms), for "Worked for 12s". */
   at: number;
   updated: number;
+  /** A person's message: the files attached to it (chat_attachments.ts). */
+  attachments?: Attached[];
 }
 
 /** A project's chat: what's saved (thread, model, effort, entries) and the running turn's state. */
@@ -147,6 +150,7 @@ function entryJson(item: Entry): Record<string, unknown> {
   if (item.tool !== undefined) out.tool = item.tool;
   if (item.status !== undefined) out.status = item.status;
   if (item.detail !== undefined) out.detail = item.detail;
+  if (item.attachments !== undefined) out.attachments = item.attachments;
   out.at = item.at;
   out.updated = item.updated;
   return out;
@@ -363,7 +367,7 @@ export class Agents implements seams.AgentPanel {
   /** Edit is quitting: the turns it ends stay noted as running (`RUNNING`). */
   private quitting = false;
   /** The SDK's `query`, the user's `claude` and its model list (tests put stand-ins here). */
-  claudeQuery: (params: { prompt: string; options: claude.Options }) => Promise<claude.Query> = async (params) =>
+  claudeQuery: (params: { prompt: string | AsyncIterable<claude.UserMessage>; options: claude.Options }) => Promise<claude.Query> = async (params) =>
     (await claude.sdk()).query(params);
   findClaude: () => Promise<string | null> = () => claude.findClaude();
   listClaudeModels: (binary: string, workspace: string) => Promise<claude.ModelInfo[]> = (binary, workspace) =>
@@ -790,8 +794,9 @@ export class Agents implements seams.AgentPanel {
 
   /** Sends a message, starting or resuming the project's Codex thread. */
   /** `context`: what the agent reads after the message but the chat doesn't show (where the playhead is and what's under it). */
-  send(project: string, text: string, model: string | null, effort: string | null, context = ""): Promise<void> {
-    return this.sendTurn(project, text, model, effort, null, false, context);
+  /** `attached`: files the person attached, already in the project (chat_attachments.ts). */
+  send(project: string, text: string, model: string | null, effort: string | null, context = "", attached: Attached[] = []): Promise<void> {
+    return this.sendTurn(project, text, model, effort, null, false, context, attached);
   }
 
   private async sendTurn(
@@ -802,6 +807,7 @@ export class Agents implements seams.AgentPanel {
     generation: number | null,
     replay = false,
     context = "",
+    attached: Attached[] = [],
   ): Promise<void> {
     if (this.store.get(projectOf(project)) === null) throw new Error("no such project");
     let sending = this.sending.get(project);
@@ -845,7 +851,7 @@ export class Agents implements seams.AgentPanel {
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
       try {
-        await this.prepareTurn(project, text, model, effort, current, provider, replay, context);
+        await this.prepareTurn(project, text, model, effort, current, provider, replay, context, attached);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);
         if (provider === "claude" && claude.signInProblem(said) && this.waitForClaudeLogin(project, current, text, false)) return;
@@ -867,10 +873,14 @@ export class Agents implements seams.AgentPanel {
     provider: Provider,
     replay = false,
     context = "",
+    attached: Attached[] = [],
   ): Promise<void> {
     const live = this.store.get(projectOf(project));
     if (live === null) throw new Error("no such project");
-    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation, replay, context);
+    // The attached pictures as pictures, the rest named (the first build sent only the names, and the agent couldn't see them).
+    const given = await attachedPictures(attached, live.project.media, join(this.dir, "workspace", "attached"));
+    const about = attachedText(attached, new Set(given.map((one) => one.media)));
+    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation, replay, context + about, attached, given);
     const codex = await this.codex();
     const chat = this.withChat(project);
     if (!stillOn(chat, generation)) throw new Error("Stopped.");
@@ -934,12 +944,12 @@ export class Agents implements seams.AgentPanel {
     now.thread = thread;
     now.provider = "codex";
     const selection = { model: now.model, effort: now.effort };
-    this.upsert(project, entry({ id: newId("user"), kind: "user", text }));
+    this.upsert(project, entry({ id: newId("user"), kind: "user", text, ...(attached.length > 0 ? { attachments: attached } : {}) }));
     this.save(project);
     this.emit(project, { event: "status", running: true });
     const params: Record<string, unknown> = {
       threadId: thread,
-      input: [{ type: "text", text: text + context, text_elements: [] }],
+      input: [...given.map((one) => ({ type: "localImage", path: one.path })), { type: "text", text: text + context + about, text_elements: [] }],
       approvalPolicy: "never",
     };
     if (selection.model !== null) params.model = selection.model;
@@ -975,7 +985,17 @@ export class Agents implements seams.AgentPanel {
    * pre-approved, the instructions as its system prompt, and its messages
    * mapped onto the chat as they stream in.
    */
-  private async claudeTurn(project: string, text: string, model: string | null, effort: string | null, generation: number, replay = false, context = ""): Promise<void> {
+  private async claudeTurn(
+    project: string,
+    text: string,
+    model: string | null,
+    effort: string | null,
+    generation: number,
+    replay = false,
+    context = "",
+    attached: Attached[] = [],
+    given: Picture[] = [],
+  ): Promise<void> {
     const live = this.store.get(projectOf(project));
     if (live === null) throw new Error("no such project");
     const chat = this.withChat(project);
@@ -987,7 +1007,7 @@ export class Agents implements seams.AgentPanel {
       chat.effort = effort;
       chat.provider = "claude";
     }
-    if (!replay) this.upsert(project, entry({ id: newId("user"), kind: "user", text }));
+    if (!replay) this.upsert(project, entry({ id: newId("user"), kind: "user", text, ...(attached.length > 0 ? { attachments: attached } : {}) }));
     this.save(project);
     // The once-per-nightly update finishes before a new CLI is started.
     // Sign-in failures below keep this already-visible message for recovery.
@@ -1034,7 +1054,7 @@ export class Agents implements seams.AgentPanel {
     this.save(project);
     this.emit(project, { event: "status", running: true });
     if (updated !== "") diag.info("agent", `${project}: told the resumed session what changed in the tools`);
-    await this.runClaude(project, generation, updated === "" ? text + context : `${updated}\n\n${text}${context}`, options);
+    await this.runClaude(project, generation, updated === "" ? text + context : `${updated}\n\n${text}${context}`, options, 0, given);
   }
 
   /**
@@ -1042,8 +1062,9 @@ export class Agents implements seams.AgentPanel {
    * a session Claude Code no longer has is started again once as a new
    * conversation (`fresh`), rather than failing the turn.
    */
-  private async runClaude(project: string, generation: number, text: string, options: claude.Options, attempt = 0): Promise<void> {
-    const running = await this.claudeQuery({ prompt: text, options });
+  private async runClaude(project: string, generation: number, text: string, options: claude.Options, attempt = 0, given: Picture[] = []): Promise<void> {
+    // Pictures go in the one user message with the words.
+    const running = await this.claudeQuery({ prompt: given.length === 0 ? text : claude.withPictures(text, given), options });
     this.claudeQueries.set(project, running);
     // Edit's own tools didn't connect (a turn started as Edit came back from
     // a restart, card 1 of Oct 28: the agent said it had "lost the connection
@@ -1055,7 +1076,7 @@ export class Agents implements seams.AgentPanel {
             await timing.sleep(EDIT_TOOLS_WAIT_MS);
             const chat = this.withChat(project);
             if (chat.generation !== generation || chat.halted || !chat.running) return;
-            await this.runClaude(project, generation, text, options, attempt + 1);
+            await this.runClaude(project, generation, text, options, attempt + 1, given);
           }
         : null;
     const fresh =
@@ -1063,7 +1084,7 @@ export class Agents implements seams.AgentPanel {
         ? null
         : () => {
             const { resume: _gone, ...rest } = options;
-            return this.runClaude(project, generation, `${SESSION_GONE}\n\n${text}`, rest);
+            return this.runClaude(project, generation, `${SESSION_GONE}\n\n${text}`, rest, 0, given);
           };
     void this.followClaude(project, generation, new ClaudeTurn(nowMs()), running, fresh, text, again);
     const after = this.withChat(project);
@@ -1921,6 +1942,8 @@ export function readChat(text: string): Chat {
       for (const name of ["tool", "status", "detail"] as const) {
         if (typeof fields[name] === "string") read[name] = fields[name] as string;
       }
+      const attachments = savedAttached(fields.attachments);
+      if (attachments !== undefined) read.attachments = attachments;
       chat.entries.push(read);
     }
   }

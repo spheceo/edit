@@ -2286,7 +2286,7 @@ impl ChunkSink {
     fn finish(mut self) -> Result<(), String> {
         if null_sink() {
             return Err(
-                "a measurement into the null sink (EDIT_EXPORT_SINK=null): nothing encoded"
+                "a measurement into the null sink (EDIT_EXPORT_SINK=null or none): nothing encoded"
                     .to_owned(),
             );
         }
@@ -2359,9 +2359,127 @@ impl Sink {
 /// Decoder threads per export: one plays the current clip while the others
 /// open and seek the next ones.
 const DECODERS: usize = 3;
-/// Whether frames go nowhere (`EDIT_EXPORT_SINK=null`, a measurement).
+/// Whether frames go nowhere (`EDIT_EXPORT_SINK=null`, or `none`: measurements).
 fn null_sink() -> bool {
-    std::env::var("EDIT_EXPORT_SINK").as_deref() == Ok("null")
+    matches!(
+        std::env::var("EDIT_EXPORT_SINK").as_deref(),
+        Ok("null" | "none")
+    )
+}
+
+/// Whether frames are only rendered (`EDIT_EXPORT_SINK=none`, a measurement:
+/// off Modal, step 7): never copied to a buffer or mapped, so the encoder's
+/// side waits on the GPU's drawing alone, where `null` waits on the drawing
+/// and the readback.
+fn no_readback() -> bool {
+    std::env::var("EDIT_EXPORT_SINK").as_deref() == Ok("none")
+}
+
+/// What a measurement leaves out of every frame it renders
+/// (`EDIT_EXPORT_DROP`, comma-separated; off Modal, step 7: which of an
+/// edit's effects its GPU time goes to): `blur` (adjustments' blurs),
+/// `adjust` (adjustment layers), `text`, `waveform`, `solid`, `overlays`
+/// (every layer above the bottom video).
+#[derive(Default)]
+struct Leave {
+    blur: bool,
+    adjust: bool,
+    text: bool,
+    waveform: bool,
+    solid: bool,
+    overlays: bool,
+}
+
+impl Leave {
+    fn from_env() -> Option<Leave> {
+        let asked = std::env::var("EDIT_EXPORT_DROP").ok()?;
+        let mut leave = Leave::default();
+        for part in asked.split(',').map(str::trim) {
+            match part {
+                "blur" => leave.blur = true,
+                "adjust" => leave.adjust = true,
+                "text" => leave.text = true,
+                "waveform" => leave.waveform = true,
+                "solid" => leave.solid = true,
+                "overlays" => leave.overlays = true,
+                _ => {}
+            }
+        }
+        Some(leave)
+    }
+
+    fn apply(&self, scene: &Scene) -> Scene {
+        let mut out = scene.clone();
+        if self.overlays {
+            if let Some(first) = out
+                .layers
+                .iter()
+                .position(|layer| matches!(layer, Layer::Video { .. }))
+            {
+                out.layers.truncate(first + 1);
+            }
+        }
+        out.layers.retain(|layer| match layer {
+            Layer::Text { .. } => !self.text,
+            Layer::Adjustment { .. } => !self.adjust,
+            Layer::Waveform { .. } => !self.waveform,
+            Layer::Solid { .. } => !self.solid,
+            Layer::Video { .. } => true,
+        });
+        if self.blur {
+            for layer in &mut out.layers {
+                if let Layer::Adjustment { blur, .. } = layer {
+                    blur.radius = 0.0;
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The layers a measured export drew, by kind (`Leave`).
+#[derive(Default)]
+struct LayerCounts {
+    frames: u64,
+    video: u64,
+    text: u64,
+    adjust: u64,
+    blur: u64,
+    waveform: u64,
+    solid: u64,
+}
+
+impl LayerCounts {
+    fn add(&mut self, scene: &Scene) {
+        self.frames += 1;
+        for layer in &scene.layers {
+            match layer {
+                Layer::Video { .. } => self.video += 1,
+                Layer::Text { .. } => self.text += 1,
+                Layer::Adjustment { blur, .. } => {
+                    self.adjust += 1;
+                    if blur.radius > 0.0 {
+                        self.blur += 1;
+                    }
+                }
+                Layer::Waveform { .. } => self.waveform += 1,
+                Layer::Solid { .. } => self.solid += 1,
+            }
+        }
+    }
+
+    fn describe(&self) -> String {
+        let per = |count: u64| count as f64 / self.frames.max(1) as f64;
+        format!(
+            "layers a frame: video {:.2}, text {:.2}, adjustments {:.2} (blurring {:.2}), waveforms {:.2}, solids {:.2}",
+            per(self.video),
+            per(self.text),
+            per(self.adjust),
+            per(self.blur),
+            per(self.waveform),
+            per(self.solid)
+        )
+    }
 }
 
 /// A focused export renders this much from the playhead before the sound's mix (seconds).
@@ -2606,7 +2724,9 @@ struct Readback {
     frame: i64,
     slot: usize,
     submission: wgpu::SubmissionIndex,
-    mapped: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    /// None with `EDIT_EXPORT_SINK=none`: the frame was rendered, never
+    /// copied out or mapped, so the encoder's side waits on the GPU only.
+    mapped: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 /// Renders the frames of `ranges` (timeline frames `[from, to)`, in order)
@@ -2670,8 +2790,28 @@ fn render_frames_watched(
             let mut written = 0;
             for readback in readbacks {
                 let buffer = buffers.get(readback.slot).ok_or("no readback buffer")?;
+                let Some(mapped) = readback.mapped else {
+                    // Render only (EDIT_EXPORT_SINK=none): the frame's
+                    // submission done is all there is to wait for.
+                    while device
+                        .poll(wgpu::PollType::Wait {
+                            submission_index: Some(readback.submission.clone()),
+                            timeout: Some(Duration::from_secs(1)),
+                        })
+                        .is_err()
+                    {
+                        if cancel.load(Ordering::Acquire) {
+                            return Err("cancelled".to_owned());
+                        }
+                    }
+                    written += 1;
+                    if free_tx.send(readback.slot).is_err() {
+                        break;
+                    }
+                    continue;
+                };
                 loop {
-                    match readback.mapped.try_recv() {
+                    match mapped.try_recv() {
                         Ok(result) => {
                             result.map_err(|error| format!("GPU readback failed: {error}"))?;
                             break;
@@ -2702,6 +2842,10 @@ fn render_frames_watched(
             }
             sink.finish(written)
         });
+        let render_only = no_readback();
+        let leave = Leave::from_env();
+        let measuring = leave.is_some() || std::env::var_os("EDIT_EXPORT_SINK").is_some();
+        let mut counts = LayerCounts::default();
         let composited = (|| -> Result<(), String> {
             let mut inline_pool = ReaderPool::new(4, 2);
             let mut inline: HashMap<String, VideoReader> = HashMap::new();
@@ -2780,18 +2924,31 @@ fn render_frames_watched(
                         inline_pool.put(reader);
                     }
                 }
-                renderer.render(&planned.scene);
+                if let Some(leave) = &leave {
+                    counts.add(&planned.scene);
+                    renderer.render(&leave.apply(&planned.scene));
+                } else {
+                    if measuring {
+                        counts.add(&planned.scene);
+                    }
+                    renderer.render(&planned.scene);
+                }
                 let waiting = Instant::now();
                 let slot = free.recv().map_err(|_| "the encoder stopped".to_owned())?;
                 on_encode += waiting.elapsed();
                 let buffer = buffers.get(slot).ok_or("no readback buffer")?;
-                let submission = renderer.copy_output_to(buffer);
-                let (mapped_tx, mapped) = mpsc::channel();
-                buffer
-                    .slice(..)
-                    .map_async(wgpu::MapMode::Read, move |result| {
-                        let _ = mapped_tx.send(result);
-                    });
+                let (submission, mapped) = if render_only {
+                    (renderer.queue().submit([]), None)
+                } else {
+                    let submission = renderer.copy_output_to(buffer);
+                    let (mapped_tx, mapped) = mpsc::channel();
+                    buffer
+                        .slice(..)
+                        .map_async(wgpu::MapMode::Read, move |result| {
+                            let _ = mapped_tx.send(result);
+                        });
+                    (submission, Some(mapped))
+                };
                 readback_tx
                     .send(Readback {
                         frame: planned.frame,
@@ -2808,6 +2965,16 @@ fn render_frames_watched(
             }
             if cancel.load(Ordering::Acquire) {
                 return Err("cancelled".to_owned());
+            }
+            if measuring {
+                crate::log::info(
+                    "export",
+                    format!(
+                        "measured ({}): {}",
+                        std::env::var("EDIT_EXPORT_DROP").unwrap_or_default(),
+                        counts.describe()
+                    ),
+                );
             }
             crate::log::info(
                 "export",

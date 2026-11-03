@@ -34,7 +34,6 @@ ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
 # Sign-in (accounts.spheceo.com, Oct 23): every route but /health takes a signed-in person's token,
 # checked against this issuer's JWKS. The old shared token (CLOUD_TOKEN) was retired the same day.
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
-MODAL_PROXY_URL = "https://sphealt--edit-proxies-endpoint.us-east.modal.run"
 OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
 STAMP_CREATOR = "1"                # a project's first commit records who started it (`actor`, from the token); Repack's edit:commitProject takes it since 906b67a (Oct 23)
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
@@ -128,21 +127,19 @@ name = "edit-drive-to-r2"
 binding = "DRIVE_TO_R2"
 class_name = "DriveToR2"
 
-# Independent of the existing Drive Workflow and transcription budget.
-# Disabled until MODAL_EXPORT_URL, MODAL_RENDER_VERSION, MODAL_WORKER_TOKEN
-# and an explicit MODAL_DAILY_BUDGET_USD are configured. MODAL_GPU=L4 by default.
-[[durable_objects.bindings]]
-name = "EXPORT_JOBS"
-class_name = "ExportJobs"
-
+# Modal's cloud exports had a job store here until Nov 3 (Edit moved off Modal):
+# its class is deleted, with what it kept.
 [[migrations]]
 tag = "v2-export-jobs"
 new_sqlite_classes = ["ExportJobs"]
 
+[[migrations]]
+tag = "v3-no-export-jobs"
+deleted_classes = ["ExportJobs"]
+
 # ── dev: edit-relay-dev (Oct 31) ──────────────────────────────────────────
 # What `just dev` and agents call (EDIT_RELAY_URL), with Infisical dev's
-# secrets (`bun scripts/push-secrets.ts --yes`) and Modal's `dev` environment
-# (and dev's own Convex and R2). Deploy: `npx wrangler deploy --env dev`.
+# secrets (`bun scripts/push-secrets.ts --yes`) and dev's own Convex and R2. Deploy: `npx wrangler deploy --env dev`.
 # The live relay above is deployed only from a nightly's tag (release.yml).
 # Wrangler doesn't carry bindings into an environment: each is repeated here.
 [env.dev]
@@ -157,7 +154,6 @@ MEDIA_HOST = "media-dev.spheceo.com"
 OPENART_UPSTREAM = "https://edit-relay.sphe-g-personal.workers.dev"
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
-MODAL_PROXY_URL = "https://sphealt-dev--edit-proxies-endpoint.us-east.modal.run"
 OPEN_MAPS = "0"
 STAMP_CREATOR = "1"
 DAILY_BYTES_PER_IP = "3240000000"
@@ -215,10 +211,6 @@ service = "edit-relay"
 [[env.dev.durable_objects.bindings]]
 name = "BUDGET"
 class_name = "TranscriptionBudget"
-
-[[env.dev.durable_objects.bindings]]
-name = "EXPORT_JOBS"
-class_name = "ExportJobs"
 
 [[env.dev.workflows]]
 name = "edit-drive-to-r2-dev"

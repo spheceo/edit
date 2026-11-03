@@ -20,8 +20,6 @@ import * as captionsModule from "./captions.ts";
 import * as channelMarksModule from "./channel_marks.ts";
 import * as cloudModule from "./cloud.ts";
 import * as cloudMediaModule from "./cloud_media.ts";
-import * as cloudExportsModule from "./cloud_exports.ts";
-import * as modalExportsModule from "./modal_exports.ts";
 import type { StartExtra } from "./exports.ts";
 import * as cloudProjectsModule from "./cloud_projects.ts";
 import * as driveModule from "./drive.ts";
@@ -195,7 +193,6 @@ export interface CloudMediaSeam {
   forExport(project: Project, start: number, end: number, cache: string, cancelled?: () => boolean): Promise<[Project, Originals]>;
   /** The cloud stills a render of `project` reads, fetched again where the cache dropped them. */
   restoreStills(app: App, project: Project): Promise<void>;
-  forWorker(project: Project, start: number, end: number): Promise<{ project: Project; assets: import("@edit/types/worker").WorkerAsset[] }>;
   /** Puts a file from this machine in the cloud (deduplicated by content) and returns the media to add; footage's uploads finish in the background. */
   importLocal(cache: string, path: string, probe: Probe, name: string): Promise<Made>;
   /** Resolves once the background uploads importing `file` are done: whether they all went up. */
@@ -239,8 +236,6 @@ export interface CloudSeam {
 
 // cloud.ts, cloud_projects.ts and cloud_media.ts.
 export const cloudMedia: CloudMediaSeam = cloudMediaModule;
-export const cloudExports = cloudExportsModule;
-export const modalExports = modalExportsModule;
 /** A channel's watermark over an export (channel_marks.ts). */
 export interface ChannelMarksSeam {
   addWatermark(app: { library: Library }, cacheDir: string, project: Project, plan: { start: number; end: number }, id: string): Promise<Project>;

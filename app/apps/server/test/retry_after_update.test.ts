@@ -10,7 +10,6 @@ import { readOnly } from "../src/cloud_projects.ts";
 import { chunkFolder, ExportRegistry, failedExports, type ExportFailure } from "../src/exports.ts";
 import * as reviews from "../src/reviews.ts";
 import * as retry from "../src/retry_after_update.ts";
-import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip } from "./helpers/model.ts";
 import { MockServer } from "./mocks/server.ts";
@@ -190,8 +189,6 @@ test("an export that fails is noted with its settings and build, a share's as a 
   const { dir, home, store, app, native, cleanup } = fixtureHome("retry-noted-failures");
   const registry = new ExportRegistry(home);
   app.exports = registry;
-  const modal = spyOn(seams.modalExports, "enabled").mockReturnValue(false);
-  const cloudExports = spyOn(seams.cloudExports, "enabled").mockReturnValue(false);
   const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
   let fail = true;
   const render = spyOn(native.ExportJob, "start").mockImplementation((job) => ({
@@ -222,7 +219,7 @@ test("an export that fails is noted with its settings and build, a share's as a 
     expect(registry.activity()[0]).toMatchObject({ state: "done", note: retry.NOTE });
     expect(failedExports(home)[project.id]).toBeUndefined();
   } finally {
-    render.mockRestore(); plan.mockRestore(); cloudExports.mockRestore(); modal.mockRestore(); cleanup();
+    render.mockRestore(); plan.mockRestore(); cleanup();
   }
 });
 

@@ -68,7 +68,7 @@ describe("relay sign-in gate", () => {
     expect(((await allow(asked(await token({}, { key: other })), env(), "use", "transcribe")) as Response).status).toBe(401);
     expect(((await allow(asked("not-a-token"), env(), "use", "transcribe")) as Response).status).toBe(401);
     // An admin may use everything.
-    expect(await allow(asked(await token({ perms: [], admin: true })), env(), "use", "cloud/exports/start")).toMatchObject({ kind: "person" });
+    expect(await allow(asked(await token({ perms: [], admin: true })), env(), "use", "cloud/r2/url")).toMatchObject({ kind: "person" });
     // Inside the 60 s skew an expired token still passes.
     expect(await allow(asked(await token({}, { exp: Math.floor(Date.now() / 1000) - 20 })), env(), "use", "transcribe")).toMatchObject({ kind: "person" });
   });
@@ -196,12 +196,10 @@ describe("relay sign-in gate", () => {
     // Without use: refused before anything runs.
     expect(await call("r2/url", ["cloud", "video.subtitles"])).toBe(403);
     // With use, whatever else (v1's names, capability ids, ones it's never heard of): past the gate.
-    for (const route of ["google/token", "r2/url", "convex", "exports/start"]) {
+    for (const route of ["google/token", "r2/url", "convex"]) {
       expect(await call(route, ["use"])).not.toBe(403);
       expect(await call(route, ["use", "ai", "video.subtitles", "made.up-thing"])).not.toBe(403);
     }
-    // Modal's worker routes take only the worker token, never a person's.
-    expect(await call("exports/worker/claim", ["use"])).toBe(401);
   });
 
   it("lets anyone signed in send a problem report (Edit writes there), and only an admin read one", () => {

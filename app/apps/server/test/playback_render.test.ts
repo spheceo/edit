@@ -23,8 +23,6 @@ test("an agent's turn over, its edit is made smooth by itself, here; a turn star
     // Nothing exporting here (the fixture's exports are a stub).
     Object.assign(app.exports, { localRunning: () => false, running: () => false });
     playback.hooks.afterTurnMs = 30;
-    // Modal off (Nov 2): rendered on this Mac.
-    playback.hooks.toCloud = async () => false;
     const id = store.create("smooth", { width: 1920, height: 1080, fps: 30 }).project.id;
     playback.start(app);
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -50,7 +48,6 @@ test("while a changed edit renders, the old render is never offered as it", asyn
   const { fixtureHome } = await import("./helpers/home.ts");
   const playback = await import("../src/playback_render.ts");
   const { app, store, cleanup } = fixtureHome("playback-stale");
-  const toCloud = playback.hooks.toCloud;
   try {
     Object.assign(app.exports, { localRunning: () => false, running: () => false });
     const id = store.create("stale", { width: 1920, height: 1080, fps: 30 }).project.id;
@@ -65,30 +62,28 @@ test("while a changed edit renders, the old render is never offered as it", asyn
     await store.update(id, "test", (p) => {
       p.settings.fps = 25;
     });
-    playback.hooks.toCloud = () => new Promise<boolean>(() => {});
+    // Its render waits behind an export.
+    Object.assign(app.exports, { localRunning: () => true, running: () => true });
     const asked = playback.request(app, id);
     expect(asked.rev).toBe(store.get(id)!.rev);
     expect(asked.url).toBeNull();
   } finally {
-    playback.hooks.toCloud = toCloud;
     cleanup();
   }
 });
 
-test("a render of the same picture any Mac put in R2 is played at once; one Modal can't make is made here", async () => {
-  // Sphe, Nov 2: "open up the project on a new Mac … instantly start playing it", with Edit off Modal.
+test("a render of the same picture any Mac put in R2 is played at once; one not there is made here", async () => {
+  // Sphe, Nov 2: "open up the project on a new Mac … instantly start playing it".
   const { fixtureHome } = await import("./helpers/home.ts");
   const playback = await import("../src/playback_render.ts");
-  const seams = await import("../src/seams.ts");
   const { spyOn } = await import("bun:test");
   const { app, store, native, cleanup } = fixtureHome("playback-shared");
-  const { toCloud, inCloud } = playback.hooks;
+  const { inCloud } = playback.hooks;
   const looked: string[] = [];
   try {
     Object.assign(app.exports, { localRunning: () => false, running: () => false });
     const id = store.create("shared", { width: 1920, height: 1080, fps: 30 }).project.id;
     const hash = playback.pictureHash(store.get(id)!.project);
-    playback.hooks.toCloud = async () => false;
     playback.hooks.inCloud = async (key) => {
       looked.push(key);
       return true;
@@ -101,13 +96,11 @@ test("a render of the same picture any Mac put in R2 is played at once; one Moda
     expect(rendered).not.toHaveBeenCalled();
     rendered.mockRestore();
 
-    // Another picture, none in R2, Modal on but failing: made here.
+    // Another picture, none in R2: made here.
     await store.update(id, "test", (p) => {
       p.settings.fps = 25;
     });
     playback.hooks.inCloud = async () => false;
-    playback.hooks.toCloud = async () => true;
-    const modal = spyOn(seams.modalExports, "run").mockRejectedValue(new Error("Modal is out of credit"));
     const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 1920, height: 1080, audio: true }, fps: 25 } as never);
     const here = spyOn(native.ExportJob, "start").mockImplementation((job) => {
       (require("node:fs") as typeof import("node:fs")).writeFileSync(job.output, "picture");
@@ -116,14 +109,11 @@ test("a render of the same picture any Mac put in R2 is played at once; one Moda
     playback.request(app, id);
     const rev = store.get(id)!.rev;
     for (let tries = 0; !(playback.status(app, id).state === "ready" && playback.status(app, id).rev === rev) && tries < 200; tries++) await Bun.sleep(5);
-    expect(modal).toHaveBeenCalled();
     expect(here).toHaveBeenCalled();
     expect(playback.status(app, id)).toMatchObject({ state: "ready", rev });
-    modal.mockRestore();
     plan.mockRestore();
     here.mockRestore();
   } finally {
-    playback.hooks.toCloud = toCloud;
     playback.hooks.inCloud = inCloud;
     cleanup();
   }

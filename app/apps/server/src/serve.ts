@@ -348,11 +348,12 @@ function resumeJobs(app: App): void {
       void seams.script.start(app, job.project, false);
     },
     export: async (job) => {
-      const { options, output, backend, cloudRequest, cloudJob, drive } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
+      // Jobs from before Nov 3 may name a Modal or Relay-worker backend: every export renders here now.
+      const { options, output, drive } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
       // The timeline it was started with, not edits made since.
       const current = project(job.project);
       const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
-      await app.exports.start(app.store, app.library, asked, options, output, { backend, cloudRequest, cloudJob, drive });
+      await app.exports.start(app.store, app.library, asked, options, output, { drive });
     },
     archive: async (job) => {
       // The export finished before the restart: only its upload is done again.

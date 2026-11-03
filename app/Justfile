@@ -234,10 +234,8 @@ dev: wasm web-install (native "debug")
     fi
     # Dev's own data folder: ~/.edit is the installed Edit's (prod), and a cloud project cached there must never sync into dev.
     export EDIT_HOME="${EDIT_HOME:-$HOME/.edit-dev}"
-    # Dev talks to dev: its own relay (edit-relay-dev: Infisical dev's keys, Modal's dev environment, dev's Convex and R2). Installed builds use the live one.
+    # Dev talks to dev: its own relay (edit-relay-dev: Infisical dev's keys, dev's Convex and R2). Installed builds use the live one.
     export EDIT_RELAY_URL="${EDIT_RELAY_URL:-https://edit-relay-dev.sphe-g-personal.workers.dev}"
-    # Exports and smooth playback run on this Mac (Sphe, Nov 2: off Modal); EDIT_MODAL_EXPORTS=1 sends whole cloud edits there when the Mac cannot (modal_exports.ts).
-    export EDIT_MODAL_EXPORTS="${EDIT_MODAL_EXPORTS:-0}" EDIT_WORKER_ROOT="${EDIT_WORKER_ROOT:-$PWD}"
     # bun --watch keeps a handle on every file it watches: macOS's default 256 ran out (EMFILE) on Nov 2 and the
     # server stopped, Vite serving a page with nothing behind it ("i just get a blank screen").
     ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true

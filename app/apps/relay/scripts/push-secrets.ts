@@ -32,8 +32,8 @@ const yes = args.includes("--yes");
 const envAt = args.indexOf("--env");
 const environment = envAt >= 0 ? (args[envAt + 1] ?? "dev") : "dev";
 // `--only A,B` (or the names given bare): just these.
-// Infisical's MODAL_TOKEN_* sign the Mac's own Modal calls in; the Worker never needs them.
-const NOT_THE_WORKERS = new Set(["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "MODAL_IMAGE_BUILDER_VERSION"]);
+// Modal's (MODAL_*): Edit stopped using Modal on Nov 3; never the Worker's.
+const notTheWorkers = (key: string) => key.startsWith("MODAL_");
 if (environment !== "dev" && environment !== "prod") throw new Error("--env must be dev or prod");
 const WORKER = environment === "prod" ? "edit-relay" : "edit-relay-dev";
 const WRANGLER_ENV = environment === "prod" ? [] : ["--env", "dev"];
@@ -58,7 +58,7 @@ if (exported.code !== 0) {
   console.error(`couldn't read ${FOLDER} from Infisical (${environment}): is \`infisical login\` done?`);
   process.exit(1);
 }
-const secrets = (JSON.parse(exported.out) as { key: string; value: string }[]).filter((one) => (only.length === 0 ? !NOT_THE_WORKERS.has(one.key) : only.includes(one.key)));
+const secrets = (JSON.parse(exported.out) as { key: string; value: string }[]).filter((one) => (only.length === 0 ? !notTheWorkers(one.key) : only.includes(one.key)));
 const unresolved = secrets.filter((one) => one.value === "" || one.value.startsWith("${"));
 if (unresolved.length > 0) {
   console.error(`not resolved in Infisical (fix the reference first): ${unresolved.map((one) => one.key).join(", ")}`);

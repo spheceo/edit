@@ -40,10 +40,9 @@ import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
 import { join } from "./paths.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
-import { asLengths, copyProblem, lengthsOf } from "./review_check.ts";
+import { copyProblem, lengthsOf } from "./review_check.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
 import { Semaphore } from "./media.ts";
-import type { Reviewed } from "./modal_exports.ts";
 import { native } from "./native/index.ts";
 import { onScreen } from "./review.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
@@ -232,31 +231,12 @@ export async function share(app: App, projectId: string, path: string | null, re
       const prefix = `edit/reviews/${projectId}/${timeline}`;
       const fullKey = fullKeyOf(prefix, chosen.path);
       const seconds = chosen.frames / fps;
-      // In the cloud when the export is there and Modal is here: its review
-      // copy, poster and full-quality file made and copied within R2, nothing
-      // through this Mac (the team, Oct 29: "everything should be done on the
-      // cloud"); else here, as before.
-      let made: Reviewed | null = null;
-      await seams.modalExports.ready();
-      if (chosen.cloudKey !== undefined && seams.modalExports.enabled()) {
-        sharing.set(projectId, "making the review copy in the cloud");
-        try {
-          const answer = await seams.modalExports.review(home, projectId, { source: chosen.cloudKey, video: `${prefix}/video.mp4`, poster: `${prefix}/poster.jpg`, full: fullKey }, posterSecond(live.project, seconds), fps, chosen.frames);
-          // The worker refuses a copy that doesn't match before it goes up; its measurements are checked here too, against this Mac's rule.
-          const [copyLengths, exportLengths] = [asLengths(answer.lengths?.review), asLengths(answer.lengths?.export)];
-          const problem = copyLengths && exportLengths ? copyProblem(copyLengths, exportLengths, fps) : null;
-          if (problem !== null) throw new Error(`it doesn't match its export (${problem})`);
-          made = answer;
-        } catch (error) {
-          diag.warn("review", `${projectId}: the review copy in the cloud: ${diag.messageOf(error)}; making it on this Mac`);
-        }
-      }
-      if (made === null) await shareFromHere();
+      await shareFromHere();
       // What the page shows beside the video: its transcript, chapters, the
       // censoring, a waveform and the files' details (Fields), and the clips
       // under each moment (a note is pinned to its footage as it's written).
       sharing.set(projectId, "describing it");
-      const extra = await describe(app, live.project, chosen.path, copy, prefix, clips, made);
+      const extra = await describe(app, live.project, chosen.path, copy, prefix, clips);
       async function shareFromHere(): Promise<void> {
         const [pick, now] = [chosen!, live!];
         if (!fs.existsSync(pick.path)) {
@@ -477,9 +457,8 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
           yield* ended.pipe(Effect.timeoutOrElse({ duration: Math.max(left, 0), orElse: () => Effect.succeed({ silent: true } as const) }));
           return { kind: "again" } as const;
         }
-        // On Modal the export stays in the cloud and the share is made there; on
-        // this Mac the share holds the file while it reads it (withExport), so
-        // the archive never takes it away underneath.
+        // The share holds the file while it reads it (withExport), so the
+        // archive never takes it away underneath.
         const started = yield* Effect.tryPromise({
           try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), { share: true, ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) }),
           catch: (error) => error as Error,
@@ -553,13 +532,12 @@ async function probe(path: string): Promise<Record<string, unknown>> {
  * beside the video its words (export time, with who says them) and a
  * waveform; plus the picture clips, so a note can be pinned to its footage.
  */
-async function describe(app: App, project: Project, exported: string, copy: string, prefix: string, clips: [string, number, number][], made: Reviewed | null = null): Promise<Record<string, unknown>> {
+async function describe(app: App, project: Project, exported: string, copy: string, prefix: string, clips: [string, number, number][]): Promise<Record<string, unknown>> {
   const fps = fpsOf(project);
   const ms = (frame: number) => Math.round((frame / fps) * 1000);
-  // Made in the cloud: the files' details and the waveform came back with it.
   const out: Record<string, unknown> = {
-    export: { renderedAt: Date.now(), ...(made?.export ?? (await probe(exported))) },
-    review: made?.review ?? (await probe(copy)),
+    export: { renderedAt: Date.now(), ...(await probe(exported)) },
+    review: await probe(copy),
     clipMap: clips,
   };
   // Chapters: the intro, each cut-in, the story, the outro.
@@ -610,16 +588,13 @@ async function describe(app: App, project: Project, exported: string, copy: stri
   }
   // A waveform of the review copy's sound: its loudest sample every 100 ms, 0–100.
   try {
-    let peaks: number[] = made?.peaks ?? [];
-    if (made === null) {
-      const pcm = await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-i", copy, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]);
-      const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
-      peaks = [];
-      for (let at = 0; at < samples.length; at += 800) {
-        let most = 0;
-        for (let one = at; one < Math.min(at + 800, samples.length); one++) most = Math.max(most, Math.abs(samples[one]!));
-        peaks.push(Math.round((most / 32768) * 100));
-      }
+    const pcm = await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-i", copy, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]);
+    const samples = new Int16Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 2));
+    const peaks: number[] = [];
+    for (let at = 0; at < samples.length; at += 800) {
+      let most = 0;
+      for (let one = at; one < Math.min(at + 800, samples.length); one++) most = Math.max(most, Math.abs(samples[one]!));
+      peaks.push(Math.round((most / 32768) * 100));
     }
     const file = `${copy}.peaks.json`;
     fs.writeFileSync(file, JSON.stringify({ everyMs: 100, peaks }));

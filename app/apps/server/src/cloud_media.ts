@@ -62,7 +62,6 @@ import * as exportExcerpts from "./export_excerpts.ts";
 import * as pieces from "./proxy_pieces.ts";
 import * as cloud from "./cloud.ts";
 import { PLAYBACK_ROUTE, playbackKey, playbackPath } from "./cloud_playback.ts";
-import { proxyJob, requestProxy } from "./cloud_proxy.ts";
 import * as diag from "./diag.ts";
 import { serveFile } from "./http/files.ts";
 import * as endpoints from "./endpoints.ts";
@@ -776,19 +775,6 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
       await cloud.uploadFile(path, originalKey);
       await putRecord({ source, originalReady: true, size });
     }
-  } else if (process.env.EDIT_CLOUD_PROXY === "1") {
-    // Cloud-first: the original goes up once, the proxy is made in the
-    // cloud, and playback streams it without a local copy.
-    // No worker answer: fall back to making it here, as before.
-    if (needOriginal) {
-      await cloud.uploadFile(path, originalKey);
-      await putRecord({ source, originalReady: true, size, duration: probe.duration });
-    }
-    const asked = await requestProxy(proxyJob(source, originalKey, proxy, probe.width ?? 0, probe.height ?? 0));
-    if (asked.state === "preparing") {
-      return { path: previewPath(cache, proxy), name, probe, cloud: { source, original: originalKey, proxy, size } };
-    }
-    if (asked.state === "unavailable") await publish(path, probe, source, originalKey, false, proxy, local, later);
   } else {
     await publish(path, probe, source, originalKey, needOriginal, proxy, local, later);
   }
@@ -1908,38 +1894,6 @@ export async function forExport(project: Project, start: number, end: number, ca
   originals.unpin = exportExcerpts.pin(originals.excerpts.map((one) => one.path));
   diag.info("export", `${project.id}: reading ${needed.length} cloud originals from ${originals.excerpts.length} excerpts here, the rest from the cloud`);
   return [out, originals];
-}
-
-/** Freeze only the assets this export plays. Cloud footage stays in R2;
- * local graphics/sounds are content-addressed once, three files at a time.
- * ETags pin originals that another import might replace during the export.
- */
-export async function forWorker(project: Project, start: number, end: number): Promise<{ project: Project; assets: import("@edit/types/worker").WorkerAsset[] }> {
-  const out = structuredClone(project) as Project;
-  const used = usedMedia(project, start, end);
-  const assets: import("@edit/types/worker").WorkerAsset[] = [];
-  for (let first = 0; first < used.length; first += 3) {
-    const batch = await Promise.all(used.slice(first, first + 3).map(async id => {
-      const media = project.media.find(m => m.id === id);
-      if (!media) throw new Error(`missing export media ${id}`);
-      let key = media.cloud?.original;
-      if (!key) {
-        if (!isFile(media.path)) throw new Error(`${media.name} must finish uploading before a cloud export`);
-        const digest = await sha256File(media.path);
-        key = `edit/exports/assets/${digest}.${extensionOf(media.path).replace(/^\./, "") || "bin"}`;
-        if (await cloud.head(key) === null) await cloud.uploadFile(media.path, key);
-        // A file being rendered/replaced while it uploads isn't a snapshot.
-        if (await sha256File(media.path) !== digest) throw new Error(`${media.name} changed while preparing the cloud export; try again`);
-      }
-      const head = await cloud.head(key);
-      if (!head || !head.etag || head.size <= 0) throw new Error(`${media.name} has not finished uploading to the cloud`);
-      return { media: id, key, size: head.size, etag: head.etag };
-    }));
-    assets.push(...batch);
-  }
-  // No workstation paths or expiring links are persisted in the manifest.
-  for (const media of out.media) media.path = `asset:${media.id}`;
-  return { project: out, assets };
 }
 
 // ---------------------------------------------------------------------------

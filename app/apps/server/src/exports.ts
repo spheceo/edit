@@ -1,6 +1,4 @@
-// The server's export registry: a durable queue on this Mac and any
-// number in the cloud (Modal's sections, `modal_exports.ts`, when it's on and
-// worth it), their
+// The server's export registry: a durable queue on this Mac, its
 // `export` events, the files it may hand out, and the Drive upload after a
 // subtitled video (or whenever asked). The local rendering, mixing, the partial
 // file beside the destination and its rename are the addon's (`ExportJob`).
@@ -18,7 +16,6 @@ import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
 import { subtitleVideo } from "./drive.ts";
 import { catchBugsAsync } from "./guard.ts";
-import type { MacSpeed } from "./modal_exports.ts";
 import type { ExportOptions, Plan, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { canonical, fileName, join, parent } from "./paths.ts";
@@ -31,14 +28,8 @@ import { BUILD } from "./version.ts";
 /** How many finished exports are remembered (handed out, revealed). */
 const KEEP_FINISHED = 50;
 
-/** Where an export renders: this Mac, the Relay's worker (v2) or Modal's sections (v3). */
-export type Backend = "local" | "cloud" | "modal";
-
 /** How an export is started beyond its options (a restart passes back what it was). */
 export interface StartExtra {
-  backend?: Backend;
-  cloudRequest?: string;
-  cloudJob?: string;
   /** Upload the finished file to Drive; by default only a whole subtitled video is (`drive.wanted`). */
   drive?: boolean;
   /** Keep the local file after its verified cloud upload (default: deleted, cloud is canonical). */
@@ -102,11 +93,6 @@ interface Running {
   key: string;
   cancelled: boolean;
   job: { cancel(): void } | null;
-  backend: Backend;
-  /** Rendered elsewhere: no contention with this Mac's own work. */
-  remote: boolean;
-  cloudRequest: string;
-  cloudJob?: string;
   /** The timeline kept for a restart (`snapshotFile`), removed when it ends. */
   snapshot: string | null;
   /** What it exports, as `timelineHash`. */
@@ -121,8 +107,6 @@ interface Running {
   note?: string;
   /** What it waits for while queued (export_capacity.ts `noRoom`). */
   waiting?: string;
-  /** Rendered on Modal and kept in the cloud there (never copied here): its key and size. */
-  inCloud?: { key: string; bytes: number | null };
   cancelQueued?: () => void;
 }
 
@@ -134,7 +118,6 @@ export interface ExportActivity {
   path: string;
   state: "queued" | "running" | "done" | "failed" | "cancelled";
   progress: number;
-  backend: Backend;
   updated_ms: number;
   error?: string;
   /** Said beside it: "Trying again after the update". */
@@ -165,7 +148,7 @@ export interface ExportRecord {
   /**
    * Frames a second this Mac rendered it at when every frame was new (a first
    * export on this Mac, H.264, no restart), and whether it was a subtitle
-   * video: what `macSpeed` learns this Mac's speed from.
+   * video: this Mac's own speed for the house export.
    */
   fresh_fps?: number;
   subtitles?: boolean;
@@ -463,30 +446,6 @@ function remember(home: string, id: string, record: ExportRecord): void {
 
 /** The fewest frames a speed sample has: a short export is mostly its fixed start and finish. */
 const SPEED_FRAMES = 1800;
-/** The newest samples a kind's speed is the median of. */
-const SPEED_SAMPLES = 5;
-
-/**
- * This Mac's own speed for the house export, by kind: the median of its
- * newest fresh exports (`fresh_fps`), where Modal's 25-minute rule reads it
- * (`cloudBetter`). A fixed 45 frames/s had a Mac keeping an edit it took twice
- * as long over (the 16-Year-Old, 26.7 min: 22 frames/s on an M1, Nov 1).
- */
-export function macSpeed(home: string): MacSpeed {
-  const samples = Object.values(readRecords(home)).flat()
-    .filter((record) => typeof record.fresh_fps === "number" && record.fresh_fps > 0)
-    .sort((a, b) => b.finished_ms - a.finished_ms);
-  const median = (subtitles: boolean): number | undefined => {
-    const rates = samples.filter((record) => (record.subtitles === true) === subtitles).slice(0, SPEED_SAMPLES).map((record) => record.fresh_fps!).sort((a, b) => a - b);
-    if (rates.length === 0) return undefined;
-    const middle = Math.floor(rates.length / 2);
-    return rates.length % 2 === 1 ? rates[middle]! : (rates[middle - 1]! + rates[middle]!) / 2;
-  };
-  const edit = median(false);
-  const subtitles = median(true);
-  return { ...(edit === undefined ? {} : { edit }), ...(subtitles === undefined ? {} : { subtitles }) };
-}
-
 /** Whether nothing of `project`'s earlier exports is kept to reuse: an export now renders every frame. */
 function nothingToReuse(cache: string, project: string): boolean {
   try {
@@ -569,7 +528,7 @@ export class ExportRegistry implements seams.Exports {
   }
 
   private publish(store: Store, project: Project, running: Running, state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}): void {
-    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, backend: running.backend, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }), ...(state === "queued" && running.waiting !== undefined ? { waiting: running.waiting } : {}) });
+    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }), ...(state === "queued" && running.waiting !== undefined ? { waiting: running.waiting } : {}) });
     // Keep every active job and only the latest completed outcomes.
     const ended = [...this.recent.values()].filter(one => one.state !== "queued" && one.state !== "running").sort((a, b) => b.updated_ms - a.updated_ms);
     for (const old of ended.slice(20)) this.recent.delete(old.id);
@@ -618,8 +577,7 @@ export class ExportRegistry implements seams.Exports {
 
   /**
    * Starts exporting `project` as `options` ask; returns the file it will
-   * write (`output` with the format's extension). It renders on Modal when
-   * that's on and the export suits it, else here (or the Relay's worker). A
+   * write (`output` with the format's extension), rendered on this Mac. A
    * whole subtitled video is then uploaded to the team's Drive unless
    * `drive` is false; any whole video export is when it's true.
    */
@@ -631,8 +589,6 @@ export class ExportRegistry implements seams.Exports {
     output: string,
     extra: StartExtra = {},
   ): Promise<string> {
-    const cloudRequest = extra.cloudRequest ?? crypto.randomUUID();
-    const cloudJob = extra.cloudJob;
     const addon = native();
     const { plan, fps } = addon.exportPlan({ json: jsonForSerde(project) }, options);
     // The edit as it is, before a watermark goes over it: what this export is of (its hash and clip map).
@@ -663,43 +619,12 @@ export class ExportRegistry implements seams.Exports {
         throw new Error("export would overwrite source footage; choose another file");
       }
     }
-    let backend: Backend;
-    if (extra.backend !== undefined) {
-      backend = extra.backend;
-    } else if ((await seams.modalExports.ready(), seams.modalExports.enabled())) {
-      // Modal only when the Mac really can't (the user, Oct 31: ~$1 an export,
-      // the same videos four to six times a day, the month's limit reached):
-      // it's already exporting, it's busy, or it would take over 25 minutes at
-      // its own measured speed (`cloudBetter`, `macSpeed`). Until Nov 1 that
-      // rule was written but never asked, so every export Modal could take
-      // went there. Modal can't do some (`unsuitable`): those stay here too.
-      const why = seams.modalExports.unsuitable(project, options, plan);
-      const busy = why === null
-        ? seams.modalExports.cloudBetter(project, plan, capacity.noRoom(this.localActive) !== null || this.localQueue.length > 0, undefined, macSpeed(this.home ?? store.home))
-        : null;
-      if (why === null && busy !== null) {
-        diag.info("export", `${project.id}: exporting on Modal: ${busy}`);
-        backend = "modal";
-      } else {
-        diag.info("export", `${project.id}: exporting on this Mac: ${why ?? "it's free here and would finish within 25 minutes"}`);
-        backend = why === null || !seams.cloudExports.enabled() ? "local" : "cloud";
-      }
-    } else {
-      backend = seams.cloudExports.enabled() ? "cloud" : "local";
-    }
-    if (backend === "modal") {
-      const why = seams.modalExports.unsuitable(project, options, plan);
-      if (why !== null) throw new Error(`this export can't render in the cloud: ${why}`);
-    }
     // Rendered here: refused up front when the disks can't hold it, never halfway (TODO, Oct 18: a 2h35m export
     // needed ~8 GB with 2.8 GB free).
-    if (backend === "local") {
-      const short = roomFor(exportBytes(options, plan, options.fps ?? fps), store.cacheDir(), folder);
-      if (short !== null) throw new Error(short);
-    }
+    const short = roomFor(exportBytes(options, plan, options.fps ?? fps), store.cacheDir(), folder);
+    if (short !== null) throw new Error(short);
     const whole = ["h264", "hevc", "prores"].includes(options.format) && plan.start === 0 && plan.end >= duration(project) && plan.end > 0;
     if (extra.drive === true && !whole) throw new Error("only a whole video export (MP4 or MOV) uploads to Drive");
-    const remote = backend !== "local";
     if (this.jobs.has(project.id)) throw new Error("this project already has an export running");
     if ([...this.jobs.values()].some(job => job.output === path)) throw new Error("another export is writing this output path");
     let snapshot: string | null = null;
@@ -713,15 +638,15 @@ export class ExportRegistry implements seams.Exports {
       }
     }
     const args = {
-      options, output: path, backend, cloudRequest,
-      ...(cloudJob === undefined ? {} : { cloudJob }), ...(extra.drive === undefined ? {} : { drive: extra.drive }), ...(snapshot === null ? {} : { snapshot }),
+      options, output: path,
+      ...(extra.drive === undefined ? {} : { drive: extra.drive }), ...(snapshot === null ? {} : { snapshot }),
     };
     const key = jobs.begin(this.home, "export", project.id, args);
     // Own the snapshot in memory too: a caller changing its draft or options
     // after enqueueing must never change the export that was accepted.
     project = structuredClone(project);
     options = structuredClone(options);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, backend, remote, cloudRequest, cloudJob, timeline: timelineHash(edit), options: withWatermarkKey(optionsKey(options), extra.watermark), clips: clipMap(edit), keepLocal: extra.keepLocal === true, queued: !remote, ...(extra.share === true ? { share: true } : {}), ...(extra.note === undefined ? {} : { note: extra.note }) };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, timeline: timelineHash(edit), options: withWatermarkKey(optionsKey(options), extra.watermark), clips: clipMap(edit), keepLocal: extra.keepLocal === true, queued: true, ...(extra.share === true ? { share: true } : {}), ...(extra.note === undefined ? {} : { note: extra.note }) };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -734,21 +659,18 @@ export class ExportRegistry implements seams.Exports {
         throw error;
       }
     }
-    if (remote) void this.run(store, library, project, options, plan, path, running, upload);
-    else {
-      running.cancelQueued = () => {
-        this.localQueue = this.localQueue.filter(one => one.running !== running);
-        this.publish(store, project, running, "cancelled", 0);
-        this.jobs.delete(project.id);
-        jobs.end(this.home, running.key);
-        if (snapshot !== null) fs.rmSync(snapshot, { force: true });
-      };
-      this.localQueue.push({ running, start: () => {
-        void this.run(store, library, project, options, plan, path, running, upload, () => this.releaseOne());
-      } });
-      this.drain();
-      if (running.queued) this.publish(store, project, running, "queued", 0);
-    }
+    running.cancelQueued = () => {
+      this.localQueue = this.localQueue.filter(one => one.running !== running);
+      this.publish(store, project, running, "cancelled", 0);
+      this.jobs.delete(project.id);
+      jobs.end(this.home, running.key);
+      if (snapshot !== null) fs.rmSync(snapshot, { force: true });
+    };
+    this.localQueue.push({ running, start: () => {
+      void this.run(store, library, project, options, plan, path, running, upload, () => this.releaseOne());
+    } });
+    this.drain();
+    if (running.queued) this.publish(store, project, running, "queued", 0);
     return path;
   }
 
@@ -768,49 +690,10 @@ export class ExportRegistry implements seams.Exports {
     emit("running", 0);
     const started = performance.now();
     // A speed sample (`fresh_fps`): rendered here from the start, every frame new, never restarted.
-    let fresh = running.backend === "local" && options.format === "h264" && nothingToReuse(store.cacheDir(), id);
+    let fresh = options.format === "h264" && nothingToReuse(store.cacheDir(), id);
     let result: { ok: true } | { ok: false; error: string };
     try {
       await catchBugsAsync("the export", async () => {
-        if (running.backend === "modal") {
-          try {
-            // Kept in the cloud where it's archived, unless Drive or the caller wants it here.
-            const keep = !upload && !running.keepLocal && exportCloud.enabled() ? exportCloudKey(id, fileName(output) ?? "export.mp4") : null;
-            const made = await seams.modalExports.run(this.home ?? store.home, project, options, output, () => running.cancelled, progress => emit("running", progress), keep);
-            if (made.key !== null) running.inCloud = { key: made.key, bytes: made.bytes };
-            return;
-          } catch (error) {
-            if (running.cancelled) throw error;
-            // Something wrong on Modal (out of credit, down): exported here instead.
-            diag.warn("export", `${project.name}: Modal couldn't export it (${diag.messageOf(error)}); exporting on this Mac`);
-            running.backend = "local";
-            running.remote = false;
-            fresh = false;
-            // In line for this Mac's renderer like any export here. It went
-            // around the line (Nov 2, JJ's Mac: Modal refused Cops Surprise,
-            // it exported here, and Mom Secretly's v2 started beside it, two
-            // whole renders on a Mac with 0.1 GB free, until its encoder stalled).
-            await new Promise<void>((resolve, reject) => {
-              running.queued = true;
-              running.cancelQueued = () => {
-                this.localQueue = this.localQueue.filter(one => one.running !== running);
-                reject(new Error("cancelled"));
-              };
-              this.localQueue.push({ running, start: resolve });
-              this.drain();
-              if (running.queued) emit("queued", 0);
-            });
-            releaseLocal = () => this.releaseOne();
-            emit("running", 0);
-          }
-        }
-        if (running.backend === "cloud") {
-          await seams.cloudExports.run(project, options, plan, output, () => running.cancelled, progress => emit("running", progress), running.cloudRequest, {
-            id: running.cloudJob,
-            accepted: id => { running.cloudJob = id; jobs.patch(this.home, running.key, { cloudJob: id }); },
-          });
-          return;
-        }
         // Fetched back to reuse its chunks; gone again after if this export writes elsewhere.
         let restored: string | null = null;
         try {
@@ -905,13 +788,13 @@ export class ExportRegistry implements seams.Exports {
         `${project.name} exported ${frames} frames in ${diag.human(took)} (${fixed(frames / Math.max(took / 1000, 1e-3), 1)} frames/s) to ${output}`,
       );
       diag.record("export", "export", took, null);
-      let bytes: number | null = running.inCloud?.bytes ?? null;
+      let bytes: number | null = null;
       try {
         bytes = fs.statSync(output).size;
       } catch {
-        // In the cloud only.
+        // Gone already.
       }
-      emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload, backend: running.backend });
+      emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload });
       if (this.home !== null) noteFailure(this.home, id, null);
       try {
         remember(this.home ?? store.home, id, {
@@ -928,7 +811,6 @@ export class ExportRegistry implements seams.Exports {
             ? { fresh_fps: Math.round((frames / (took / 1000)) * 10) / 10, subtitles: subtitleVideo(project) }
             : {}),
           timeline: running.timeline,
-          ...(running.inCloud === undefined ? {} : { cloudKey: running.inCloud.key }),
         });
         fs.mkdirSync(join(this.home ?? store.home, "export-maps"), { recursive: true });
         writeAtomic(mapFile(this.home ?? store.home, running.timeline), JSON.stringify(running.clips ?? clipMap(project)));
@@ -937,9 +819,7 @@ export class ExportRegistry implements seams.Exports {
       }
       // Cloud is canonical: upload, verify by size, then delete the local
       // file. Skipped when Drive will read the file next, or on request.
-      if (running.inCloud !== undefined) {
-        diag.info("export", `${id}: rendered and kept in the cloud at ${running.inCloud.key}, never copied to this Mac`);
-      } else if (!upload && !running.keepLocal && exportCloud.enabled()) {
+      if (!upload && !running.keepLocal && exportCloud.enabled()) {
         const key = exportCloudKey(id, fileName(output) ?? "export.mp4");
         const record: ExportRecord = {
           path: output, name: fileName(output) ?? output, finished_ms: nowMs(), seconds: took / 1000, bytes,

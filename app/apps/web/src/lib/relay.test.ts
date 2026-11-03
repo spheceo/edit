@@ -107,7 +107,6 @@ describe("relay atomic spend reservations", () => {
 
 describe("relay cloud endpoints", () => {
   const env = {
-    CLOUD_TOKEN: "cloud-secret",
     R2_ACCOUNT_ID: "account",
     R2_ACCESS_KEY_ID: "AKID",
     R2_SECRET_ACCESS_KEY: "SECRET",
@@ -592,7 +591,7 @@ describe("relay cloud jobs: Drive → R2", () => {
 });
 
 describe("relay cloud: Google sign-in", () => {
-  const env = { CLOUD_TOKEN: "cloud-secret", GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r" } as Env;
+  const env = { GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r" } as Env;
   const post = (route: string, body: string, token = "", given: Env = env) =>
     relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method: "POST", headers: { authorization: `Bearer ${token || PERSON}`, "content-type": "application/json", "content-length": String(body.length) }, body }), given);
   afterEach(() => { vi.unstubAllGlobals(); });

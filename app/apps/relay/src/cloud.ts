@@ -26,14 +26,11 @@
  */
 import { allow, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, ideaRefused, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
-import { cancelJob, driveJob, googleSignIn, jobStatus, proxyJob, type JobsEnv } from "./jobs";
-import { exportRoute, v3Route, type ModalEnv } from "./exports";
+import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
 import { writerCloud } from "./writer_cloud";
 import { mediaUrl, type MediaEnv } from "./media";
 
-export interface CloudEnv extends JobsEnv, ModalEnv, MediaEnv {
-  /** Edit's bearer token for /v1/cloud/* (EDIT_RELAY_TOKEN on the app side). */
-  CLOUD_TOKEN?: string;
+export interface CloudEnv extends JobsEnv, MediaEnv {
   R2_ACCOUNT_ID?: string;
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
@@ -87,8 +84,6 @@ function permissionOf(route: string): Permission | null {
 }
 
 export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv): Promise<Response> {
-  if (url.pathname.startsWith("/v1/cloud/exports/")) return exportRoute(request, url, env);
-  if (url.pathname.startsWith("/v1/cloud/v3/")) return v3Route(request, url, env);
   // Script mode's scripts, reviews and lessons, under Writer's rules (writer_cloud.ts).
   if (url.pathname.startsWith("/v1/cloud/writer/")) {
     const found = await allow(request, env, "use", url.pathname.slice("/v1/".length));
@@ -140,7 +135,6 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
         const owner = typeof body.id === "string" ? await jobOwner(env, body.id) : null;
         if (owner !== null && !(found.kind === "person" && (found.sub === owner || found.admin))) throw new Forbidden("Only who started this copy, or an admin, can cancel it.");
       }
-      if (route === "jobs/proxy") { await mayTouch({ found, env }, "write", needKey(body.manifest)); return json(200, await proxyJob(body, env, r2)); }
       if (route === "jobs/status") return json(200, await jobStatus(body, env, r2));
       if (route === "jobs/cancel") return json(200, await cancelJob(body, env, r2));
     } catch (error) {
@@ -163,16 +157,6 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
     if (error instanceof Upstream) return json(502, { error: error.message });
     throw error;
   }
-}
-
-/** `Bearer <CLOUD_TOKEN>` (now only Modal's worker token, passed as CLOUD_TOKEN), compared in constant time; refused when unset. */
-export async function cloudAuthorized(request: Request, env: CloudEnv): Promise<boolean> {
-  if (!env.CLOUD_TOKEN) return false;
-  const sent = request.headers.get("authorization") ?? "";
-  const [a, b] = await Promise.all([sha256(sent), sha256(`Bearer ${env.CLOUD_TOKEN}`)]);
-  let difference = 0;
-  for (let i = 0; i < a.length; i++) difference |= a[i] ^ b[i];
-  return difference === 0;
 }
 
 /** A Writer script's key Edit may read (`writer/scripts/…`), with the same rules as `validKey`. */

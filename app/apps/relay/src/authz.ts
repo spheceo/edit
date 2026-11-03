@@ -98,10 +98,10 @@ export function ideaRefused(found: Caller, key: string): string | null {
   return "Your account can't work on ideas yet: an admin can give you Interrogation ideas at accounts.spheceo.com.";
 }
 
-/** Where Edit writes in R2 (cloud_media.ts, covers.ts, reviews.ts, cloud_exports.ts, reports, ideas). */
+/** Where Edit writes in R2 (cloud_media.ts, covers.ts, reviews.ts, reports, ideas). */
 export const WRITABLE = [
   "edit/originals/", "edit/proxies/", "edit/excerpts/", "edit/analysis/", "edit/sound/",
-  "edit/covers/", "edit/reviews/", "edit/exports/assets/", "edit/exports/manifests/",
+  "edit/covers/", "edit/reviews/",
   // A long recording to be heard by link (transcribe_jobs.ts); the relay deletes it once heard.
   "edit/transcribe/",
   REPORTS, IDEAS, THUMBNAILS,

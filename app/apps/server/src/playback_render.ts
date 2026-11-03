@@ -16,15 +16,11 @@
 // page asks for it (`POST /api/projects/{id}/playback`) once its edits settle,
 // so the agent's dozens of changes in a turn don't each start one.
 //
-// A render lives in R2 under the picture's hash
-// (`edit/exports/playback/<project>/<hash>.mp4`, `cloudKey`) when Modal made
-// it, and before rendering a Mac looks there and plays any render of the same
-// picture at once (streamed through this server's block cache, copied down
-// behind it), so a project opened on another Mac plays straight away. Modal
-// renders only with its exports on (`EDIT_MODAL_EXPORTS`, off by default
-// since Sphe moved Edit off Modal, Nov 2); otherwise it renders here, and a
-// render Modal can't make is made here too. A Mac's own render isn't put in
-// R2 yet: whole, a 40-minute edit's is ~900 MB up from South Africa after
+// A render is made on this Mac. Before rendering, a Mac looks in R2 under the
+// picture's hash (`edit/exports/playback/<project>/<hash>.mp4`, `cloudKey`)
+// and plays any render of the same picture there at once (streamed through
+// this server's block cache, copied down behind it). A Mac's own render isn't
+// put in R2 yet: whole, a 40-minute edit's is ~900 MB up from South Africa after
 // every agent turn; it goes up chunk by chunk once renders are kept in chunks.
 //
 // The Mac's file is `<cache>/playback/<project>.mp4`; either way the status
@@ -76,7 +72,7 @@ interface Made {
   stamp: string;
   /** Whether it has sound (the edit has something heard). */
   heard?: boolean;
-  /** In R2 (made on Modal or another Mac), not on this Mac. */
+  /** In R2 (made elsewhere), not on this Mac. */
   key?: string;
 }
 
@@ -87,8 +83,6 @@ interface Running {
   progress: number;
   job: ExportJob | null;
   cancelled: boolean;
-  /** On Modal: it doesn't take the Mac, so a local export needn't stop it. */
-  cloud: boolean;
   key?: string;
   /** When it started (ms since 1970): a chunk plan older than this is another render's. */
   started: number;
@@ -130,13 +124,13 @@ function present(app: App, id: string, done: Made | undefined): done is Made {
   return done !== undefined && (done.key !== undefined || isFile(file(app, id)));
 }
 
-/** Where a picture's render lives in R2, whichever Mac (or Modal) made it (under edit/exports/: the relay keeps an installed Edit's cloud exports there). */
+/** Where a picture's render lives in R2, whichever Mac made it (under edit/exports/: the relay keeps an installed Edit's cloud exports there). */
 export function cloudKey(id: string, hash: string): string {
   return `edit/exports/playback/${id.replace(/[^A-Za-z0-9_-]/g, "_")}/${hash}.mp4`;
 }
 
 /**
- * Modal's render copied to this Mac behind the stream, so playback stops
+ * A render in R2 copied to this Mac behind the stream, so playback stops
  * leaning on the network once it's down (580 MB for 26 minutes): played from
  * the file when it's whole and still this picture's, streamed from R2 before.
  */
@@ -151,7 +145,7 @@ async function fetchLocal(app: App, id: string, key: string): Promise<void> {
   if (made.get(id)?.key !== key) fs.rmSync(local, { force: true });
 }
 
-/** This Mac's copy of a render made on Modal, when it's whole. */
+/** This Mac's copy of a render from R2, when it's whole. */
 function localCopy(app: App, id: string, key: string): string | null {
   const local = file(app, id).replace(/\.mp4$/u, `.${key.split("/").pop() ?? "cloud.mp4"}`);
   return isFile(local) ? local : null;
@@ -173,7 +167,7 @@ export function status(app: App, id: string): Status {
   // picture: no url, so nothing plays it as this one (JJ, Nov 2: "I've made
   // changes to the window screen rather than the paper, but on the screen, it
   // still shows the paper thing": the status gave the new rev with the old file).
-  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null, stream: !running.cloud };
+  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null, stream: true };
   if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url: asked.get(id) === ready?.rev ? url : null, error: null, stream: false };
   if (ready !== undefined) return { state: "ready", rev: ready.rev, progress: 1, url, error: null, stream: ready.key === undefined };
   const lost = failed.get(id);
@@ -229,7 +223,7 @@ function requestQuietly(app: App, id: string): void {
 
 /** Stops a render for an export (it carries on once the export is done). */
 export function yieldToExport(app: App): void {
-  if (running === null || running.cloud) return;
+  if (running === null) return;
   asked.set(running.project, running.rev);
   running.cancelled = true;
   running.job?.cancel();
@@ -248,41 +242,27 @@ async function next(app: App): Promise<void> {
     return void next(app);
   }
   const project = live.project;
-  const onCloud = await hooks.toCloud(project);
-  // A local export goes first (a render on Modal doesn't take the Mac); this looks again shortly.
-  if (!onCloud && exporting(app)) {
+  // A local export goes first; this looks again shortly.
+  if (exporting(app)) {
     clearTimeout(waitTimer);
     waitTimer = setTimeout(() => void next(app), WAIT_MS);
     return;
   }
-  if (running !== null || asked.get(id) === undefined) return;
   asked.delete(id);
-  const current: Running = { project: id, rev: live.rev, hash: pictureHash(project), progress: 0, job: null, cancelled: false, cloud: onCloud, started: Date.now() };
+  const current: Running = { project: id, rev: live.rev, hash: pictureHash(project), progress: 0, job: null, cancelled: false, started: Date.now() };
   running = current;
   failed.delete(id);
   publish(app, id);
   const started = performance.now();
   try {
-    // Its record and file live here whichever way it's made (Nov 1: made on Modal into a fresh data folder, its record
-    // couldn't be written, so it was never copied down and a restart would have paid Modal to make it again).
+    // Its record and file live here whichever way it's found or made.
     fs.mkdirSync(join(app.store.cacheDir(), "playback"), { recursive: true });
     const key = cloudKey(id, current.hash);
-    // A render of this very picture any Mac made (or Modal) is played as it is: opened on a new Mac, it plays at once.
+    // A render of this very picture in R2 is played as it is: opened on a new Mac, it plays at once.
     let found = false;
     if (await hooks.inCloud(key)) {
       current.key = key;
       found = true;
-    } else if (current.cloud) {
-      try {
-        await renderOnModal(app, project, current);
-      } catch (error) {
-        if (current.cancelled) throw error;
-        // Out of credit, down, or off: made here, as any other (an export starting stops it till it's done).
-        diag.warn("playback", `${project.name}: Modal couldn't make smooth playback (${diag.messageOf(error)}); rendering it here`);
-        current.cloud = false;
-        delete current.key;
-        await render(app, project, current);
-      }
     } else await render(app, project, current);
     if (!current.cancelled) {
       const stamp = `${current.hash}-${Date.now().toString(36)}`;
@@ -295,10 +275,10 @@ async function next(app: App): Promise<void> {
         if (old !== undefined && old !== current.key) fs.rmSync(file(app, id).replace(/\.mp4$/u, `.${old.split("/").pop() ?? ""}`), { force: true });
         void fetchLocal(app, id, current.key);
       } else keepRecent(app);
-      // The render it replaces, made on Modal, goes from R2 (another Mac's of this picture is the same key, kept).
+      // The render it replaces in R2 goes from there (another Mac's of this picture is the same key, kept).
       if (before?.key !== undefined && before.key !== key) void cloud.remove([before.key]).catch(() => {});
       const frames = duration(project);
-      const how = found ? "found in the cloud" : current.cloud ? "made on Modal" : "rendered here";
+      const how = found ? "found in the cloud" : "rendered here";
       diag.info("playback", `${project.name}: smooth playback of ${frames} frames ${how} in ${diag.human(performance.now() - started)}`);
     }
   } catch (error) {
@@ -314,7 +294,7 @@ async function next(app: App): Promise<void> {
   }
 }
 
-/** The render's export: the project's own size (the chunked encoder and Modal take no other), smallest quality, with sound. */
+/** The render's export: the project's own size (the chunked encoder takes no other), smallest quality, with sound. */
 function playbackOptions(): ExportOptions {
   return {
     ...native().exportDefaults(),
@@ -332,30 +312,6 @@ function playbackOptions(): ExportOptions {
     loudness: null,
     chapters: [],
   };
-}
-
-/** Whether `project` renders on Modal: every footage it plays is in the cloud and Modal exports are on. */
-async function toCloud(project: Project): Promise<boolean> {
-  try {
-    await seams.modalExports.ready();
-    if (!seams.modalExports.enabled()) return false;
-    const { plan } = native().exportPlan({ json: jsonForSerde(project) }, playbackOptions());
-    return seams.modalExports.unsuitable(project, playbackOptions(), plan) === null;
-  } catch {
-    return false;
-  }
-}
-
-/** On Modal, kept in R2 by the picture's hash; a render another Mac made of the same picture is used as it is. */
-async function renderOnModal(app: App, project: Project, current: Running): Promise<void> {
-  const key = cloudKey(project.id, current.hash);
-  current.key = key;
-  if ((await cloud.head(key).catch(() => null)) !== null) return;
-  const scratch = file(app, project.id).replace(/\.mp4$/u, ".modal.mp4");
-  await seams.modalExports.run(app.store.home, project, playbackOptions(), scratch, () => current.cancelled, (progress) => {
-    current.progress = progress;
-    publishSoon(app, project.id);
-  }, key);
 }
 
 async function render(app: App, project: Project, current: Running): Promise<void> {
@@ -442,12 +398,10 @@ function publishSoon(app: App, id: string): void {
 
 /**
  * How long an agent's turn has been over before its edit is made smooth (a
- * follow-up turn may start meanwhile); whether it would be made on Modal;
- * whether R2 has a render at a key. Tests change them.
+ * follow-up turn may start meanwhile) and whether R2 has a render at a key. Tests change them.
  */
 export const hooks = {
   afterTurnMs: 45_000,
-  toCloud: (project: Project) => toCloud(project),
   inCloud: async (key: string): Promise<boolean> => cloud.enabled() && (await cloud.head(key).catch(() => null)) !== null,
 };
 
@@ -457,8 +411,7 @@ export const hooks = {
  * edit is made smooth by itself, so it plays smoothly when someone opens it
  * (the user, Oct 31: "too many loading frame issues… the biggest issue"; a
  * 40-minute edit was only rendered once someone sat watching it): here, behind
- * any export, since Edit moved off Modal (Sphe, Nov 2), and shared in R2 for
- * the other Macs. Never on a trial server.
+ * any export. Never on a trial server.
  */
 export function start(app: App): void {
   const turns = new Map<string, number>();
@@ -484,7 +437,7 @@ export function start(app: App): void {
 /** What playback_stream.ts serves for revision `rev` of `id`: the render under way, or the one made, when it's that revision's and made here. */
 const lookup: playbackStream.Lookup = (app, id, rev) => {
   const fps = app.store.get(id)?.project.settings.fps ?? 30;
-  if (running?.project === id) return running.rev === rev && !running.cloud ? { output: file(app, id), heard: running.heard ?? true, fps, since: running.started } : null;
+  if (running?.project === id) return running.rev === rev ? { output: file(app, id), heard: running.heard ?? true, fps, since: running.started } : null;
   const done = record(app, id);
   if (!present(app, id, done) || done.key !== undefined) return null;
   // A save that changed nothing seen keeps the render (status's rule).

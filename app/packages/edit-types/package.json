@@ -6,7 +6,6 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./worker": "./src/worker.ts",
     "./problems": "./src/problems.ts",
     "./writer": "./src/writer.ts",
     "./ideas": "./src/ideas.ts",

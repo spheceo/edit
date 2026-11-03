@@ -8,16 +8,13 @@
 // The logo goes on the timeline being exported, not into the project: a
 // locked top track over everything (subtitles too) with one picture clip
 // across the export, at 10%, its x and y keyframed in straight lines from
-// wall to wall, so this Mac, Modal and an export started again after a
-// restart (its snapshot) all draw the same thing. In the cloud the picture
-// goes up first like any other (cloud_media `importLocal`), so an edit whose
-// footage is all in the cloud can still export on Modal.
+// wall to wall, so an export and one started again after a restart (its
+// snapshot) draw the same thing.
 //
 //   GET /api/watermarks    {channels: [{id, code, name}]}: the folder's pictures
 
 import * as fs from "node:fs";
 
-import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import type { App } from "./app.ts";
 import { json } from "./http/errors.ts";
@@ -199,11 +196,7 @@ export function withWatermark(project: Project, plan: Pick<Plan, "start" | "end"
   return out;
 }
 
-/**
- * The export's timeline with channel `id`'s watermark on it: the picture
- * fetched, put in the cloud when Edit's cloud is on (so Modal can take the
- * export), and laid over `plan`.
- */
+/** The export's timeline with channel `id`'s watermark on it: the picture fetched and laid over `plan`. */
 export async function addWatermark(app: Pick<App, "library">, cacheDir: string, project: Project, plan: Pick<Plan, "start" | "end">, id: string): Promise<Project> {
   let channel = (await channels(app.library)).find((one) => one.id === id);
   channel ??= (await channels(app.library, true)).find((one) => one.id === id);
@@ -211,16 +204,7 @@ export async function addWatermark(app: Pick<App, "library">, cacheDir: string, 
   const path = await logoFile(app.library, cacheDir, channel);
   const probe = await native().probe(path);
   if (probe.kind !== "image") throw new Error(`${channel.name}'s watermark isn't a picture`);
-  let made: seams.Made = { path, name: `${channel.code} watermark`, probe, cloud: null };
-  if (cloud.enabled()) {
-    try {
-      made = await seams.cloudMedia.importLocal(cacheDir, path, probe, made.name);
-    } catch (error) {
-      // Exported here then: Modal refuses a timeline with a picture only on this Mac.
-      diag.warn("watermark", `${channel.name}'s watermark couldn't go to the cloud: ${diag.messageOf(error)}`);
-    }
-  }
-  const logo: Media = { id: `watermark-${channel.code.toLowerCase()}`, name: made.name, path: made.path, kind: "image", duration: probe.duration, width: probe.width, height: probe.height, fps: probe.fps, has_audio: false, ...(made.cloud === null ? {} : { cloud: made.cloud }) };
+  const logo: Media = { id: `watermark-${channel.code.toLowerCase()}`, name: `${channel.code} watermark`, path, kind: "image", duration: probe.duration, width: probe.width, height: probe.height, fps: probe.fps, has_audio: false };
   diag.info("watermark", `${project.name}: ${channel.name}'s watermark at ${Math.round(LOOK.opacity * 100)}%`);
   return withWatermark(project, plan, logo);
 }

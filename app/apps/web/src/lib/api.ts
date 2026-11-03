@@ -161,7 +161,6 @@ export interface ExportActivity {
   path: string;
   state: "queued" | "running" | "done" | "failed" | "cancelled";
   progress: number;
-  backend: "local" | "cloud" | "modal";
   updated_ms: number;
   error?: string;
   /** Said beside it: "Trying again after the update". */

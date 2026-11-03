@@ -98,7 +98,7 @@ export function Viewer() {
   // Smooth playback: the rendered edit plays when it shows what's on screen (its
   // revision, nothing waiting to save); else the canvas draws live.
   const projectId = project?.id ?? null;
-  // Rendered here, it plays a chunk at a time as each lands, while it renders too; made on Modal, as one file.
+  // Rendered here, it plays a chunk at a time as each lands, while it renders too.
   const streamed = playback?.stream === true && (playback.state === "ready" || playback.state === "rendering") && playback.rev === rev && !dirty;
   const smooth = streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? playback.url : null;
   useEffect(() => { preview.setSmooth(smooth); }, [smooth]);

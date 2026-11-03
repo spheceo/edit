@@ -64,6 +64,7 @@ import * as cloud from "./cloud.ts";
 import { PLAYBACK_ROUTE, playbackKey, playbackPath } from "./cloud_playback.ts";
 import { proxyJob, requestProxy } from "./cloud_proxy.ts";
 import * as diag from "./diag.ts";
+import { serveFile } from "./http/files.ts";
 import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
@@ -1393,6 +1394,24 @@ async function streamingUrl(key: string): Promise<string> {
 }
 
 /**
+ * A proxy's bytes from this Mac's own copy, while it's here: the copy an
+ * import made, kept until its upload lands (`uploadLater`, then
+ * `removeWhenUploaded`). The import answers once the proxy is made, so the
+ * media's analysis started at once and read it through R2 before it was
+ * there: the thumbnails, waveform and censor check of every such import
+ * failed with a 404 (Nov 3, Robyn in custody on the old path). Null when
+ * there's no whole copy here (it's read from R2).
+ */
+export function fromLocalCopy(request: Request, cache: string, key: string): Response | null {
+  if (!key.startsWith("edit/proxies/")) return null;
+  const local = localPath(cache, key);
+  if (!isFile(local)) return null;
+  const response = serveFile(request, local);
+  response.headers.set("cache-control", "no-cache");
+  return response;
+}
+
+/**
  * A cloud medium's bytes for the preview, read from R2 by this server (the
  * range asked, passed through): never a redirect, since the bucket has no
  * CORS policy for the page (Repack proxies it for the same reason), so the
@@ -1402,7 +1421,13 @@ async function streamingUrl(key: string): Promise<string> {
  */
 export async function streamFromCloud(request: Request, cloudMedia: { proxy?: string } | null | undefined, kind: string): Promise<Response | null> {
   const key = streamKey(cloudMedia, kind);
-  if (key === null || !cloud.enabled()) return null;
+  if (key === null) return null;
+  // A proxy made on this Mac and still here (its upload behind the import): read from here.
+  if (playbackBlocks !== null) {
+    const here = fromLocalCopy(request, parent(parent(playbackBlocks)!)!, key);
+    if (here !== null) return here;
+  }
+  if (!cloud.enabled()) return null;
   // A pieced proxy (proxy_pieces.ts) is answered from its pieces, made as they're read.
   const pieced = pieces.baseOf(key);
   if (pieced !== null && playbackBlocks !== null) {

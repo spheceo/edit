@@ -717,3 +717,31 @@ test("the preview reads a medium not on this Mac through the server: ranges from
   expect(await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x"), { proxy: key }, "thumbs")).toBeNull();
   expect(await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x"), null, "proxy")).toBeNull();
 });
+
+test("a proxy made here and not uploaded yet is read from here: the import's analysis never waits on R2's 404", async () => {
+  // Nov 3: the import answered once the proxy was made, the upload behind it,
+  // and thumbnails, waveform and censor read it through R2 at once: 404 each.
+  const fixture = home("local-proxy-before-upload");
+  try {
+    const cache = fixture.store.cacheDir();
+    const key = "edit/proxies/sha256/not-uploaded-yet.mp4";
+    const bytes = new Uint8Array(50_000).map((_, index) => (index * 7) % 253);
+    const local = cloudMedia.localPath(cache, key);
+    fs.mkdirSync(local.slice(0, local.lastIndexOf("/")), { recursive: true });
+    fs.writeFileSync(local, bytes);
+    expect(mock.cloud.objects.has(key)).toBe(false);
+    const read = await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x", { headers: { range: "bytes=100-199" } }), { proxy: key }, "proxy");
+    expect(read!.status).toBe(206);
+    expect(read!.headers.get("content-range")).toBe("bytes 100-199/50000");
+    expect([...new Uint8Array(await read!.arrayBuffer())]).toEqual([...bytes.subarray(100, 200)]);
+    // Once uploaded and the copy here gone, R2's.
+    mock.cloud.objects.set(key, bytes);
+    fs.rmSync(local);
+    const later = await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x", { headers: { range: "bytes=0-9" } }), { proxy: key }, "proxy");
+    expect([...new Uint8Array(await later!.arrayBuffer())]).toEqual([...bytes.subarray(0, 10)]);
+    // Only a proxy's copy: never an original's or anything else under the cache.
+    expect(cloudMedia.fromLocalCopy(new Request("http://127.0.0.1/x"), cache, "edit/originals/sha256/x/y.mp4")).toBeNull();
+  } finally {
+    fixture.cleanup();
+  }
+});

@@ -745,3 +745,33 @@ test("a proxy made here and not uploaded yet is read from here: the import's ana
     fixture.cleanup();
   }
 });
+
+test("a proxy's blocks are read through the relay's edge cache, every other read through R2's own URL", async () => {
+  // Nov 3: the edge (the relay's media.ts) answers bounded ranges of up to 8 MiB only;
+  // FFmpeg's open-ended reads through the same URL would have been refused.
+  const fixture = home("edge-blocks");
+  const before = process.env.EDIT_EDGE_MEDIA;
+  try {
+    delete process.env.EDIT_EDGE_MEDIA;
+    const signs = () => mock.calls("/v1/cloud/r2/url", "POST").map((call) => call.json() as { key: string; edge?: boolean });
+    const key = "edit/proxies/sha256/edge-blocks.mp4";
+    mock.cloud.objects.set(key, new Uint8Array(30_000).map((_, index) => index % 249));
+    const at = signs().length;
+    const block = await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x", { headers: { range: "bytes=10-19" } }), { proxy: key }, "proxy");
+    expect(block!.status).toBe(206);
+    const open = await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x", { headers: { range: "bytes=29990-" } }), { proxy: key }, "proxy");
+    expect([...new Uint8Array(await open!.arrayBuffer())].length).toBe(10);
+    expect(signs().slice(at).map((body) => [body.key, body.edge === true])).toEqual([[key, true], [key, false]]);
+    // EDIT_EDGE_MEDIA=0: blocks through R2's own URL too.
+    process.env.EDIT_EDGE_MEDIA = "0";
+    const other = "edit/proxies/sha256/edge-off.mp4";
+    mock.cloud.objects.set(other, new Uint8Array(1_000));
+    const off = signs().length;
+    await cloudMedia.streamFromCloud(new Request("http://127.0.0.1/x", { headers: { range: "bytes=0-9" } }), { proxy: other }, "proxy");
+    expect(signs().slice(off).map((body) => body.edge === true)).toEqual([false]);
+  } finally {
+    if (before === undefined) delete process.env.EDIT_EDGE_MEDIA;
+    else process.env.EDIT_EDGE_MEDIA = before;
+    fixture.cleanup();
+  }
+});

@@ -39,7 +39,7 @@ const BITRATE = 6_000_000;
 const making = new Semaphore(1);
 const inFlight = new Map<string, Promise<string | null>>();
 
-/** Whether pieces go to R2 and come from it (EDIT_EDGE_MEDIA=1, as the edge cache's media); else this Mac's only. */
+/** Whether pieces go to R2 and come from it (EDIT_EDGE_MEDIA=1 set by hand: proxies' blocks use the edge by default, pieces stay here); else this Mac's only. */
 export function shared(): boolean {
   return process.env.EDIT_EDGE_MEDIA === "1" && cloud.enabled();
 }

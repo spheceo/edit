@@ -5,6 +5,9 @@ main = "src/index.ts"
 compatibility_date = "2026-09-07"
 workers_dev = true
 preview_urls = false
+# The edge cache (src/media.ts, Nov 3): proxies are read on the team's zone, where the Cache API
+# works (it does nothing on workers.dev). Deploying makes the custom domain and its DNS record.
+routes = [{ pattern = "media.spheceo.com", custom_domain = true }]
 
 # Secrets: in Infisical (the platform's project "Platform", dev, folder /edit-relay; CONVEX_* reference /mamagi),
 # pushed with `bun scripts/push-secrets.ts --yes` (dry run without --yes; values on wrangler's
@@ -24,6 +27,7 @@ preview_urls = false
 # (the sound library, script imports, Drive links and uploads).
 
 [vars]
+MEDIA_HOST = "media.spheceo.com"  # media.ts hands out signed proxy URLs on it (MEDIA_SECRET, a secret)
 # Comma-separated voice IDs belonging to ELEVENLABS_VOICES_KEY; all others
 # (including the existing house voice) use ELEVENLABS_MAIN_KEY.
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
@@ -145,8 +149,10 @@ new_sqlite_classes = ["ExportJobs"]
 name = "edit-relay-dev"
 workers_dev = true
 preview_urls = false
+routes = [{ pattern = "media-dev.spheceo.com", custom_domain = true }]
 
 [env.dev.vars]
+MEDIA_HOST = "media-dev.spheceo.com"
 # Thumbnails' OpenArt: the live relay holds the team's one sign-in (openart.ts); dev asks it.
 OPENART_UPSTREAM = "https://edit-relay.sphe-g-personal.workers.dev"
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"

@@ -1384,13 +1384,28 @@ export function streamKey(cloudMedia: { proxy?: string } | null | undefined, kin
 /** Signed streaming URLs by key, kept until an hour before they lapse: a block read costs R2's round trip, not the relay's too. */
 const signedStreams = new Map<string, { url: string; until: number }>();
 
-async function streamingUrl(key: string): Promise<string> {
-  const known = signedStreams.get(key);
+/**
+ * The URL a proxy's 2 MiB blocks are read from (`edge`, cloud_blocks.ts), or R2's own for any other read.
+ * Blocks go through the relay's edge cache when the relay has one (its media.ts, on media.spheceo.com since
+ * Nov 3; R2's own URL otherwise): measured from South Africa on a 2.6 GB proxy, a block took 1.2–1.4 s from R2,
+ * 0.55–0.9 s the first time through the edge and 55–92 ms after, also for another Mac's signature.
+ * EDIT_EDGE_MEDIA=0 turns it off. The edge answers bounded ranges of up to 8 MiB only, so FFmpeg's and
+ * any open-ended reads keep R2's URL.
+ */
+async function streamingUrl(key: string, edge = false): Promise<string> {
+  const viaEdge = edge && process.env.EDIT_EDGE_MEDIA !== "0";
+  const kept = `${viaEdge ? "edge" : "r2"} ${key}`;
+  const known = signedStreams.get(kept);
   if (known !== undefined && Date.now() < known.until) return known.url;
-  // EDIT_EDGE_MEDIA=1: a proxy through the relay's edge cache when the relay has one (its media.ts), else R2's own URL.
-  const url = process.env.EDIT_EDGE_MEDIA === "1" ? await cloud.presign(key, "GET", 6 * HOUR, true) : await getUrl(key, 6 * HOUR);
-  signedStreams.set(key, { url, until: Date.now() + 5 * HOUR * 1000 });
+  const url = viaEdge ? await cloud.presign(key, "GET", 6 * HOUR, true) : await getUrl(key, 6 * HOUR);
+  signedStreams.set(kept, { url, until: Date.now() + 5 * HOUR * 1000 });
   return url;
+}
+
+/** Forgets `key`'s signed URLs (a lapsed or refused one is signed again). */
+function forgetStreams(key: string) {
+  signedStreams.delete(`edge ${key}`);
+  signedStreams.delete(`r2 ${key}`);
 }
 
 /**
@@ -1442,9 +1457,9 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
   const range = request.headers.get("range");
   // The page's bounded reads come from big blocks read once and kept a while (cloud_blocks.ts); anything else straight from R2.
   if (playbackBlocks !== null) {
-    const served = await cloudBlocks.serve(playbackBlocks, key, range, () => streamingUrl(key)).catch((error: unknown) => {
+    const served = await cloudBlocks.serve(playbackBlocks, key, range, () => streamingUrl(key, true)).catch((error: unknown) => {
       diag.warn("cloud", `reading ${key} in blocks: ${diag.messageOf(error)}`);
-      signedStreams.delete(key);
+      forgetStreams(key);
       return null;
     });
     if (served !== null) return served;
@@ -1454,7 +1469,7 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
     // A signature that lapsed early (a clock off): signed again, once.
     if (answer.status === 403 && attempt === 0) {
       void answer.body?.cancel();
-      signedStreams.delete(key);
+      forgetStreams(key);
       continue;
     }
     const headers = new Headers({ "cache-control": "no-cache" });
@@ -1530,7 +1545,7 @@ export async function prefetchProject(app: App, id: string, from = 0): Promise<n
     const firstBlock = Math.max(Math.floor((size * a) / media.duration / block) - 1, 0);
     const lastBlock = Math.min(Math.ceil((size * b) / media.duration / block) + 1, Math.ceil(size / block) - 1);
     const indexes = Array.from({ length: Math.max(lastBlock - firstBlock + 1, 0) }, (_, n) => firstBlock + n);
-    bytes += await cloudBlocks.prefetch(root, key, indexes, () => streamingUrl(key), stop);
+    bytes += await cloudBlocks.prefetch(root, key, indexes, () => streamingUrl(key, true), stop);
   }
   if (bytes > 0) diag.info("cloud", `${id}: ${Math.round(bytes / 1e6)} MB of its proxies read ahead from frame ${from}`);
   return bytes;

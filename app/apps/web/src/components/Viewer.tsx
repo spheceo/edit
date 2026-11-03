@@ -346,7 +346,6 @@ function ScrubBar({ frame, duration }: { frame: number; duration: number }) {
   };
   return (
     <div
-      ref={trackRef}
       role="slider"
       aria-label="Scrub"
       aria-valuemin={0}
@@ -368,7 +367,7 @@ function ScrubBar({ frame, duration }: { frame: number; duration: number }) {
         window.addEventListener("pointercancel", up);
       }}
     >
-      <div className="relative h-1.5 w-full rounded-full bg-white/20 transition-[height] group-hover:h-2">
+      <div ref={trackRef} className="relative h-1.5 w-full rounded-full bg-white/20 transition-[height] group-hover:h-2">
         <div className="absolute inset-y-0 left-0 rounded-full bg-playhead" style={{ width: `${fraction * 100}%` }} />
         <div className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100" style={{ left: `${fraction * 100}%` }} />
       </div>

@@ -13,10 +13,12 @@ import {
   FolderOpen,
   LayoutGrid,
   ListChecks,
+  MousePointerClick,
   Music,
   RotateCcw,
   RotateCw,
   ScrollText,
+  Scissors,
   Share,
   SlidersHorizontal,
   Spline,
@@ -84,35 +86,102 @@ export function AgentPanel() {
 }
 
 /**
+ * The right-hand chat, one shell for every surface (the editor, a script, an
+ * idea, a thumbnail): the panel's card, a scroll that keeps to the newest
+ * entry unless you've scrolled up, and the composer or whatever sits under
+ * it — so what a chat gains lands in all of them at once. `bare` drops the
+ * card for a chat inside another panel (a script's grid draws its own).
+ */
+export function ChatShell({
+  children,
+  footer,
+  header,
+  loading,
+  resetKey,
+  bare,
+  className,
+  label,
+}: {
+  children?: ReactNode;
+  /** Under the scroll: the composer and what goes with it. */
+  footer?: ReactNode;
+  /** A bar above the scroll (the sub-agent's back row). */
+  header?: ReactNode;
+  loading?: boolean;
+  /** When this changes the scroll snaps back to the tail (a new chat opened). */
+  resetKey?: unknown;
+  /** No card chrome: the chat lives inside a panel that draws its own. */
+  bare?: boolean;
+  className?: string;
+  label?: string;
+}) {
+  const list = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
+  // Stay pinned to the newest message unless you've scrolled up; jump before
+  // paint so streaming text never lurches.
+  useLayoutEffect(() => {
+    const node = list.current;
+    if (node && stick.current) node.scrollTop = node.scrollHeight;
+  });
+  useLayoutEffect(() => {
+    stick.current = true;
+  }, [resetKey]);
+  return (
+    <section
+      aria-label={label}
+      // repack-chat: the script pages' base styles leave the chat's own alone (writer.css).
+      className={cx("repack-chat flex h-full min-h-0 flex-1 flex-col overflow-hidden", !bare && "rounded-xl border border-line bg-panel", className)}
+    >
+      {header}
+      <div
+        ref={list}
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
+        }}
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-3"
+      >
+        {loading ? <ChatLoading /> : children}
+      </div>
+      {footer}
+    </section>
+  );
+}
+
+/** A chat's entries as turns, plus the ids already there (they don't animate in). */
+export function useChatTurns(key: unknown, entries: AgentEntry[], running: boolean): { turns: Turn[]; known: Set<string> } {
+  const turns = buildTurns(entries, running);
+  const known = useRef<{ key: unknown; ids: Set<string> } | null>(null);
+  if (known.current?.key !== key) known.current = { key, ids: new Set(entries.map((entry) => entry.id)) };
+  return { turns, known: known.current!.ids };
+}
+
+/**
  * A sub-agent's own chat (the fresh-eyes final pass), opened from its card:
  * read as the main chat reads, Back to the main thread, Stop while it works.
  */
 function SubAgentPanel() {
   const sub = useAgent((state) => state.sub)!;
-  const list = useRef<HTMLDivElement>(null);
-  const turns = buildTurns(sub.entries, sub.running);
-  const known = useRef(new Set(sub.entries.map((entry) => entry.id)));
-  useLayoutEffect(() => {
-    const node = list.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  });
+  const { turns, known } = useChatTurns(sub.title, sub.entries, sub.running);
   return (
-    <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-2">
-        <Button variant="ghost" onClick={closeSub} aria-label="Back to the main thread" className="h-7 gap-1 px-2 text-[12px]">
-          <ArrowLeft size={14} strokeWidth={2} /> Main thread
-        </Button>
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{sub.title}</span>
-        {sub.running && (
-          <Button variant="ghost" onClick={stopSub} className="h-7 gap-1 px-2 text-[12px]">
-            <Square size={11} strokeWidth={2.4} /> Stop
+    <ChatShell
+      loading={!sub.loaded}
+      header={
+        <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line px-2">
+          <Button variant="ghost" onClick={closeSub} aria-label="Back to the main thread" className="h-7 gap-1 px-2 text-[12px]">
+            <ArrowLeft size={14} strokeWidth={2} /> Main thread
           </Button>
-        )}
-      </div>
-      <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {!sub.loaded ? <ChatLoading /> : sub.entries.length === 0 ? <Empty title="Starting" detail="A new agent is opening the edit to watch it through." /> : <ChatTurns turns={turns} known={known.current} />}
-      </div>
-    </section>
+          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{sub.title}</span>
+          {sub.running && (
+            <Button variant="ghost" onClick={stopSub} className="h-7 gap-1 px-2 text-[12px]">
+              <Square size={11} strokeWidth={2.4} /> Stop
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {sub.entries.length === 0 ? <Empty title="Starting" detail="A new agent is opening the edit to watch it through." /> : <ChatTurns turns={turns} known={known} />}
+    </ChatShell>
   );
 }
 
@@ -139,51 +208,27 @@ function SubAgentCard({ entry }: { entry: AgentEntry }) {
 function MainAgentPanel() {
   const projectId = useEditor((state) => state.project?.id);
   const { status, entries, running, loaded } = useAgent();
-  const list = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
-  const turns = buildTurns(entries, running);
-
   // Entries already there when the chat loaded don’t animate in.
-  const known = useRef<{ project?: string; ids: Set<string> }>({ ids: new Set() });
-  if (loaded && known.current.project !== projectId) known.current = { project: projectId, ids: new Set(entries.map((entry) => entry.id)) };
+  const { turns, known } = useChatTurns(loaded ? projectId : "loading", entries, running);
 
   useEffect(() => {
     if (projectId) void openAgent(projectId);
   }, [projectId]);
 
-  // Stay pinned to the newest message unless you’ve scrolled up; jump before
-  // paint so streaming text never lurches.
-  useLayoutEffect(() => {
-    const node = list.current;
-    if (node && stick.current) node.scrollTop = node.scrollHeight;
-  });
-  useLayoutEffect(() => {
-    stick.current = true;
-  }, [projectId, loaded]);
-
   return (
-    <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      <div
-        ref={list}
-        onScroll={(event) => {
-          const node = event.currentTarget;
-          stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
-        }}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
-      >
-        {!loaded ? (
-          <ChatLoading />
-        ) : !entries.length && status && !status.ready ? (
-          status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
-        ) : !entries.length ? (
-          <Empty title="Ask for an edit" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
-        ) : (
-          <ChatTurns turns={turns} known={known.current.ids} />
-        )}
-      </div>
-
-      {!(status && !status.ready) && <Composer disabled={!status?.ready} projectId={projectId} />}
-    </section>
+    <ChatShell
+      loading={!loaded}
+      resetKey={loaded ? projectId : "loading"}
+      footer={!(status && !status.ready) && <Composer disabled={!status?.ready} projectId={projectId} />}
+    >
+      {!entries.length && status && !status.ready ? (
+        status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
+      ) : !entries.length ? (
+        <Empty title="Ask for an edit" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
+      ) : (
+        <ChatTurns turns={turns} known={known} />
+      )}
+    </ChatShell>
   );
 }
 
@@ -315,6 +360,51 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
 }
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
+  // A script's run (writer/chat/turn.ts names them; their labels ride in the entry's text).
+  build_script: ScrollText,
+  plan_part: FileText,
+  read_timeline: FileText,
+  read_passages: ScrollText,
+  find_words: ScrollText,
+  remove_words: Trash2,
+  insert_words: Type,
+  arrange_word_clips: LayoutGrid,
+  arrange_time_clips: LayoutGrid,
+  insert_cut_in: Image,
+  set_reuse_link: FileText,
+  move_clips: LayoutGrid,
+  reorder_clip: LayoutGrid,
+  trim_clip: Scissors,
+  split_clip: Scissors,
+  delete_items: Trash2,
+  close_gaps: LayoutGrid,
+  set_label: Type,
+  correct_word: Type,
+  history: RotateCcw,
+  select_clips: MousePointerClick,
+  move_playhead: LayoutGrid,
+  start_export: Share,
+  inspect_frames: Eye,
+  read_assets: FileText,
+  curate_assets: Image,
+  read_doc_comments: FileText,
+  find_silences: AudioLines,
+  read_audio: AudioLines,
+  review_cuts: Eye,
+  polish_clips: Star,
+  remove_silences: AudioLines,
+  load_writing_skill: ScrollText,
+  read_script: ScrollText,
+  write_cut_ins: Type,
+  set_outline: ScrollText,
+  set_opening: Image,
+  add_section: SquarePlus,
+  finish_section: Check,
+  read_plan: ScrollText,
+  review_plan: Eye,
+  replace_items: Type,
+  remove_items: Trash2,
+  finish: Check,
   // The idea page's run (ideas/run.ts).
   save_titles: Type,
   remove_titles: Trash2,
@@ -559,6 +649,44 @@ const MARKDOWN: Components = {
 };
 
 /**
+ * A chat asking to start over, in the composer's island (ChatComposer's tray),
+ * as the queue and the notes sit: the edit's reset card, everywhere a chat
+ * asks (Sphe, Nov 3: "the shared resetting system we have on edits, across
+ * all chats"). `onAnswer(false)` rejects, `onAnswer(true)` accepts.
+ */
+export function ResetAsk({
+  title,
+  detail,
+  busy,
+  acceptLabel = "Accept and reset",
+  onAnswer,
+}: {
+  title: string;
+  detail: string;
+  busy?: boolean;
+  acceptLabel?: string;
+  onAnswer: (accept: boolean) => void;
+}) {
+  return (
+    <div className="px-3 pt-2.5 pb-2">
+      <div className="flex items-center gap-2 text-[13px] font-medium">
+        <RotateCcw size={14} className="shrink-0 text-warning" />
+        {title}
+      </div>
+      <p className="mt-1 text-[12px] leading-relaxed text-muted">{detail}</p>
+      <div className="mt-2.5 flex justify-end gap-2">
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => onAnswer(false)}>
+          Reject
+        </Button>
+        <Button size="sm" variant="primary" disabled={busy} onClick={() => onAnswer(true)}>
+          {acceptLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The agent asked to reset the edit (`reset_edit`, "reset the video"): the
  * user accepts or rejects here, and the agent, waiting on the answer, carries on.
  */
@@ -573,24 +701,12 @@ function ResetCard({ projectId }: { projectId: string }) {
       .finally(() => setAnswering(false));
   };
   return (
-    // A row of the composer's island (ChatComposer's tray), as the queue and the notes are.
-    <div className="px-3 pt-2.5 pb-2">
-      <div className="flex items-center gap-2 text-[13px] font-medium">
-        <RotateCcw size={14} className="shrink-0 text-warning" />
-        Reset the edit?
-      </div>
-      <p className="mt-1 text-[12px] leading-relaxed text-muted">
-        Every clip goes and the script is laid out again as the import left it: the footage ranges, cut-in cards and voice-overs. Media, transcripts and research stay. The edit before is kept in the project’s history.
-      </p>
-      <div className="mt-2.5 flex justify-end gap-2">
-        <Button size="sm" variant="ghost" disabled={answering} onClick={() => answer(false)}>
-          Reject
-        </Button>
-        <Button size="sm" variant="primary" disabled={answering} onClick={() => answer(true)}>
-          Accept and reset
-        </Button>
-      </div>
-    </div>
+    <ResetAsk
+      title="Reset the edit?"
+      detail="Every clip goes and the script is laid out again as the import left it: the footage ranges, cut-in cards and voice-overs. Media, transcripts and research stay. The edit before is kept in the project’s history."
+      busy={answering}
+      onAnswer={answer}
+    />
   );
 }
 

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { mediaUrl } from "../lib/api";
 import { DecodedCache } from "../lib/decoded-cache";
 import { CLIP_HEX } from "../lib/colors";
+import { drawFilmstrip } from "../lib/filmstrip";
 import {
   addElement,
   addTrack,
@@ -22,7 +23,7 @@ import {
 } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
-import { contentFrames, dimOutsideSpan, marksOf, drawMarquee, drawPlayhead, drawRuler, getLanesWidth, leftTheWindow, initialPpf, MOST_PPF, RULER, setLanesWidth, setView, useView } from "../lib/timelineView";
+import { centredScrollY, contentFrames, dimOutsideSpan, marksOf, drawMarquee, drawPlayhead, drawRuler, getLanesWidth, leftTheWindow, initialPpf, MOST_PPF, nextFollow, RULER, setLanesWidth, setView, useView } from "../lib/timelineView";
 import { uploadFiles } from "../lib/upload";
 import type { Clip, Project, Track } from "../lib/types";
 import { clipMenu, timelineMenu, trackMenu } from "../lib/menus";
@@ -156,6 +157,11 @@ export function Timeline() {
   const drop = useRef<{ frame: number; track?: string; duration: number; kind: "video" | "audio" | "element"; withAudio: boolean } | null>(null);
   const snapLine = useRef<number | null>(null);
   const drag = useRef<Drag | null>(null);
+  /** Following the playhead while it plays; off once scrolled away from it (see nextFollow). */
+  const follow = useRef(true);
+  const wasPlaying = useRef(false);
+  /** The project whose lanes have been centred on the V1/A1 divide. */
+  const centredFor = useRef("");
   const queued = useRef(0);
   /** The lanes and ruler as last drawn, and what they were drawn from (see draw). */
   const layer = useRef<{ canvas: HTMLCanvasElement; key: unknown[] } | null>(null);
@@ -202,6 +208,20 @@ export function Timeline() {
   }, [size.w, project]);
 
   useEffect(() => () => useView.setState({ fitted: false, scrollX: 0, scrollY: 0 }), [project.id]);
+
+  // Open on the divide between picture and sound (midway between V1 and
+  // A1), not on whichever effect track happens to be on top.
+  useLayoutEffect(() => {
+    if (!size.h || centredFor.current === project.id) return;
+    centredFor.current = project.id;
+    const video = rows.filter((row) => row.track.kind === "video");
+    const audio = rows.filter((row) => row.track.kind === "audio");
+    const v1 = video.at(-1);
+    const a1 = audio[0];
+    const mid = v1 && a1 ? (v1.y + v1.h + a1.y) / 2 : contentHeight / 2;
+    useView.setState({ scrollY: centredScrollY(mid, size.h, contentHeight) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.h, project.id]);
 
   // Tracks come and go (the agent drafts on new tracks above, then tidies them
   // down): keep the top lane in view where it was on screen, so the lanes being
@@ -281,6 +301,7 @@ export function Timeline() {
     const frame = (x + scrollX) / ppf;
     const next = Math.min(MOST_PPF, ppf * factor);
     setView({ ppf: next, scrollX: frame * Math.max(next, getLanesWidth() / contentFrames()) - x });
+    noteManualScroll();
   }
 
   /** The whole edit in view. */
@@ -288,13 +309,26 @@ export function Timeline() {
     setView({ ppf: 0, scrollX: 0 });
   }
 
-  function followPlayhead() {
-    if (!playhead.playing || drag.current) return;
-    const x = playheadX();
+  /** After a scroll of the person's own: follow again only if the playhead is in the view they left. */
+  function noteManualScroll() {
     const width = canvasRef.current?.clientWidth ?? 0;
-    if (x > width - 40 || x < 0) {
-      setView({ scrollX: playhead.frame * useView.getState().ppf - 40 });
+    const x = playheadX();
+    follow.current = x >= 0 && x <= width;
+  }
+
+  function followPlayhead() {
+    if (!playhead.playing) {
+      wasPlaying.current = false;
+      return;
     }
+    if (drag.current) return;
+    const justStarted = !wasPlaying.current;
+    wasPlaying.current = true;
+    const width = canvasRef.current?.clientWidth ?? 0;
+    if (!width) return;
+    const next = nextFollow({ playing: true, justStarted, following: follow.current, x: playheadX(), width });
+    follow.current = next.following;
+    if (next.page) setView({ scrollX: playhead.frame * useView.getState().ppf - 40 });
   }
 
   function rowAt(y: number) {
@@ -363,6 +397,7 @@ export function Timeline() {
     // The ruler, or the playhead’s line anywhere: grab it and scrub.
     if (y < RULER || (onPlayhead(x) && !clipAt(x, y)?.edge)) {
       drag.current = { kind: "scrub" };
+      follow.current = true;
       preview.seek(Math.round(xToFrame(x)));
       return;
     }
@@ -546,6 +581,7 @@ export function Timeline() {
     if (horizontal) {
       const amount = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
       setView({ scrollX: scrollX + amount });
+      noteManualScroll();
     } else {
       useView.setState({ scrollY: Math.min(Math.max(0, overflow), Math.max(0, scrollY + event.deltaY)) });
     }
@@ -862,7 +898,7 @@ export function Timeline() {
         </div>
         {view.graph && <GraphEditor />}
       </div>
-      <ZoomBar width={view.lanes} header={view.graph ? GRAPH_HEADER : HEADER} onFit={fit} />
+      <ZoomBar width={view.lanes} header={view.graph ? GRAPH_HEADER : HEADER} onFit={fit} onManual={noteManualScroll} />
     </section>
   );
 }
@@ -878,7 +914,7 @@ const THUMB_LEAST_SHARE = 0.06;
  * frame-level zoom. Drag it to move, drag an end to zoom, click beside it to
  * jump there, double-click to see it all.
  */
-function ZoomBar({ width, header, onFit }: { width: number; header: number; onFit: () => void }) {
+function ZoomBar({ width, header, onFit, onManual }: { width: number; header: number; onFit: () => void; onManual: () => void }) {
   const { ppf, scrollX } = useView();
   const held = useRef<{ part: "thumb" | "in" | "out"; x: number; start: number; end: number; thumb: number } | null>(null);
   const start = scrollX / ppf;
@@ -905,12 +941,14 @@ function ZoomBar({ width, header, onFit }: { width: number; header: number; onFi
     const dx = event.clientX - grip.x;
     if (grip.part === "thumb") {
       setView({ scrollX: (grip.start + (travel > 0 ? (dx * room) / travel : 0)) * ppf });
+      onManual();
       return;
     }
     // Dragging an end resizes the thumb; the other end’s moment stays put.
     const next = ppfOf(Math.max(12, Math.min(width, grip.thumb + (grip.part === "out" ? dx : -dx))));
     if (grip.part === "out") setView({ ppf: next, scrollX: grip.start * next });
     else setView({ ppf: next, scrollX: grip.end * next - width });
+    onManual();
   };
   return (
     <div className="flex h-4 shrink-0 border-t border-line">
@@ -923,6 +961,7 @@ function ZoomBar({ width, header, onFit }: { width: number; header: number; onFi
           const box = event.currentTarget.getBoundingClientRect();
           const left = event.clientX - box.left - thumbWidth / 2;
           setView({ scrollX: (travel > 0 ? (left / travel) * room : 0) * ppf });
+          onManual();
         }}
         onPointerMove={move}
         onPointerUp={() => (held.current = null)}
@@ -1043,18 +1082,14 @@ function drawClip(
     const status = statuses[clip.media];
     const image = media && w >= 8 && sprite(project, clip.media, status?.thumbs === "ready", onAsset);
     if (media && image) {
-      const count = Math.max(1, status?.thumb_count || 1);
-      const cellW = image.naturalWidth / count;
-      const th = h - header;
-      const tw = Math.max(8, (th * cellW) / image.naturalHeight);
-      const start = x0 + Math.floor((visible0 - x0) / tw) * tw;
-      for (let x = start; x < visible1; x += tw) {
-        const t = sourceAt(x + tw / 2);
-        const index = Math.min(count - 1, Math.max(0, Math.floor((t / media.duration) * count)));
-        ctx.drawImage(image, index * cellW, 0, cellW, image.naturalHeight, x, y + header, tw, th);
-      }
-      ctx.fillStyle = "rgba(0,0,0,0.18)";
-      ctx.fillRect(x0, y + header, w, h - header);
+      drawFilmstrip(
+        ctx,
+        { image, width: image.naturalWidth, height: image.naturalHeight, count: Math.max(1, status?.thumb_count || 1), duration: media.duration, rev: 0 },
+        { x: x0, y, w, h, header },
+        sourceAt,
+        visible0,
+        visible1,
+      );
     }
     ctx.fillStyle = shade(color, 0.92);
     ctx.fillRect(x0, y, w, header);

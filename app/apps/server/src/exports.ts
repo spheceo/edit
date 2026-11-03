@@ -531,6 +531,8 @@ export class ExportRegistry implements seams.Exports {
   /** A look again at the line when an export waits for room (memory, the CPU) rather than for one to end. */
   private recheck: ReturnType<typeof setTimeout> | null = null;
   private recent = new Map<string, ExportActivity>();
+  /** How an export was started, kept after it fails or is cancelled so it can be run again. Gone when it succeeds, or when the outcome leaves the recent list. */
+  private held = new Map<string, { options: ExportOptions; output: string; extra: StartExtra }>();
   /** Files exported since the server started, newest last: the only ones it hands out or reveals. */
   private finished: string[] = [];
 
@@ -593,7 +595,10 @@ export class ExportRegistry implements seams.Exports {
     this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }), ...(state === "queued" && running.waiting !== undefined ? { waiting: running.waiting } : {}) });
     // Keep every active job and only the latest completed outcomes.
     const ended = [...this.recent.values()].filter(one => one.state !== "queued" && one.state !== "running").sort((a, b) => b.updated_ms - a.updated_ms);
-    for (const old of ended.slice(20)) this.recent.delete(old.id);
+    for (const old of ended.slice(20)) {
+      this.recent.delete(old.id);
+      this.held.delete(old.id);
+    }
     store.emit({ type: "export", id: project.id, state, progress, path: running.output, ...extra });
   }
 
@@ -647,6 +652,14 @@ export class ExportRegistry implements seams.Exports {
     if (running.queued) running.cancelQueued?.();
     running.job?.cancel();
     return true;
+  }
+
+  /** How `id`'s export was started, when that export failed or was cancelled and can be run again. */
+  replay(id: string): { options: ExportOptions; output: string; extra: StartExtra } | null {
+    const outcome = this.recent.get(id);
+    const held = this.held.get(id);
+    if (held === undefined || outcome === undefined || (outcome.state !== "failed" && outcome.state !== "cancelled")) return null;
+    return { options: structuredClone(held.options), output: held.output, extra: { ...held.extra } };
   }
 
   /**
@@ -749,6 +762,18 @@ export class ExportRegistry implements seams.Exports {
       jobs.end(this.home, running.key);
       if (snapshot !== null) fs.rmSync(snapshot, { force: true });
     };
+    this.held.set(project.id, {
+      options,
+      output: path,
+      extra: {
+        ...(extra.drive === undefined ? {} : { drive: extra.drive }),
+        ...(extra.keepLocal === true ? { keepLocal: true } : {}),
+        ...(extra.share === true ? { share: true } : {}),
+        ...(extra.note === undefined ? {} : { note: extra.note }),
+        ...(extra.watermark === undefined ? {} : { watermark: extra.watermark }),
+        ...(extra.replace === true ? { replace: true } : {}),
+      },
+    });
     this.localQueue.push({ running, start: () => {
       void this.run(store, library, project, options, plan, path, running, upload, () => this.releaseOne());
     }, notify: () => {
@@ -880,6 +905,7 @@ export class ExportRegistry implements seams.Exports {
         // Gone already.
       }
       emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload });
+      this.held.delete(id);
       if (this.home !== null) noteFailure(this.home, id, null);
       try {
         remember(this.home ?? store.home, id, {

@@ -1,7 +1,10 @@
-import { type CSSProperties, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChatLog, Composer, ResetAsk, useChatDraft } from "./agent";
-import { AgentTurn, ChatNotice, UserMessage } from "./chat/chat-log";
-import { buildStatus, clearChat, completeTranscription, correctWord, editProject, getChat, getResearch, getScript, importReuses, message, previewSrc, resetScript, resolveProposals, restoreVersion, retrySpeakers, saveClips, setHeading, startBuild, startEdit, startRevision, stopJob } from "./api";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useChatDraft } from "./agent";
+import { ChatShell, ChatTurns, Empty, ResetAsk } from "../components/AgentPanel";
+import { ChatComposer } from "../components/ChatComposer";
+import { buildTurns } from "../lib/agentTurns";
+import { savedEntryIds, scriptEntries } from "./chat/editor-entries";
+import { buildStatus, completeTranscription, correctWord, editProject, getChat, getResearch, getScript, importReuses, message, previewSrc, resetScript, resolveProposals, restoreVersion, retrySpeakers, saveClips, setHeading, startBuild, startEdit, startRevision, stopJob } from "./api";
 import { navigate } from "../lib/route";
 import { breathe, clock, insertAt, isCutIn, keptMs, purposes, splitClip } from "./clips";
 import { Avatar } from "./avatar";
@@ -15,10 +18,10 @@ import { Monitor } from "./monitor";
 import { clipStarts, editedPosition, newPlayer, Playhead } from "./playback";
 import { Timeline } from "./timeline";
 import { type Picked, ResearchList, Transcript, useSpeakers } from "./transcript";
-import type { BuildStatus, ChatTurn, Clip, Highlight, Kind, Research, Script } from "./types";
+import type { BuildStatus, ChatTurn, Clip, Highlight, Research, Script } from "./types";
 import { FOOTAGE_SHORTCUTS, Shortcuts } from "./shortcuts";
 import { BandTip, bandsOf, ReviewButton, ReviewDialog, useReview, ArchivedBanner } from "./review";
-import { Dialog, Icon, Menu } from "./ui";
+import { Icon, Menu } from "./ui";
 
 export type View = "video" | "script" | "split";
 const VIEWS: { value: View; label: string }[] = [
@@ -103,12 +106,6 @@ export function ViewTabs({ view, onChange, views = VIEWS }: { view: View; onChan
   );
 }
 
-const KINDS: { value: Kind; label: string }[] = [
-  { value: "interrogation", label: "Interrogation" },
-  { value: "foia", label: "Bodycam" },
-  { value: "courtroom", label: "Courtroom" },
-];
-
 /** When the last build of a script whose outcome was shown here ended; or marks one shown. */
 export function seen(id: string, finishedAt?: number | null) {
   const key = `writer.build-seen.${id}`;
@@ -162,7 +159,6 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   const [chat, setChat] = useState<ChatTurn[]>([]);
   // What was just asked, shown until the conversation on disk has it.
   const [sent, setSent] = useState<string | null>(null);
-  const [clearing, setClearing] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [research, setResearch] = useState<Research | null>(null);
   const [note, setNote] = useChatDraft(script.id);
@@ -480,16 +476,16 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
 
   // Once the script is built, a message asks Opus for targeted edits, as
   // Repack's chat does, with what the producer has selected as "this".
-  const revise = async (retry?: string) => {
-    const words = (retry ?? note).trim();
+  const revise = async (given?: string, applyQuote = false) => {
+    const words = (given ?? note).trim();
     // A quote across paragraphs (or the whole script) belongs to no one narration.
-    const request = quote && !retry ? (quote.id === "" ? `Quoted from the script:\n“${quote.quote}”\n\n${words}` : `Quoted from narration ${quote.narrationNumber} (clip ${quote.id}, characters ${quote.start}–${quote.end}):\n“${quote.quote}”\n\n${words}`) : words;
+    const request = quote && applyQuote ? (quote.id === "" ? `Quoted from the script:\n“${quote.quote}”\n\n${words}` : `Quoted from narration ${quote.narrationNumber} (clip ${quote.id}, characters ${quote.start}–${quote.end}):\n“${quote.quote}”\n\n${words}`) : words;
     if (!request) return;
     setError(null);
     setStage("Editing the script");
     try {
       const job = await startRevision(script.id, request, {
-        selected: quote && !retry && quote.id !== "" ? [quote.id] : selected,
+        selected: quote && applyQuote && quote.id !== "" ? [quote.id] : selected,
         picked: picked ? [picked.startMs, picked.endMs] : null,
         playheadMs: Math.round(playhead.ms),
       });
@@ -581,6 +577,14 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   };
 
   const ready = script.words.length > 0;
+  // The chat as the editor's chat shows it: same turns, same composer,
+  // only the script's tools and send behind them.
+  const chatEntries = scriptEntries(chat, working ? liveTurn : null, working ? sent : null);
+  const chatTurns = buildTurns(chatEntries, working);
+  const chatKnown = savedEntryIds(chat);
+  const resetTurn = chat.find((turn) => turn.reset === "pending");
+  const lastTurn = chat.at(-1);
+  const retryTurn = !busy && lastTurn?.role === "producer" ? lastTurn : !busy && chat.at(-2)?.role === "producer" && !!chat.at(-1)?.failed ? chat.at(-2) : undefined;
   return (
     <div className="studio">
       <header className="topbar" data-tauri-drag-region>
@@ -591,7 +595,6 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           <span>Scripts</span>
           <span>/</span>
           <h1>{script.title}</h1>
-          <span className="script-format">{KINDS.find((item) => item.value === script.kind)?.label ?? "Interrogation"}{script.compilation ? " compilation" : ""}</span>
           <Avatar creator={script.createdBy} size={24} />
           {saving && <span className={saving === "saved" ? "save-state ok" : "save-state"}>{saving === "saved" ? "Saved" : "Saving…"}</span>}
         </div>
@@ -789,6 +792,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           words={script.words}
           overview={script.overview}
           durationMs={script.durationMs}
+          preview={src}
           parts={script.parts}
           labels={labels}
           playhead={playhead}
@@ -798,161 +802,107 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           onSelect={setSelected}
           onEdit={(next) => void persist(next)}
         />
-        <aside className="agent" aria-label="Claude">
-          <div className="agent-head">
-            <div className="panel-tabs" role="tablist">
-              <button type="button" role="tab" aria-selected>
-                Claude
+        <ChatShell
+      bare
+      className="agent"
+      label="Claude"
+      footer={
+        <ChatComposer
+          chat={`script:${script.id}`}
+          value={note}
+          onValueChange={setNote}
+          allowEmpty={!cueCount}
+          running={working}
+          disabled={busy || !ready}
+          modelName="Opus 5.5"
+          quote={quote ? `Narration ${quote.narrationNumber}: “${quote.quote}”` : undefined}
+          onClearQuote={() => setQuote(null)}
+          hint={!ready ? "Transcribe the footage first" : undefined}
+          tray={
+            resetTurn ? (
+              <ResetAsk
+                title="Reset the script?"
+                detail="Every clip and cut-in goes, and the script is laid out again as the import left it. The transcript, speakers, sources and research stay. The script before is kept in Versions."
+                busy={busy}
+                onAnswer={(accept) => void resetScript(script.id, accept).then((fresh) => { remember(shown.current); onChange(fresh); setClips(fresh.clips); shown.current = fresh.clips; revision.current = fresh.revision; void getChat(script.id).then(setChat, () => {}); }, (cause) => setError(message(cause)))}
+              />
+            ) : undefined
+          }
+          placeholder={
+            archived
+              ? "The footage is archived: restore it to change the script"
+              : busy
+                ? "Claude is working…"
+                : quote
+                  ? "What should we do with this passage?"
+                  : cueCount
+                    ? "Ask for a change, e.g. tighten the intro, rewrite cut-in 4 shorter, fix the edges…"
+                    : "Notes for the build (optional), e.g. aim for 30 minutes…"
+          }
+          onSend={(text) => void (cueCount ? revise(text, true) : build(text))}
+          onStop={() => void stopJob(script.id).catch((cause) => setError(message(cause)))}
+        />
+      }
+    >
+      {!cueCount && !busy && !chat.length && (
+            <Empty title="Write the script" detail="Claude Opus reads the whole transcript with Repack's cut-in guide, picks every clip and writes each cut-in. It takes a few minutes.">
+              {script.noSpeech && <p className="mx-auto mt-2 max-w-[270px] text-center text-[12px] leading-relaxed text-muted">No words were heard in this footage, so it has no transcript. Cut it by time on the timeline.</p>}
+            </Empty>
+          )}
+          <ReusedCases
+            script={script}
+            busy={busy}
+            onImport={(urls) => void bringReuses(urls)}
+            onPlay={(moment: Highlight) => player.audition(moment.startMs)}
+            onInsert={insertMoment}
+          />
+          {notesShown && !!script.notes?.length && (
+            <div className="rounded-lg border border-line px-3 py-2 text-[12.5px] leading-relaxed text-muted">
+              <ul className="list-disc space-y-1 pl-4">
+                {script.notes.map((text) => (
+                  <li key={text}>{text}</li>
+                ))}
+              </ul>
+              {unfinishedSpeakers && <button type="button" className="mt-2 text-fg underline underline-offset-2" disabled={busy} onClick={() => void retrySpeakers(script.id).then((job) => follow(job.startedAt), (cause) => setError(message(cause)))}>Retry unfinished speaker checks</button>}
+              <button type="button" className="mt-2 block text-faint hover:text-fg" onClick={() => setNotesShown(false)}>
+                Dismiss
               </button>
             </div>
-          </div>
-          <ChatLog trigger={`${chat.length}:${sent ?? ""}:${busy}`}>
-            {!cueCount && !busy && !chat.length && (
-              <div className="agent-empty">
-                <h2>Write the script</h2>
-                <p>
-                  Claude Opus reads the whole transcript with Repack's cut-in guide, picks every clip and writes each cut-in. It takes a few minutes.
-                </p>
-                {script.noSpeech && <p>No words were heard in this footage, so it has no transcript. Cut it by time on the timeline.</p>}
-              </div>
-            )}
-            <ReusedCases
-              script={script}
-              busy={busy}
-              onImport={(urls) => void bringReuses(urls)}
-              onPlay={(moment: Highlight) => player.audition(moment.startMs)}
-              onInsert={insertMoment}
-            />
-            {notesShown && !!script.notes?.length && (
-              <div className="turn notes">
-                <ul>
-                  {script.notes.map((text) => (
-                    <li key={text}>{text}</li>
-                  ))}
-                </ul>
-                {unfinishedSpeakers && <button type="button" className="tool" disabled={busy} onClick={() => void retrySpeakers(script.id).then((job) => follow(job.startedAt), (cause) => setError(message(cause)))}>Retry unfinished speaker checks</button>}
-                <button type="button" className="link-button faint" onClick={() => setNotesShown(false)}>
-                  Dismiss
-                </button>
-              </div>
-            )}
-            {chat.map((turn, index) =>
-              turn.role === "producer" ? (
-                <UserMessage key={`${turn.at}-${index}`} text={turn.text} at={new Date(turn.at).toISOString()} onRetry={!busy && (index === chat.length - 1 || (index === chat.length - 2 && !!chat[index + 1].failed)) ? () => void (cueCount ? revise(turn.text) : build(turn.text.replace(/^Build the script\.?\s*/i, ""))) : undefined} />
-              ) : (
-                <Fragment key={`${turn.at}-${index}`}>
-                  {/* Repack's chat: the answer with its tools folded behind how long it worked; a failure as its notice. A reset asks with its own line and card. */}
-                  {!turn.reset && !turn.failed && <AgentTurn text={turn.text} trace={turn.trace} workedMs={turn.workedMs} partial={turn.partial} at={new Date(turn.at).toISOString()} />}
-                  {!turn.reset && turn.failed && !!turn.trace?.length && <AgentTurn text="" trace={turn.trace} workedMs={turn.workedMs} partial={turn.partial} at={new Date(turn.at).toISOString()} />}
-                  {!turn.reset && turn.failed && <ChatNotice>{turn.text}</ChatNotice>}
-                  {turn.reset && (
-                    <ResetAsk
-                      state={turn.reset}
-                      busy={busy}
-                      onAnswer={(accept) =>
-                        void resetScript(script.id, accept).then(
-                          (fresh) => {
-                            remember(shown.current);
-                            onChange(fresh);
-                            setClips(fresh.clips);
-                            shown.current = fresh.clips;
-                            revision.current = fresh.revision;
-                            void getChat(script.id).then(setChat, () => {});
-                          },
-                          (cause) => setError(message(cause)),
-                        )
-                      }
-                    />
-                  )}
-                </Fragment>
-              ),
-            )}
-            {sent && working && <UserMessage text={sent} />}
-            {cueCount > 0 && !busy && !chat.length && (
-              <div className="turn">
-                <p className="muted">
-                  {clock(keptMs(clips))} cut · {cueCount} cut-ins. Ask for a change below: Claude edits the script where it needs to, and undo brings back what it changed.
-                </p>
-              </div>
-            )}
-            {!!script.proposals?.length && !busy && (
-              <div className="proposals-note">
-                <span>
-                  {script.proposals.length === 1 ? "A rewrite is" : `${script.proposals.length} rewrites are`} waiting for your review beside the narration.
-                </span>
-                {view === "video" && (
-                  <button type="button" className="link-button" onClick={() => setView("script")}>
-                    Review in Script view
-                  </button>
-                )}
-              </div>
-            )}
-            {working && (
-              <AgentTurn
-                live
-                text={liveTurn?.text ?? ""}
-                trace={liveTurn?.trace}
-                waitingLabel={stage || "Thinking"}
-                since={started}
-                waitingNote={
-                  stage === "Editing the script"
-                    ? "Edits usually take a minute or two."
-                    : /reused/i.test(stage) || stage.startsWith("Adding the footage")
-                      ? "Each reused case is downloaded, transcribed and read for its strongest moments. A long video takes several minutes."
-                      : "Long footage takes 5 to 15 minutes. You can keep reading the transcript meanwhile."
-                }
-              />
-            )}
-          </ChatLog>
-          <Composer
-            onStop={working ? () => void stopJob(script.id).catch((cause) => setError(message(cause))) : undefined}
-            value={note}
-            disabled={busy}
-            canSend={!busy && ready && (!cueCount || !!note.trim())}
-            label={cueCount ? "Ask for a change" : "Build the script"}
-            model="Opus 5.5"
-            quote={quote ? `Narration ${quote.narrationNumber}: “${quote.quote}”` : undefined}
-            onClearQuote={() => setQuote(null)}
-            onNewChat={chat.length > 0 ? () => setClearing(true) : undefined}
-            placeholder={
-              archived
-                ? "The footage is archived: restore it to change the script"
-                : busy
-                ? "Claude is working…"
-                : quote ? "What should we do with this passage?" : cueCount
-                  ? "Ask for a change, e.g. tighten the intro, rewrite cut-in 4 shorter, fix the edges…"
-                  : "Notes for the build (optional), e.g. aim for 30 minutes…"
-            }
-            hint={!ready ? "Transcribe the footage first" : undefined}
-            onChange={setNote}
-            onSend={() => void (cueCount ? revise() : build())}
-          />
-        </aside>
-      </div>
-      <Dialog
-        open={clearing}
-        onClose={() => setClearing(false)}
-        title="Start a new conversation?"
-        description="This conversation with Claude is cleared. The script stays exactly as it is."
-        width={400}
-        footer={
-          <>
-            <span className="spacer" />
-            <button type="button" className="ghost" onClick={() => setClearing(false)}>Cancel</button>
-            <button
-              type="button"
-              className="primary"
-              data-autofocus
-              onClick={() => {
-                setClearing(false);
-                void clearChat(script.id).then(() => setChat([]), (cause) => setError(message(cause)));
-              }}
-            >
-              New conversation
+          )}
+          {chatTurns.length > 0 && <ChatTurns turns={chatTurns} known={chatKnown} thinking={working ? stage || undefined : undefined} />}
+          {retryTurn && (
+            <button type="button" className="h-7 w-fit rounded-md px-2 text-[12px] text-faint hover:bg-hover hover:text-fg" onClick={() => void (cueCount ? revise(retryTurn.text) : build(retryTurn.text.replace(/^Build the script\.?\s*/i, "")))}>
+              Retry that message
             </button>
-          </>
-        }
-      />
+          )}
+          {cueCount > 0 && !busy && !chat.length && (
+            <p className="px-1.5 text-[13px] leading-relaxed text-muted">
+              {clock(keptMs(clips))} cut · {cueCount} cut-ins. Ask for a change below: Claude edits the script where it needs to, and undo brings back what it changed.
+            </p>
+          )}
+          {!!script.proposals?.length && !busy && (
+            <div className="rounded-lg border border-line px-3 py-2 text-[12.5px] leading-relaxed text-muted">
+              <span>
+                {script.proposals.length === 1 ? "A rewrite is" : `${script.proposals.length} rewrites are`} waiting for your review beside the narration.
+              </span>
+              {view === "video" && (
+                <button type="button" className="block text-fg underline underline-offset-2" onClick={() => setView("script")}>
+                  Review in Script view
+                </button>
+              )}
+            </div>
+          )}
+          {working && (
+            <p className="px-1.5 text-[12px] leading-relaxed text-faint">
+              {stage === "Editing the script"
+                ? "Edits usually take a minute or two."
+                : /reused/i.test(stage) || stage.startsWith("Adding the footage")
+                  ? "Each reused case is downloaded, transcribed and read for its strongest moments. A long video takes several minutes."
+                  : "Long footage takes 5 to 15 minutes. You can keep reading the transcript meanwhile."}
+            </p>
+          )}
+        </ChatShell>
+      </div>
       <VersionsDialog
         open={versionsOpen}
         script={script}

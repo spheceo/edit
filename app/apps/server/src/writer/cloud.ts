@@ -306,12 +306,63 @@ export async function removeUnder(prefix: string, keys: string[]): Promise<numbe
 
 const transferProblem = (error: unknown, name: string): Problem => new Problem(`${name} didn't get through (${diag.messageOf(error)}).`, true);
 
-/** Uploads a file, its progress shown as it goes: in parts past MULTIPART_OVER. */
-async function upload(script: string, name: string, path: string, key: string): Promise<number> {
+/**
+ * A file as a PUT body that reports bytes as the request takes them, a MiB at
+ * a time (S3 wants a Content-Length, never chunked). The handle closes when
+ * the body finishes or the request drops it.
+ */
+function fileBody(path: string, size: number, onProgress: (done: number) => void): ReadableStream<Uint8Array> {
+  const handle = fs.openSync(path, "r");
+  let done = 0;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    fs.closeSync(handle);
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        try {
+          if (done >= size) {
+            onProgress(size);
+            close();
+            controller.close();
+            return;
+          }
+          const piece = Buffer.alloc(Math.min(1024 * 1024, size - done));
+          const got = fs.readSync(handle, piece, 0, piece.length, done);
+          if (got <= 0) {
+            onProgress(size);
+            close();
+            controller.close();
+            return;
+          }
+          done += got;
+          onProgress(done);
+          controller.enqueue(new Uint8Array(piece.buffer, piece.byteOffset, got));
+        } catch (error) {
+          close();
+          controller.error(error);
+        }
+      },
+      cancel() {
+        close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+/** Uploads a file, its progress shown as it goes: in parts past MULTIPART_OVER. `onProgress` is told bytes as they go, including a file under that size. */
+async function upload(script: string, name: string, path: string, key: string, onProgress?: (done: number, total: number) => void): Promise<number> {
   const size = fs.statSync(path).size;
-  const shown = (done: number) => (status.transfer = { script, name, up: true, done, total: size });
+  const shown = (done: number) => {
+    status.transfer = { script, name, up: true, done, total: size };
+    onProgress?.(Math.min(done, size), size);
+  };
   if (size <= MULTIPART_OVER) {
-    const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: Bun.file(path), headers: { "content-length": String(size) }, signal: AbortSignal.timeout(600_000) }).catch((error: unknown) => {
+    const answer = await fetch(await presign(key, "PUT"), { method: "PUT", body: onProgress ? fileBody(path, size, shown) : Bun.file(path), headers: { "content-length": String(size) }, signal: AbortSignal.timeout(600_000), ...(onProgress ? { duplex: "half" } : {}) } as RequestInit).catch((error: unknown) => {
       throw transferProblem(error, name);
     });
     if (!answer.ok) throw new Problem(`The cloud refused ${name} (${answer.status}).`);
@@ -415,8 +466,8 @@ export async function putBytes(key: string, bytes: Uint8Array | string, contentT
   if (!answer.ok) throw new Problem(`The cloud refused ${key.split("/").pop()} (${answer.status}).`);
 }
 
-/** Uploads a file to a key, its progress shown under `script` as the sync's is. */
-export const putFile = (script: string, key: string, path: string): Promise<number> => upload(script, path.split("/").pop() ?? "file", path, key);
+/** Uploads a file to a key, its progress shown under `script` as the sync's is. `onProgress` hears bytes as they go. */
+export const putFile = (script: string, key: string, path: string, onProgress?: (done: number, total: number) => void): Promise<number> => upload(script, path.split("/").pop() ?? "file", path, key, onProgress);
 
 /** The size of what's at a key, or null when nothing is there. */
 export async function head(key: string): Promise<number | null> {

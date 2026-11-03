@@ -241,9 +241,10 @@ function fileSource(fd: number): Source {
   };
 }
 
-/** Uploads the file at `path` to `key`: one PUT under 64 MiB, else multipart. */
-export async function uploadFile(path: string, key: string, progress: Report = () => {}): Promise<void> {
+/** Uploads the file at `path` to `key`: one PUT under 64 MiB, else multipart. `signal` stops it (a share the person cancelled). */
+export async function uploadFile(path: string, key: string, progress: Report = () => {}, signal?: AbortSignal): Promise<void> {
   checkKey(key);
+  if (signal?.aborted) throw new Error("the share was cancelled");
   await diag.timeOnAsync("cloud", "cloud: upload file", `${path} → ${key}`, async () => {
     let fd: number;
     let size: number;
@@ -254,7 +255,7 @@ export async function uploadFile(path: string, key: string, progress: Report = (
       throw new Error(ioMessage(error));
     }
     try {
-      const sent = await upload(fileSource(fd), key, size, partSize(timing.filePart, size), FILE_PARALLEL, progress);
+      const sent = await upload(fileSource(fd), key, size, partSize(timing.filePart, size), FILE_PARALLEL, progress, signal);
       if (sent !== size) throw new TransferMismatch({ message: `${path} changed while uploading (${size} bytes, sent ${sent})` });
     } finally {
       fs.closeSync(fd);
@@ -386,7 +387,9 @@ async function upload(
   part: number,
   parallel: number,
   report: Report,
+  signal?: AbortSignal,
 ): Promise<number> {
+  if (signal?.aborted) throw new Error("the share was cancelled");
   const progress = new Progress(total ?? 0, report);
   const kind = contentType(key);
   const first = await readPart(source, part);
@@ -394,17 +397,18 @@ async function upload(
     // It all fits in one request.
     await retry(`upload of ${key}`, async () => {
       const url = await presign(key, "PUT");
-      await put(url, first, kind, progress);
+      await put(url, first, kind, progress, signal);
     });
     const size = first.length;
     report(size, total ?? size);
     return size;
   }
+  if (signal?.aborted) throw new Error("the share was cancelled");
   const created = await relayJson("r2/multipart/create", { key, contentType: kind });
   if (typeof created.uploadId !== "string") throw lacking("the relay gave no upload id");
   const uploadId = created.uploadId;
   try {
-    const size = await multipart(source, key, uploadId, first, part, parallel, progress);
+    const size = await multipart(source, key, uploadId, first, part, parallel, progress, signal);
     report(size, total ?? size);
     return size;
   } catch (error) {
@@ -430,6 +434,7 @@ async function multipart(
   part: number,
   parallel: number,
   progress: Progress,
+  signal?: AbortSignal,
 ): Promise<number> {
   let failed = false;
   let error: unknown = null;
@@ -443,13 +448,17 @@ async function multipart(
   let number = 1;
   let data = first;
   for (;;) {
+    if (signal?.aborted) {
+      fail(new Error("the share was cancelled"));
+      break;
+    }
     const length = data.length;
     size += length;
     while (inFlight.size >= Math.max(parallel, 1)) await Promise.race(inFlight);
     if (!failed) {
       const sending = number;
       const bytes = data;
-      const job: Promise<void> = putPart(key, uploadId, sending, bytes, progress)
+      const job: Promise<void> = putPart(key, uploadId, sending, bytes, progress, signal)
         .then((etag) => {
           etags.push([sending, etag]);
         }, fail)
@@ -483,13 +492,13 @@ async function multipart(
 }
 
 /** One part, retried with a fresh URL; its ETag. */
-function putPart(key: string, uploadId: string, number: number, data: Uint8Array, progress: Progress): Promise<string> {
+function putPart(key: string, uploadId: string, number: number, data: Uint8Array, progress: Progress, signal?: AbortSignal): Promise<string> {
   return retry(`part ${number} of ${key}`, async () => {
     const answer = await relayJson("r2/multipart/urls", { key, uploadId, parts: [number] });
     const urls = answer.urls as Record<string, unknown> | undefined;
     const url = urls !== undefined && urls !== null && typeof urls === "object" ? urls[String(number)] : undefined;
     if (typeof url !== "string") throw lacking("the relay gave no part URL");
-    const etag = await put(url, data, null, progress);
+    const etag = await put(url, data, null, progress, signal);
     if (etag === null) throw new service.AnswerInvalid({ service: "R2", message: "R2 gave no ETag for the part" });
     return etag;
   });
@@ -512,7 +521,7 @@ export function retry<T>(what: string, attempt: () => Promise<T>): Promise<T> {
       Effect.retry(
         Schedule.recurs(ATTEMPTS - 1).pipe(
           Schedule.setInputType<Error>(),
-          Schedule.while(({ input }) => !isBug(input) && service.isTemporary(input)),
+          Schedule.while(({ input }) => !isBug(input) && !diag.messageOf(input).includes("was cancelled") && service.isTemporary(input)),
           Schedule.tap(({ input }) =>
             Effect.logWarning(`${what} failed (try ${tries}): ${diag.messageOf(input)}`).pipe(Effect.andThen(Effect.promise(() => timing.sleep((1 << tries) * 1000)))),
           ),
@@ -601,12 +610,14 @@ function unref(timer: unknown): void {
  * never chunked), a MiB at a time as the request takes it (that's the
  * progress); the ETag R2 answered with.
  */
-async function put(url: string, data: Uint8Array, kind: string | null, progress: Progress): Promise<string | null> {
+async function put(url: string, data: Uint8Array, kind: string | null, progress: Progress, signal?: AbortSignal): Promise<string | null> {
+  if (signal?.aborted) throw new Error("the share was cancelled");
   let written = 0;
   const stall = new Stall();
   const body = new ReadableStream<Uint8Array>(
     {
       pull(controller) {
+        if (signal?.aborted) throw new Error("the share was cancelled");
         if (written >= data.length) {
           controller.close();
           return;
@@ -623,11 +634,13 @@ async function put(url: string, data: Uint8Array, kind: string | null, progress:
   );
   const headers: Record<string, string> = { "content-length": String(data.length) };
   if (kind !== null) headers["content-type"] = kind;
+  const stop = signal === undefined ? stall.signal : AbortSignal.any([stall.signal, signal]);
   try {
     let response: Response;
     try {
-      response = await fetch(url, { method: "PUT", body, headers, signal: stall.signal, duplex: "half" } as RequestInit);
+      response = await fetch(url, { method: "PUT", body, headers, signal: stop, duplex: "half" } as RequestInit);
     } catch (error) {
+      if (signal?.aborted || diag.messageOf(error).includes("was cancelled")) throw new Error("the share was cancelled");
       throw unreached(`could not reach R2: ${diag.scrub(stall.why(error))}`, stall.reason !== null);
     }
     const text = await response.text().catch(() => "");

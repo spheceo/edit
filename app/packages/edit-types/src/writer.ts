@@ -141,8 +141,8 @@ export type Script = {
   captions?: boolean;
   /** The stretches (ms) of captioned footage heard exactly since: their words have Scribe's times and spelling. */
   exact?: [number, number][];
-  /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). */
-  sharing?: { startedAt: number };
+  /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). `stage` is how far it is, as the share dialog prints it. */
+  sharing?: { startedAt: number; stage?: string };
   /** The last share failed: why. */
   shareFailed?: { error: string; at: number };
   revision: number;
@@ -161,8 +161,8 @@ export type Summary = {
   firstBuild?: boolean;
   dismissedAt?: number;
   archive?: Archive;
-  /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). */
-  sharing?: { startedAt: number };
+  /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). `stage` is how far it is. */
+  sharing?: { startedAt: number; stage?: string };
   /** The last share failed: why. */
   shareFailed?: { error: string; at: number };
   createdBy?: Creator;

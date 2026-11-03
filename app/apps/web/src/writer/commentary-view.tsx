@@ -1,6 +1,10 @@
 import { pickFile } from "./pick";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ChatLog, Composer, Elapsed, ResetAsk, Said, Working, useChatDraft } from "./agent";
+import { Elapsed, Said, Working, useChatDraft } from "./agent";
+import { ChatShell, ChatTurns, Empty, ResetAsk } from "../components/AgentPanel";
+import { ChatComposer } from "../components/ChatComposer";
+import { buildTurns } from "../lib/agentTurns";
+import type { AgentEntry } from "../lib/agent";
 import { stopJob, addSource, getChat, previewSrc, resetScript, buildStatus, findClips, footageUrl, getFeedback, getFinds, getFootage, getScript, startLearning, setPacing, listScripts, message, removeSource, saveDraft, sourceText, startBuild, startRevision, updateSource } from "./api";
 import { clock } from "./clips";
 import { commentaryDocument, liveMarks, narrationWords, noteLines, timing, totalLine, WORDS_PER_MINUTE } from "./commentary";
@@ -486,15 +490,6 @@ export function CommentaryEditor({
       return false;
     }
   };
-  const send = () => {
-    if (busy || !ready || (draft && !note.trim())) return;
-    void (draft && !rewriting ? revise(note) : build(note)).then((done) => {
-      if (!done) return;
-      setNote("");
-      setRewriting(false);
-    });
-  };
-
   return (
     <div className="studio">
       <header className="topbar" data-tauri-drag-region>
@@ -673,106 +668,107 @@ export function CommentaryEditor({
               <FoundClips id={script.id} finds={finds} busy={busy} canFind={sources.some((source) => source.role === "brief")} onFind={() => void find()} />
             </>
           ) : tab === "claude" ? (
-            <>
-              <ChatLog trigger={`${said}${sent}${busy}${stage}`}>
-                {!draft && !busy ? (
-                  <div className="agent-empty">
-                    <h2>Write the script</h2>
-                    <p>
-                      Claude Opus reads every source: the brief for the angle, the evidence to quote from, and past scripts for the
-                      voice. It writes the whole script, and Writer checks every quote and link against the sources.
-                    </p>
-                    {!ready && (
-                      <p>
-                        <button type="button" className="link-button" onClick={() => setTab("sources")}>Add the brief or some evidence</button> first.
-                      </p>
-                    )}
+            <ChatShell
+              bare
+              footer={
+                <>
+                  <div className="pacing-pick">
+                    <Select
+                      size="sm"
+                      value={script.commentary?.pacing ?? "channel"}
+                      disabled={busy}
+                      label="Pacing for the next build"
+                      options={PACINGS.map((item) => ({ value: item.value, label: item.label }))}
+                      onChange={(pacing) => void change(setPacing(script.id, pacing))}
+                    />
                   </div>
-                ) : (
-                  <>
-                    {said && !(working && !draft) && !(reset === "pending" && !working) && <Said text={said} costUsd={report && !working ? report.costUsd : 0} />}
-                    {reset === "pending" && !working && (
-                      <ResetAsk
-                        state={reset}
-                        busy={busy}
-                        onAnswer={(accept) =>
-                          void resetScript(script.id, accept).then(
-                            (fresh) => {
-                              setReset(accept ? "accepted" : "declined");
-                              onChange(fresh);
-                            },
-                            (cause) => setError(message(cause)),
-                          )
-                        }
-                      />
-                    )}
-                    {draft && !busy && cut.items.length > 0 && (
-                      <div className="turn">
-                        <p className="muted">
-                          Split previews the script: {cut.playable} of {cut.clips} clips play from recordings in Writer, the rest show
-                          their words, and narration is held for as long as it takes to read. Click a timestamp to play from it.
-                        </p>
-                      </div>
-                    )}
-                    {draft && draft.checks.length > 0 && !busy && (
-                      <div className="turn">
-                        <p><strong>Checks before recording</strong></p>
-                        <ul>
-                          {draft.checks.map((check, index) => (
-                            <li key={index}>{check}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
-                    {sent && working && (
-                      <div className="user">
-                        <div className="bubble">{sent}</div>
-                      </div>
-                    )}
-                    {working && <Working stage={stage} since={started} hint="A full script from long sources takes 10 to 20 minutes. You can close this window; it keeps going." />}
-                  </>
-                )}
-              </ChatLog>
-              <div className="pacing-pick">
-                <Select
-                  size="sm"
-                  value={script.commentary?.pacing ?? "channel"}
-                  disabled={busy}
-                  label="Pacing for the next build"
-                  options={PACINGS.map((item) => ({ value: item.value, label: item.label }))}
-                  onChange={(pacing) => void change(setPacing(script.id, pacing))}
-                />
-              </div>
-              <Composer
-                onStop={working ? () => void stopJob(script.id).catch((cause) => setError(message(cause))) : undefined}
-                value={note}
-                disabled={busy}
-                canSend={!busy && ready && (!draft || !!note.trim())}
-                label={draft ? (rewriting ? "Rewrite the script" : "Change the script") : "Write the script"}
-                placeholder={
-                  archived
-                    ? "The footage is archived: restore it to change the script"
-                    : busy
-                    ? "Claude is writing…"
-                    : !draft
-                      ? "Notes for the first draft (optional), e.g. aim for 15 minutes…"
-                      : rewriting
-                        ? "Ask for a rewrite. It replaces the whole script…"
-                        : "Ask for a change. Claude edits only the paragraphs it's about, or adds an edit: note for the editor…"
-                }
-                hint={!ready ? "Add a brief or evidence first" : undefined}
-                onChange={setNote}
-                onSend={send}
-              />
-              {draft && (
-                <div className="agent-actions" style={{ padding: "0 14px 8px" }}>
-                  <label className="toggle" title="Off: Claude changes only what the message is about. On: it writes the whole script again from the sources.">
-                    <input type="checkbox" checked={rewriting} disabled={busy} onChange={(event) => setRewriting(event.target.checked)} />
-                    Rewrite the whole script
-                  </label>
-                </div>
+                  <ChatComposer
+                    chat={`script:${script.id}`}
+                    value={note}
+                    onValueChange={setNote}
+                    allowEmpty={!draft}
+                    running={working}
+                    disabled={busy || !ready}
+                    modelName="Opus 5.5"
+                    hint={!ready ? "Add a brief or evidence first" : undefined}
+                    tray={
+                      reset === "pending" && !working ? (
+                        <ResetAsk
+                          title="Reset the script?"
+                          detail="Every clip and cut-in goes, and the script is laid out again as the import left it. The transcript, speakers, sources and research stay. The script before is kept in Versions."
+                          busy={busy}
+                          onAnswer={(accept) => void resetScript(script.id, accept).then((fresh) => { setReset(accept ? "accepted" : "declined"); onChange(fresh); }, (cause) => setError(message(cause)))}
+                        />
+                      ) : undefined
+                    }
+                    placeholder={
+                      archived
+                        ? "The footage is archived: restore it to change the script"
+                        : busy
+                          ? "Claude is writing\u2026"
+                          : !draft
+                            ? "Notes for the first draft (optional), e.g. aim for 15 minutes\u2026"
+                            : rewriting
+                              ? "Ask for a rewrite. It replaces the whole script\u2026"
+                              : "Ask for a change. Claude edits only the paragraphs it's about, or adds an edit: note for the editor\u2026"
+                    }
+                    onSend={(text) => {
+                      if (busy || !ready || (draft && !text.trim())) return;
+                      void (draft && !rewriting ? revise(text) : build(text)).then((done) => {
+                        if (!done) return;
+                        setNote("");
+                        setRewriting(false);
+                      });
+                    }}
+                    onStop={() => void stopJob(script.id).catch((cause) => setError(message(cause)))}
+                  />
+                  {draft && (
+                    <div className="agent-actions" style={{ padding: "0 14px 8px" }}>
+                      <label className="toggle" title="Off: Claude changes only what the message is about. On: it writes the whole script again from the sources.">
+                        <input type="checkbox" checked={rewriting} disabled={busy} onChange={(event) => setRewriting(event.target.checked)} />
+                        Rewrite the whole script
+                      </label>
+                    </div>
+                  )}
+                </>
+              }
+            >
+              {!draft && !busy ? (
+                <Empty title="Write the script" detail="Claude Opus reads every source: the brief for the angle, the evidence to quote from, and past scripts for the voice. It writes the whole script, and Writer checks every quote and link against the sources.">
+                  {!ready && (
+                    <p className="mx-auto mt-2 max-w-[270px] text-center text-[12px] leading-relaxed text-muted">
+                      <button type="button" className="text-fg underline underline-offset-2" onClick={() => setTab("sources")}>Add the brief or some evidence</button> first.
+                    </p>
+                  )}
+                </Empty>
+              ) : (
+                <>
+                  {(() => {
+                    const entries: AgentEntry[] = [];
+                    if (said && !(working && !draft) && !(reset === "pending" && !working)) entries.push({ id: "said", kind: "assistant", text: said });
+                    if (sent && working) entries.push({ id: "sent", kind: "user", text: sent });
+                    return entries.length > 0 ? <ChatTurns turns={buildTurns(entries, working)} known={new Set(entries.filter((entry) => entry.id === "said").map((entry) => entry.id))} thinking={working ? stage || undefined : undefined} /> : null;
+                  })()}
+                  {draft && !busy && cut.items.length > 0 && (
+                    <p className="px-1.5 text-[13px] leading-relaxed text-muted">
+                      Split previews the script: {cut.playable} of {cut.clips} clips play from recordings in Writer, the rest show
+                      their words, and narration is held for as long as it takes to read. Click a timestamp to play from it.
+                    </p>
+                  )}
+                  {draft && draft.checks.length > 0 && !busy && (
+                    <div className="px-1.5 text-[13px] leading-relaxed text-fg/90">
+                      <p className="font-semibold">Checks before recording</p>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4 text-muted">
+                        {draft.checks.map((check, index) => (
+                          <li key={index}>{check}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {working && <p className="px-1.5 text-[12px] leading-relaxed text-faint">A full script from long sources takes 10 to 20 minutes. You can close this window; it keeps going.</p>}
+                </>
               )}
-            </>
+            </ChatShell>
           ) : (
             <div className="sources">
               <p className="sources-sum faint">About {size(tokens(total))} tokens in all</p>

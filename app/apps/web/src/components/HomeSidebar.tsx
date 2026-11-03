@@ -10,6 +10,7 @@ import { motion } from "motion/react";
 import { useEffect, useState } from "react";
 
 import { AppMenu } from "./AppMenu";
+import { ExportActivity } from "./ExportActivity";
 import { LayoutLeftIcon } from "./HugeIcons";
 import { whenBack } from "../lib/time";
 import { cx, IconButton } from "./ui";
@@ -152,9 +153,11 @@ export function HomeSidebar({ places, thumbnails, later, done, where, onChoose, 
           </div>
         </nav>
         {/*
-          Set aside and finished, in a card at the foot (Sphe, Nov 2, option 2 of four: "they're important but let's
+          The export queue, then what's set aside and finished (Sphe, Nov 2, option 2 of four: "they're important but let's
           think more about them"): Later says how many and when the next comes back, Done how many; each opens its list.
+          The queue sits above that card, in the same chrome, and only while something is exporting or still undismissed.
         */}
+        <ExportActivity />
         <div className="mb-1 flex flex-col gap-0.5 rounded-xl border border-line bg-panel p-1">
           <button
             onClick={() => onChoose("later")}

@@ -1,6 +1,6 @@
 import { ChevronLeft, Cloud, CloudAlert, CloudCheck, CloudOff, CloudSync, CloudUpload, Copy, ExternalLink, FileText, Lock, Redo2, Share, Undo2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useConnection } from "../lib/api";
 import { syncLabel } from "../lib/cloud";
@@ -32,8 +32,6 @@ export function TopBar({ onShare }: { onShare: () => void }) {
       <Tile size={22} />
       <NameField value={name} />
       <StartedBy by={createdBy} projectId={projectId} size={32} />
-      <History />
-      <SyncState />
       {/* Only worth a word when the server is away. */}
       <AnimatePresence>
         {down && (
@@ -58,6 +56,8 @@ export function TopBar({ onShare }: { onShare: () => void }) {
         )}
         <DriveButton />
         <DocChangesButton />
+        <History />
+        <SyncState />
         <Button variant="primary" className="ml-1.5" onClick={onShare}>
           {exportState?.state === "running" ? (
             <span className="tabular">{Math.round(exportState.progress * 100)}%</span>
@@ -72,7 +72,7 @@ export function TopBar({ onShare }: { onShare: () => void }) {
   );
 }
 
-/** A cloud project’s sync: saved to cloud, syncing, offline, conflict, read-only. */
+/** A cloud project’s sync as an icon only (its words are its tooltip): saved, syncing, offline, conflict, read-only. */
 function SyncState() {
   const cloud = useEditor((state) => state.cloud);
   const label = syncLabel(cloud);
@@ -81,17 +81,18 @@ function SyncState() {
   const title = cloud?.missing ?? cloud?.message ?? (cloud?.sync === "readonly" ? `${cloud.holder} is editing` : cloud?.sync === "offline" ? "Changes are saved on this Mac and go to the cloud when it’s back" : label.text);
   return (
     <span
+      role="status"
+      aria-label={label.text}
       title={title}
       className={cx(
-        "ml-1 flex h-7 items-center gap-1.5 rounded-md px-1.5 text-[12px]",
+        "flex size-7 items-center justify-center rounded-md",
         label.tone === "ok" && "text-faint",
         label.tone === "busy" && "text-muted",
         label.tone === "warn" && "text-warning/80",
         label.tone === "bad" && "text-danger",
       )}
     >
-      <Icon size={14} className={label.tone === "busy" ? "animate-pulse" : undefined} />
-      {label.text}
+      <Icon size={16} className={label.tone === "busy" ? "animate-pulse" : undefined} />
     </span>
   );
 }
@@ -130,10 +131,28 @@ function DriveButton() {
   );
 }
 
+/** Past this width the title stops growing and its tail is cut off. */
+const NAME_MAX_PX = 480;
+
 function NameField({ value }: { value: string }) {
   const [draft, setDraft] = useState(value);
+  const [width, setWidth] = useState(120);
+  const input = useRef<HTMLInputElement>(null);
   const edit = useEditor((state) => state.edit);
   useEffect(() => setDraft(value), [value]);
+  // Fit the words, not a character count: `ch` overstates a proportional
+  // font, so the field ran wide past its text. Measured, capped, and the
+  // input scrolls its tail off past the cap until clicked into.
+  useLayoutEffect(() => {
+    const node = input.current;
+    if (!node) return;
+    const style = getComputedStyle(node);
+    const canvas = document.createElement("canvas").getContext("2d");
+    if (!canvas) return;
+    canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const text = Math.ceil(canvas.measureText(draft || " ").width);
+    setWidth(Math.min(NAME_MAX_PX, Math.max(56, text + 18)));
+  }, [draft]);
   const commit = () => {
     const name = draft.trim();
     if (name && name !== value) edit((project) => void (project.name = name));
@@ -141,6 +160,7 @@ function NameField({ value }: { value: string }) {
   };
   return (
     <input
+      ref={input}
       value={draft}
       onChange={(event) => setDraft(event.target.value)}
       onBlur={commit}
@@ -153,9 +173,8 @@ function NameField({ value }: { value: string }) {
       }}
       spellCheck={false}
       title={value}
-      // Long names end in a proper "…" (not cut mid-letter) until you click in to edit.
-      className="h-8 min-w-0 truncate rounded-md bg-transparent px-1.5 text-[14px] font-medium text-fg outline-none hover:bg-hover focus:bg-hover"
-      style={{ width: `${Math.min(40, Math.max(6, draft.length + 1))}ch` }}
+      className="h-8 min-w-0 shrink rounded-md bg-transparent px-1.5 text-[14px] font-medium text-fg outline-none hover:bg-hover focus:bg-hover"
+      style={{ width, maxWidth: "38vw" }}
     />
   );
 }

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { askConfirm } from "./confirm";
 import { CommentsPanel, hoverNote } from "./comments";
-import { approveReview, compressReview, deleteReviewLink, fixNotes, getScript, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
-import type { BuildStatus, Cite, Paragraph, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, Script } from "./types";
+import { approveReview, cancelScriptShare, compressReview, deleteReviewLink, fixNotes, getScript, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
+import { makeDoc } from "./docs-dialog";
+import type { BuildStatus, Cite, DocFile, Paragraph, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, Script } from "./types";
 import { CAN, useGrants } from "./can";
 import { Dialog, Icon } from "./ui";
 
@@ -184,13 +185,90 @@ export function BandTip({ notes }: { notes: ReviewNote[] }) {
 
 const when = (ms: number) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
-/** The topbar's Share button: "Share" until shared, then the open notes' count. */
+/** A share's stage, as the edit dialog prints one: first letter up, then an ellipsis. */
+const stageLine = (stage: string) => `${stage.charAt(0).toUpperCase()}${stage.slice(1)}…`;
+
+const docWhen = (value: string | number) => new Date(value).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
+/** The script can become a Doc: a commentary once it has a draft, a footage script once it has a cut-in. */
+const docReady = (script: Script) => (script.commentary ? !!script.commentary.draft : script.clips.some((clip) => clip.kind === "cut-in"));
+
+/**
+ * Export the script as a Google Doc, the share dialog's extra row (the edit
+ * dialog's option rows). The fuller Doc window stays on the More menu.
+ */
+function DocExportRow({ script, onChange }: { script: Script; onChange: (script: Script) => void }) {
+  const mayShare = useGrants().has(CAN.share);
+  const doc = script.docExport;
+  const behind = !!doc && doc.revision !== script.revision;
+  const ready = docReady(script);
+  const [exporting, setExporting] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [made, setMade] = useState<DocFile | null>(null);
+  const latest = made?.url ?? doc?.url;
+
+  const make = async () => {
+    setExporting(true);
+    setProblem(null);
+    setMade(null);
+    try {
+      const next = await makeDoc(script, false);
+      setMade(next);
+      onChange(await getScript(script.id));
+      window.open(next.url, "_blank", "noopener,noreferrer");
+    } catch (cause) {
+      setProblem(message(cause));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const hint = !mayShare
+    ? "Exporting needs “Share for review”: ask an admin."
+    : problem
+      ? problem
+      : !ready
+        ? "Write the script first."
+        : made
+          ? "Exported."
+          : behind
+            ? "The script has changed since the last Doc."
+            : doc
+              ? `Up to date · ${docWhen(doc.exportedAt)}`
+              : "A new Doc from the script, with a comment on each timestamp.";
+
+  return (
+    <div className="share-row">
+      <div className="share-copy">
+        <b>Google Doc</b>
+        <span className={problem ? "bad" : undefined}>
+          {hint}
+          {latest && !problem && (
+            <>
+              {" "}
+              <a href={latest} target="_blank" rel="noreferrer">
+                Open ↗
+              </a>
+            </>
+          )}
+        </span>
+      </div>
+      {mayShare && (
+        <button type="button" className="sm" disabled={!ready || exporting} onClick={() => void make()}>
+          {exporting ? "Exporting…" : doc ? "Export again" : "Export"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The topbar's Share button, the same red Share as the edit page. Open notes still show as a count. */
 export function ReviewButton({ script, open, approved, onClick }: { script: Script; open: number; approved: ReviewApproval | null; onClick: () => void }) {
   const shared = !!script.review;
   return (
     <button
       type="button"
-      className={approved ? "secondary sm review-button approved" : open ? "secondary sm review-button has-notes" : "secondary sm review-button"}
+      className="primary review-button"
       title={
         approved
           ? `Approved v${approved.version} by ${approved.by}, ${when(approved.at)}.`
@@ -200,17 +278,18 @@ export function ReviewButton({ script, open, approved, onClick }: { script: Scri
       }
       onClick={onClick}
     >
-      <Icon name={approved ? "check" : "share"} size={14} />
-      {approved ? `Approved v${approved.version}` : shared ? "Review" : "Share"}
+      <Icon name="share" size={14} />
+      Share
       {open > 0 && <span className="count-badge">{open}</span>}
     </button>
   );
 }
 
 /**
- * Sharing and the notes: the link to copy, Share again for the next version,
- * whether Claude fixes new notes by itself, and every note with what Claude
- * did about it.
+ * Sharing and the notes, in the same box as the edit page's Share: the link,
+ * a Google Doc export, and a progress line (the stage, with a percent while
+ * the footage goes up). Close leaves a share running. Notes, approve, and
+ * fixing stay in the box.
  */
 export function ReviewDialog({
   open,
@@ -236,9 +315,18 @@ export function ReviewDialog({
   onRefresh: () => void;
 }) {
   const [sharing, setSharing] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [fixesHere, setFixesHere] = useState<boolean | null>(null);
+  // The share's stage while this dialog follows it, and whether the last one here just landed.
+  const [stage, setStage] = useState<string | null>(null);
+  const [landed, setLanded] = useState(false);
+  const said = useRef("");
+  const sawShare = useRef(false);
+  const change = useRef(onChange);
+  change.current = onChange;
   // Sharing, approving and fixing need review.share; reading the notes doesn't.
   const mayShare = useGrants().has(CAN.share);
   // What a reviewer would flag, checked before it's shared, as Edit's audit is before an export.
@@ -246,6 +334,8 @@ export function ReviewDialog({
   useEffect(() => {
     if (!open) return;
     setProblem(null);
+    setLanded(false);
+    said.current = script.review ? `${script.review.url}#${script.review.version}` : "";
     onRefresh();
     void reviewCounts().then((counts) => setFixesHere(counts.fixesHere), () => {});
   }, [open]);
@@ -258,14 +348,41 @@ export function ReviewDialog({
   const sharingNow = script.sharing !== undefined;
   const shareId = script.id;
   useEffect(() => {
-    if (!sharingNow) return;
+    if (!open || !sharingNow) return;
     let live = true;
-    const timer = window.setInterval(() => void getScript(shareId).then((fresh) => live && fresh.sharing === undefined && onChange(fresh), () => {}), 3000);
+    const look = () =>
+      void getScript(shareId).then((fresh) => {
+        if (!live) return;
+        if (fresh.sharing) {
+          sawShare.current = true;
+          if (fresh.sharing.stage) setStage(fresh.sharing.stage);
+          return;
+        }
+        const saw = sawShare.current;
+        sawShare.current = false;
+        setStage(null);
+        if (fresh.shareFailed) {
+          setLanded(false);
+          setStopped(false);
+          setProblem(`Sharing failed: ${fresh.shareFailed.error}`);
+        } else if (fresh.review) {
+          const key = `${fresh.review.url}#${fresh.review.version}`;
+          if (key !== said.current) {
+            said.current = key;
+            setLanded(true);
+            setStopped(false);
+            void navigator.clipboard?.writeText(fresh.review.url).catch(() => {});
+          } else if (saw) setStopped(true);
+        } else if (saw) setStopped(true);
+        change.current(fresh);
+      }, () => {});
+    look();
+    const timer = window.setInterval(look, 1500);
     return () => {
       live = false;
       window.clearInterval(timer);
     };
-  }, [sharingNow, shareId]);
+  }, [open, sharingNow, shareId]);
   useEffect(() => {
     if (script.shareFailed) setProblem(`Sharing failed: ${script.shareFailed.error}`);
   }, [script.shareFailed?.at]);
@@ -274,10 +391,24 @@ export function ReviewDialog({
   const share = async () => {
     setSharing(true);
     setProblem(null);
+    setLanded(false);
+    setStopped(false);
+    setStage("checking the preview");
     try {
-      onChange(await shareScript(script.id));
+      const fresh = await shareScript(script.id);
+      if (fresh.sharing?.stage) setStage(fresh.sharing.stage);
+      else if (fresh.review && !fresh.shareFailed) {
+        const key = `${fresh.review.url}#${fresh.review.version}`;
+        if (key !== said.current) {
+          said.current = key;
+          setLanded(true);
+          void navigator.clipboard?.writeText(fresh.review.url).catch(() => {});
+        }
+      }
+      change.current(fresh);
     } catch (cause) {
       setProblem(message(cause));
+      setStage(null);
     } finally {
       setSharing(false);
     }
@@ -288,12 +419,21 @@ export function ReviewDialog({
     if (!(await askConfirm(`v1 to v${link.version} are removed from the link and every note is kept on v1. The script's own version history is untouched.`, { title: "Make the script as it is now v1?", ok: "Make this v1" }))) return;
     setSharing(true);
     setProblem(null);
+    setLanded(false);
+    setStage("making this v1");
     try {
-      onChange(await compressReview(script.id));
+      const fresh = await compressReview(script.id);
+      if (fresh.review) {
+        said.current = `${fresh.review.url}#${fresh.review.version}`;
+        setLanded(true);
+        void navigator.clipboard?.writeText(fresh.review.url).catch(() => {});
+      }
+      change.current(fresh);
     } catch (cause) {
       setProblem(message(cause));
     } finally {
       setSharing(false);
+      setStage(null);
     }
   };
   const copy = async () => {
@@ -350,124 +490,176 @@ export function ReviewDialog({
   const openNotes = roots.filter((note) => note.status !== "done");
   const waiting = openNotes.length;
   const behind = link && link.revision !== script.revision;
+  const spinning = sharing || sharingNow;
+  const shownStage = spinning ? (stage ?? script.sharing?.stage ?? "sharing") : null;
+  const cancelling = stopping || shownStage === "cancelling";
+  const stopShare = async () => {
+    setStopping(true);
+    setProblem(null);
+    try {
+      await cancelScriptShare(script.id);
+      setLanded(false);
+      setStopped(true);
+    } catch (cause) {
+      setProblem(message(cause));
+    } finally {
+      setStopping(false);
+    }
+  };
+  const progress = shownStage ? stageLine(shownStage) : null;
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      title={link ? "Review" : "Share for review"}
+      className="share-dialog"
+      title="Share"
       description={
         link
-          ? "Only people signed in can open the link, read the script and leave notes. Share again to publish the script as it is now, as the next version on the same link."
-          : "Publishes the script on a Repack link. Only people signed in can open it, read the script and leave notes."
+          ? "Each share publishes the script as it is now and adds it to this link as a new version. Only people signed in can open the link, read the script and leave notes."
+          : "Publishes the script and makes a review link. Only people signed in can open it, read the script and leave notes. Later shares go on the same link as new versions."
       }
-      width={560}
+      width={500}
       footer={
         <>
-          {problem && <span className="bad">{problem}</span>}
-          <span className="spacer" />
-          {!mayShare && <span className="faint">Sharing, approving and fixing need “Share for review”: ask an admin.</span>}
-          {mayShare && link && !approved && (
-            <button type="button" className="ghost" disabled={busy || approving} title="The script is done: the link takes no more notes, and the other versions' files are deleted (their notes stay)" onClick={() => void approve(true)}>
-              {approving ? "Approving…" : `Approve v${link.version}`}
+          <span className="share-progress">
+            {progress && (
+              <span className="faint tabular" title="It carries on if you close this, and other scripts can be shared meanwhile.">
+                {progress}
+              </span>
+            )}
+            {!progress && problem && <span className="bad">{problem}</span>}
+            {!progress && !problem && stopped && <span className="faint">Cancelled</span>}
+            {!progress && !problem && !stopped && landed && link && (
+              <span className="up">
+                <Icon name="check" size={13} /> Up on the link
+              </span>
+            )}
+            {!progress && !problem && !stopped && !(landed && link) && !mayShare && <span className="faint">Sharing, approving and fixing need “Share for review”: ask an admin.</span>}
+          </span>
+          {spinning && shownStage !== "making this v1" && (
+            <button type="button" className="ghost" disabled={cancelling} onClick={() => void stopShare()}>
+              {cancelling ? "Stopping…" : "Cancel"}
             </button>
           )}
-          {mayShare && link && waiting > 0 && !approved && (
-            <button type="button" className="ghost" disabled={busy} onClick={() => void fix()}>
-              Fix {waiting} {waiting === 1 ? "note" : "notes"} now
+          {!spinning && (stopped || script.shareFailed !== undefined) && mayShare && (
+            <button type="button" className="ghost" disabled={busy} onClick={() => void share()}>
+              Retry
             </button>
           )}
-          {mayShare && link && link.version > 1 && !approved && (
-            <button type="button" className="ghost" disabled={sharing || sharingNow || busy} title="The script as it is now becomes the link's only version, v1; every note is kept" onClick={() => void makeFirst()}>
-              Make this v1
-            </button>
-          )}
+          <button type="button" className="ghost" onClick={onClose}>
+            Close
+          </button>
           {mayShare && (
-            <button type="button" className={link && !behind ? "ghost" : "primary"} disabled={sharing || sharingNow || busy} onClick={() => void share()}>
-              {sharing || sharingNow ? "Sharing…" : `${link ? `Share again as v${link.version + 1}` : "Share"}${flags.length ? " anyway" : ""}`}
+            <button type="button" className="primary share-go" disabled={spinning || busy} onClick={() => void share()}>
+              {spinning ? "Sharing…" : link ? `Share v${link.version + 1}` : "Share"}
             </button>
           )}
         </>
       }
     >
-      {sharingNow && <p className="faint review-meta">Sharing: its footage goes up with it, which takes a while. It carries on if you close this, and other scripts can be shared meanwhile.</p>}
-      {mayShare && flags.length > 0 && !approved && (
-        <div className="review-flags">
-          <strong>Before sharing: {flags.length === 1 ? "one thing" : `${flags.length} things`} the team would flag</strong>
-          <ul>
-            {flags.map((flag, index) => (
-              <li key={index}>{flag}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {link && (
-        <div className="review-link">
-          <input readOnly value={link.url} aria-label="Review link" onFocus={(event) => event.currentTarget.select()} />
-          <button type="button" className="sm" onClick={() => void copy()}>
-            <Icon name={copied ? "check" : "copy"} size={14} />
-            {copied ? "Copied" : "Copy"}
-          </button>
-          {mayShare && deleting === null && (
-            <button type="button" className="sm ghost" disabled={sharing || sharingNow || busy} title={sharing || sharingNow ? "It's being shared: delete the link once that's done" : busy ? "Claude is working on this script: delete the link once that's done" : "Delete this review link for good"} onClick={() => setDeleting("ask")}>
-              <Icon name="trash" size={14} />
-              Delete link
-            </button>
-          )}
-        </div>
-      )}
-      {link && deleting !== null && (
-        <div className="review-delete" role="alertdialog" aria-label="Delete the review link">
-          <span>
-            <b>Delete this link?</b> It can't be undone: reviewers lose the page and every note on it{link.version > 1 ? `, v1 to v${link.version}` : ""}. The script and its own version history stay; sharing again makes a new link.
-          </span>
-          <button type="button" className="sm ghost" disabled={deleting === "running"} onClick={() => setDeleting(null)}>
-            Cancel
-          </button>
-          <button type="button" className="sm danger-fill" disabled={deleting === "running" || sharingNow || busy} onClick={() => void removeLink()}>
-            {deleting === "running" ? "Deleting…" : "Delete link"}
-          </button>
-        </div>
-      )}
-      {link && (
-        <p className="faint review-meta">
-          v{link.version} shared {when(link.sharedAt)}
-          {behind ? " · the script has changed since" : ""}
-        </p>
-      )}
-      {approved && (
-        <p className="review-approved">
-          <Icon name="check" size={14} />
-          <span>
-            <b>Approved v{approved.version}</b> · by {approved.by} · {when(approved.at)}
-            <span className="faint"> · The link takes no more notes, and nothing is fixed by itself. Sharing again starts v{(link?.version ?? approved.version) + 1}, unapproved.</span>
-          </span>
-          {mayShare && (
-            <button type="button" className="link-button" disabled={approving} onClick={() => void approve(false)}>
-              Take back
-            </button>
-          )}
-        </p>
-      )}
-      {mayShare && link && fixesHere !== null && !approved && (
-        <p className="faint review-auto">
-          {fixesHere
-            ? "When a reviewer clicks Ready for changes, Claude fixes the notes on this Mac and shares the next version."
-            : "When a reviewer clicks Ready for changes, the fixing computer chosen on accounts.spheceo.com fixes the notes and shares the next version."}
-        </p>
-      )}
-      {link && (
-        <CommentsPanel
-          scriptId={script.id}
-          reviewId={link.reviewId}
-          notes={notes}
-          version={link.version}
-          shared
-          canWrite={mayShare && !approved}
-          onRefresh={onRefresh}
-          onError={setProblem}
-        />
-      )}
+      <div className="share-stack">
+        {link && (
+          <div className="share-card">
+            <div className="share-url">
+              <Icon name="link" size={14} />
+              <a className="url" href={link.url} target="_blank" rel="noreferrer" title={link.url}>
+                {link.url.replace(/^https?:\/\//, "")}
+              </a>
+              <button type="button" className="sm ghost" title="Copy the link" onClick={() => void copy()}>
+                <Icon name={copied ? "check" : "copy"} size={13} />
+              </button>
+              <button type="button" className="sm" title="Open the link" onClick={() => window.open(link.url, "_blank", "noopener,noreferrer")}>
+                <Icon name="external" size={13} /> Open
+              </button>
+            </div>
+            <div className="share-meta">
+              <span className="grow">
+                {link.version} {link.version === 1 ? "version" : "versions"}, latest v{link.version}
+                {behind ? " · the script has changed since" : ""}
+                {approved && <span className="ok"> · v{approved.version} approved by {approved.by}</span>}
+              </span>
+              {mayShare && waiting > 0 && !approved && (
+                <button type="button" className="sm ghost" disabled={busy} onClick={() => void fix()}>
+                  Fix {waiting} {waiting === 1 ? "note" : "notes"}
+                </button>
+              )}
+              {mayShare && link.version > 1 && !approved && (
+                <button type="button" className="sm ghost" disabled={spinning || busy} title="The script as it is now becomes the link's only version, v1; every note is kept" onClick={() => void makeFirst()}>
+                  Make this v1
+                </button>
+              )}
+              {mayShare && deleting === null && (
+                <button type="button" className="sm ghost" disabled={spinning || busy} title={spinning ? "It's being shared: delete the link once that's done" : busy ? "Claude is working on this script: delete the link once that's done" : "Delete this review link for good"} onClick={() => setDeleting("ask")}>
+                  <Icon name="trash" size={13} /> Delete link
+                </button>
+              )}
+              {mayShare && !approved && deleting === null && (
+                <button type="button" className="sm ghost" disabled={busy || approving} title="The script is done: the link takes no more notes, and the other versions' files are deleted (their notes stay)" onClick={() => void approve(true)}>
+                  {approving ? "Approving…" : `Approve v${link.version}`}
+                </button>
+              )}
+            </div>
+            {deleting !== null && (
+              <div className="share-ask" role="alertdialog" aria-label="Delete the review link">
+                <span>
+                  <b>Delete this link?</b> It can't be undone: reviewers lose the page and every note on it{link.version > 1 ? `, v1 to v${link.version}` : ""}. The script and its own version history stay; sharing again makes a new link.
+                </span>
+                <button type="button" className="sm ghost" disabled={deleting === "running"} onClick={() => setDeleting(null)}>
+                  Cancel
+                </button>
+                <button type="button" className="sm danger-fill" disabled={deleting === "running" || spinning || busy} onClick={() => void removeLink()}>
+                  {deleting === "running" ? "Deleting…" : "Delete link"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {mayShare && flags.length > 0 && !approved && (
+          <div className="review-flags">
+            <strong>Before sharing: {flags.length === 1 ? "one thing" : `${flags.length} things`} the team would flag</strong>
+            <ul>
+              {flags.map((flag, index) => (
+                <li key={index}>{flag}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <DocExportRow script={script} onChange={onChange} />
+        {approved && (
+          <p className="review-approved">
+            <Icon name="check" size={14} />
+            <span>
+              <b>Approved v{approved.version}</b> · by {approved.by} · {when(approved.at)}
+              <span className="faint"> · The link takes no more notes, and nothing is fixed by itself. Sharing again starts v{(link?.version ?? approved.version) + 1}, unapproved.</span>
+            </span>
+            {mayShare && (
+              <button type="button" className="link-button" disabled={approving} onClick={() => void approve(false)}>
+                Take back
+              </button>
+            )}
+          </p>
+        )}
+        {mayShare && link && fixesHere !== null && !approved && (
+          <p className="faint review-auto">
+            {fixesHere
+              ? "When a reviewer clicks Ready for changes, Claude fixes the notes on this Mac and shares the next version."
+              : "When a reviewer clicks Ready for changes, the fixing computer chosen on accounts.spheceo.com fixes the notes and shares the next version."}
+          </p>
+        )}
+        {link && (
+          <CommentsPanel
+            scriptId={script.id}
+            reviewId={link.reviewId}
+            notes={notes}
+            version={link.version}
+            shared
+            canWrite={mayShare && !approved}
+            onRefresh={onRefresh}
+            onError={setProblem}
+          />
+        )}
+      </div>
     </Dialog>
   );
 }

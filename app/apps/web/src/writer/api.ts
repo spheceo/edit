@@ -303,6 +303,9 @@ export const deleteReviewLink = (id: string) =>
   http<Script>(`/api/writer/scripts/${id}/review`, { method: "DELETE" });
 export const shareScript = (id: string) =>
   http<Script>(`/api/writer/scripts/${id}/share`, json({}));
+/** Stops a script share. It leaves the queue once the step it's in lets go. */
+export const cancelScriptShare = (id: string) =>
+  http<{ cancelled: boolean }>(`/api/writer/scripts/${id}/share/cancel`, json({}));
 
 /** Open review notes per script, for the cards' badges, and whether Claude fixes new ones by itself. */
 export const reviewCounts = () =>

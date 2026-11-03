@@ -32,7 +32,7 @@ export interface ExportOptions {
   /** Integrated loudness to normalise to (LUFS), or null to leave the mix alone. */
   loudness: number | null;
   chapters: Chapter[];
-  /** YouTube's upload settings over these (crates/edit-engine/src/export.rs `Preset`); the house export when absent. */
+  /** YouTube's upload settings (crates/edit-engine/src/export.rs `Preset`). A share always sends `youtube`. */
   preset?: "house" | "youtube";
 }
 

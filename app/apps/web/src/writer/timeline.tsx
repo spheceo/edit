@@ -1,4 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ClipPreview } from "../components/ClipPreview";
+import { CLIP_HEX } from "../lib/colors";
+import { useVideoStrip } from "../lib/filmstrip";
 import { clock, cutInCard, insertAfter, isCutIn, moveItems, nearestEdge, range, recordingSpans, splitClip, trimClip } from "./clips";
 import { type Player, clipStarts, editedPosition, type Playhead } from "./playback";
 import type { Clip, Part, Word } from "./types";
@@ -11,8 +14,13 @@ const INSET = 14;
 const MAX_PPMS = 0.6;
 const SNAP_PX = 10;
 const RULER_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200];
-const FOOTAGE = "#7088dc";
-const CARD = "#a27ce0";
+/** The edit timeline's clip colours (CLIP_HEX): footage is blue, a cut-in is purple. */
+const FOOTAGE = CLIP_HEX.blue;
+const CARD = CLIP_HEX.purple;
+const shade = (hex: string, alpha: number) => {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
+};
 
 type Drag =
   | { mode: "scrub" }
@@ -33,6 +41,7 @@ export function Timeline({
   words,
   overview,
   durationMs,
+  preview,
   parts,
   labels,
   playhead,
@@ -47,6 +56,8 @@ export function Timeline({
   /** Loudness across the whole footage, evenly spaced. */
   overview: number[];
   durationMs: number;
+  /** The preview the filmstrip is sampled from. Empty until the footage can play. */
+  preview?: string;
   parts?: Part[];
   /** Each cut-in's purpose, in order. */
   labels: string[];
@@ -66,6 +77,7 @@ export function Timeline({
   const [zoom, setZoom] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
+  const strip = useVideoStrip(preview ?? "", durationMs);
 
   const starts = useMemo(() => clipStarts(clips), [clips]);
   const total = starts[starts.length - 1];
@@ -116,10 +128,10 @@ export function Timeline({
       for (let s = Math.max(0, Math.floor(from / 1000 / minor) * minor); s * 1000 <= Math.min(to, total); s += minor) {
         const px = x(s * 1000) - view.scroll;
         const major = Math.abs(s / step - Math.round(s / step)) < 1e-6;
-        pen.fillStyle = major ? "#4a4a4a" : "#262626";
+        pen.fillStyle = major ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.1)";
         pen.fillRect(Math.round(px), major ? height - 10 : height - 5, 1, major ? 10 : 5);
         if (major) {
-          pen.fillStyle = "#7a7a7a";
+          pen.fillStyle = "#8f8f8f";
           // The playhead's marker sits over 0:00, so its label steps aside.
           pen.fillText(clock(s * 1000), Math.round(px) + (s === 0 ? 10 : 4), 6);
         }
@@ -128,15 +140,17 @@ export function Timeline({
     const bottom = prepare(wave.current);
     if (bottom && overview.length && durationMs > 0) {
       const { pen, width, height } = bottom;
+      const amp = Math.max(4, (height - 18) / 2);
+      const mid = height / 2 + 5;
+      pen.fillStyle = shade(FOOTAGE, 0.85);
       for (let px = 0; px < width; px += 2) {
         const ms = (view.scroll + px - INSET) / ppms;
         if (ms < 0 || ms > total) continue;
         const at = editedPosition(clips, ms);
         if (!at || isCutIn(at.clip)) continue;
         const peak = overview[Math.min(overview.length - 1, Math.floor((at.sourceMs / durationMs) * overview.length))] ?? 0;
-        const bar = Math.max(1.5, peak * (height - 12));
-        pen.fillStyle = selected.includes(at.clip.id) ? "#c9d3ff" : "#9fb0ec";
-        pen.fillRect(px, (height - bar) / 2, 1.2, bar);
+        const bar = Math.max(0.5, peak * amp);
+        pen.fillRect(px, mid - bar, 1.5, bar * 2);
       }
     }
   });
@@ -362,6 +376,7 @@ export function Timeline({
                       }}
                       onDoubleClick={() => player?.seek(starts[index])}
                     >
+                      {!card && <ClipPreview strip={strip} sourceIn={shown.startMs / 1000} sourceOut={shown.endMs / 1000} width={width} />}
                       {recordings.map((part) => <span key={part.index} className="clip-recording" style={{ left: (part.startMs - shown.startMs) * ppms, width: (part.endMs - part.startMs) * ppms }}>
                         <span>{part.index + 1} · {part.title}</span>
                       </span>)}

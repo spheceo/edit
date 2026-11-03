@@ -36,6 +36,7 @@ export function Dialog({
   children,
   footer,
   width = 440,
+  className,
 }: {
   open: boolean;
   onClose: () => void;
@@ -44,6 +45,7 @@ export function Dialog({
   children?: ReactNode;
   footer?: ReactNode;
   width?: number;
+  className?: string;
 }) {
   const { mounted, closing } = usePresence(open);
   const box = useRef<HTMLDivElement>(null);
@@ -90,7 +92,7 @@ export function Dialog({
     <div className={closing ? "overlay out" : "overlay"} onPointerDown={(event) => event.target === event.currentTarget && onClose()}>
       <div
         ref={box}
-        className={closing ? "dialog out" : "dialog"}
+        className={`${closing ? "dialog out" : "dialog"}${className ? ` ${className}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -467,6 +469,19 @@ const PATHS: Record<string, ReactNode> = {
   minus: <path d="M3.5 8h9" />,
   chevron: <path d="m4.5 6.25 3.5 3.5 3.5-3.5" />,
   send: <path d="M8 13V3.5M4 7.25 8 3.25l4 4" />,
+  link: (
+    <>
+      <path d="M6.6 9.15a2.35 2.35 0 0 0 3.35.05l1.55-1.5a2.4 2.4 0 0 0-3.35-3.45L7.1 5.3" />
+      <path d="M9.4 6.85a2.35 2.35 0 0 0-3.35-.05l-1.55 1.5a2.4 2.4 0 0 0 3.35 3.45l1.05-1.05" />
+    </>
+  ),
+  external: (
+    <>
+      <path d="M8.75 3.25H12.5V7" />
+      <path d="M12.25 3.5 7.25 8.5" />
+      <path d="M6.75 4.75H3.75v7.5h7.5V9" />
+    </>
+  ),
   copy: (
     <>
       <rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1.75" />

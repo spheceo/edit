@@ -50,6 +50,7 @@ import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
 import * as writerHandoff from "./writer_handoff.ts";
 import * as writer from "./writer/routes.ts";
+import * as writerReviews from "./writer/reviews.ts";
 import * as ideas from "./ideas/routes.ts";
 import * as thumbnails from "./thumbnails/routes.ts";
 import * as later from "./later.ts";
@@ -159,6 +160,7 @@ export function buildRouter(): Router<App> {
     .get("/api/projects/{id}/cover/{frame}", coverJpeg)
     .post("/api/projects/{id}/export", startExport)
     .post("/api/projects/{id}/export/cancel", cancelExport)
+    .post("/api/projects/{id}/export/retry", retryExport)
     .get("/api/projects/{id}/exports", projectExports)
     .get("/api/storage", async ({ app }) => json({ ...storageReport(app.store.home), exports: await verifyExports(app.store.home) }))
     .post("/api/storage/migrate-media", migrateMedia)
@@ -197,7 +199,20 @@ export function buildRouter(): Router<App> {
     .get("/api/export/encoders", exportEncoders)
     .get("/api/exports/activity", ({ app }) => {
       const visible = new Set(app.store.visible().map(project => project.id));
-      return json((app.exports.activity?.() ?? []).filter(job => visible.has(job.id)));
+      const edits = (app.exports.activity?.() ?? []).filter(job => visible.has(job.id));
+      // Script shares join the same queue. Only the ones running: a share has no file, and a settled one is not kept (it would linger in this process and show up in the activity check).
+      const shares = writerReviews.shareQueue().map(share => ({
+        id: share.id,
+        name: share.name,
+        path: "",
+        state: "running" as const,
+        progress: share.progress,
+        updated_ms: share.startedAt,
+        kind: "script" as const,
+        stage: share.stage,
+      }));
+      const rank = (state: string) => (state === "running" || state === "queued" ? 0 : 1);
+      return json([...edits, ...shares].sort((a, b) => rank(a.state) - rank(b.state) || b.updated_ms - a.updated_ms));
     })
     .get("/api/exports/file", exportedFile)
     .post("/api/exports/reveal", revealExport);
@@ -1126,6 +1141,34 @@ async function startExport(context: Context): Promise<Response> {
 
 function cancelExport({ app, params }: Context): Response {
   return json({ cancelled: app.exports.cancel(params.id!) });
+}
+
+/** Runs a failed or cancelled export again, the way it was started. A share's export is shared again. */
+async function retryExport({ app, params }: Context): Promise<Response> {
+  const id = params.id!;
+  liveOr404(app, id);
+  const held = app.exports.replay?.(id) ?? null;
+  if (held === null) throw bad("nothing to retry");
+  if (held.extra.share === true) {
+    const started = reviews.exportAndShare(app, id, held.options, held.extra.replace === true, held.extra.note, held.extra.watermark);
+    started.catch((error: unknown) => {
+      const message = diag.messageOf(error);
+      if (message === "the share was cancelled" || message === "the export was cancelled") return;
+      diag.warn("review", `sharing ${id} again: ${message}`);
+    });
+    const first = await Promise.race([
+      started.then((done) => ({ done })),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 300)),
+    ]).catch((error: unknown) => {
+      throw bad(diag.messageOf(error));
+    });
+    return json(first === null ? { started: true } : first.done);
+  }
+  try {
+    return json({ path: await app.exports.start(app.store, app.library, app.store.get(id)!.project, held.options, held.output, held.extra) });
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
 }
 
 /** Which export formats and encoders this machine's FFmpeg offers. */

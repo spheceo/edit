@@ -7,8 +7,10 @@
 // it still finds its moment after the edit moves. Kept in mamagi
 // (`edit:*Note*`, through the relay, which stamps who left it), never on the
 // review: "in app feedback and feedback-feedback are different". Queued until
-// someone tells the agent to implement the feedback (pull_feedback takes them
-// with the review's), sent while it works, then done (its fix: what changed
+// the next message to the agent — they ride it whether or not it asks for
+// them (Sphe, Nov 3: "implement the feedback" isn't needed to send them;
+// pull_feedback still takes them with the review's), sent while it works,
+// then done (its fix: what changed
 // where, as a review note's) or left (why); a sent note the turn never
 // answered goes back in the queue when the turn ends.
 
@@ -174,11 +176,11 @@ function clock(seconds: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-/** The agent's message for the team's own notes: each with its [app:id], its moment now, the clip there and the box. */
-export function message(project: Project, notes: AppNote[]): string {
+/** One line per note: its [app:id], its moment now, the clip there and the box. */
+function lines(project: Project, notes: AppNote[]): string {
   const fps = fpsOf(project);
   const { width, height } = project.settings;
-  const lines = notes
+  return notes
     .map((note) => placed(project, note))
     .sort((a, b) => a.now - b.now || a.at - b.at)
     .map((note) => {
@@ -195,11 +197,28 @@ export function message(project: Project, notes: AppNote[]): string {
         said.push(`the area they boxed: centre ${Math.round((box.x + box.w / 2 - 0.5) * width)}, ${Math.round((box.y + box.h / 2 - 0.5) * height)} px from the frame's centre, ${Math.round(box.w * width)}×${Math.round(box.h * height)} px`);
       }
       return `- [${PREFIX}${note.id}] at ${span} (${timeline}; ${said.join("; ")}): ${note.by?.name ?? "the team"}: ${JSON.stringify(note.text.replace(/\s+/gu, " ").trim())}`;
-    });
+    })
+    .join("\n");
+}
+
+const FIX = 'Load the feedback skill and fix them across the video, as you would a review\'s; after each, feedback_done {note: "<its id, app: and all>", summary}, or feedback_unfixed {note, reason}; a question gets feedback_answer {note, answer}.';
+
+/** The agent's message for the team's own notes: each with its [app:id], its moment now, the clip there and the box. */
+export function message(project: Project, notes: AppNote[]): string {
+  return `The team's own notes, left in Edit at these moments: ${notes.length} note${notes.length === 1 ? "" : "s"}. ${FIX}\n${lines(project, notes)}`;
+}
+
+/**
+ * The team's queued notes, attached to a message of whatever it says (Sphe,
+ * Nov 3: they go on the next message; "implement the feedback" isn't needed to
+ * send them): if the message asks for them, the feedback skill's fix; if not,
+ * the agent says it sees them and asks, and leaves them alone.
+ */
+export function context(project: Project, notes: AppNote[]): string {
   return (
-    `The team's own notes, left in Edit at these moments: ${notes.length} note${notes.length === 1 ? "" : "s"}. ` +
-    'Load the feedback skill and fix them across the video, as you would a review\'s; after each, feedback_done {note: "<its id, app: and all>", summary}, or feedback_unfixed {note, reason}; a question gets feedback_answer {note, answer}.\n' +
-    lines.join("\n")
+    `The team's own notes, left in Edit at these moments (${notes.length}). ` +
+    `If their message asks to implement the feedback, ${FIX.charAt(0).toLowerCase()}${FIX.slice(1)} ` +
+    `If it doesn't, say you see them and ask whether to implement them; don't fix them unasked.\n${lines(project, notes)}`
   );
 }
 

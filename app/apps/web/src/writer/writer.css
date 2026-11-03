@@ -61,8 +61,11 @@
   -webkit-font-smoothing: antialiased;
 }
 .writer-root * { box-sizing: border-box; }
-.writer-root h1, .writer-root h2, .writer-root h3, .writer-root p { margin: 0; }
-.writer-root button, .writer-root input, .writer-root textarea { font: inherit; color: inherit; }
+/* The shared chat (.repack-chat) is styled with Tailwind. These rules are
+   unlayered, so they beat those utilities: leave the chat's own type, colour
+   and margins alone (a light arrow on the white send button, flat paragraphs). */
+.writer-root h1:not(:where(.repack-chat h1)), .writer-root h2:not(:where(.repack-chat h2)), .writer-root h3:not(:where(.repack-chat h3)), .writer-root p:not(:where(.repack-chat p)) { margin: 0; }
+.writer-root button:not(:where(.repack-chat button)), .writer-root input:not(:where(.repack-chat input)), .writer-root textarea:not(:where(.repack-chat textarea)) { font: inherit; color: inherit; }
 .writer-root ::selection { background: #ffffff33; }
 /* Scrollbars: the app's, only while scrolling (index.css, lib/scrollbars.ts). */
 /* (Not the chat ported from Repack, .repack-chat: its own styles, as Repack has them.) */
@@ -82,11 +85,8 @@
 }
 .writer-root button:not(:where(.repack-chat button)):hover:not(:disabled) { background: var(--hover); border-color: #3a3a3a; }
 .writer-root button:not(:where(.repack-chat button)):disabled { opacity: 0.4; cursor: default; }
-/* Repack's base for the same (its globals.css), under the ported chat. */
-.writer-root .repack-chat :where(button) { cursor: pointer; }
-.writer-root .repack-chat :where(button):disabled { opacity: 0.45; cursor: not-allowed; }
+/* Repack's base for the same (its globals.css): icons in the shared chat don't shrink. */
 .writer-root .repack-chat :where(button) :where(svg) { flex-shrink: 0; }
-.writer-root .repack-chat :where(p), .writer-root .repack-chat:where(p) { margin: 0; }
 /* Keyboard focus: a white ring with a gap, on anything you can press. */
 .writer-root :where(button, a, [role="button"], [role="tab"], [role="menuitem"], [tabindex]):focus-visible { outline: none; box-shadow: var(--focus-ring); }
 /* After a click, no ring (main.tsx marks the page until Tab); fields still brighten their border. */
@@ -96,6 +96,8 @@
 .writer-root button.primary { background: var(--primary); color: #fff; border-color: var(--primary); font-weight: 500; }
 .writer-root button.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
 .writer-root button.primary:disabled { background: var(--surface); color: var(--faint); border-color: var(--line-strong); opacity: 1; }
+/* The share dialog's Share stays red while it runs, faded, as the edit page's does. */
+.writer-root button.primary.share-go:disabled { background: var(--primary); border-color: var(--primary); color: #fff; opacity: 0.45; }
 .writer-root button.ghost { background: none; border-color: transparent; color: var(--text-2); }
 .writer-root button.ghost:hover:not(:disabled) { background: var(--hover); color: var(--text); }
 /* Destructive among other actions: red text on a red tint; a dialog's final destructive answer is solid. */
@@ -107,7 +109,7 @@
 .writer-root button.secondary { background: transparent; border-color: var(--line-strong); color: var(--text); font-weight: 500; }
 .writer-root button.secondary.sm { height: 28px; padding: 0 10px; }
 .writer-root button.secondary svg { color: var(--muted); }
-.writer-root input:not([type="checkbox"]), .writer-root textarea {
+.writer-root input:not([type="checkbox"]):not(:where(.repack-chat input)), .writer-root textarea:not(:where(.repack-chat textarea)) {
   width: 100%;
   background: var(--bg);
   border: 1px solid var(--line-strong);
@@ -116,10 +118,10 @@
   outline: none;
   transition: border-color 0.12s;
 }
-.writer-root input:not([type="checkbox"]) { height: 34px; }
-.writer-root input:focus, .writer-root textarea:focus, .writer-root select:focus { border-color: var(--muted); }
-.writer-root input::placeholder, .writer-root textarea::placeholder { color: var(--faint); }
-.writer-root textarea { resize: none; }
+.writer-root input:not([type="checkbox"]):not(:where(.repack-chat input)) { height: 34px; }
+.writer-root input:not(:where(.repack-chat input)):focus, .writer-root textarea:not(:where(.repack-chat textarea)):focus, .writer-root select:not(:where(.repack-chat select)):focus { border-color: var(--muted); }
+.writer-root input:not(:where(.repack-chat input))::placeholder, .writer-root textarea:not(:where(.repack-chat textarea))::placeholder { color: var(--faint); }
+.writer-root textarea:not(:where(.repack-chat textarea)) { resize: none; }
 .writer-root input[type="checkbox"] { accent-color: var(--play); margin: 0; }
 .writer-root .muted { color: var(--muted); }
 .writer-root .faint { color: var(--faint); }
@@ -277,6 +279,14 @@
 .writer-root .dialog-head p { margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
 .writer-root .dialog-body { padding: 16px 20px 4px; overflow: auto; }
 .writer-root .dialog-foot { display: flex; align-items: center; gap: 8px; padding: 16px 20px 18px; }
+/* The script share dialog, laid out like the edit page's Share (24px padding, progress on the left, Close, Share). */
+.writer-root .share-dialog .dialog-head { padding: 24px 24px 0; }
+.writer-root .share-dialog .dialog-head p { margin-top: 4px; font-size: 13px; line-height: 1.5; }
+.writer-root .share-dialog .dialog-body { padding: 16px 24px 4px; }
+.writer-root .share-dialog .dialog-foot { gap: 12px; padding: 20px 24px 24px; }
+.writer-root .share-dialog .dialog-foot > button { flex: none; }
+.writer-root .share-progress { flex: 1; min-width: 0; font-size: 12px; line-height: 1.35; }
+.writer-root .share-progress .up { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); }
 /* No hairline above the buttons; Cancel sits left of the answer. */
 .writer-root .dialog-error { font-size: 12px; }
 /* A dialog's final destructive answer: solid brand red (one red, not two). */
@@ -621,52 +631,53 @@
 .writer-root .tracks { display: flex; flex: 1; min-height: 0; }
 .writer-root .track-heads { display: flex; flex-direction: column; flex-shrink: 0; width: 44px; border-right: 1px solid var(--line); }
 .writer-root .ruler-head { height: 28px; border-bottom: 1px solid var(--line); }
-.writer-root .track-head { display: grid; place-items: center; color: var(--faint); font-family: var(--font-mono); font-size: 11px; font-weight: 600; }
-.writer-root .track-head:nth-child(2) { height: 56px; border-bottom: 1px solid var(--line); }
-.writer-root .track-head:nth-child(3) { flex: 1; }
+/* V1 near-white, A1 green, as the edit timeline's track headers. */
+.writer-root .track-head { display: grid; place-items: center; color: rgb(237 237 237 / 0.8); font-family: var(--font-mono); font-size: 11px; font-weight: 500; }
+.writer-root .track-head:nth-child(2) { height: 48px; margin-bottom: 3px; }
+.writer-root .track-head:nth-child(3) { flex: 1; color: rgb(127 209 139 / 0.8); }
 .writer-root .scroller { position: relative; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; user-select: none; }
 .writer-root .scroller::-webkit-scrollbar { display: none; }
 .writer-root .sequence { position: relative; display: flex; flex-direction: column; height: 100%; min-width: 100%; }
-.writer-root .ruler { position: sticky; left: 0; flex-shrink: 0; display: block; height: 28px; border-bottom: 1px solid var(--line); cursor: ew-resize; }
-.writer-root .video-track, .writer-root .audio-track { position: relative; flex-shrink: 0; }
-.writer-root .video-track { height: 56px; border-bottom: 1px solid var(--line); }
+.writer-root .ruler { position: sticky; left: 0; flex-shrink: 0; display: block; height: 28px; border-bottom: 1px solid rgb(255 255 255 / 0.07); background: #0a0a0a; cursor: ew-resize; }
+.writer-root .video-track, .writer-root .audio-track { position: relative; flex-shrink: 0; background: rgb(255 255 255 / 0.025); }
+.writer-root .video-track { height: 48px; margin-bottom: 3px; }
 .writer-root .audio-track { flex: 1; min-height: 40px; }
-.writer-root .clip, .writer-root .audio-clip { --label: #7088dc; border: 1px solid color-mix(in srgb, var(--label) 42%, #000); border-radius: 5px; background: color-mix(in srgb, var(--label) 24%, #080808); }
+/* Same recipe as the edit timeline: colour at 32% on picture, 60% on a cut-in, 28% on sound, a 92% name bar, a 70% edge. */
+.writer-root .clip, .writer-root .audio-clip { --label: #3b82f6; border: 1px solid color-mix(in srgb, var(--label) 70%, transparent); border-radius: 6px; }
 .writer-root .clip {
   position: absolute;
-  top: 6px;
-  bottom: 6px;
+  top: 1px;
+  bottom: 1px;
   height: auto;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: flex-start;
   padding: 0;
   overflow: hidden;
-  color: color-mix(in srgb, var(--label) 35%, #fff);
+  background: color-mix(in srgb, var(--label) 32%, transparent);
+  color: rgb(255 255 255 / 0.97);
   cursor: grab;
 }
-.writer-root .clip:hover:not(:disabled), .writer-root .clip.hovered { background: color-mix(in srgb, var(--label) 24%, #080808); border-color: color-mix(in srgb, var(--label) 75%, #000); }
+.writer-root .clip:hover:not(:disabled), .writer-root .clip.hovered { border-color: var(--label); }
 .writer-root .cut-in-clip {
+  align-items: center;
   justify-content: center;
-  background: color-mix(in srgb, var(--label) 22%, #080808);
+  background: color-mix(in srgb, var(--label) 60%, transparent);
 }
-.writer-root .cut-in-clip:hover:not(:disabled), .writer-root .cut-in-clip.hovered {
-  background: color-mix(in srgb, var(--label) 22%, #080808);
-}
-.writer-root .clip.selected, .writer-root .clip.selected:hover:not(:disabled) { border-color: #fff; box-shadow: 0 0 0 1px #fff; }
-.writer-root .clip-label { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px; font-size: 11.5px; line-height: 1.3; white-space: nowrap; }
-.writer-root .cut-in-clip .clip-label { font-weight: 500; }
-.writer-root .clip-label b { flex-shrink: 0; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; opacity: 0.6; }
+.writer-root .clip.selected, .writer-root .clip.selected:hover:not(:disabled), .writer-root .audio-clip.selected { border-color: #fff; box-shadow: 0 0 0 1px #fff; }
+.writer-root .clip:not(.cut-in-clip) .clip-label { width: 100%; }
+.writer-root .clip-label { display: flex; align-items: center; gap: 6px; min-width: 0; height: 17px; padding: 0 8px; background: color-mix(in srgb, var(--label) 92%, transparent); font-size: 11px; font-weight: 500; line-height: 17px; white-space: nowrap; }
+.writer-root .cut-in-clip .clip-label { width: auto; height: auto; background: none; }
+.writer-root .clip-label b { flex-shrink: 0; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; }
 .writer-root .clip-label span { overflow: hidden; text-overflow: ellipsis; }
-.writer-root .clip-recording { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; border-left: 2px solid #ffffff99; overflow: hidden; pointer-events: none; }
+.writer-root .clip-recording { position: absolute; top: 0; bottom: 0; display: flex; align-items: flex-start; border-left: 1px solid rgb(255 255 255 / 0.35); overflow: hidden; pointer-events: none; }
 .writer-root .clip-recording:first-child { border-left: 0; }
-.writer-root .clip-recording > span { padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+.writer-root .clip-recording > span { display: flex; align-items: center; width: 100%; height: 17px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: color-mix(in srgb, var(--label) 92%, transparent); font-size: 11px; font-weight: 500; }
 .writer-root .handle { position: absolute; top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
 .writer-root .handle.in { left: 0; }
 .writer-root .handle.out { right: 0; }
 .writer-root .handle:hover, .writer-root .clip.selected .handle { background: color-mix(in srgb, #fff 18%, transparent); }
-.writer-root .audio-clip { position: absolute; top: 5px; bottom: 5px; }
-.writer-root .audio-clip.selected { border-color: #ffffff88; }
+.writer-root .audio-clip { position: absolute; top: 1px; bottom: 1px; background: color-mix(in srgb, var(--label) 28%, transparent); }
 .writer-root .audio-track .wave { position: sticky; left: 0; display: block; height: 100%; pointer-events: none; }
 .writer-root .track-empty { position: sticky; left: 14px; display: inline-block; padding: 19px 0; color: var(--faint); font-size: 12px; }
 .writer-root .drop-mark { position: absolute; top: 18px; bottom: 0; width: 2px; margin-left: -1px; background: var(--text); pointer-events: none; z-index: 5; }
@@ -684,7 +695,7 @@
   white-space: nowrap;
   pointer-events: none;
 }
-.writer-root .playhead { position: absolute; top: 0; bottom: 0; left: -0.5px; z-index: 5; width: 1px; background: var(--play); pointer-events: none; will-change: transform; }
+.writer-root .playhead { position: absolute; top: 0; bottom: 0; left: -0.5px; z-index: 5; width: 1.5px; background: #ff3d6e; pointer-events: none; will-change: transform; }
 .writer-root .playhead::before {
   content: "";
   position: absolute;
@@ -693,13 +704,13 @@
   width: 13px;
   height: 16px;
   border-radius: 2px 2px 0 0;
-  background: var(--play);
+  background: #ff3d6e;
   clip-path: polygon(0 0, 100% 0, 100% 62%, 50% 100%, 0 62%);
 }
 .writer-root .zoom-bar { display: flex; flex-shrink: 0; height: 16px; border-top: 1px solid var(--line); }
 .writer-root .zoom-label { flex-shrink: 0; width: 44px; border-right: 1px solid var(--line); }
 .writer-root .zoom-track { position: relative; flex: 1; min-width: 0; touch-action: none; user-select: none; }
-.writer-root .zoom-thumb { position: absolute; top: 3px; bottom: 3px; min-width: 16px; border-radius: 999px; background: var(--line-strong); cursor: grab; }
+.writer-root .zoom-thumb { position: absolute; top: 3px; bottom: 3px; min-width: 16px; border-radius: 999px; background: rgb(255 255 255 / 0.13); cursor: grab; }
 .writer-root .zoom-thumb:hover { background: #3a3a3a; }
 /* Claude's composer extras */
 .writer-root .kind-select { height: 22px; padding: 0 4px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
@@ -887,7 +898,6 @@
 .writer-root .card-quote { margin: 5px 0 8px; padding-left: 8px; border-left: 2px solid var(--line-strong); color: var(--muted); font-size: 12px; }
 .writer-root .doc-rail .comment.human { background: var(--panel); border-color: var(--line-strong); }
 .writer-root .creation-format { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--text-2); font-size: 13px; }
-.writer-root .script-format { flex-shrink: 0; padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--text-2); font-size: 11px; white-space: nowrap; }
 .writer-root .proposal-review { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 12px; background: var(--surface); border-bottom: 1px solid var(--line-strong); font-size: 12px; }
 .writer-root .proposal-review > div:first-child { display: flex; flex-direction: column; gap: 3px; }
 .writer-root .proposal-review > div:first-child > span { color: var(--muted); }
@@ -1258,12 +1268,29 @@
 /* Review on a Repack link: the Share button, its dialog, and the bands a fix leaves on the page (review.tsx). */
 .writer-root .count-badge { flex: none; display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); color: var(--text); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .writer-root .review-button { gap: 6px; }
-.writer-root .review-link { display: flex; gap: 6px; }
-.writer-root .review-link input { flex: 1; min-width: 0; font-family: var(--font-mono); font-size: 12px; }
-.writer-root .review-meta { margin: 6px 0 0; font-size: 12px; }
-.writer-root .review-delete { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--danger-solid) 45%, transparent); border-radius: 8px; background: var(--danger-soft); font-size: 12px; line-height: 1.45; }
-.writer-root .review-delete span { flex: 1; min-width: 0; }
-.writer-root .review-delete button { flex: none; }
+.writer-root .share-stack { display: flex; flex-direction: column; gap: 8px; }
+.writer-root .share-stack .review-flags, .writer-root .share-stack .review-approved, .writer-root .share-stack .review-auto { margin: 0; }
+.writer-root .share-card, .writer-root .share-row { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.writer-root .share-url { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.writer-root .share-url > svg { flex: none; color: var(--muted); }
+.writer-root .share-url a.url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; text-decoration: none; }
+.writer-root .share-url a.url:hover { text-decoration: underline; }
+.writer-root .share-url button { flex: none; }
+.writer-root .share-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.writer-root .share-meta .grow { flex: 1; min-width: 140px; }
+.writer-root .share-meta button { flex: none; }
+.writer-root .share-meta .ok { color: var(--ok); }
+.writer-root .share-ask { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid color-mix(in srgb, var(--danger-solid) 45%, transparent); background: var(--danger-soft); font-size: 12px; line-height: 1.45; }
+.writer-root .share-ask span { flex: 1; min-width: 0; }
+.writer-root .share-ask button { flex: none; }
+.writer-root .share-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.writer-root .share-row .share-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.writer-root .share-row .share-copy b { font-weight: 500; }
+.writer-root .share-row .share-copy span { font-size: 12px; line-height: 1.35; }
+.writer-root .share-row .share-copy span:not(.bad) { color: var(--muted); }
+.writer-root .share-row .share-copy a { color: var(--text); font-size: 12px; text-decoration: none; }
+.writer-root .share-row .share-copy a:hover { text-decoration: underline; }
+.writer-root .share-row button { flex: none; }
 .writer-root .review-auto { margin: 12px 0 4px; align-items: flex-start; line-height: 1.4; }
 .writer-root .review-notes { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 12px; max-height: 50vh; overflow: auto; }
 .writer-root .review-note { display: flex; flex-direction: column; gap: 4px; padding-left: 10px; border-left: 2px solid var(--accent); }
@@ -1296,7 +1323,6 @@
 .writer-root .band-tip-fix { color: var(--text-2); }
 /* A note for the video editor ("edit: …"): Edit's agent follows it in that section. */
 /* An approved review: done, the link closed to notes. */
-.writer-root .review-button.approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
 .writer-root .approved-mark { height: 22px; border-color: transparent; background: color-mix(in srgb, var(--ok) 10%, transparent); color: var(--ok); }
 .writer-root .review-approved { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 4px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent); border-radius: 8px; color: var(--text); line-height: 1.45; }
 .writer-root .review-approved svg { flex: none; margin-top: 2px; color: var(--ok); }

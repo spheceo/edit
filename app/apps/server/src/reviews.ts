@@ -155,6 +155,43 @@ function update<T>(home: string, change: (state: State) => T): T {
 
 /** Shares in progress (project id → what it's doing), for the UI. */
 const sharing = new Map<string, string>();
+/** A share the person stopped. Checked between stages, and its upload is aborted. */
+const droppedShares = new Set<string>();
+const shareAbort = new Map<string, AbortController>();
+
+function haltShare(projectId: string): void {
+  if (droppedShares.has(projectId)) throw new Error("the share was cancelled");
+}
+
+function shareSignal(projectId: string): AbortSignal {
+  let stop = shareAbort.get(projectId);
+  if (stop === undefined) {
+    stop = new AbortController();
+    shareAbort.set(projectId, stop);
+  }
+  return stop.signal;
+}
+
+function dropShare(projectId: string): void {
+  droppedShares.delete(projectId);
+  shareAbort.delete(projectId);
+}
+
+/** Stops a share, and this project's export when one is running. */
+export function cancelShare(app: App, projectId: string): boolean {
+  const sharingNow = sharing.has(projectId);
+  const exporting = (app.exports.runningFor?.(projectId) ?? null) !== null;
+  if (!sharingNow && !exporting) return false;
+  if (sharingNow) {
+    droppedShares.add(projectId);
+    const stop = shareAbort.get(projectId) ?? new AbortController();
+    shareAbort.set(projectId, stop);
+    stop.abort();
+    sharing.set(projectId, "cancelling");
+  }
+  if (exporting) app.exports.cancel(projectId);
+  return true;
+}
 
 /** Whether project `id` is being shared now (its exports are being read and copied). */
 export function sharingNow(id: string): boolean {
@@ -225,9 +262,15 @@ export async function share(app: App, projectId: string, path: string | null, re
   const copy = join(work, `${timeline}.mp4`);
   const poster = join(work, `${timeline}.jpg`);
   sharing.set(projectId, "making the review copy");
+  const signal = shareSignal(projectId);
+  const tick = (label: string) => (done: number, total: number) => {
+    haltShare(projectId);
+    sharing.set(projectId, total ? `${label} ${Math.round((done / total) * 100)}%` : label);
+  };
   try {
     // The export held while it's read (an archive waits for it), let go however this ends.
     return await withExport(chosen.path, async () => {
+      haltShare(projectId);
       const prefix = `edit/reviews/${projectId}/${timeline}`;
       const fullKey = fullKeyOf(prefix, chosen.path);
       const seconds = chosen.frames / fps;
@@ -270,11 +313,14 @@ export async function share(app: App, projectId: string, path: string | null, re
         }
         await tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", "-ss", fixed(posterSecond(now.project, seconds), 2), "-i", pick.path, "-frames:v", "1", "-vf", "scale=1280:-2", poster]);
         sharing.set(projectId, "uploading");
-        await cloud.uploadFile(copy, `${prefix}/video.mp4`, (done, total) => sharing.set(projectId, `uploading ${total ? Math.round((done / total) * 100) : 0}%`));
-        await cloud.uploadFile(poster, `${prefix}/poster.jpg`);
+        haltShare(projectId);
+        await cloud.uploadFile(copy, `${prefix}/video.mp4`, tick("uploading"), signal);
+        haltShare(projectId);
+        await cloud.uploadFile(poster, `${prefix}/poster.jpg`, () => haltShare(projectId), signal);
         // The export itself, untouched, for the page's Download button (`fullKey`).
         sharing.set(projectId, "uploading the full-quality file");
-        await cloud.uploadFile(pick.path, fullKey, (done, total) => sharing.set(projectId, `uploading the full-quality file ${total ? Math.round((done / total) * 100) : 0}%`));
+        haltShare(projectId);
+        await cloud.uploadFile(pick.path, fullKey, tick("uploading the full-quality file"), signal);
       }
       if (latest !== null && latest !== undefined) {
         const shared = read(home).shared[projectId]!;
@@ -286,6 +332,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
         return { url: shared.url, version: latest.n };
       }
+      haltShare(projectId);
       if (compress) {
         // Every revision so far becomes this one, v1, on the same link: the
         // other versions go and their notes move onto v1 (Repack's reviews:compress).
@@ -302,6 +349,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
         return { url: answer.url, version: 1 };
       }
+      haltShare(projectId);
       sharing.set(projectId, "publishing");
       const durationMs = Math.round((chosen.frames / fps) * 1000);
       const answer = (await cloud.mutation("reviews:publish", {
@@ -326,14 +374,16 @@ export async function share(app: App, projectId: string, path: string | null, re
     });
   } finally {
     sharing.delete(projectId);
+    dropShare(projectId);
   }
 }
 
 /**
- * The Share button: the whole edit exported the house way (`options`, the
- * dialog's: its script chapters), then shared to its review link, made the
- * first time and a new version under it after. It runs on with nobody
- * watching; the review's `sharing` says how it's going.
+ * The Share button: the whole edit exported for YouTube (`options`, the
+ * dialog's: its script chapters; a keyframe every half second, 320 kbps
+ * sound, −14 LUFS), then shared to its review link, made the first time
+ * and a new version under it after. It runs on with nobody watching; the
+ * review's `sharing` says how it's going.
  */
 /**
  * `replace` (the person sharing asks for it, or a fix by the user's rule:
@@ -346,8 +396,9 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
   if (removing.has(projectId)) throw new Error("this project's review link is being deleted: share it again once that's done");
-  // Remembered for the share after a Ready for changes: the house settings, not this span or its chapters.
-  const { range: _range, chapters: _chapters, ...settings } = options;
+  // Remembered for the share after a Ready for changes: these settings, not this span or its chapters.
+  // Every share is for YouTube, including one from Home that sends no options (Sphe, Nov 3).
+  const { range: _range, chapters: _chapters, ...settings } = { ...options, preset: "youtube" as const };
   // The watermark too (Sphe, Nov 2: a channel's logo on the final export): `null` takes it off, absent keeps the last one.
   update(app.store.home, (state) => {
     state.shareOptions = { ...state.shareOptions, [projectId]: settings };
@@ -366,19 +417,30 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
     await seams.broll.waitForMaps(app, projectId, 60_000).catch((error: unknown) => {
       if (!seams.isUnavailable(error)) throw error;
     });
+    haltShare(projectId);
     // Slowed shots still being smoothed would go out stuttering or half
     // swapped (N3on's fourth preview was shared with 16 still rendering).
     sharing.set(projectId, "waiting for slowed shots");
     await seams.broll.waitForSmoothing(projectId, 20 * 60_000).catch((error: unknown) => {
       if (!seams.isUnavailable(error)) throw error;
     });
+    haltShare(projectId);
     sharing.set(projectId, "exporting");
     const live = app.store.get(projectId);
     if (live === null) throw new Error("no such project");
-    const asked = { ...native().exportDefaults(), ...options } as ExportOptions;
+    const asked = { ...native().exportDefaults(), ...options, preset: "youtube" } as ExportOptions;
     path = await exportOnce(app, projectId, live.project, asked, note, mark, replace);
-  } finally {
+  } catch (error) {
     sharing.delete(projectId);
+    const message = diag.messageOf(error);
+    dropShare(projectId);
+    if (message === "the export was cancelled" || message === "the share was cancelled") throw new Error(message);
+    throw error;
+  }
+  sharing.delete(projectId);
+  if (droppedShares.has(projectId)) {
+    dropShare(projectId);
+    throw new Error("the share was cancelled");
   }
   return share(app, projectId, path, replace);
 }
@@ -396,8 +458,17 @@ export async function resumeShare(app: App, projectId: string, project: Project,
   let path: string;
   try {
     path = await exportOnce(app, projectId, project, options, output.note, output.watermark, output.replace === true);
-  } finally {
+  } catch (error) {
     sharing.delete(projectId);
+    const message = diag.messageOf(error);
+    dropShare(projectId);
+    if (message === "the export was cancelled" || message === "the share was cancelled") throw new Error(message);
+    throw error;
+  }
+  sharing.delete(projectId);
+  if (droppedShares.has(projectId)) {
+    dropShare(projectId);
+    throw new Error("the share was cancelled");
   }
   await share(app, projectId, path, output.replace === true);
 }
@@ -433,6 +504,7 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
   let followed = false;
   let silent = 0;
   for (;;) {
+    if (droppedShares.has(projectId)) return yield* Effect.fail(new Error("the share was cancelled"));
     const turn = yield* Effect.scoped(
       Effect.gen(function* () {
         // Listening before looking, so its end can't be missed.
@@ -491,6 +563,8 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
     const outcome: Ended = turn.ended;
     if ("file" in outcome) return outcome.file;
     if ("failed" in outcome) {
+      // A cancel stops the share. Following an export and then exporting again would undo it.
+      if (outcome.failed === "the export was cancelled" || droppedShares.has(projectId)) return yield* Effect.fail(new Error(outcome.failed === "the export was cancelled" ? outcome.failed : "the share was cancelled"));
       if (turn.kind === "followed") {
         yield* Effect.logWarning(`${project.name}: the export it followed ended without a file (${outcome.failed}); exporting again`);
         continue;
@@ -2062,6 +2136,11 @@ export function routes(router: Router<App>): void {
   router.get("/api/projects/status", ({ app }) => sorted(projectStatus(app)));
   router.get("/api/projects/{id}/review", ({ app, params }) => sorted(view(app, params.id ?? "")));
   // Share: export the whole edit, then share it (the link, or its next version).
+  router.post("/api/projects/{id}/share/cancel", ({ app, params }) => {
+    const id = params.id ?? "";
+    if (app.store.get(id) === null) throw new ApiError(404, "no such project");
+    return sorted({ cancelled: cancelShare(app, id) });
+  });
   router.post("/api/projects/{id}/share", async (context) => {
     const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
     const id = context.params.id ?? "";
@@ -2074,7 +2153,11 @@ export function routes(router: Router<App>): void {
     // The dialog's watermark: a channel's picture id, or null for none; from Home, the last Share's.
     const watermark = typeof given?.watermark === "string" && given.watermark !== "" ? given.watermark : given?.watermark === null ? null : undefined;
     const started = exportAndShare(context.app, id, options, replace, undefined, watermark);
-    started.catch((error: unknown) => diag.warn("review", `sharing ${id}: ${diag.messageOf(error)}`));
+    started.catch((error: unknown) => {
+      const message = diag.messageOf(error);
+      if (message === "the share was cancelled" || message === "the export was cancelled") return;
+      diag.warn("review", `sharing ${id}: ${message}`);
+    });
     // Refused at once (already sharing, no cloud) says so; else it runs on.
     const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 300))]).catch((error: unknown) => {
       throw new ApiError(400, diag.messageOf(error));
@@ -2088,7 +2171,11 @@ export function routes(router: Router<App>): void {
     const id = context.params.id ?? "";
     const path = typeof given?.path === "string" ? given.path : null;
     const started = share(context.app, id, path, false, true);
-    started.catch((error: unknown) => diag.warn("review", `compressing ${id}: ${diag.messageOf(error)}`));
+    started.catch((error: unknown) => {
+      const message = diag.messageOf(error);
+      if (message === "the share was cancelled" || message === "the export was cancelled") return;
+      diag.warn("review", `compressing ${id}: ${message}`);
+    });
     const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))]).catch((error: unknown) => {
       throw new ApiError(400, diag.messageOf(error));
     });
@@ -2100,7 +2187,11 @@ export function routes(router: Router<App>): void {
     const path = typeof given?.path === "string" ? given.path : null;
     // A minute or two (the review copy, the upload): it runs on, and the review says how it's going.
     const started = share(context.app, id, path, given?.replace === true);
-    started.catch((error: unknown) => diag.warn("review", `sharing ${id}: ${diag.messageOf(error)}`));
+    started.catch((error: unknown) => {
+      const message = diag.messageOf(error);
+      if (message === "the share was cancelled" || message === "the export was cancelled") return;
+      diag.warn("review", `sharing ${id}: ${message}`);
+    });
     const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 1500))]).catch((error: unknown) => {
       throw new ApiError(400, diag.messageOf(error));
     });

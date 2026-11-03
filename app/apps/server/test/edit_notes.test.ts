@@ -1,6 +1,7 @@
 // The team's own notes on an edit (Sphe, Nov 2): left at the playhead, pinned
-// to the footage there, queued, pulled with "implement the feedback", fixed
-// and reported like a review's, never put on the review.
+// to the footage there, queued, riding the next message (Nov 3) or pulled
+// with "implement the feedback", fixed and reported like a review's, never
+// put on the review.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 
@@ -159,6 +160,48 @@ test("implement the feedback: the team's notes go to the agent, are fixed with w
     while (db.rows[1]!.status !== "queued" && Date.now() < end) await Bun.sleep(20);
     expect(db.rows[1]!.status).toBe("queued");
     expect(db.paths.some((path) => path.startsWith("reviews:"))).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("queued notes ride the next message, whatever it says (Sphe, Nov 3); the one it doesn't answer goes back in the queue", async () => {
+  const { app, cleanup } = fixtureHome("notes-send");
+  // The turn the send starts: running while it works, done when it's over.
+  let running = false;
+  const sent: { text: string; context: string }[] = [];
+  (app as unknown as { agents: unknown }).agents = {
+    chat: () => ({ running }),
+    send: async (_id: string, text: string, _model: null, _effort: null, context: string) => {
+      sent.push({ text, context });
+      running = true;
+    },
+  };
+  try {
+    const db = mamagi();
+    const id = await judge(app);
+    await editNotes.add(app, id, { text: "cut the pause", frame: 60 });
+    const router = buildRouter();
+    const response = await respond(
+      app,
+      router,
+      new Request(`http://localhost:7700/api/projects/${id}/agent`, {
+        method: "POST",
+        headers: { host: "localhost:7700", "content-type": "application/json" },
+        body: JSON.stringify({ text: "tighten the intro" }),
+      }),
+      null,
+    );
+    expect(response?.status).toBe(200);
+    expect(sent[0]!.text).toBe("tighten the intro");
+    expect(sent[0]!.context).toContain("[app:n1] at 0:02");
+    expect(sent[0]!.context).toContain("implement the feedback");
+    expect(sent[0]!.context).toContain("don't fix them unasked");
+    expect(db.rows[0]!.status).toBe("sent");
+    running = false;
+    const end = Date.now() + 5_000;
+    while (db.rows[0]!.status !== "queued" && Date.now() < end) await Bun.sleep(20);
+    expect(db.rows[0]!.status).toBe("queued");
   } finally {
     cleanup();
   }

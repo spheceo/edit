@@ -12,13 +12,14 @@ import { ProblemView } from "./ProblemView";
 import { Button, cx, Modal, Select } from "./ui";
 
 /**
- * Share replaces Export (Oct 24): one button exports the whole edit the
- * house way (the project's size and rate, H.264, −14 LUFS, the script's
- * chapters) and puts it on the project's review link, where anyone with it
- * watches and leaves notes at a moment, and the notes come back to the agent.
- * The first share makes the link; every share after is a new version on it.
+ * Share replaces Export (Oct 24): one button exports the whole edit for
+ * YouTube (the project's size and rate, H.264, a keyframe every half second,
+ * 320 kbps sound, −14 LUFS, the script's chapters) and puts it on the
+ * project's review link, where anyone with it watches and leaves notes at a
+ * moment, and the notes come back to the agent. The first share makes the
+ * link; every share after is a new version on it.
  */
-const HOUSE: Omit<ExportOptions, "range" | "chapters"> = { ...DEFAULTS, size: null, fps: null };
+const HOUSE: Omit<ExportOptions, "range" | "chapters"> = { ...DEFAULTS, size: null, fps: null, preset: "youtube" };
 
 export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const project = useEditor((state) => state.project);
@@ -40,8 +41,10 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [marked, setMarked] = useState(false);
   const [channel, setChannel] = useState<string | null>(null);
   const [markTouched, setMarkTouched] = useState(false);
-  // YouTube's upload settings (Sphe, Nov 2): a keyframe every half second, 320 kbps sound, −14 LUFS; else the house export.
-  const [youtube, setYoutube] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  // A share or export just stopped here, so a finished export isn't announced as the new version.
+  const [stopped, setStopped] = useState(false);
   useEffect(() => {
     if (!open) return;
     setMarkTouched(false);
@@ -110,6 +113,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const share = async () => {
     if (busy) return;
     setStarting(true);
+    setStopped(false);
     setProblem(null);
     try {
       useEditor.getState().endGesture();
@@ -118,7 +122,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       const duration = projectDuration(project);
       const span: [number, number] = [0, duration];
       const embedded = chaptersInSpan(chapters, span, rate(project.settings));
-      const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [], ...(youtube ? { preset: "youtube" as const, quality: "high" as const, loudness: -14 } : {}) };
+      const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [] };
       await api.shareProject(project.id, options, replace && latest !== null, false, marked && channel !== null ? channel : null);
       setReview(await api.review(project.id));
     } catch (error) {
@@ -161,7 +165,43 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
+  const exporting = exportState?.state === "queued" || exportState?.state === "running";
   const progress = exportState?.state === "queued" ? "Export queued · you can keep editing" : exportState?.state === "running" ? `Exporting… ${Math.round(exportState.progress * 100)}%` : sharing ? `${sharing[0]!.toUpperCase()}${sharing.slice(1)}…` : null;
+  const ended = !busy && !exporting && (stopped || exportState?.state === "failed" || exportState?.state === "cancelled");
+  const retry = async () => {
+    if (busy || retrying) return;
+    setRetrying(true);
+    setProblem(null);
+    try {
+      await api.retryExport(project.id);
+      setStopped(false);
+      setReview(await api.review(project.id));
+    } catch (error) {
+      // Cancelled before an export existed: share with the dialog's settings.
+      if ((error as Error).message === "nothing to retry") {
+        setRetrying(false);
+        await share();
+        return;
+      }
+      setProblem((error as Error).message);
+    } finally {
+      setRetrying(false);
+    }
+  };
+  const stop = async () => {
+    setStopping(true);
+    setProblem(null);
+    try {
+      if (sharing !== null) await api.cancelShare(project.id);
+      if (exporting) await api.cancelExport(project.id);
+      setStopped(true);
+      setReview(await api.review(project.id));
+    } catch (error) {
+      setProblem((error as Error).message);
+    } finally {
+      setStopping(false);
+    }
+  };
 
   return (
     <Modal open={open} onClose={onClose} width={500}>
@@ -256,23 +296,15 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
           )}
         </div>
 
-        <div className="mt-2 flex items-center gap-3 rounded-[10px] border border-line bg-panel px-3 py-2.5">
-          <label className="flex min-w-0 flex-1 items-center gap-2.5 text-[13px]" title="H.264 High, a keyframe every half second, AAC at 320 kbps, −14 LUFS with peaks under −1 dBTP">
-            <input type="checkbox" checked={youtube} disabled={busy} onChange={(event) => setYoutube(event.target.checked)} />
-            <span className="min-w-0">
-              <span className="block text-fg">For YouTube</span>
-              <span className="block text-[12px] leading-snug text-muted">A keyframe every half second, 320 kbps sound, −14 LUFS</span>
-            </span>
-          </label>
-        </div>
-
         <div className="mt-5 flex min-h-[34px] items-center gap-3">
           <div className="min-w-0 flex-1 text-[12px]">
             {progress && <span className="text-muted tabular">{progress}</span>}
             {!progress && problem && (
               <ProblemView error={problem} doing="share it" />
             )}
-            {!progress && !problem && exportState?.state === "done" && link && (
+            {!progress && !problem && exportState?.state === "failed" && (exportState.error ? <ProblemView error={exportState.error} doing="export it" /> : <span className="text-muted">Export failed</span>)}
+            {!progress && !problem && (stopped || exportState?.state === "cancelled") && exportState?.state !== "failed" && <span className="text-muted">Cancelled</span>}
+            {!progress && !problem && !stopped && exportState?.state === "done" && link && (
               <span className="flex items-center gap-1.5 text-success">
                 <Check size={13} /> Up on the link
               </span>
@@ -284,10 +316,20 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
               Replace v{latest}
             </label>
           )}
+          {(exporting || sharing !== null) && (
+            <Button variant="ghost" disabled={stopping || sharing === "cancelling"} onClick={() => void stop()}>
+              {stopping || sharing === "cancelling" ? "Stopping…" : "Cancel"}
+            </Button>
+          )}
+          {ended && (
+            <Button variant="ghost" disabled={retrying} onClick={() => void retry()}>
+              {retrying ? "Retrying…" : "Retry"}
+            </Button>
+          )}
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button variant="primary" disabled={busy || projectDuration(project) <= 0} onClick={() => void share()}>
+          <Button variant="primary" disabled={busy || retrying || projectDuration(project) <= 0} onClick={() => void share()}>
             {busy ? "Sharing…" : link && latest !== null ? (replace ? `Replace v${latest}` : `Share v${latest + 1}`) : "Share"}
           </Button>
         </div>

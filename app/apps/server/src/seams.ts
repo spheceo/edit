@@ -106,6 +106,8 @@ export interface Exports {
   start(store: Store, library: Library, project: Project, options: ExportOptions, path: string | null, extra?: StartExtra): Promise<string>;
   /** Cancels project `id`'s export; whether one was running. */
   cancel(id: string): boolean;
+  /** How an export that failed or was cancelled was started, so it can be run again. */
+  replay?(id: string): { options: ExportOptions; output: string; extra: StartExtra } | null;
   /** Whether any export is running (an update waits for it). */
   running(): boolean;
   /** Project `id`'s export under way, if any: what it writes, its timeline hash and options key. */

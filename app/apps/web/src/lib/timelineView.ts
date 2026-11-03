@@ -94,6 +94,8 @@ function reveal(frame: number, at: number) {
   setView({ scrollX: frame * ppf - lanesWidth * at });
 }
 
+export { centredScrollY, nextFollow } from "./follow";
+
 /** Go to start: the playhead to frame 0, and the lanes with it. */
 export function goToStart() {
   preview.seek(0);

@@ -27,7 +27,6 @@ import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, Modal, Spinner, spring } from "./ui";
-import { ExportActivity } from "./ExportActivity";
 import { DevBadge, DevControl, promoteItem, useDevTools, useShowDev } from "./DevProjects";
 
 // Every project is 1080p at 30 fps.
@@ -467,7 +466,6 @@ export function Home() {
             </h1>
             <div className="ml-auto flex items-center gap-1.5">
               <UpdateButton />
-              <ExportActivity inline />
               {/* One main action a screen, in white (the user, Oct 30). */}
               {inIdeas ? (
                 <Button variant="light" onClick={() => setIdeaOpen(true)}>

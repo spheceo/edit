@@ -10,14 +10,13 @@
 import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, Loader, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
+import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
 import { picturesOnly, postFile } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { StartedBy } from "../components/StartedBy";
 import { Button, cx, Modal, Spinner } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
-import { buildTurns } from "../lib/agentTurns";
 import { footageIn, footageLine, WORKSPACE_NAMES, type IdeaFootage, type IdeaImage } from "@edit/types/ideas";
 import { chatImageUrl, ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
@@ -1009,23 +1008,11 @@ export function entriesOf(idea: Idea): { entries: AgentEntry[]; running: boolean
   return { entries, running };
 }
 
-function ChatShell({ loading, children }: { loading?: boolean; children?: ReactNode }) {
-  return <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">{loading ? <div className="min-h-0 flex-1 px-3 py-3"><ChatLoading /></div> : children}</section>;
-}
-
 function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => void }) {
-  const list = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
   const toastError = useEditor((state) => state.toastError);
   const { entries, running } = entriesOf(idea);
-  const turns = buildTurns(entries, running);
   // What was there when the page opened doesn't animate in.
-  const known = useRef<{ idea: string; ids: Set<string> } | null>(null);
-  if (known.current?.idea !== id) known.current = { idea: id, ids: new Set(entries.map((entry) => entry.id)) };
-  useEffect(() => {
-    const node = list.current;
-    if (node && stick.current) node.scrollTop = node.scrollHeight;
-  });
+  const { turns, known } = useChatTurns(id, entries, running);
   const other = running && idea.run !== null && idea.run.tools === undefined && idea.run.said === undefined ? ` · on ${idea.run.holder}` : "";
   // Pictures attached to a message are kept beside the idea's own, not among its eight.
   const files = useMemo(
@@ -1037,32 +1024,27 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
     [id],
   );
   return (
-    <ChatShell>
-      <div
-        ref={list}
-        onScroll={(event) => {
-          const node = event.currentTarget;
-          stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
-        }}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
-      >
-        {entries.length === 0 ? (
-          <Empty title="Ask for a change" detail="Another angle, punchier titles, one more title, a different place in the thumbnail. Claude changes the idea as you watch." />
-        ) : (
-          <ChatTurns turns={turns} known={known.current.ids} thinking={running ? `${idea.run?.step ?? "Working"}${other}` : undefined} />
-        )}
-      </div>
-      <ChatComposer
-        running={running}
-        disabled={false}
-        modelName="Opus 5.5"
-        placeholder={running ? "Working…" : "Ask for another angle, or a change…"}
-        draft={`ideas.chat-draft.${id}`}
-        chat={`idea:${id}`}
-        files={files}
-        onSend={(message, attached) => void ideasApi.chat(id, message, attached.map((one) => one.landed as IdeaImage)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
-        onStop={() => void ideasApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
-      />
+    <ChatShell
+      resetKey={id}
+      footer={
+        <ChatComposer
+          running={running}
+          disabled={false}
+          modelName="Opus 5.5"
+          placeholder={running ? "Working…" : "Ask for another angle, or a change…"}
+          draft={`ideas.chat-draft.${id}`}
+          chat={`idea:${id}`}
+          files={files}
+          onSend={(message, attached) => void ideasApi.chat(id, message, attached.map((one) => one.landed as IdeaImage)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
+          onStop={() => void ideasApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
+        />
+      }
+    >
+      {entries.length === 0 ? (
+        <Empty title="Ask for a change" detail="Another angle, punchier titles, one more title, a different place in the thumbnail. Claude changes the idea as you watch." />
+      ) : (
+        <ChatTurns turns={turns} known={known} thinking={running ? `${idea.run?.step ?? "Working"}${other}` : undefined} />
+      )}
     </ChatShell>
   );
 }

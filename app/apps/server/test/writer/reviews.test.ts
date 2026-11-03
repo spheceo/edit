@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import type { App } from "../../src/app.ts";
-import { approvalOf, isOpen, noteOf, shareState, shareWork, sharedAnchor, startShare, untaken } from "../../src/writer/reviews.ts";
+import { approvalOf, cancelShare, isOpen, noteOf, shareProgress, shareQueue, shareState, shareWork, sharedAnchor, startShare, untaken } from "../../src/writer/reviews.ts";
 import type { Script } from "@edit/types/writer";
 
 test("reads notes and approvals as Repack sends them", () => {
@@ -42,6 +42,33 @@ test("names a comment's words in the shared text", () => {
   fs.rmSync(dir, { recursive: true });
 });
 
+test("a script share's place in the export queue follows its stage", () => {
+  expect(shareProgress("checking the preview")).toBeCloseTo(0.05);
+  expect(shareProgress("uploading the script")).toBeCloseTo(0.15);
+  expect(shareProgress("uploading the footage")).toBeCloseTo(0.2);
+  expect(shareProgress("uploading the footage 50%")).toBeCloseTo(0.5);
+  expect(shareProgress("uploading the footage 100%")).toBeCloseTo(1);
+  expect(shareProgress("publishing")).toBeCloseTo(0.95);
+});
+
+test("cancelling a script share takes it off the queue and is not a failure", async () => {
+  const before = shareWork.run;
+  let finish: (script: Script) => void = () => {};
+  shareWork.run = () => new Promise<Script>((resolve) => { finish = resolve; });
+  try {
+    const pending = startShare({} as App, "/nowhere", "share-cancel");
+    expect(cancelShare("share-cancel")).toBe(true);
+    expect(shareState("share-cancel").sharing?.stage).toBe("cancelling");
+    expect(cancelShare("missing")).toBe(false);
+    finish({ id: "share-cancel" } as Script);
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(shareState("share-cancel")).toEqual({});
+    expect(shareQueue()).toEqual([]);
+  } finally {
+    shareWork.run = before;
+  }
+});
+
 test("scripts share on their own, several at once, and one share of a script at a time (JJ, Nov 1)", async () => {
   const before = shareWork.run;
   const waiting = new Map<string, { resolve: (script: Script) => void; reject: (error: Error) => void }>();
@@ -53,6 +80,9 @@ test("scripts share on their own, several at once, and one share of a script at 
     // Both under way at once; a second share of the same script is refused, saying the first carries on.
     expect(shareState("share-a").sharing).toBeDefined();
     expect(shareState("share-b").sharing).toBeDefined();
+    // Both are on the shared export queue, at the first stage, until each share settles.
+    expect(shareQueue().map((one) => one.id).sort()).toEqual(["share-a", "share-b"]);
+    expect(shareQueue().every((one) => one.name === "Script" && one.stage === "checking the preview" && one.progress === 0.05)).toBe(true);
     await expect(startShare(app, "/nowhere", "share-a")).rejects.toThrow("already being shared");
     waiting.get("share-a")!.resolve({ id: "share-a" } as Script);
     await a;
@@ -65,6 +95,7 @@ test("scripts share on their own, several at once, and one share of a script at 
     expect(shareState("share-b").shareFailed).toBeUndefined();
     waiting.get("share-b")!.resolve({ id: "share-b" } as Script);
     await again;
+    expect(shareQueue()).toEqual([]);
   } finally {
     shareWork.run = before;
   }

@@ -278,6 +278,12 @@ export function routes(router: Router<App>): void {
       });
     })
     // Sharing for review on feedback.spheceo.com, and the notes reviewers leave there.
+    .post("/api/writer/scripts/{id}/share/cancel", (context) =>
+      answer(() => {
+        can.require(can.SHARE);
+        return { cancelled: reviews.cancelShare(id(context)) };
+      }),
+    )
     .post("/api/writer/scripts/{id}/share", (context) =>
       answer(async () => {
         can.require(can.SHARE);
@@ -285,7 +291,10 @@ export function routes(router: Router<App>): void {
         readFor(data, id(context));
         // It runs on its own, as an edit's share does (JJ, Nov 1): refused at once says so, else the script says it's sharing.
         const started = reviews.startShare(context.app, data, id(context));
-        started.catch((error: unknown) => diag.warn("writer", `sharing ${id(context)}: ${diag.messageOf(error)}`));
+        started.catch((error: unknown) => {
+          if (error instanceof reviews.ShareCancelled) return;
+          diag.warn("writer", `sharing ${id(context)}: ${diag.messageOf(error)}`);
+        });
         const first = await Promise.race([started.then((done) => ({ done })), new Promise<null>((resolve) => setTimeout(() => resolve(null), 300))]);
         return detail(data, first === null ? readFor(data, id(context)) : first.done);
       }),

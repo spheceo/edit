@@ -16,6 +16,12 @@ function base64(bytes: Uint8Array) {
 const madeAt = (value: string | number) =>
   new Date(value).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
+/** A new Google Doc from the script as it stands. The share dialog and this one both use it. */
+export async function makeDoc(script: Script, draft: boolean) {
+  const docx = scriptDocx(docContent(script), COMMENT_AUTHOR, new Date(script.updatedAt || Date.now()).toISOString());
+  return exportDoc(script.id, draft, base64(docx));
+}
+
 /** Comments people left, not the notes Writer put on the Doc itself. */
 const people = (comments: DocComment[]) =>
   comments.filter((comment) => !comment.deleted && comment.author?.displayName !== COMMENT_AUTHOR && comment.content?.trim());
@@ -101,8 +107,7 @@ export function DocsDialog({
     setProblem(null);
     setMade(null);
     try {
-      const docx = scriptDocx(docContent(script), COMMENT_AUTHOR, new Date(script.updatedAt || Date.now()).toISOString());
-      const file = await exportDoc(script.id, kind === "draft", base64(docx));
+      const file = await makeDoc(script, kind === "draft");
       setMade(file);
       if (kind === "script") onChange(await getScript(script.id));
       if (earlierOpen) setEarlier(await listDocs(script.id).catch(() => earlier));

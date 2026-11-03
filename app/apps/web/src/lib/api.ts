@@ -167,6 +167,10 @@ export interface ExportActivity {
   note?: string;
   /** Queued: what it waits for ("waiting for the encoder (this Mac has one)"). */
   waiting?: string;
+  /** A script share in the same queue. Absent on an edit's export. */
+  kind?: "edit" | "script";
+  /** A script share's stage ("uploading the footage 42%"). */
+  stage?: string;
 }
 
 export const api = {
@@ -235,6 +239,10 @@ export const api = {
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),
   transcript: (id: string, media: string) => request<Transcript>("GET", `/api/projects/${id}/media/${media}/transcript`),
   cancelExport: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/export/cancel`),
+  /** Runs a failed or cancelled export again, the way it was started. A share's export is shared again. */
+  retryExport: (id: string) => request<{ path?: string; started?: boolean }>("POST", `/api/projects/${id}/export/retry`),
+  /** Stops a share, and this project's export when one is running. */
+  cancelShare: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/share/cancel`),
   /** Smooth playback (playback_render.ts): what's rendered, and asking for the edit as it is now. */
   playback: (id: string) => request<PlaybackStatus>("GET", `/api/projects/${id}/playback`),
   /** `frame`: the playhead, whose chunk is rendered first. */

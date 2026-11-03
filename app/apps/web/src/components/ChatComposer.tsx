@@ -44,6 +44,12 @@ export function ChatComposer({
   chat,
   files,
   tray,
+  value,
+  onValueChange,
+  allowEmpty = false,
+  quote,
+  onClearQuote,
+  hint,
 }: {
   running: boolean;
   disabled: boolean;
@@ -60,8 +66,23 @@ export function ChatComposer({
   files?: { upload: Uploader; accept?: Accept };
   /** On the composer's top edge with the queue: the team's notes, the agent asking to reset. */
   tray?: ReactNode;
+  /** Controlled words (a chat that sets the draft from elsewhere); without it the composer keeps its own. */
+  value?: string;
+  onValueChange?: (value: string) => void;
+  /** This chat can send with no words (a script's first build takes notes or none). */
+  allowEmpty?: boolean;
+  /** Words quoted from elsewhere, shown in the tray until cleared. */
+  quote?: string;
+  onClearQuote?: () => void;
+  /** A quiet word at the footer's right, before Send. */
+  hint?: string;
 }) {
-  const [text, setText] = useState(() => (draft === undefined ? "" : (localStorage.getItem(draft) ?? "")));
+  const [own, setOwn] = useState(() => (draft === undefined ? "" : (localStorage.getItem(draft) ?? "")));
+  const text = value ?? own;
+  const setText = (next: string) => {
+    if (onValueChange) onValueChange(next);
+    if (value === undefined) setOwn(next);
+  };
   const attached = useFilesOf(chat);
   const queue = useQueue((state) => state.chats[chat] ?? NO_QUEUE);
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
@@ -108,10 +129,10 @@ export function ChatComposer({
   };
   const waiting = uploading(attached);
   const ready = attached.some((one) => one.state === "done");
-  const canSend = (text.trim() !== "" || ready) && !waiting && !disabled;
+  const canSend = (allowEmpty || text.trim() !== "" || ready) && !waiting && !disabled;
   const send = () => {
     if (!canSend) return;
-    const message = text.trim() || "Here are the files I've attached.";
+    const message = text.trim() || (ready ? "Here are the files I've attached." : "");
     const given = takeFiles(chat);
     setText("");
     if (running || queue.length > 0) {
@@ -124,6 +145,16 @@ export function ChatComposer({
   const showStop = running && !canSend;
   const islands = [
     queue.length > 0 && <QueueIsland key="queue" chat={chat} queue={queue} />,
+    quote !== undefined && quote !== "" && (
+      <div key="quote" className="flex items-start gap-2 px-3 pt-2 pb-1.5">
+        <blockquote className="min-w-0 flex-1 border-l-2 border-line-strong pl-2 text-[12px] leading-relaxed whitespace-pre-wrap text-muted">{quote}</blockquote>
+        {onClearQuote && (
+          <button type="button" aria-label="Remove quoted text" title="Remove quoted text" onClick={onClearQuote} className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg">
+            <X size={12} />
+          </button>
+        )}
+      </div>
+    ),
     tray,
   ].filter((one) => one !== false && one !== null && one !== undefined);
 
@@ -221,6 +252,7 @@ export function ChatComposer({
             {/^(Opus|Sonnet|Haiku|Fable|Claude)\b/u.test(modelName) && <ClaudeMark size={12} />}
             {modelName}
           </span>
+          {hint !== undefined && hint !== "" && <span className="ml-auto truncate text-[11.5px] text-faint">{hint}</span>}
           {showStop ? (
             <button
               type="button"

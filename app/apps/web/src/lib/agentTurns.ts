@@ -84,8 +84,12 @@ const IDEA_TOOLS: Record<string, string> = {
   save_summary: "Wrote the summary",
 };
 
+/** A script's tools carry their own human label in the entry's text (writer/chat/turn.ts). */
+const SCRIPT_TOOLS = new Set(["build_script", "plan_part", "read_timeline", "read_passages", "find_words", "remove_words", "insert_words", "arrange_word_clips", "arrange_time_clips", "insert_cut_in", "set_reuse_link", "move_clips", "reorder_clip", "trim_clip", "split_clip", "delete_items", "close_gaps", "set_label", "correct_word", "history", "select_clips", "move_playhead", "start_export", "inspect_frames", "read_assets", "curate_assets", "read_doc_comments", "find_silences", "read_audio", "review_cuts", "polish_clips", "remove_silences", "load_writing_skill", "read_script", "write_cut_ins", "set_outline", "set_opening", "add_section", "finish_section", "read_plan", "review_plan", "replace_items", "remove_items", "finish"]);
+
 /** A short, human title for one call. */
 export function callTitle(entry: AgentEntry): string {
+  if (entry.tool !== undefined && SCRIPT_TOOLS.has(entry.tool) && entry.text) return entry.text;
   const a = args(entry);
   switch (entry.tool) {
     // The idea page's run (ideas/run.ts): the tool's own first sentence says what it did.

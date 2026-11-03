@@ -60,6 +60,18 @@ test("local exports queue across projects, preserve snapshots and advance after 
     expect(registry.running()).toBe(false);
     expect(registry.activity().find(one => one.id === third.id)?.state).toBe("done");
     expect(fs.existsSync(`${home}/jobs/export-${third.id}.json`)).toBe(false);
+    // A failed or cancelled export can be run again with the settings it was started with. A finished one cannot.
+    expect(registry.replay(third.id)).toBeNull();
+    expect(registry.replay(projects[0]!.id)?.options.quality).toBe(quality);
+    const cancelled = projects[1]!;
+    const again = registry.replay(cancelled.id);
+    expect(again).toMatchObject({ output: registry.activity().find((one) => one.id === cancelled.id)?.path, extra: { drive: false, keepLocal: true } });
+    await registry.start(store, app.library, store.get(cancelled.id)!.project, again!.options, again!.output, again!.extra);
+    for (let tries = 0; !releases.has("cancelled") && tries < 100; tries++) await Bun.sleep(1);
+    expect(registry.activity().find((one) => one.id === cancelled.id)?.state).toBe("running");
+    expect(registry.replay(cancelled.id)).toBeNull();
+    releases.get("cancelled")!();
+    for (let tries = 0; registry.running() && tries < 100; tries++) await Bun.sleep(1);
   } finally {
     if (most === undefined) delete process.env.EDIT_LOCAL_EXPORTS;
     else process.env.EDIT_LOCAL_EXPORTS = most;

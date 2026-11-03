@@ -5,7 +5,6 @@ import { AppDialogs } from "./components/AppMenu";
 import { ContextMenuHost } from "./components/ContextMenu";
 import { Editor } from "./components/Editor";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { ExportActivity } from "./components/ExportActivity";
 import { Home } from "./components/Home";
 import { ScriptMode } from "./writer/script-mode";
 import { IdeaScreen } from "./ideas/page";
@@ -50,8 +49,6 @@ export function App() {
       </AnimatePresence>
       <ServerDown />
       <Toasts />
-      {/* Edit's exports, in the editor (Home has them in its header); a script page has none of its own, and the pill sat over its top bar (the user, Oct 31). */}
-      {projectId !== undefined && <ExportActivity />}
       <AppDialogs />
       <ContextMenuHost />
     </MotionConfig>

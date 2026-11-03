@@ -10,6 +10,7 @@ import { readAttached, type Attached } from "./chat_attachments.ts";
 import { subKey } from "./agent.ts";
 import * as diag from "./diag.ts";
 import * as drive from "./drive.ts";
+import * as editNotes from "./edit_notes.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
 import * as footageLevels from "./footage_levels.ts";
 import { isBug } from "./guard.ts";
@@ -508,8 +509,23 @@ async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
   const frame = given.playhead === null ? Number.NaN : Number(given.playhead);
   const live = Number.isFinite(frame) ? app.store.get(id) : null;
   const where = live === null ? "" : playheadContext(live.project, frame, cachedTranscripts(app, live.project, false));
+  // The team's queued notes ride the next message, whatever it says (Sphe, Nov
+  // 3: "implement the feedback" isn't needed to send them); the ones the turn
+  // doesn't answer go back in the queue. Not while it still runs (send refuses).
+  const project = (live ?? app.store.get(id))?.project ?? null;
+  const notes =
+    project === null || (seams.agentPanel(app).chat(id) as { running?: boolean }).running === true
+      ? []
+      : await editNotes.take(app, id).catch((error: unknown) => {
+          diag.warn("notes", `${id}: taking queued notes for the message: ${diag.messageOf(error)}`);
+          return [] as editNotes.AppNote[];
+        });
+  const withNotes = notes.length === 0 ? where : `${where}${where === "" ? "" : "\n\n"}${editNotes.context(project!, notes)}`;
+  if (notes.length > 0) {
+    void editNotes.requeueAfterTurn(app, id, notes.map((note) => note.id)).catch((error: unknown) => diag.warn("notes", `${id}: putting unanswered notes back: ${diag.messageOf(error)}`));
+  }
   try {
-    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null, where, attached);
+    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null, withNotes, attached);
   } catch (error) {
     failed(error);
   }

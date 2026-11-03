@@ -9,14 +9,13 @@
 import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Plus, Redo2, SlidersHorizontal, Trash2, Type, Undo2, Upload } from "lucide-react";
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
+import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
 import { attachFiles, attachLanded, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { toggleMenu } from "../components/ContextMenu";
 import { Button, cx, IconButton, Modal, Scrub, Select, Spinner, Switch } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
-import { buildTurns } from "../lib/agentTurns";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { sourceUrl, thumbnailsApi, working, type Adjust, type Asset, type Design, type ImageLayer, type Layer, type Shadow, type TextLayer, type Thumbnail } from "../lib/thumbnails";
@@ -1064,60 +1063,33 @@ function entriesOf(thumb: Thumbnail): { entries: AgentEntry[]; running: boolean 
   return { entries, running };
 }
 
-function ChatShell({ loading, children }: { loading?: boolean; children?: ReactNode }) {
-  return (
-    <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      {loading ? (
-        <div className="min-h-0 flex-1 px-3 py-3">
-          <ChatLoading />
-        </div>
-      ) : (
-        children
-      )}
-    </section>
-  );
-}
-
 function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; upload: Uploader; onAsked: () => void }) {
-  const list = useRef<HTMLDivElement>(null);
-  const stick = useRef(true);
   const toastError = useEditor((state) => state.toastError);
   const { entries, running } = entriesOf(thumb);
-  const turns = buildTurns(entries, running);
-  const known = useRef<{ id: string; ids: Set<string> } | null>(null);
-  if (known.current?.id !== id) known.current = { id, ids: new Set(entries.map((entry) => entry.id)) };
-  useEffect(() => {
-    const node = list.current;
-    if (node && stick.current) node.scrollTop = node.scrollHeight;
-  });
+  const { turns, known } = useChatTurns(id, entries, running);
   const other = running && thumb.run !== null && thumb.run.tools === undefined && thumb.run.said === undefined ? ` · on ${thumb.run.holder}` : "";
   return (
-    <ChatShell>
-      <div
-        ref={list}
-        onScroll={(event) => {
-          const node = event.currentTarget;
-          stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
-        }}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
-      >
-        {entries.length === 0 ? (
-          <Empty title="Make a thumbnail with Claude" detail="Drop in a frame or a thumbnail and say what you want: “clean this base and put the REC overlay on”, “three drafts of the mom at the door”, “add ‘He abused me’ in a black box”." />
-        ) : (
-          <ChatTurns turns={turns} known={known.current.ids} thinking={running ? `${thumb.run?.step ?? "Working"}${other}` : undefined} />
-        )}
-      </div>
-      <ChatComposer
-        running={running}
-        disabled={false}
-        modelName="Opus 5.5"
-        placeholder={running ? "Working…" : "Ask for a thumbnail, or a change…"}
-        draft={`thumbnails.chat-draft.${id}`}
-        chat={`thumb:${id}`}
-        files={{ upload, accept: picturesOnly }}
-        onSend={(message, files) => void thumbnailsApi.chat(id, message, files.map((one) => one.landed as string)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
-        onStop={() => void thumbnailsApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
-      />
+    <ChatShell
+      resetKey={id}
+      footer={
+        <ChatComposer
+          running={running}
+          disabled={false}
+          modelName="Opus 5.5"
+          placeholder={running ? "Working…" : "Ask for a thumbnail, or a change…"}
+          draft={`thumbnails.chat-draft.${id}`}
+          chat={`thumb:${id}`}
+          files={{ upload, accept: picturesOnly }}
+          onSend={(message, files) => void thumbnailsApi.chat(id, message, files.map((one) => one.landed as string)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
+          onStop={() => void thumbnailsApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
+        />
+      }
+    >
+      {entries.length === 0 ? (
+        <Empty title="Make a thumbnail with Claude" detail="Drop in a frame or a thumbnail and say what you want: “clean this base and put the REC overlay on”, “three drafts of the mom at the door”, “add ‘He abused me’ in a black box”." />
+      ) : (
+        <ChatTurns turns={turns} known={known} thinking={running ? `${thumb.run?.step ?? "Working"}${other}` : undefined} />
+      )}
     </ChatShell>
   );
 }

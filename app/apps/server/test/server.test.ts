@@ -286,6 +286,8 @@ test("an export runs one at a time, tells clients how it goes, and only its file
       'attachment; filename="teen.mp4"',
       "exported",
     ]);
+    // A finished export is not something to run again.
+    expect((await send(`/api/projects/${id}/export/retry`, { method: "POST" })).status).toBe(400);
     // Cancelled: said so, and the file isn't one to hand out.
     useNative(exportingNative(5000));
     const other = (await (await send(`/api/projects/${id}/export`, jsonBody("POST", { path: `${dir}/b.mp4` }))).json()) as { path: string };
@@ -293,6 +295,12 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     while (app.exports.running()) await Bun.sleep(10);
     expect(events.at(-1)).toMatchObject({ state: "cancelled", error: "cancelled" });
     expect(app.exports.exported(other.path)).toBe(false);
+    // The cancelled export runs again, the same way.
+    const retried = await send(`/api/projects/${id}/export/retry`, { method: "POST" });
+    expect(retried.status).toBe(200);
+    expect(app.exports.running()).toBe(true);
+    expect(await (await send(`/api/projects/${id}/export/cancel`, { method: "POST" })).json()).toEqual({ cancelled: true });
+    while (app.exports.running()) await Bun.sleep(10);
     expect(await (await send(`/api/projects/${id}/export/cancel`, { method: "POST" })).json()).toEqual({ cancelled: false });
     // The default name: the project's, made safe, in the exports folder.
     const project = store.get(id)!.project;

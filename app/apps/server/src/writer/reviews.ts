@@ -381,13 +381,75 @@ export async function share(app: App, data: string, id: string): Promise<Script>
  * of exporting multiple scripts at once then? so we're not freezed on that
  * screen and cant do anything else").
  */
-const sharing = new Map<string, { startedAt: number }>();
+const sharing = new Map<string, { startedAt: number; stage: string; name?: string }>();
 const shareFailed = new Map<string, { error: string; at: number }>();
+/** A share the person stopped. The step it's in lets go, and nothing is published. */
+const dropped = new Set<string>();
+
+/** A share stopped on purpose: not a failure, and not kept on the script. */
+export class ShareCancelled extends Error {
+  constructor() {
+    super("cancelled");
+    this.name = "ShareCancelled";
+  }
+}
+
+function halt(id: string): void {
+  if (dropped.has(id)) throw new ShareCancelled();
+}
+
+/** Stops a running script share. It stays on the queue, saying "cancelling", until the step it's in lets go. */
+export function cancelShare(id: string): boolean {
+  const running = sharing.get(id);
+  if (running === undefined) return false;
+  dropped.add(id);
+  sharing.set(id, { ...running, stage: "cancelling" });
+  return true;
+}
+
+/** Where a running share has got to, for the dialog's progress line. No-op once it has finished. */
+function mark(id: string, stage: string) {
+  const running = sharing.get(id);
+  if (running !== undefined && running.stage !== stage) sharing.set(id, { ...running, stage });
+}
+
+/** The script's name on the shared queue, once the share has read it. */
+function titleShare(id: string, title: string) {
+  const running = sharing.get(id);
+  const name = title.trim() || "Script";
+  if (running !== undefined && running.name !== name) sharing.set(id, { ...running, name });
+}
+
+/**
+ * Where a script share sits in the shared export queue, from 0 to 1. A stage
+ * that names a percent uses it, so the queue shows the same number as the share.
+ */
+export function shareProgress(stage: string): number {
+  const percent = /(\d+)%/.exec(stage);
+  if (percent) return Math.min(100, Number(percent[1])) / 100;
+  if (stage === "cancelling") return 0;
+  if (stage === "publishing") return 0.95;
+  if (stage === "uploading the script") return 0.15;
+  if (stage === "uploading the footage") return 0.2;
+  if (stage === "checking the preview") return 0.05;
+  return 0.05;
+}
+
+/** Script shares running now, for the export queue beside the edit exports. Finished shares leave; a script has no file to keep. */
+export function shareQueue(): { id: string; name: string; stage: string; progress: number; startedAt: number }[] {
+  return [...sharing.entries()].map(([id, one]) => ({
+    id,
+    name: one.name?.trim() || "Script",
+    stage: one.stage,
+    progress: shareProgress(one.stage),
+    startedAt: one.startedAt,
+  }));
+}
 
 /** A script's share as it stands now, for its detail and its row. */
-export function shareState(id: string): { sharing?: { startedAt: number }; shareFailed?: { error: string; at: number } } {
+export function shareState(id: string): { sharing?: { startedAt: number; stage: string }; shareFailed?: { error: string; at: number } } {
   const running = sharing.get(id);
-  if (running !== undefined) return { sharing: running };
+  if (running !== undefined) return { sharing: { startedAt: running.startedAt, stage: running.stage } };
   const failed = shareFailed.get(id);
   return failed === undefined ? {} : { shareFailed: failed };
 }
@@ -400,16 +462,22 @@ export function startShare(app: App, data: string, id: string): Promise<Script> 
   if (sharing.has(id)) return Promise.reject(new Error("This script is already being shared: it carries on if you close this."));
   if (removing.has(id)) return Promise.reject(new Error("This script's review link is being deleted: share it again once that's done."));
   if (jobs.running(id)) return Promise.reject(new Error("Claude is still working on this script. Share it when that's done."));
-  sharing.set(id, { startedAt: Date.now() });
+  sharing.set(id, { startedAt: Date.now(), stage: "checking the preview" });
   shareFailed.delete(id);
   return shareWork
     .run(app, data, id)
+    .then((script) => {
+      if (dropped.has(id)) throw new ShareCancelled();
+      return script;
+    })
     .catch((error: unknown) => {
+      if (dropped.has(id) || error instanceof ShareCancelled) throw new ShareCancelled();
       shareFailed.set(id, { error: diag.messageOf(error), at: Date.now() });
       throw error;
     })
     .finally(() => {
       sharing.delete(id);
+      dropped.delete(id);
       // The lists hear it: Home's row and the open script stop saying "Sharing".
       store.libraryChanged();
     });
@@ -419,13 +487,25 @@ export function startShare(app: App, data: string, id: string): Promise<Script> 
 export async function shareNext(app: App, data: string, id: string): Promise<Script> {
   const dir = store.scriptDir(data, id);
   const script = store.read(dir);
+  titleShare(id, script.title);
   const found = shareable(dir, script);
+  halt(id);
+  mark(id, "checking the preview");
   await previewInCloud(data, id, dir, script);
+  halt(id);
   const next = (script.review?.version ?? 0) + 1;
   // The review's id is Repack's to give, on the first publish: snapshots are kept by the script's id instead.
   const key = `writer/reviews/${id}/v${next}/script.json`;
+  mark(id, "uploading the script");
+  halt(id);
   await cloud.putBytes(key, JSON.stringify(script));
-  const meta = await metaOf(data, id, script, found);
+  halt(id);
+  const meta = await metaOf(data, id, script, found, (stage) => {
+    halt(id);
+    mark(id, stage);
+  });
+  halt(id);
+  mark(id, "publishing");
   let value: Record<string, unknown>;
   try {
     value = await call("mutation", "reviews:publish", { sourceId: id, title: script.title, kind: "script", key, meta, sourceRev: script.revision, by: by() });
@@ -571,7 +651,7 @@ function forget(data: string, scriptId: string, reviewId: string): void {
  * from. Word timings that would take it past Repack's cap go in a file of
  * their own (`wordsKey`).
  */
-async function metaOf(data: string, id: string, script: Script, found: Block[]): Promise<Record<string, unknown>> {
+async function metaOf(data: string, id: string, script: Script, found: Block[], onStage?: (stage: string) => void): Promise<Record<string, unknown>> {
   const isFootage = !script.commentary;
   const meta: Record<string, unknown> = { format: isFootage ? "footage" : "commentary", revision: script.revision, outline: outline(script, found) };
   const target = targetMs(script);
@@ -584,7 +664,10 @@ async function metaOf(data: string, id: string, script: Script, found: Block[]):
     const proxy = await cloud.fetchPreview(data, id);
     const size = fs.statSync(proxy).size;
     const key = `writer/reviews/${id}/preview.mp4`;
-    if ((await cloud.head(key)) !== size) await cloud.putFile(id, key, proxy);
+    if ((await cloud.head(key)) !== size) {
+      onStage?.("uploading the footage");
+      await cloud.putFile(id, key, proxy, (done, total) => onStage?.(total ? `uploading the footage ${Math.round((done / total) * 100)}%` : "uploading the footage"));
+    }
     meta.preview = { key, durationMs: script.durationMs, sizeBytes: size };
   }
   meta.blocks = found;

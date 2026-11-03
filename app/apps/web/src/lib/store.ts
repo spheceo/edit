@@ -13,9 +13,10 @@ import { shareProject } from "./project-sharing";
 import { forgetSetting, readSetting, writeSetting } from "./storage";
 import type { MediaStatus, Project, ScriptJob } from "./types";
 
-/** Until resized, the timeline takes a bit over half the window: the tracks are where the work is. */
+/** Until resized, the viewer and the timeline split their space half and half (below the top bar, its divider and padding). */
 export function defaultTimelineHeight() {
-  return Math.round(Math.max(160, Math.min(window.innerHeight - 260, window.innerHeight * 0.55)));
+  const available = Math.max(320, window.innerHeight - 56);
+  return Math.round(Math.min(Math.max(160, available - 160), Math.max(160, available / 2)));
 }
 
 export const clientId = `ui-${Math.random().toString(36).slice(2, 10)}`;

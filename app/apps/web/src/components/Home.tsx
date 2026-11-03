@@ -64,8 +64,8 @@ interface Item {
 }
 
 /**
- * The sidebar Home (Oct 31 2026, a beta in Settings → Beta: App.tsx shows
- * HomeClassic.tsx when it's off): a sidebar of ideas, thumbnails,
+ * Home (Oct 31 2026, a beta until Nov 3, when it became everyone's: Sphe,
+ * "moving forward, we want to use the new home"): a sidebar of ideas, thumbnails,
  * scripts and edits by stage, Later and Done, and one short list at a time
  * beside it, the study portal's look (the user, Oct 31: "We have ideas,
  * scripts, and edits ... complaints from the teams about having to scroll

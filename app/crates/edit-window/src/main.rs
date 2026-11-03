@@ -95,9 +95,10 @@ fn run(url: &str, server: Option<(Child, u16)>, watch_stdin: bool) -> ! {
                 .title("Edit")
                 // The page shows its own title; the bar keeps just the traffic lights.
                 .hidden_title(true)
-                // A see-through bar over the page's own colour (the kit's #0b0b0b).
+                // A see-through bar over the window's colour: black, as Home is
+                // (Sphe, Nov 3: the bar "needs to be black like the background").
                 .title_bar_style(tauri::TitleBarStyle::Transparent)
-                .background_color(tauri::webview::Color(11, 11, 11, 255))
+                .background_color(tauri::webview::Color(0, 0, 0, 255))
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(960.0, 600.0)
                 // Opens filling the screen (zoomed, not macOS full screen: the

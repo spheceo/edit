@@ -6,10 +6,7 @@
 // sidebar's items, the header and the toolbar; a row's menus and Set aside's
 // submenu inside the window and beside each other. A few things are set aside
 // first (one coming back after 15 s, so a Back mark is measured too) and one
-// marked done, all brought back at the end. The sidebar Home is a beta
-// (Settings → Beta): the run opens `/?home=new`, which shows it in its own tab
-// and never switches this Mac's beta (switching it on and back left the user
-// on the old Home, Nov 2). Screenshots go to OUT.
+// marked done, all brought back at the end. Screenshots go to OUT.
 //
 //   bun scripts/home-audit.ts            (HOME_UI=https://localhost:5173 HOME_API=http://localhost:7700 OUT=/tmp/home-audit)
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -130,7 +127,7 @@ let total = 0;
 const report = (where: string, problems: string[]) => { const unique = [...new Set(problems)]; total += unique.length; if (unique.length) console.log(`✗ ${where}\n   ` + unique.slice(0, 8).join("\n   ") + (unique.length > 8 ? `\n   … ${unique.length - 8} more` : "")); };
 try {
   await size(1600);
-  await send("Page.navigate", { url: `${BASE}/?home=new` });
+  await send("Page.navigate", { url: `${BASE}/` });
   await sleep(5000);
   let checked = 0;
   for (const width of [1600, 1440, 1280, 1100, 960]) {

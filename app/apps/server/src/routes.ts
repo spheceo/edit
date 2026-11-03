@@ -59,7 +59,6 @@ import * as lessonInbox from "./lesson_inbox.ts";
 import "./agent_reports.ts";
 import * as presence from "./presence.ts";
 import * as devProjects from "./dev_projects.ts";
-import * as beta from "./beta.ts";
 import * as channelMarks from "./channel_marks.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
@@ -107,7 +106,6 @@ export function buildRouter(): Router<App> {
   lessonInbox.routes(router);
   presence.routes(router);
   devProjects.routes(router);
-  beta.routes(router);
   channelMarks.routes(router);
   archive.routes(router);
   covers.routes(router);

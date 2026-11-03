@@ -7,15 +7,12 @@ import { Editor } from "./components/Editor";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ExportActivity } from "./components/ExportActivity";
 import { Home } from "./components/Home";
-import { HomeClassic } from "./components/HomeClassic";
 import { ScriptMode } from "./writer/script-mode";
 import { IdeaScreen } from "./ideas/page";
 import { ThumbnailScreen } from "./thumbnails/page";
-import { ThumbnailsScreen } from "./thumbnails/list";
 import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
 import { useConnection } from "./lib/api";
-import { loadBeta, tabHome, useBeta } from "./lib/beta";
 import { watchPresence } from "./lib/presence";
 import { usePath } from "./lib/route";
 
@@ -30,10 +27,8 @@ export function App() {
   const ideaId = path.match(/^\/ideas\/([\w-]+)/)?.[1];
   // Thumbnails (Nov 2): /thumbnails (the list) and /thumbnails/<id> (one, with its conversation).
   const thumbId = path.match(/^\/thumbnails\/([\w-]+)/)?.[1];
-  // With the sidebar Home on, the list is Home's Thumbnails, in its panel (Sphe, Nov 2), so it's Home's screen too.
-  const sidebarHome = useBeta((beta) => tabHome ?? beta.home);
-  const thumbs = path === "/thumbnails" && !sidebarHome;
-  const screen = projectId ?? (scripts ? "scripts" : ideaId !== undefined ? `idea-${ideaId}` : thumbId !== undefined ? `thumb-${thumbId}` : thumbs ? "thumbnails" : "home");
+  // /thumbnails (the list) is Home's Thumbnails, in its panel (Sphe, Nov 2), so it's Home's screen too.
+  const screen = projectId ?? (scripts ? "scripts" : ideaId !== undefined ? `idea-${ideaId}` : thumbId !== undefined ? `thumb-${thumbId}` : "home");
   return (
     // The kit: respect reduced motion (movement goes, fades stay).
     <MotionConfig reducedMotion="user">
@@ -48,33 +43,19 @@ export function App() {
         >
           <ErrorBoundary key={screen}>
             <SignInGate>
-              {projectId ? <Editor id={projectId} /> : scripts ? <ScriptMode /> : ideaId !== undefined ? <IdeaScreen id={ideaId} /> : thumbId !== undefined ? <ThumbnailScreen id={thumbId} /> : thumbs ? <ThumbnailsScreen /> : <HomeScreen />}
+              {projectId ? <Editor id={projectId} /> : scripts ? <ScriptMode /> : ideaId !== undefined ? <IdeaScreen id={ideaId} /> : thumbId !== undefined ? <ThumbnailScreen id={thumbId} /> : <Home />}
             </SignInGate>
           </ErrorBoundary>
         </motion.div>
       </AnimatePresence>
       <ServerDown />
       <Toasts />
-      {/* Edit's exports, in the editor and the Home everyone has (the sidebar Home has them in its header); a script page has none of its own, and the pill sat over its top bar (the user, Oct 31). */}
-      {!scripts && ideaId === undefined && thumbId === undefined && !thumbs && !(sidebarHome && screen === "home") && <ExportActivity />}
+      {/* Edit's exports, in the editor (Home has them in its header); a script page has none of its own, and the pill sat over its top bar (the user, Oct 31). */}
+      {projectId !== undefined && <ExportActivity />}
       <AppDialogs />
       <ContextMenuHost />
     </MotionConfig>
   );
-}
-
-/**
- * Home: the sidebar one (Home.tsx) when this Mac has it on in Settings → Beta,
- * else the Home everyone has (HomeClassic.tsx). The user, Oct 31: "put the new
- * Home … behind a beta option in Settings that can easily be toggled on and
- * off". A check in headless Chrome opens `/?home=new` instead (tabHome).
- */
-function HomeScreen() {
-  const sidebar = useBeta((beta) => tabHome ?? beta.home);
-  useEffect(() => {
-    void loadBeta().catch(() => {});
-  }, []);
-  return sidebar ? <Home /> : <HomeClassic />;
 }
 
 /**

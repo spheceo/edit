@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import type { Project } from "../src/model.ts";
-import { PIECE, pieceKey, piecesOf } from "../src/scrub.ts";
+import { PIECE, pieceKey, piecesOf, shared } from "../src/scrub.ts";
 
 test("the scrub tier is made for the stretches the timeline shows, in pieces of the source, each once", () => {
   const project = {
@@ -24,4 +24,17 @@ test("the scrub tier is made for the stretches the timeline shows, in pieces of 
   expect([...(piecesOf(project, 600, 900).get("a") ?? [])]).toEqual([4]);
   expect(PIECE).toBe(300);
   expect(pieceKey("edit/proxies/drive/abc.mp4", 3)).toBe("edit/scrub/proxies/drive/abc.mp4/3.mp4");
+});
+
+test("scrub pieces stay on this Mac unless edge media is on", () => {
+  const before = { edge: process.env.EDIT_EDGE_MEDIA };
+  try {
+    delete process.env.EDIT_EDGE_MEDIA;
+    expect(shared()).toBe(false);
+    process.env.EDIT_EDGE_MEDIA = "0";
+    expect(shared()).toBe(false);
+  } finally {
+    if (before.edge === undefined) delete process.env.EDIT_EDGE_MEDIA;
+    else process.env.EDIT_EDGE_MEDIA = before.edge;
+  }
 });

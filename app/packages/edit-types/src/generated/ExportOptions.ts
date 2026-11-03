@@ -2,6 +2,7 @@
 import type { Chapter } from "./Chapter";
 import type { Fill } from "./Fill";
 import type { Format } from "./Format";
+import type { Preset } from "./Preset";
 import type { Quality } from "./Quality";
 import type { Shape } from "./Shape";
 
@@ -34,4 +35,8 @@ wait_for_smoothing: boolean, audio: boolean,
 /**
  * Bring the sound to this integrated loudness (LUFS), e.g. -14 for YouTube.
  */
-loudness: number | null, chapters: Array<Chapter>, };
+loudness: number | null, chapters: Array<Chapter>, 
+/**
+ * The house export, or YouTube's settings over these (`Preset`).
+ */
+preset: Preset, };

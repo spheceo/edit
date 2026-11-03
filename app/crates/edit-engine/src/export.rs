@@ -90,6 +90,27 @@ pub enum Quality {
     Small,
 }
 
+/// What an export is for: the house export, or a file to upload to YouTube
+/// (Sphe, Nov 2: H.264 High, 4:2:0, BT.709, a keyframe every half second,
+/// AAC-LC 48 kHz stereo at 384 kbps, the High bitrate, −14 LUFS with peaks
+/// under −1 dBTP through the mixer's limiter).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum Preset {
+    #[default]
+    House,
+    Youtube,
+}
+
+/// YouTube's loudness (LUFS), unless the export asks for another.
+pub const YOUTUBE_LUFS: f64 = -14.0;
+/// YouTube's sound bitrate (AAC-LC stereo): YouTube asks 384 kbps, but no
+/// encoder here makes it. Apple's AAC tops out at 320 kbps for 48 kHz stereo
+/// ("Cannot Encode Media" past it), and FFmpeg's own, asked for 384, spends
+/// ~250 even on pink noise (Nov 3). So the most there is: Apple's at 320.
+const YOUTUBE_AUDIO: u32 = 320_000;
+
 /// A chapter mark: frame on the timeline (not in the span) and its title.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -123,6 +144,43 @@ pub struct ExportOptions {
     /// Bring the sound to this integrated loudness (LUFS), e.g. -14 for YouTube.
     pub loudness: Option<f64>,
     pub chapters: Vec<Chapter>,
+    /// The house export, or YouTube's settings over these (`Preset`).
+    pub preset: Preset,
+}
+
+impl ExportOptions {
+    fn youtube(&self) -> bool {
+        self.preset == Preset::Youtube
+    }
+
+    /// The quality the picture is encoded at: always High for YouTube.
+    pub fn picture_quality(&self) -> Quality {
+        if self.youtube() {
+            Quality::High
+        } else {
+            self.quality
+        }
+    }
+
+    /// The sound's bitrate: 320 kbps AAC in an MP4 for YouTube (`YOUTUBE_AUDIO`).
+    pub fn sound_bitrate(&self) -> u32 {
+        if self.youtube() && matches!(self.format, Format::H264 | Format::Hevc) {
+            YOUTUBE_AUDIO
+        } else {
+            audio_bitrate(self.format, self.quality)
+        }
+    }
+
+    /// The loudness the mix is brought to: −14 LUFS for YouTube unless asked otherwise.
+    pub fn target_loudness(&self) -> Option<f64> {
+        self.loudness.or(self.youtube().then_some(YOUTUBE_LUFS))
+    }
+
+    /// Frames between keyframes at `fps`: half a second for YouTube, else two seconds.
+    pub fn key_interval(&self, fps: f64) -> i32 {
+        let seconds = if self.youtube() { 0.5 } else { 2.0 };
+        ((fps * seconds).round() as i32).max(1)
+    }
 }
 
 impl Default for ExportOptions {
@@ -141,6 +199,7 @@ impl Default for ExportOptions {
             audio: true,
             loudness: None,
             chapters: Vec::new(),
+            preset: Preset::default(),
         }
     }
 }
@@ -314,7 +373,7 @@ pub fn video_bitrate(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<u
     if let Some(mb) = options.target_mb {
         let rate = mb * 8_000_000.0 * 0.94 / plan.seconds(fps)
             - if plan.audio {
-                f64::from(audio_bitrate(options.format, options.quality))
+                f64::from(options.sound_bitrate())
             } else {
                 0.0
             };
@@ -326,7 +385,7 @@ pub fn video_bitrate(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<u
     Ok((f64::from(plan.width)
         * f64::from(plan.height)
         * fps
-        * bits_per_pixel(options.quality)
+        * bits_per_pixel(options.picture_quality())
         * if options.format == Format::Hevc {
             0.6
         } else {
@@ -350,7 +409,7 @@ pub fn codec_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
 
 /// The sound's codec arguments for the format.
 pub fn audio_args(options: &ExportOptions) -> Vec<String> {
-    let rate = audio_bitrate(options.format, options.quality).to_string();
+    let rate = options.sound_bitrate().to_string();
     let args: &[&str] = match options.format {
         Format::H264 | Format::Hevc => &["-c:a", "aac", "-b:a", &rate],
         Format::Prores | Format::Wav => &["-c:a", "pcm_s16le"],
@@ -365,7 +424,7 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
     let mut args: Vec<String> = Vec::new();
     let mut push = |items: &[&str]| args.extend(items.iter().map(|item| (*item).to_owned()));
     let format = options.format;
-    let audio_rate = audio_bitrate(format, options.quality);
+    let audio_rate = options.sound_bitrate();
     let seconds = plan.seconds(fps);
     // A target size sets the video bitrate; otherwise hardware encoders get one from the quality.
     let target = match options
@@ -394,7 +453,7 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
         (f64::from(plan.width)
             * f64::from(plan.height)
             * out_fps
-            * bits_per_pixel(options.quality)
+            * bits_per_pixel(options.picture_quality())
             * scale)
             .round() as u64
     };
@@ -443,7 +502,7 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
                         push(&["-b:v", &rate, "-maxrate", &rate, "-bufsize", &buffer]);
                     }
                     None => {
-                        let crf = match (hevc, options.quality) {
+                        let crf = match (hevc, options.picture_quality()) {
                             (false, Quality::High) => "17",
                             (false, Quality::Balanced) => "20",
                             (false, Quality::Small) => "24",
@@ -461,6 +520,10 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
             if hevc {
                 // Apple's players want the hvc1 tag.
                 push(&["-tag:v", "hvc1"]);
+            }
+            if options.preset == Preset::Youtube {
+                // A keyframe every half second, as YouTube asks.
+                push(&["-g", &options.key_interval(out_fps).to_string()]);
             }
             push(&[
                 "-colorspace",
@@ -573,6 +636,54 @@ pub fn encoders() -> Encoders {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_youtube_preset_is_high_with_320k_sound_a_keyframe_each_half_second_and_minus_14_lufs() {
+        let house = options(Format::H264);
+        let youtube = ExportOptions {
+            preset: Preset::Youtube,
+            quality: Quality::Small,
+            ..options(Format::H264)
+        };
+        assert_eq!(house.sound_bitrate(), 256_000);
+        assert_eq!(youtube.sound_bitrate(), 320_000);
+        assert_eq!(youtube.picture_quality(), Quality::High);
+        assert_eq!(youtube.target_loudness(), Some(-14.0));
+        assert_eq!(house.target_loudness(), None);
+        let asked = ExportOptions {
+            loudness: Some(-16.0),
+            ..youtube.clone()
+        };
+        assert_eq!(asked.target_loudness(), Some(-16.0));
+        assert_eq!(youtube.key_interval(30.0), 15);
+        assert_eq!(youtube.key_interval(29.97), 15);
+        assert_eq!(house.key_interval(30.0), 60);
+        // The house export: as it was, a 1080p30 picture at ~8.7 Mbit/s.
+        let plan = Plan {
+            start: 0,
+            end: 300,
+            width: 1920,
+            height: 1080,
+            audio: true,
+            focus: None,
+        };
+        assert_eq!(
+            video_bitrate(&youtube, &plan, 30.0).unwrap(),
+            video_bitrate(&house, &plan, 30.0).unwrap()
+        );
+        let args = video_args(
+            &ExportOptions {
+                hardware: false,
+                ..youtube.clone()
+            },
+            &plan,
+            30.0,
+        )
+        .unwrap();
+        assert!(args.windows(2).any(|pair| pair == ["-g", "15"]), "{args:?}");
+        assert!(audio_args(&youtube).contains(&"320000".to_owned()));
+    }
+
     use super::*;
 
     fn options(format: Format) -> ExportOptions {

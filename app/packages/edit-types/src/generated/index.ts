@@ -31,6 +31,7 @@ export type * from "./Mute";
 export type * from "./Person";
 export type * from "./PhotoFrame";
 export type * from "./Plan";
+export type * from "./Preset";
 export type * from "./Probe";
 export type * from "./Project";
 export type * from "./Quality";

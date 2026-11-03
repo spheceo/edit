@@ -70,6 +70,7 @@ test("tells_whether_a_file_is_still_there", () => {
 
 const OPTIONS: ExportOptions = {
   format: "h264",
+  preset: "house",
   range: null,
   shape: "original",
   fill: "blur",

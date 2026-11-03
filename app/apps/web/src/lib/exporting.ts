@@ -32,6 +32,8 @@ export interface ExportOptions {
   /** Integrated loudness to normalise to (LUFS), or null to leave the mix alone. */
   loudness: number | null;
   chapters: Chapter[];
+  /** YouTube's upload settings over these (crates/edit-engine/src/export.rs `Preset`); the house export when absent. */
+  preset?: "house" | "youtube";
 }
 
 const FORMATS: { value: Format; label: string; extension: string }[] = [

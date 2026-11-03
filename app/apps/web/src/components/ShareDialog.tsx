@@ -40,6 +40,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [marked, setMarked] = useState(false);
   const [channel, setChannel] = useState<string | null>(null);
   const [markTouched, setMarkTouched] = useState(false);
+  // YouTube's upload settings (Sphe, Nov 2): a keyframe every half second, 320 kbps sound, −14 LUFS; else the house export.
+  const [youtube, setYoutube] = useState(false);
   useEffect(() => {
     if (!open) return;
     setMarkTouched(false);
@@ -116,7 +118,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       const duration = projectDuration(project);
       const span: [number, number] = [0, duration];
       const embedded = chaptersInSpan(chapters, span, rate(project.settings));
-      const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [] };
+      const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [], ...(youtube ? { preset: "youtube" as const, quality: "high" as const, loudness: -14 } : {}) };
       await api.shareProject(project.id, options, replace && latest !== null, false, marked && channel !== null ? channel : null);
       setReview(await api.review(project.id));
     } catch (error) {
@@ -252,6 +254,16 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
               className={cx("h-[30px] min-w-[150px] shrink-0 justify-between rounded-lg border border-line-strong bg-bg pr-2.5 pl-3 text-[13px] hover:border-muted", !marked && "opacity-50")}
             />
           )}
+        </div>
+
+        <div className="mt-2 flex items-center gap-3 rounded-[10px] border border-line bg-panel px-3 py-2.5">
+          <label className="flex min-w-0 flex-1 items-center gap-2.5 text-[13px]" title="H.264 High, a keyframe every half second, AAC at 320 kbps, −14 LUFS with peaks under −1 dBTP">
+            <input type="checkbox" checked={youtube} disabled={busy} onChange={(event) => setYoutube(event.target.checked)} />
+            <span className="min-w-0">
+              <span className="block text-fg">For YouTube</span>
+              <span className="block text-[12px] leading-snug text-muted">A keyframe every half second, 320 kbps sound, −14 LUFS</span>
+            </span>
+          </label>
         </div>
 
         <div className="mt-5 flex min-h-[34px] items-center gap-3">

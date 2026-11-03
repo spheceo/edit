@@ -1924,7 +1924,7 @@ fn mix_sound(
         codec: &codec,
         // MP4's AAC goes into an .m4a that the join copies.
         aac: (video && matches!(options.format, Format::H264 | Format::Hevc))
-            .then(|| crate::export::audio_bitrate(options.format, options.quality)),
+            .then(|| options.sound_bitrate()),
     };
     // Written beside it, then renamed into place whole: smooth playback plays
     // the mix the moment it's there, and it was there half-written (Nov 2).
@@ -1939,7 +1939,7 @@ fn mix_sound(
             crate::mix::render(
                 parts,
                 (seconds * crate::mix::RATE as f64).round() as usize,
-                options.loudness,
+                options.target_loudness(),
                 &encoding,
                 &mixing.0,
                 &scratch.0,
@@ -1962,9 +1962,9 @@ pub fn sound_key(options: &ExportOptions, parts: &[crate::mix::Part], seconds: f
     for part in parts {
         crate::chunks::content_key(&part.path).hash(&mut hasher);
     }
-    format!("{:?}", options.loudness).hash(&mut hasher);
+    format!("{:?}", options.target_loudness()).hash(&mut hasher);
     crate::export::audio_args(options).hash(&mut hasher);
-    crate::export::audio_bitrate(options.format, options.quality).hash(&mut hasher);
+    options.sound_bitrate().hash(&mut hasher);
     seconds.to_bits().hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
@@ -2166,7 +2166,7 @@ fn native_options(
     Ok(Some(crate::mac_media::WriterOptions {
         hevc: options.format == Format::Hevc,
         bitrate: crate::export::video_bitrate(options, plan, project.fps())?,
-        key_interval: (project.settings.fps * 2) as i32,
+        key_interval: options.key_interval(f64::from(project.settings.fps)),
         finished: true,
         faststart: alone,
     }))

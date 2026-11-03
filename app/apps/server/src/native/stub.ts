@@ -273,6 +273,7 @@ export function createStub(): Stub {
 
   const defaults = (): ExportOptions => ({
     format: "h264",
+    preset: "house",
     range: null,
     shape: "original",
     fill: "blur",

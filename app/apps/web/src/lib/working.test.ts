@@ -2,7 +2,7 @@
 
 import { expect, test } from "vitest";
 
-import { formatWorking, isWorking } from "./agentTurns";
+import { buildTurns, editWorked, formatSpan, formatWorking, isWorking } from "./agentTurns";
 
 test("a turn is working once it calls a tool or a few seconds in", () => {
   expect(isWorking(1200, false)).toBe(false);
@@ -15,4 +15,20 @@ test("working reads to the second", () => {
   expect(formatWorking(72_000)).toBe("Working for 1m 12s");
   expect(formatWorking(3_840_000)).toBe("Working for 1h 4m");
   expect(formatWorking(-50)).toBe("Working for 0s");
+});
+
+test("an edit's agent time adds up every turn, the live one to now, and none of the waits between", () => {
+  // JJ, Nov 3: "Is it possible to get some kind of tracker on how long each edit takes?"
+  const at = (id: string, kind: "user" | "tool" | "assistant", ms: number, updated = ms) => ({ id, kind, text: "", at: ms, updated }) as never;
+  const entries = [
+    at("u1", "user", 0), at("t1", "tool", 1000, 20 * 60_000), at("a1", "assistant", 25 * 60_000),
+    // An hour later: an automatic follow-up.
+    at("u2", "user", 90 * 60_000), at("t2", "tool", 91 * 60_000, 100 * 60_000),
+  ];
+  expect(editWorked(buildTurns(entries, false), 0)).toEqual({ ms: 35 * 60_000, turns: 2 });
+  // The second still running: counted to now.
+  expect(editWorked(buildTurns(entries, true), 110 * 60_000)).toEqual({ ms: 45 * 60_000, turns: 2 });
+  expect(formatSpan(45 * 60_000)).toBe("45m");
+  expect(formatSpan(72 * 60_000)).toBe("1h 12m");
+  expect(formatSpan(8_000)).toBe("8s");
 });

@@ -15,7 +15,7 @@
 import type { App } from "./app.ts";
 import { hex, subtitleRow, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
-import type { Clip, Mute, Project, Rgba, Segment, TextStyle, Transform } from "./model.ts";
+import type { Clip, Media, Mute, Project, Rgba, Segment, TextStyle, Transform } from "./model.ts";
 import {
   addTrack,
   clipEnd,
@@ -1001,6 +1001,7 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
   const lines: Line[] = [];
   const mutes: ClipMutes = new Map();
   const muted: unknown[] = [];
+  const heard: { clip: Clip & { type: "audio" }; media: Media; transcript: Transcript; words: TimedWord[]; visibleFrom: number; visibleTo: number }[] = [];
   for (const clip of sound) {
     if (clip.type !== "audio") continue;
     const media = mediaOf(project, clip.media);
@@ -1008,9 +1009,14 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
     if (!transcripts.has(media.id)) transcripts.set(media.id, await transcriptOf(app, media, project));
     const transcript = transcripts.get(media.id)!;
     const [visibleFrom, visibleTo] = visible(clip, from, to, fps);
-    const words = timedWords(transcript.words, visibleFrom, visibleTo);
-    // Words that spilled across a change of speaker go back to who said them (Repack's turns).
-    await fixTurns(words, (voice) => get(transcript.speakers, voice) ?? voice, project.name, join(app.store.cacheDir(), "turns"), post);
+    heard.push({ clip, media, transcript, words: timedWords(transcript.words, visibleFrom, visibleTo), visibleFrom, visibleTo });
+  }
+  // Words that spilled across a change of speaker go back to who said them
+  // (Repack's turns): every clip's at once (turns.ts asks AT_ONCE at a time),
+  // each its own copy of the words; one after another, an interrogation
+  // compilation's excerpts were one model call each in a row.
+  await Promise.all(heard.map(({ words, transcript }) => fixTurns(words, (voice) => get(transcript.speakers, voice) ?? voice, project.name, join(app.store.cacheDir(), "turns"), post)));
+  for (const { clip, media, transcript, words, visibleFrom, visibleTo } of heard) {
     const onTimeline = onTimelineOf(clip, fps);
     const found = suggestions(words, neglect, visibleFrom * 1000.0, visibleTo * 1000.0);
     for (const cue of segment(words)) {

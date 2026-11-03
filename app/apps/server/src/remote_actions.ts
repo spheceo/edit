@@ -31,6 +31,7 @@ import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
 import { importing } from "./drive_import.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
+import * as editTime from "./edit_time.ts";
 import { join } from "./paths.ts";
 import * as presence from "./presence.ts";
 import * as problemReports from "./problem_reports.ts";
@@ -297,6 +298,13 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
     "",
     "Scripts:",
     ...scriptLines(app),
+    "",
+    // How long each edit took the agent (JJ, Nov 3: "a tracker on how long each edit takes").
+    "Agent time (the last week's edits, every turn added up):",
+    ...(() => {
+      const lines = editTime.reportLines(app);
+      return lines.length > 0 ? lines : ["none"];
+    })(),
     "",
     "Timings:",
     ...slow,

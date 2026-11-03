@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { fixTurns, type TurnWord } from "../src/turns.ts";
+import { AT_ONCE, fixTurns, type TurnWord } from "../src/turns.ts";
 import { scratch } from "./helpers/home.ts";
 
 /** Words of `text`, a quarter second each, all `speaker`'s. */
@@ -97,6 +97,35 @@ test("chained cuts all apply: a middle line losing words at both ends (the run-t
       "Narrator: that's the voice of the sergeant when investigators questioned him after this incident",
       "Sergeant: I'm yelling the whole time James stop Tim stop",
     ]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("clips' questions are asked side by side, never more than AT_ONCE, and one asked twice at once is asked once", async () => {
+  // Nov 3 (JJ: "Is it possible to get some kind of tracker on how long each edit takes?"): add_subtitles asked one clip after another, 2–4 minutes an edit.
+  const { dir, cleanup } = scratch("turns-at-once");
+  try {
+    let out = 0;
+    let most = 0;
+    const asked: string[] = [];
+    const post = async (body: string) => {
+      asked.push(fs.readFileSync(body, "utf8"));
+      out += 1;
+      most = Math.max(most, out);
+      await Bun.sleep(40);
+      out -= 1;
+      return { choices: [{ message: { content: JSON.stringify({ cuts: [] }) } }] };
+    };
+    const clip = (n: number) => [...said(`clip ${n} the reporter speaks`, "reporter", 0), ...said(`and clip ${n} the sergeant answers`, "sergeant", 3000)];
+    const began = performance.now();
+    // Twelve different clips, and one of them twice.
+    await Promise.all([...Array.from({ length: 12 }, (_, n) => fixTurns(clip(n), names, "t", dir, post)), fixTurns(clip(0), names, "t", dir, post)]);
+    const took = performance.now() - began;
+    expect(most).toBe(AT_ONCE);
+    expect(asked.length).toBe(12);
+    // Two rounds of six, not twelve in a row.
+    expect(took).toBeLessThan(12 * 40);
   } finally {
     cleanup();
   }

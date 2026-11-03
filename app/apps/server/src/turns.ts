@@ -23,6 +23,14 @@ const WINDOW = 120;
 const OVERLAP = 6;
 /** A pause this long inside a turn is shown: a spilled word often starts after one. */
 const PAUSE_MS = 500;
+/**
+ * Questions asked of the model at once, across every caller. Asked one after
+ * another, a subtitle pass over an edit's footage clips was one Opus call per
+ * clip in a row (5–15 s each, a 1 KB question): add_subtitles took 2–4 minutes
+ * of every full edit, more in a compilation (Nov 3, JJ: "Is it possible to get
+ * some kind of tracker on how long each edit takes?… well over an hour").
+ */
+export const AT_ONCE = 6;
 
 /** Repack's words, as it gave them to its model. */
 const SYSTEM = `You correct where subtitle lines of police footage (interrogations, interviews, bodycam, news reports) split between speakers. The transcript was cut into lines by an automatic system, and at a change of speaker a word or a few often spill across: the start of the next person's sentence is left at the end of the line before it, or the end of a sentence is carried into the next person's line. For example:
@@ -177,19 +185,26 @@ export async function fixTurns(
 ): Promise<number> {
   const turns = turnsOf(words);
   if (turns.length < 2) return 0;
-  const cuts = new Map<number, Cut>();
+  // Every window's question is of the words as heard, so they're asked side
+  // by side (`AT_ONCE` across callers) and their cuts taken in window order.
+  const windows: { start: number; size: number; text: string }[] = [];
   for (let start = 0; start < turns.length; start += WINDOW - OVERLAP) {
     const window = turns.slice(start, start + WINDOW);
     if (window.length < 2) break;
     const text = `Title: ${title}\n\nLines (number [time] speaker: text):\n${window
       .map((turn, i) => `${start + i} [${clock(words[turn.from]!.start_ms)}] ${name(turn.speaker)}: ${marked(words, turn)}`)
       .join("\n")}`;
-    for (const cut of await ask(text, dir, post)) {
+    windows.push({ start, size: window.length, text });
+  }
+  const answers = await Promise.all(windows.map((window) => ask(window.text, dir, post)));
+  const cuts = new Map<number, Cut>();
+  windows.forEach(({ start, size }, index) => {
+    for (const cut of answers[index]!) {
       // Only inside this window, and between two different speakers.
-      if (cut.line < start || cut.line + 1 >= start + window.length || cut.line + 1 >= turns.length) continue;
+      if (cut.line < start || cut.line + 1 >= start + size || cut.line + 1 >= turns.length) continue;
       if (!cuts.has(cut.line)) cuts.set(cut.line, cut);
     }
-  }
+  });
   let moved = 0;
   for (const [line, cut] of [...cuts].sort((a, b) => a[0] - b[0])) {
     const a = turns[line]!;
@@ -217,6 +232,26 @@ export async function fixTurns(
   return moved;
 }
 
+/** Questions being asked now, by their answer's file: the same one asked twice at once waits for the first. */
+const asking = new Map<string, Promise<Cut[]>>();
+/** Questions waiting for a place among the `AT_ONCE` being asked. */
+let open = AT_ONCE;
+const waiting: (() => void)[] = [];
+let asked = 0;
+
+/** Runs `work` once fewer than `AT_ONCE` questions are out. */
+async function inTurn<T>(work: () => Promise<T>): Promise<T> {
+  if (open > 0) open--;
+  else await new Promise<void>((resolve) => waiting.push(resolve));
+  try {
+    return await work();
+  } finally {
+    const next = waiting.shift();
+    if (next !== undefined) next();
+    else open++;
+  }
+}
+
 /** The model's cuts for one window: from the cache in `dir`, else asked once; none when it can't be asked. */
 async function ask(text: string, dir: string, post: (body: string) => Promise<unknown>): Promise<Cut[]> {
   const hasher = new Bun.CryptoHasher("sha256");
@@ -227,6 +262,18 @@ async function ask(text: string, dir: string, post: (body: string) => Promise<un
   } catch {
     // Not asked yet.
   }
+  const already = asking.get(file);
+  if (already !== undefined) return already;
+  const answer = inTurn(() => askNow(text, dir, file, post));
+  asking.set(file, answer);
+  try {
+    return await answer;
+  } finally {
+    asking.delete(file);
+  }
+}
+
+async function askNow(text: string, dir: string, file: string, post: (body: string) => Promise<unknown>): Promise<Cut[]> {
   const request = {
     model: MODEL,
     messages: [
@@ -236,7 +283,8 @@ async function ask(text: string, dir: string, post: (body: string) => Promise<un
     response_format: { type: "json_schema", json_schema: { name: "turns", strict: true, schema: schema() } },
     reasoning: { effort: "low" },
   };
-  const scratch = join(dir, `${VERSION}-request-${process.pid}-${Date.now()}.json`);
+  // Its own file: several are written in the same millisecond now.
+  const scratch = join(dir, `${VERSION}-request-${process.pid}-${Date.now()}-${(asked += 1)}.json`);
   try {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(scratch, JSON.stringify(request));

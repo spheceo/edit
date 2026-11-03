@@ -597,8 +597,8 @@ export function intro(project: Project): [number, number] | null {
  */
 async function spokenLines(app: App, project: Project, clips: Clip[], from: number, to: number, capped: boolean): Promise<Line[]> {
   const fps = fpsOf(project);
-  const lines: Line[] = [];
   const transcripts = new Map<string, Transcript>();
+  const heard: { clip: Clip & { type: "video" | "audio" }; transcript: Transcript }[] = [];
   for (const clip of clips) {
     if (clip.type !== "video" && clip.type !== "audio") continue;
     const media = mediaOf(project, clip.media);
@@ -608,33 +608,42 @@ async function spokenLines(app: App, project: Project, clips: Clip[], from: numb
       transcript = await transcriptOf(app, media, project);
       transcripts.set(media.id, transcript);
     }
-    const visibleFrom = clip.source_in + ((Math.max(from, clip.start) - clip.start) / fps) * clip.speed;
-    const visibleTo = clip.source_in + ((Math.min(to, clipEnd(clip)) - clip.start) / fps) * clip.speed;
-    const seen = transcript.words.filter((word) => word.start >= visibleFrom && word.end <= visibleTo + 0.05);
-    const words = seen.map((word) => (capped ? cap(word) : { ...word }));
-    if (capped) {
-      // Words that spilled across a change of speaker go back to who said
-      // them (Repack's turns): the run-through's "him after this incident",
-      // the reporter's, was on the sergeant's subtitle.
-      const turns = words.map((word) => ({ text: word.text, speaker: word.speaker ?? null, start_ms: word.start * 1000, end_ms: word.end * 1000 }));
-      const moved = await fixTurns(turns, (voice) => transcript!.speakers?.[voice] ?? voice, project.name, join(app.store.cacheDir(), "turns"), post);
-      if (moved > 0) turns.forEach((turn, index) => (words[index]!.speaker = turn.speaker ?? undefined));
-    }
-    const own = transcript;
-    const tall = project.settings.height > project.settings.width;
-    const made = joinStrays(linesOf(clip.id, words, tall ? 3 : 9, tall ? 16 : Infinity), tall ? 16 : Infinity).map((line) => named(line, own));
-    if (capped) {
-      // Stretched words (cut back by `cap`) before a line: its times are doubtful.
-      let at = 0;
-      for (const line of made) {
-        const before = seen[at - 1];
-        if (before !== undefined && words[at - 1]!.end < before.end) line.doubtful = true;
-        at += line.words.length;
-      }
-    }
-    lines.push(...made);
+    heard.push({ clip, transcript });
   }
-  return lines;
+  // Each clip's words are its own copy, so their spilled words are put back
+  // side by side (turns.ts asks AT_ONCE at a time): one clip after another
+  // was 2–4 minutes of add_subtitles in every edit. The lines keep the clips' order.
+  const each = await Promise.all(heard.map(({ clip, transcript }) => clipLines(app, project, clip, transcript, fps, from, to, capped)));
+  return each.flat();
+}
+
+/** The lines said in `clip` between `from` and `to` (timeline frames), its spilled words put back when `capped`. */
+async function clipLines(app: App, project: Project, clip: Clip & { type: "video" | "audio" }, transcript: Transcript, fps: number, from: number, to: number, capped: boolean): Promise<Line[]> {
+  const visibleFrom = clip.source_in + ((Math.max(from, clip.start) - clip.start) / fps) * clip.speed;
+  const visibleTo = clip.source_in + ((Math.min(to, clipEnd(clip)) - clip.start) / fps) * clip.speed;
+  const seen = transcript.words.filter((word) => word.start >= visibleFrom && word.end <= visibleTo + 0.05);
+  const words = seen.map((word) => (capped ? cap(word) : { ...word }));
+  if (capped) {
+    // Words that spilled across a change of speaker go back to who said
+    // them (Repack's turns): the run-through's "him after this incident",
+    // the reporter's, was on the sergeant's subtitle.
+    const turns = words.map((word) => ({ text: word.text, speaker: word.speaker ?? null, start_ms: word.start * 1000, end_ms: word.end * 1000 }));
+    const moved = await fixTurns(turns, (voice) => transcript.speakers?.[voice] ?? voice, project.name, join(app.store.cacheDir(), "turns"), post);
+    if (moved > 0) turns.forEach((turn, index) => (words[index]!.speaker = turn.speaker ?? undefined));
+  }
+  const own = transcript;
+  const tall = project.settings.height > project.settings.width;
+  const made = joinStrays(linesOf(clip.id, words, tall ? 3 : 9, tall ? 16 : Infinity), tall ? 16 : Infinity).map((line) => named(line, own));
+  if (capped) {
+    // Stretched words (cut back by `cap`) before a line: its times are doubtful.
+    let at = 0;
+    for (const line of made) {
+      const before = seen[at - 1];
+      if (before !== undefined && words[at - 1]!.end < before.end) line.doubtful = true;
+      at += line.words.length;
+    }
+  }
+  return made;
 }
 
 /**

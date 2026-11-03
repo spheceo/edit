@@ -221,6 +221,33 @@ export function formatWorking(ms: number) {
   return `Working for ${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+/**
+ * The agent's time on this edit so far: every turn's work added up (the
+ * workflow, its automatic follow-ups, a turn carried on after a restart),
+ * the live one to `now`; the waits between turns aren't in it. JJ, Nov 3: "Is
+ * it possible to get some kind of tracker on how long each edit takes?"
+ */
+export function editWorked(turns: Turn[], now: number): { ms: number; turns: number } {
+  let ms = 0;
+  let counted = 0;
+  for (const turn of turns) {
+    const worked = turn.live && turn.startedAt > 0 ? Math.max(0, now - turn.startedAt) : turn.workedMs;
+    if (worked <= 0 && !turn.live) continue;
+    ms += worked;
+    counted += 1;
+  }
+  return { ms, turns: counted };
+}
+
+/** "8s", "12m", "1h 4m": a total's length. */
+export function formatSpan(ms: number) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
 export function formatWorked(ms: number) {
   const seconds = Math.round(ms / 1000);
   if (seconds < 1) return "Worked";

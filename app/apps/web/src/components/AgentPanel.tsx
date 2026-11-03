@@ -29,10 +29,11 @@ import {
   Wrench,
   ScanEye,
   Pencil,
+  Plus,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -50,10 +51,12 @@ import {
 import { buildTurns, callTitle, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
 import { api, useMachine } from "../lib/api";
+import { attach, clear, uploading, useAttachments, withAttachments } from "../lib/attachments";
 import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
 import { useSettled } from "../lib/settled";
 import { useEditor } from "../lib/store";
+import { AttachmentTray } from "./AttachmentTray";
 import { NoteQueue } from "./NoteQueue";
 import { ProblemView } from "./ProblemView";
 import { Button, cx } from "./ui";
@@ -602,18 +605,39 @@ function Composer({ disabled }: { disabled: boolean }) {
   const running = useAgent((state) => state.running);
   const modelName = useAgent((state) => state.modelName);
   const notes = useNotes((state) => queued(state.notes).length);
+  const project = useEditor((state) => state.project?.id ?? null);
+  const attachments = useAttachments((state) => (state.project === project ? state.items : NONE));
+  // Another project's attachments never ride along.
+  useEffect(() => {
+    if (useAttachments.getState().project !== project) clear(project);
+  }, [project]);
+  // The tray on top of the composer: what's attached, then the queued notes.
+  const trays = [attachments.length > 0 && <AttachmentTray key="files" />, notes > 0 && <NoteQueue key="notes" />].filter(Boolean);
   return (
     <ChatComposer
-      above={notes > 0 ? <NoteQueue /> : undefined}
+      above={trays.length > 0 ? <ComposerTray>{trays}</ComposerTray> : undefined}
       running={running}
       disabled={disabled}
       modelName={modelName ?? ""}
       placeholder={running ? "Working…" : "Start the editing workflow, or ask for a change…"}
+      onAttach={project === null ? undefined : (files) => attach(project, files)}
+      waiting={uploading(attachments) ? "Uploading the attached files…" : undefined}
+      canSendEmpty={attachments.length > 0}
       // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
-      onSend={(message) => void sendToAgent(message, playhead.frame)}
+      onSend={(message) => {
+        void sendToAgent(withAttachments(message, attachments), playhead.frame);
+        clear(project);
+      }}
       onStop={stopAgent}
     />
   );
+}
+
+const NONE: never[] = [];
+
+/** What sits on the composer's top edge, attached to it: each tray a row, a line between. */
+export function ComposerTray({ children }: { children: ReactNode }) {
+  return <div className="divide-y divide-line rounded-t-xl border border-b-0 border-line bg-raised">{children}</div>;
 }
 
 /** The chat's composer: a message, the model it runs on, Send or Stop. */
@@ -626,6 +650,9 @@ export function ChatComposer({
   onStop,
   draft,
   above,
+  onAttach,
+  waiting,
+  canSendEmpty = false,
 }: {
   running: boolean;
   disabled: boolean;
@@ -635,13 +662,21 @@ export function ChatComposer({
   onStop: () => void;
   /** Where an unsent message is kept (localStorage), if anywhere. */
   draft?: string;
-  /** Attached to the composer's top (the queued notes). */
+  /** Attached to the composer's top (ComposerTray: attachments, the queued notes). */
   above?: ReactNode;
+  /** Files picked with +, dropped on the composer or pasted into it; without it, no +. */
+  onAttach?: (files: File[]) => void;
+  /** Why Send waits (attachments still uploading). */
+  waiting?: string;
+  /** Send with no words (only attachments). */
+  canSendEmpty?: boolean;
 }) {
   const [text, setText] = useState(() => (draft === undefined ? "" : (localStorage.getItem(draft) ?? "")));
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
   const stoppable = useSettled(running);
   const input = useRef<HTMLTextAreaElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
   useEffect(() => {
     if (draft === undefined) return;
     if (text) localStorage.setItem(draft, text);
@@ -650,10 +685,11 @@ export function ChatComposer({
 
   const send = () => {
     const message = text.trim();
-    if (!message || running || disabled) return;
+    if ((!message && !canSendEmpty) || running || disabled || waiting !== undefined) return;
     setText("");
-    onSend(message);
+    onSend(message || "Here are the files I've attached.");
   };
+  const hasFiles = (event: DragEvent) => onAttach !== undefined && event.dataTransfer.types.includes("Files");
 
   return (
     // A plain form + labelled textarea: what dictation tools (Wispr Flow) look for to paste into.
@@ -666,7 +702,30 @@ export function ChatComposer({
     >
       {above}
       {/* In focus its edge goes a light grey, not white (Sphe, Nov 2: "remove the white on click like the outline make it a light gray"). */}
-      <div className={cx("border border-line bg-black p-2 transition-colors focus-within:border-line-strong", above === undefined ? "rounded-xl" : "rounded-b-xl", disabled && "opacity-50")}>
+      <div
+        className={cx(
+          "border bg-black p-2.5 transition-colors focus-within:border-line-strong",
+          above === undefined ? "rounded-xl" : "rounded-b-xl",
+          dragging ? "border-dashed border-white/50 bg-white/[0.03]" : "border-line",
+          disabled && "opacity-50",
+        )}
+        // A file dropped here is attached (and stops here, so the window's own drop doesn't take it too).
+        onDragOver={(event) => {
+          if (!hasFiles(event)) return;
+          event.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+        }}
+        onDrop={(event) => {
+          setDragging(false);
+          if (!hasFiles(event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          onAttach?.([...event.dataTransfer.files]);
+        }}
+      >
         <textarea
           ref={input}
           name="message"
@@ -674,9 +733,16 @@ export function ChatComposer({
           autoComplete="off"
           value={text}
           disabled={disabled}
-          rows={2}
+          rows={3}
           placeholder={placeholder}
           onChange={(event) => setText(event.target.value)}
+          // A pasted screenshot is attached.
+          onPaste={(event) => {
+            const files = [...event.clipboardData.files];
+            if (onAttach === undefined || files.length === 0) return;
+            event.preventDefault();
+            onAttach(files);
+          }}
           onKeyDown={(event) => {
             event.stopPropagation();
             if (event.key === "Enter" && !event.shiftKey) {
@@ -684,11 +750,37 @@ export function ChatComposer({
               send();
             }
           }}
-          className="max-h-40 min-h-[40px] w-full resize-none bg-transparent px-1 text-[13px] text-fg outline-none placeholder:text-faint"
-          style={{ height: Math.min(160, 40 + Math.max(0, text.split("\n").length - 2) * 18) }}
+          className="max-h-48 min-h-[60px] w-full resize-none bg-transparent px-1 text-[13px] leading-[19px] text-fg outline-none placeholder:text-faint"
+          style={{ height: Math.min(192, 60 + Math.max(0, text.split("\n").length - 3) * 19) }}
         />
-        <div className="mt-1 flex items-center gap-1">
-          <span className="flex h-6 items-center gap-1.5 px-1 text-[11px] font-medium text-muted" title="Edit picks the model and how hard it thinks">
+        <div className="mt-1.5 flex items-center gap-1.5">
+          {onAttach !== undefined && (
+            <>
+              <button
+                type="button"
+                aria-label="Attach files"
+                title="Attach files (or drop them here)"
+                disabled={disabled}
+                onClick={() => picker.current?.click()}
+                className="flex size-7 items-center justify-center rounded-full bg-white/[0.08] text-secondary transition-[background,color,transform] hover:bg-white/[0.14] hover:text-fg active:scale-90 disabled:opacity-40"
+              >
+                <Plus size={15} strokeWidth={2.2} />
+              </button>
+              <input
+                ref={picker}
+                type="file"
+                multiple
+                hidden
+                onChange={(event) => {
+                  const files = [...(event.target.files ?? [])];
+                  event.target.value = "";
+                  if (files.length > 0) onAttach(files);
+                }}
+              />
+            </>
+          )}
+          {/* A grey pill, its words light enough to read (Sphe, Nov 3). */}
+          <span className="flex h-7 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[11.5px] font-medium text-secondary" title="Edit picks the model and how hard it thinks">
             {/* Claude's orange mark before a Claude model (Sphe, Nov 2), in every chat that uses this composer. */}
             {/^(Opus|Sonnet|Haiku|Fable|Claude)\b/u.test(modelName) && <ClaudeMark size={12} />}
             {modelName}
@@ -708,8 +800,8 @@ export function ChatComposer({
             <button
               type="submit"
               aria-label="Send"
-              title="Send (Enter)"
-              disabled={!text.trim() || disabled}
+              title={waiting ?? "Send (Enter)"}
+              disabled={(!text.trim() && !canSendEmpty) || disabled || waiting !== undefined}
               className="ml-auto flex size-7 items-center justify-center rounded-full bg-white text-black transition-[transform,opacity] active:scale-90 disabled:opacity-25"
             >
               <ArrowUp size={14} strokeWidth={2.4} />

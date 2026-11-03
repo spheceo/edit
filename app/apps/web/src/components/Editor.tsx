@@ -9,7 +9,7 @@ import { clientId, connectEvents, leave, settled, syncScriptJob, useEditor } fro
 import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
 import { goToEnd, goToStart, useView } from "../lib/timelineView";
 import { followNotes, startNote } from "../lib/notes";
-import { uploadFiles } from "../lib/upload";
+import { attach } from "../lib/attachments";
 import { ShareDialog } from "./ShareDialog";
 import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
@@ -142,7 +142,7 @@ export function Editor({ id }: { id: string }) {
               className="rounded-2xl border border-dashed border-white/40 bg-panel/90 px-8 py-6 text-center"
             >
               <div className="text-[15px] font-medium">Drop to upload to {machine}</div>
-              <div className="mt-1 text-[12px] text-muted">Drop on the timeline to place it there</div>
+              <div className="mt-1 text-[12px] text-muted">It’s attached to your next message · drop on the timeline to place it there</div>
             </motion.div>
           </motion.div>
         )}
@@ -175,7 +175,9 @@ function useFileDrop() {
     const drop = (event: DragEvent) => {
       if (!hasFiles(event)) return;
       event.preventDefault();
-      uploadFiles([...(event.dataTransfer?.files ?? [])]);
+      // Attached to the chat's next message, so they show (the media panel that listed them is gone).
+      const project = useEditor.getState().project?.id;
+      if (project !== undefined) attach(project, [...(event.dataTransfer?.files ?? [])]);
     };
     // Capture phase sees every drop, so the overlay always clears.
     const reset = () => {

@@ -27,7 +27,7 @@ export function NoteQueue() {
   if (shown.length === 0) return null;
   const waiting = shown.filter((note) => note.status === "queued").length;
   return (
-    <div role="list" aria-label="Queued notes" className="rounded-t-xl border border-b-0 border-line bg-raised px-1.5 pt-1.5 pb-1">
+    <div role="list" aria-label="Queued notes" className="px-1.5 pt-1.5 pb-1">
       <div className="flex gap-1 overflow-x-auto pb-0.5 [scrollbar-width:none]">
         {shown.map((note) => (
           <Chip key={note.id} note={note} fps={fps} />

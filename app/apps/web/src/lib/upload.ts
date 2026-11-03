@@ -30,6 +30,8 @@ interface Job {
   file: File;
   projectId: string;
   placement?: Placement;
+  /** Attached in the chat: the tray shows where it is, so no toast when a file lands. */
+  quiet: boolean;
 }
 
 export const useUploads = create<{ uploads: Upload[] }>(() => ({ uploads: [] }));
@@ -57,20 +59,23 @@ function forget(id: number, delay: number) {
   setTimeout(() => useUploads.setState(({ uploads }) => ({ uploads: uploads.filter((upload) => upload.id !== id) })), delay);
 }
 
-/** Queues files for upload. With `placement`, each lands on the timeline after the previous one. */
-export function uploadFiles(files: File[], placement?: Placement) {
+/** Queues files for upload. With `placement`, each lands on the timeline after the previous one. Answers each file queued with its upload's id. */
+export function uploadFiles(files: File[], placement?: Placement, { quiet = false }: { quiet?: boolean } = {}): { id: number; file: File }[] {
   const project = useEditor.getState().project;
-  if (!project) return;
+  if (!project) return [];
   const accepted = files.filter(UPLOADABLE);
   const rejected = files.length - accepted.length;
   if (rejected) useEditor.getState().toast(`Skipped ${rejected} empty file${rejected > 1 ? "s" : ""} or folder${rejected > 1 ? "s" : ""}.`, "error");
+  const queued: { id: number; file: File }[] = [];
   for (const [index, file] of accepted.entries()) {
     const upload: Upload = { id: ++nextId, name: file.name, size: file.size, loaded: 0, state: "queued" };
     useUploads.setState(({ uploads }) => ({ uploads: [...uploads, upload] }));
     // Only the first carries an explicit frame; the rest follow it.
-    queue.push({ upload, file, projectId: project.id, placement: placement && { ...placement, frame: index === 0 ? placement.frame : -1 } });
+    queue.push({ upload, file, projectId: project.id, placement: placement && { ...placement, frame: index === 0 ? placement.frame : -1 }, quiet });
+    queued.push({ id: upload.id, file });
   }
   void pump();
+  return queued;
 }
 
 let followFrame = 0;
@@ -163,7 +168,7 @@ function send(job: Job): Promise<Landed> {
 function land(job: Job, result: Landed) {
   if (result.file !== undefined) {
     useUploadedFiles.setState(({ version }) => ({ version: version + 1 }));
-    useEditor.getState().toast(`“${result.file}” is in the media panel’s Files: the agent can read it.`, "info");
+    if (!job.quiet) useEditor.getState().toast(`“${result.file}” is uploaded: the agent can read it.`, "info");
     return;
   }
   const state = useEditor.getState();

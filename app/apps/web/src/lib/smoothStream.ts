@@ -21,6 +21,21 @@ const AHEAD = 120;
 const POLL_MS = 1500;
 /** The sound is put back in step past this much (s). */
 const DRIFT = 0.08;
+/** Past this much (s) the sound is too far out to drift back: it is moved, once. */
+const SEEK = 0.5;
+
+/**
+ * How the render's sound is kept with its picture, from how far out it is
+ * (sound time − picture time, s): a small drift is played out at a slightly
+ * off rate until it lands — a hard move on every drift past `DRIFT` was
+ * heard as bumps laid over the sound, the seek restarting the element's
+ * buffering again and again while it streamed. Only a big drift seeks.
+ */
+export function soundSync(drift: number): { seek: boolean; rate: number } {
+  if (Math.abs(drift) > SEEK) return { seek: true, rate: 1 };
+  if (Math.abs(drift) < DRIFT / 2) return { seek: false, rate: 1 };
+  return { seek: false, rate: drift < 0 ? 1.06 : 0.94 };
+}
 
 export class SmoothStream {
   readonly url: string;
@@ -72,7 +87,14 @@ export class SmoothStream {
       else this.sound.src = mediaHost(url);
     }
     if (url === null) return;
-    if (Math.abs(this.sound.currentTime - time) > DRIFT) this.sound.currentTime = time;
+    const sync = soundSync(this.sound.currentTime - time);
+    if (sync.seek) {
+      // One move, and not another while that one is still landing.
+      if (!this.sound.seeking) this.sound.currentTime = time;
+      this.sound.playbackRate = 1;
+    } else {
+      this.sound.playbackRate = playing ? sync.rate : 1;
+    }
     if (playing && this.sound.paused) void this.sound.play().catch(() => {});
     if (!playing && !this.sound.paused) this.sound.pause();
   }

@@ -16,7 +16,7 @@ import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
 import { agentHooks } from "./agent.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
-import { ExportRegistry, resumeSnapshot, type StartExtra } from "./exports.ts";
+import { archiveFinished, ExportRegistry, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
@@ -353,6 +353,11 @@ function resumeJobs(app: App): void {
       const current = project(job.project);
       const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
       await app.exports.start(app.store, app.library, asked, options, output, { backend, cloudRequest, cloudJob, drive });
+    },
+    archive: async (job) => {
+      // The export finished before the restart: only its upload is done again.
+      const { output, key, record } = job.args as { output: string; key: string; record: ExportRecord };
+      await archiveFinished(app.store.home, job.project, output, key, record);
     },
     drive: (job) => {
       const { path } = job.args as { path: string };

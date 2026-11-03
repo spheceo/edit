@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, macSpeed, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
+import { archiveExportFile, archiveFinished, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, macSpeed, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as capacity from "../src/export_capacity.ts";
 import * as seams from "../src/seams.ts";
@@ -603,4 +603,43 @@ test("how many exports a Mac runs at once (one per encode engine), and when ther
   expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 30), {})).toContain("waiting for memory");
   expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 60, 10), {})).toContain("less busy");
   expect(capacity.noRoom(1, mac("Apple M3 Max", 64, null), {})).toContain("can't be read");
+});
+
+test("a finished export's upload is a job of its own: a restart meanwhile sends the file again, never exports it again", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("archive-job");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job) => ({ cancel: () => {}, wait: async () => { fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; } }));
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const uploaded: string[] = [];
+  const enabled = spyOn(exportCloud, "enabled").mockReturnValue(true);
+  const upload = spyOn(exportCloud, "upload").mockImplementation(async (path, key) => { uploaded.push(key); await held; void path; });
+  const head = spyOn(exportCloud, "head").mockResolvedValue({ size: 6 });
+  const wanted = spyOn(seams.drive, "wanted").mockReturnValue(false);
+  try {
+    const id = store.create("archived", { width: 64, height: 36, fps: 30 }).project.id;
+    await store.update(id, "test", (p) => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+    const output = `${dir}/archived.mp4`;
+    await registry.start(store, app.library, structuredClone(store.get(id)!.project), native.exportDefaults(), output, { backend: "local", drive: false });
+    for (let tries = 0; uploaded.length === 0 && tries < 500; tries++) await Bun.sleep(5);
+    // Uploading: the export's job is over, the archive's is on the list.
+    const listed = (JSON.parse(fs.readFileSync(`${home}/jobs.json`, "utf8")) as { key: string; kind: string; args: { output?: string } }[]);
+    expect(listed.map((job) => job.kind)).toEqual(["archive"]);
+    expect(listed[0]!.args.output).toBe(output);
+    release();
+    for (let tries = 0; registry.running() && tries < 500; tries++) await Bun.sleep(5);
+    expect(JSON.parse(fs.readFileSync(`${home}/jobs.json`, "utf8"))).toEqual([]);
+    // What a restart does with that job: the file goes up again and is listed, nothing renders.
+    fs.writeFileSync(output, "export");
+    const renders = render.mock.calls.length;
+    await archiveFinished(home, id, output, "edit/exports/x/archived.mp4", { path: output, name: "archived.mp4", finished_ms: 1, seconds: 1, bytes: 6, frames: 30, whole: true, format: "h264", cloudKey: "edit/exports/x/archived.mp4" });
+    expect(uploaded.at(-1)).toBe("edit/exports/x/archived.mp4");
+    expect(render.mock.calls.length).toBe(renders);
+    expect(listExports(home, id).some((one) => one.cloudKey === "edit/exports/x/archived.mp4")).toBe(true);
+  } finally {
+    release();
+    render.mockRestore(); plan.mockRestore(); enabled.mockRestore(); upload.mockRestore(); head.mockRestore(); wanted.mockRestore(); cleanup();
+  }
 });

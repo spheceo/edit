@@ -19,7 +19,7 @@ import { inArea, runPromise } from "./effect/runtime.ts";
 import { nowMs, readState, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 
-export type Kind = "export" | "drive" | "smooth" | "watch" | "upload" | "map" | "case";
+export type Kind = "export" | "archive" | "drive" | "smooth" | "watch" | "upload" | "map" | "case";
 
 export interface Job {
   /** One job per key: kind, project and what in it (a clip). */

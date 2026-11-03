@@ -282,6 +282,25 @@ export async function archiveExportFile(
   return !fs.existsSync(output);
 }
 
+/**
+ * Puts a finished export in the cloud (`archiveExportFile`) and lists it
+ * there: after the export, or after a restart cut the upload short (the
+ * `archive` job). A file gone meanwhile is said, never exported again here.
+ */
+export async function archiveFinished(home: string, id: string, output: string, key: string, record: ExportRecord): Promise<void> {
+  if (!fs.existsSync(output)) throw new Error(`${output} is gone`);
+  if (await archiveExportFile(output, key)) {
+    try {
+      remember(home, id, record);
+    } catch { /* the list keeps the local-only record */ }
+    diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy kept: being read, or room to spare)" : " and deleted the local copy"}`);
+    // Short of room: the copies kept while there was some go too.
+    if (freeBytes(output) <= KEEP_WHEN_FREE) dropKept(home, output);
+  } else {
+    diag.warn("export", `${id}: cloud archive of ${output} unverified; local copy kept`);
+  }
+}
+
 /** The chunk folder of a project's exports (the engine's chunks::folder). */
 export function chunkFolder(cache: string, project: string): string {
   return join(cache, "export-chunks", project.replace(/[^A-Za-z0-9_-]/g, "_"));
@@ -922,18 +941,19 @@ export class ExportRegistry implements seams.Exports {
         diag.info("export", `${id}: rendered and kept in the cloud at ${running.inCloud.key}, never copied to this Mac`);
       } else if (!upload && !running.keepLocal && exportCloud.enabled()) {
         const key = exportCloudKey(id, fileName(output) ?? "export.mp4");
-        if (await archiveExportFile(output, key)) {
-          try {
-            remember(this.home ?? store.home, id, {
-              path: output, name: fileName(output) ?? output, finished_ms: nowMs(), seconds: took / 1000, bytes,
-              frames, whole: plan.start === 0 && plan.end >= duration(project), start: plan.start, format: options.format, timeline: running.timeline, cloudKey: key,
-            });
-          } catch { /* the list keeps the local-only record */ }
-          diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy kept: being read, or room to spare)" : " and deleted the local copy"}`);
-          // Short of room: the copies kept while there was some go too.
-          if (freeBytes(output) <= KEEP_WHEN_FREE) dropKept(this.home ?? store.home, output);
-        } else {
-          diag.warn("export", `${id}: cloud archive of ${output} unverified; local copy kept`);
+        const record: ExportRecord = {
+          path: output, name: fileName(output) ?? output, finished_ms: nowMs(), seconds: took / 1000, bytes,
+          frames, whole: plan.start === 0 && plan.end >= duration(project), start: plan.start, format: options.format, timeline: running.timeline, cloudKey: key,
+        };
+        // The export is done: its file is whole and listed. The archive is a job of its own, so a restart
+        // meanwhile sends the file again instead of exporting it again (Nov 3: Kroger, 77 minutes, started
+        // over from nothing by a restart during its upload).
+        jobs.end(this.home, running.key);
+        const archive = jobs.begin(this.home, "archive", id, { output, key, record });
+        try {
+          await archiveFinished(this.home ?? store.home, id, output, key, record);
+        } finally {
+          jobs.end(this.home, archive);
         }
       }
     } else if (running.cancelled) {

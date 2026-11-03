@@ -24,7 +24,6 @@ import {
   Square,
   SquarePlus,
   Star,
-  Timer,
   Trash2,
   Type,
   Wrench,
@@ -48,7 +47,7 @@ import {
   useAgent,
   type AgentEntry,
 } from "../lib/agent";
-import { buildTurns, callTitle, editWorked, formatSpan, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
+import { buildTurns, callTitle, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
 import { api, useMachine } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
@@ -184,24 +183,8 @@ function MainAgentPanel() {
       </div>
 
       {projectId && <ResetCard projectId={projectId} />}
-      {loaded && <EditTime turns={turns} live={running} />}
       {!(status && !status.ready) && <Composer disabled={!status?.ready} />}
     </section>
-  );
-}
-
-/** The agent's time on this edit, every turn added up, ticking while one runs (JJ, Nov 3: "a tracker on how long each edit takes"). */
-function EditTime({ turns, live }: { turns: Turn[]; live: boolean }) {
-  const now = useNow(live);
-  const { ms, turns: count } = editWorked(turns, now);
-  if (count === 0) return null;
-  return (
-    <div className="flex h-7 shrink-0 items-center gap-1.5 border-t border-line px-3 text-[11px] text-muted" title="The agent's working time on this edit, all its turns added up (not the time between them)">
-      <Timer size={12} className="shrink-0" />
-      <span className="truncate">
-        Agent time on this edit: <span className="text-fg tabular-nums">{formatSpan(ms)}</span> · {count} {count === 1 ? "turn" : "turns"}
-      </span>
-    </div>
   );
 }
 

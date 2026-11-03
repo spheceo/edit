@@ -62,6 +62,8 @@ export interface PlaybackStatus {
   /** The rendered file, when one is ready (it may show an older revision). */
   url: string | null;
   error: string | null;
+  /** Rendered here in chunks, played a chunk at a time as each lands (`rev`'s, smoothStream.ts). */
+  stream?: boolean;
 }
 
 export type Tool = "select" | "razor";

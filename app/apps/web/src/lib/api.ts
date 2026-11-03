@@ -238,7 +238,8 @@ export const api = {
   cancelExport: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/export/cancel`),
   /** Smooth playback (playback_render.ts): what's rendered, and asking for the edit as it is now. */
   playback: (id: string) => request<PlaybackStatus>("GET", `/api/projects/${id}/playback`),
-  renderPlayback: (id: string) => request<PlaybackStatus>("POST", `/api/projects/${id}/playback`),
+  /** `frame`: the playhead, whose chunk is rendered first. */
+  renderPlayback: (id: string, frame?: number) => request<PlaybackStatus>("POST", `/api/projects/${id}/playback`, frame === undefined ? undefined : { frame }),
   /** Sets who a voice is (its role decides its colour); returns the updated transcript. */
   setSpeaker: (id: string, media: string, voice: string, role: string) =>
     request<Transcript>("POST", `/api/projects/${id}/media/${media}/speakers`, { voice, role }),

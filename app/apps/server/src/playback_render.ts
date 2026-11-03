@@ -16,16 +16,16 @@
 // page asks for it (`POST /api/projects/{id}/playback`) once its edits settle,
 // so the agent's dozens of changes in a turn don't each start one.
 //
-// An edit whose footage is all in the cloud renders on Modal instead (the
-// house export's v3 pool, modal_exports.ts): from South Africa every read of
-// R2 waits ~0.25 s, so the Mac made the 16-Year-Old's 26 minutes at about 13
-// frames a second (~50 minutes, the viewer laggy all the while), where Modal
-// reads R2 beside it, renders eight sections at once and keeps its sections
-// and sound cached, so a render after an edit redoes only what it touched (the
-// user, Oct 31: "if its faster, lets go for it… we can so much about speed").
-// Its file stays in R2 under the picture's hash
-// (`edit/playback/<project>/<hash>.mp4`), streamed to the viewer through this
-// server's block cache, and any Mac opening the same picture uses it at once.
+// A render lives in R2 under the picture's hash
+// (`edit/exports/playback/<project>/<hash>.mp4`, `cloudKey`) when Modal made
+// it, and before rendering a Mac looks there and plays any render of the same
+// picture at once (streamed through this server's block cache, copied down
+// behind it), so a project opened on another Mac plays straight away. Modal
+// renders only with its exports on (`EDIT_MODAL_EXPORTS`, off by default
+// since Sphe moved Edit off Modal, Nov 2); otherwise it renders here, and a
+// render Modal can't make is made here too. A Mac's own render isn't put in
+// R2 yet: whole, a 40-minute edit's is ~900 MB up from South Africa after
+// every agent turn; it goes up chunk by chunk once renders are kept in chunks.
 //
 // The Mac's file is `<cache>/playback/<project>.mp4`; either way the status
 // says which revision it shows (`rev`), and the viewer plays it only when
@@ -46,6 +46,7 @@ import { isFile, join } from "./paths.ts";
 import { duration } from "./project.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { jsonForSerde } from "./rust.ts";
+import * as playbackStream from "./playback_stream.ts";
 import * as seams from "./seams.ts";
 import { createHash } from "node:crypto";
 
@@ -63,13 +64,17 @@ export interface Status {
   /** The file's address (with its version), when one is ready. */
   url: string | null;
   error: string | null;
+  /** Rendered here in chunks: the viewer plays it a chunk at a time as each lands (playback_stream.ts), while it renders too. */
+  stream: boolean;
 }
 
 interface Made {
   rev: number;
   hash: string;
   stamp: string;
-  /** In R2 (made on Modal), not on this Mac. */
+  /** Whether it has sound (the edit has something heard). */
+  heard?: boolean;
+  /** In R2 (made on Modal or another Mac), not on this Mac. */
   key?: string;
 }
 
@@ -83,6 +88,10 @@ interface Running {
   /** On Modal: it doesn't take the Mac, so a local export needn't stop it. */
   cloud: boolean;
   key?: string;
+  /** When it started (ms since 1970): a chunk plan older than this is another render's. */
+  started: number;
+  /** Whether it has sound. */
+  heard?: boolean;
 }
 
 const made = new Map<string, Made>();
@@ -90,6 +99,8 @@ const failed = new Map<string, { rev: number; error: string }>();
 let running: Running | null = null;
 /** The newest ask per project while another render runs: [rev wanted]. */
 const asked = new Map<string, number>();
+/** Where the viewer's playhead was when it asked: that chunk is rendered first. */
+const focus = new Map<string, number>();
 let waitTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** What's seen and heard: the project but its script (notes and words that change nothing on screen). */
@@ -107,7 +118,7 @@ function record(app: App, id: string): Made | undefined {
   if (known !== undefined) return known;
   const saved = readState(file(app, id).replace(/\.mp4$/u, ".json")) as Partial<Made> | null | undefined;
   if (typeof saved?.hash !== "string" || typeof saved.stamp !== "string" || typeof saved.rev !== "number") return undefined;
-  const found: Made = { rev: saved.rev, hash: saved.hash, stamp: saved.stamp, ...(typeof saved.key === "string" ? { key: saved.key } : {}) };
+  const found: Made = { rev: saved.rev, hash: saved.hash, stamp: saved.stamp, ...(typeof saved.key === "string" ? { key: saved.key } : {}), ...(typeof saved.heard === "boolean" ? { heard: saved.heard } : {}) };
   made.set(id, found);
   return found;
 }
@@ -117,7 +128,7 @@ function present(app: App, id: string, done: Made | undefined): done is Made {
   return done !== undefined && (done.key !== undefined || isFile(file(app, id)));
 }
 
-/** Where a picture's render made on Modal lives in R2 (under edit/exports/: the relay keeps an installed Edit's cloud exports there). */
+/** Where a picture's render lives in R2, whichever Mac (or Modal) made it (under edit/exports/: the relay keeps an installed Edit's cloud exports there). */
 export function cloudKey(id: string, hash: string): string {
   return `edit/exports/playback/${id.replace(/[^A-Za-z0-9_-]/g, "_")}/${hash}.mp4`;
 }
@@ -160,12 +171,12 @@ export function status(app: App, id: string): Status {
   // picture: no url, so nothing plays it as this one (JJ, Nov 2: "I've made
   // changes to the window screen rather than the paper, but on the screen, it
   // still shows the paper thing": the status gave the new rev with the old file).
-  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null };
-  if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url: asked.get(id) === ready?.rev ? url : null, error: null };
-  if (ready !== undefined) return { state: "ready", rev: ready.rev, progress: 1, url, error: null };
+  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null, stream: !running.cloud };
+  if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url: asked.get(id) === ready?.rev ? url : null, error: null, stream: false };
+  if (ready !== undefined) return { state: "ready", rev: ready.rev, progress: 1, url, error: null, stream: ready.key === undefined };
   const lost = failed.get(id);
-  if (lost !== undefined) return { state: "failed", rev: lost.rev, progress: 0, url: null, error: lost.error };
-  return { state: "none", rev: null, progress: 0, url: null, error: null };
+  if (lost !== undefined) return { state: "failed", rev: lost.rev, progress: 0, url: null, error: lost.error, stream: false };
+  return { state: "none", rev: null, progress: 0, url: null, error: null, stream: false };
 }
 
 function publish(app: App, id: string): void {
@@ -177,7 +188,7 @@ function publish(app: App, id: string): void {
  * render of an older revision stops (its chunks are kept for this one); one
  * of another project stops too (the viewer moved on).
  */
-export function request(app: App, id: string): Status {
+export function request(app: App, id: string, frame?: number): Status {
   const live = app.store.get(id);
   if (live === null) throw notFound("no such project");
   const hash = pictureHash(live.project);
@@ -189,6 +200,7 @@ export function request(app: App, id: string): Status {
   if (running !== null && running.project === id && running.hash === hash) return status(app, id);
   asked.clear();
   asked.set(id, live.rev);
+  if (frame !== undefined && Number.isFinite(frame) && frame >= 0) focus.set(id, Math.floor(frame));
   if (running !== null) {
     running.cancelled = true;
     running.job?.cancel();
@@ -230,7 +242,7 @@ async function next(app: App): Promise<void> {
     return void next(app);
   }
   const project = live.project;
-  const onCloud = await toCloud(project);
+  const onCloud = await hooks.toCloud(project);
   // A local export goes first (a render on Modal doesn't take the Mac); this looks again shortly.
   if (!onCloud && exporting(app)) {
     clearTimeout(waitTimer);
@@ -239,7 +251,7 @@ async function next(app: App): Promise<void> {
   }
   if (running !== null || asked.get(id) === undefined) return;
   asked.delete(id);
-  const current: Running = { project: id, rev: live.rev, hash: pictureHash(project), progress: 0, job: null, cancelled: false, cloud: onCloud };
+  const current: Running = { project: id, rev: live.rev, hash: pictureHash(project), progress: 0, job: null, cancelled: false, cloud: onCloud, started: Date.now() };
   running = current;
   failed.delete(id);
   publish(app, id);
@@ -248,12 +260,28 @@ async function next(app: App): Promise<void> {
     // Its record and file live here whichever way it's made (Nov 1: made on Modal into a fresh data folder, its record
     // couldn't be written, so it was never copied down and a restart would have paid Modal to make it again).
     fs.mkdirSync(join(app.store.cacheDir(), "playback"), { recursive: true });
-    if (current.cloud) await renderOnModal(app, project, current);
-    else await render(app, project, current);
+    const key = cloudKey(id, current.hash);
+    // A render of this very picture any Mac made (or Modal) is played as it is: opened on a new Mac, it plays at once.
+    let found = false;
+    if (await hooks.inCloud(key)) {
+      current.key = key;
+      found = true;
+    } else if (current.cloud) {
+      try {
+        await renderOnModal(app, project, current);
+      } catch (error) {
+        if (current.cancelled) throw error;
+        // Out of credit, down, or off: made here, as any other (an export starting stops it till it's done).
+        diag.warn("playback", `${project.name}: Modal couldn't make smooth playback (${diag.messageOf(error)}); rendering it here`);
+        current.cloud = false;
+        delete current.key;
+        await render(app, project, current);
+      }
+    } else await render(app, project, current);
     if (!current.cancelled) {
       const stamp = `${current.hash}-${Date.now().toString(36)}`;
       const before = made.get(id);
-      made.set(id, { rev: current.rev, hash: current.hash, stamp, ...(current.key !== undefined ? { key: current.key } : {}) });
+      made.set(id, { rev: current.rev, hash: current.hash, stamp, ...(current.key !== undefined ? { key: current.key } : {}), ...(current.heard !== undefined ? { heard: current.heard } : {}) });
       writeAtomic(file(app, id).replace(/\.mp4$/u, ".json"), JSON.stringify(made.get(id)));
       if (current.key !== undefined) {
         fs.rmSync(file(app, id), { force: true });
@@ -262,9 +290,10 @@ async function next(app: App): Promise<void> {
         void fetchLocal(app, id, current.key);
       } else keepRecent(app);
       // The render it replaces, made on Modal, goes from R2 (another Mac's of this picture is the same key, kept).
-      if (before?.key !== undefined && before.key !== current.key) void cloud.remove([before.key]).catch(() => {});
+      if (before?.key !== undefined && before.key !== key) void cloud.remove([before.key]).catch(() => {});
       const frames = duration(project);
-      diag.info("playback", `${project.name}: smooth playback of ${frames} frames ${current.cloud ? "made on Modal" : "rendered here"} in ${diag.human(performance.now() - started)}`);
+      const how = found ? "found in the cloud" : current.cloud ? "made on Modal" : "rendered here";
+      diag.info("playback", `${project.name}: smooth playback of ${frames} frames ${how} in ${diag.human(performance.now() - started)}`);
     }
   } catch (error) {
     if (!current.cancelled) {
@@ -333,7 +362,11 @@ async function render(app: App, project: Project, current: Running): Promise<voi
   const input = { json: jsonForSerde(own) };
   const { plan } = native().exportPlan(input, options);
   if (plan.end <= plan.start) throw new ApiError(400, "nothing on the timeline to play");
-  const job = native().ExportJob.start({ project: input, options, plan, output, cacheDir: app.store.cacheDir() }, (progress) => {
+  current.heard = plan.audio;
+  // The viewer's playhead's chunk first, then on from there (the viewer plays each as it lands).
+  const at = focus.get(project.id);
+  focus.delete(project.id);
+  const job = native().ExportJob.start({ project: input, options, plan: at === undefined ? plan : { ...plan, focus: at }, output, cacheDir: app.store.cacheDir() }, (progress) => {
     current.progress = progress;
     publishSoon(app, project.id);
   });
@@ -375,16 +408,25 @@ function publishSoon(app: App, id: string): void {
   }, 500);
 }
 
-/** How long an agent's turn has been over before its edit is made smooth (a follow-up turn may start meanwhile); whether it would be made on Modal. Tests change them. */
-export const hooks = { afterTurnMs: 45_000, toCloud: (project: Project) => toCloud(project) };
+/**
+ * How long an agent's turn has been over before its edit is made smooth (a
+ * follow-up turn may start meanwhile); whether it would be made on Modal;
+ * whether R2 has a render at a key. Tests change them.
+ */
+export const hooks = {
+  afterTurnMs: 45_000,
+  toCloud: (project: Project) => toCloud(project),
+  inCloud: async (key: string): Promise<boolean> => cloud.enabled() && (await cloud.head(key).catch(() => null)) !== null,
+};
 
 /**
  * Follows exports: a local one stops a render, which carries on once it's done.
  * And the agent: when its turn is over (and no follow-up has started), the
- * edit is made smooth on Modal by itself, so it plays smoothly when someone
- * opens it (the user, Oct 31: "too many loading frame issues… the biggest
- * issue"; a 40-minute edit was only rendered once someone sat watching it).
- * Never rendered here unasked, nor on a trial server.
+ * edit is made smooth by itself, so it plays smoothly when someone opens it
+ * (the user, Oct 31: "too many loading frame issues… the biggest issue"; a
+ * 40-minute edit was only rendered once someone sat watching it): here, behind
+ * any export, since Edit moved off Modal (Sphe, Nov 2), and shared in R2 for
+ * the other Macs. Never on a trial server.
  */
 export function start(app: App): void {
   const turns = new Map<string, number>();
@@ -396,13 +438,8 @@ export function start(app: App): void {
       turns.set(project, turn);
       if (event.running !== false) return;
       setTimeout(() => {
-        if (turns.get(project) !== turn) return;
-        const live = app.store.get(project);
-        if (live === null) return;
-        void hooks.toCloud(live.project).then((cloudy) => {
-          if (!cloudy || turns.get(project) !== turn) return;
-          requestQuietly(app, project);
-        });
+        if (turns.get(project) !== turn || app.store.get(project) === null) return;
+        requestQuietly(app, project);
       }, hooks.afterTurnMs).unref?.();
       return;
     }
@@ -412,10 +449,32 @@ export function start(app: App): void {
   });
 }
 
+/** What playback_stream.ts serves for revision `rev` of `id`: the render under way, or the one made, when it's that revision's and made here. */
+const lookup: playbackStream.Lookup = (app, id, rev) => {
+  const fps = app.store.get(id)?.project.settings.fps ?? 30;
+  if (running?.project === id) return running.rev === rev && !running.cloud ? { output: file(app, id), heard: running.heard ?? true, fps, since: running.started } : null;
+  const done = record(app, id);
+  if (!present(app, id, done) || done.key !== undefined) return null;
+  // A save that changed nothing seen keeps the render (status's rule).
+  const live = app.store.get(id);
+  const current = done.rev === rev || (live !== null && live.rev === rev && done.hash === pictureHash(live.project));
+  return current ? { output: file(app, id), heard: done.heard ?? true, fps, since: null } : null;
+};
+
 export function routes(router: Router<App>): void {
+  playbackStream.routes(router, lookup, (app, id) => app.store.get(id)?.project.settings.fps ?? 30, (app, id) => file(app, id));
   router
     .get("/api/projects/{id}/playback", ({ app, params }) => json(status(app, params.id ?? "")))
-    .post("/api/projects/{id}/playback", ({ app, params }) => json(request(app, params.id ?? "")))
+    .post("/api/projects/{id}/playback", async ({ app, params, request: given }) => {
+      let frame: number | undefined;
+      try {
+        const body = (await given.json()) as { frame?: unknown };
+        if (typeof body.frame === "number") frame = body.frame;
+      } catch {
+        // No body: from the start.
+      }
+      return json(request(app, params.id ?? "", frame));
+    })
     .get("/api/projects/{id}/playback.mp4", async ({ app, params, request: given }) => {
       const id = params.id ?? "";
       const done = record(app, id);

@@ -174,6 +174,11 @@ pub struct Plan {
     pub height: u32,
     /// Whether the file has sound (asked for, the format takes it, and something is heard).
     pub audio: bool,
+    /// A chunked export renders the chunks from this frame on first, then
+    /// the ones before it (smooth playback: where the viewer's playhead is).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub focus: Option<i64>,
 }
 
 impl Plan {
@@ -209,6 +214,7 @@ pub fn plan(options: &ExportOptions, project: &Project, heard: bool) -> Result<P
         width,
         height,
         audio,
+        focus: None,
     })
 }
 
@@ -629,6 +635,7 @@ mod tests {
             width: 1280,
             height: 720,
             audio: true,
+            focus: None,
         };
         let args = codec_args(&small, &plan, 30.0).unwrap();
         let rate: f64 = args[args.iter().position(|arg| arg == "-b:v").unwrap() + 1]
@@ -667,6 +674,7 @@ mod tests {
             width: 1920,
             height: 1080,
             audio: true,
+            focus: None,
         };
         let text = chapters_file(&with, &plan, 30.0).unwrap();
         assert_eq!(

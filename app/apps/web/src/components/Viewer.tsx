@@ -98,7 +98,9 @@ export function Viewer() {
   // Smooth playback: the rendered edit plays when it shows what's on screen (its
   // revision, nothing waiting to save); else the canvas draws live.
   const projectId = project?.id ?? null;
-  const smooth = playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? playback.url : null;
+  // Rendered here, it plays a chunk at a time as each lands, while it renders too; made on Modal, as one file.
+  const streamed = playback?.stream === true && (playback.state === "ready" || playback.state === "rendering") && playback.rev === rev && !dirty;
+  const smooth = streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? playback.url : null;
   useEffect(() => { preview.setSmooth(smooth); }, [smooth]);
   useEffect(() => {
     if (projectId === null) return;
@@ -106,6 +108,16 @@ export function Viewer() {
     api.playback(projectId).then((status) => { if (live && useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     return () => { live = false; };
   }, [projectId]);
+  // While it renders, looked at now and then: a server started again meanwhile (an update, a crash) has
+  // forgotten the render, says "none", and it's asked for again below, rather than waited on for ever.
+  const renderingNow = playback?.state === "rendering" || playback?.state === "waiting";
+  useEffect(() => {
+    if (projectId === null || !renderingNow) return;
+    const timer = setInterval(() => {
+      api.playback(projectId).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [projectId, renderingNow]);
   // Asked for once the edits settle, unless it's rendering (or failed on) this revision; never mid-turn
   // (the agent changes the edit many times a turn: each render would be stale before it landed).
   const hasClips = (project?.clips.length ?? 0) > 0;
@@ -114,7 +126,7 @@ export function Viewer() {
     if (projectId === null || dirty || !hasClips || agentBusy) return;
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;
     const timer = setTimeout(() => {
-      api.renderPlayback(projectId).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
+      api.renderPlayback(projectId, Math.floor(playhead.frame)).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     }, SMOOTH_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [projectId, rev, dirty, hasClips, agentBusy, playback]);

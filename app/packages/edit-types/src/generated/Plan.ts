@@ -11,4 +11,9 @@ start: number, end: number, width: number, height: number,
 /**
  * Whether the file has sound (asked for, the format takes it, and something is heard).
  */
-audio: boolean, };
+audio: boolean, 
+/**
+ * A chunked export renders the chunks from this frame on first, then
+ * the ones before it (smooth playback: where the viewer's playhead is).
+ */
+focus?: number, };

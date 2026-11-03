@@ -1502,6 +1502,12 @@ fn export_chunked(
     }
     // Chunks of other exports, and any cut short, go.
     chunks::tidy(&dir, &list.iter().collect::<Vec<_>>(), extension);
+    // What's to come, for smooth playback to serve each chunk as it lands.
+    chunks::write_plan(&dir, &list, extension)?;
+    // Smooth playback's from the viewer's playhead on, then what's before it.
+    if let Some(focus) = plan.focus {
+        todo.sort_by_key(|chunk| chunks::focus_order(chunk, focus));
+    }
     let parts = if plan.audio {
         crate::mix::parts(
             &heard_segments(project, plan.start, plan.end),
@@ -1541,21 +1547,38 @@ fn export_chunked(
     };
     let picture_share = (1.0 - sound_share) * (rendering / total);
     let sound_file = beside(output, ".sound.m4a");
-    if sound_key.is_some() && old_sound.is_none() {
-        mix_sound(
-            project,
-            options,
-            &parts,
-            seconds,
-            &sound_file.0,
-            cancel,
-            &mut |done| progress(done * sound_share),
-        )?;
-    }
-    if !todo.is_empty() {
-        let ranges: Vec<(i64, i64)> = todo.iter().map(|chunk| (chunk.start, chunk.end)).collect();
+    let mixing = sound_key.is_some() && old_sound.is_none();
+    // Focused (smooth playback, played as each chunk lands): the chunks
+    // around the first minute from the playhead are rendered before the
+    // sound's mix, the rest after it. The mix first held a 26-minute edit's
+    // first chunk back 2 minutes (Nov 2); never beside the picture's
+    // decoders, where AVFoundation's sound reads and theirs contend.
+    let (first, rest): (Vec<&chunks::Chunk>, Vec<&chunks::Chunk>) = match plan.focus {
+        Some(_) if mixing => {
+            let mut frames = 0;
+            let ahead = (fps * FOCUS_AHEAD_SECONDS).round() as i64;
+            todo.iter().partition(|chunk| {
+                let take = frames < ahead;
+                frames += chunk.frames();
+                take
+            })
+        }
+        _ => (Vec::new(), todo.clone()),
+    };
+    let rendered = (first.iter().map(|chunk| chunk.frames()).sum::<i64>() as f32
+        / rendering.max(1.0))
+        * picture_share;
+    let render_these = |these: &[&chunks::Chunk],
+                        from: f32,
+                        share: f32,
+                        progress: &mut dyn FnMut(f32)|
+     -> Result<(), String> {
+        if these.is_empty() {
+            return Ok(());
+        }
+        let ranges: Vec<(i64, i64)> = these.iter().map(|chunk| (chunk.start, chunk.end)).collect();
         let sink = Sink::Chunks(ChunkSink {
-            todo: todo
+            todo: these
                 .iter()
                 .map(|chunk| {
                     (
@@ -1575,10 +1598,28 @@ fn export_chunked(
         });
         crate::log::time_on("export", "export: native video", &project.id, || {
             render_frames(project, &ranges, sink, cache, cancel, &mut |done| {
-                progress(sound_share + done * picture_share)
+                progress(from + done * share)
             })
-        })?;
+        })
+    };
+    render_these(&first, 0.0, rendered, &mut *progress)?;
+    if mixing {
+        mix_sound(
+            project,
+            options,
+            &parts,
+            seconds,
+            &sound_file.0,
+            cancel,
+            &mut |done| progress(rendered + done * sound_share),
+        )?;
     }
+    render_these(
+        &rest,
+        rendered + sound_share,
+        picture_share - rendered,
+        &mut *progress,
+    )?;
     if cancel.load(Ordering::Acquire) {
         return Err("cancelled".to_owned());
     }
@@ -1885,6 +1926,14 @@ fn mix_sound(
         aac: (video && matches!(options.format, Format::H264 | Format::Hevc))
             .then(|| crate::export::audio_bitrate(options.format, options.quality)),
     };
+    // Written beside it, then renamed into place whole: smooth playback plays
+    // the mix the moment it's there, and it was there half-written (Nov 2).
+    // (Its own extension kept: a WAV or MP3 export's mix is its file.)
+    let extension = destination.extension().map_or_else(
+        || "m4a".to_owned(),
+        |ext| ext.to_string_lossy().into_owned(),
+    );
+    let mixing = beside(destination, &format!(".mixing.{extension}"));
     crate::log::time_on("export", "export: sound", &project.id, || {
         crate::util::killed_on_cancel(cancel, || {
             crate::mix::render(
@@ -1892,13 +1941,14 @@ fn mix_sound(
                 (seconds * crate::mix::RATE as f64).round() as usize,
                 options.loudness,
                 &encoding,
-                destination,
+                &mixing.0,
                 &scratch.0,
                 cancel,
                 progress,
             )
         })
-    })
+    })?;
+    std::fs::rename(&mixing.0, destination).map_err(|error| format!("the sound's mix: {error}"))
 }
 
 /// What a mix of `parts` sounds like, as a key: the parts (their files by
@@ -2174,7 +2224,15 @@ impl ChunkSink {
     }
 
     fn write(&mut self, frame: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
-        if self.open.as_ref().is_some_and(|open| frame >= open.1) {
+        // A frame outside the open chunk is the next chunk's: after it, or
+        // before it in a focused export (the playhead's chunks first, then
+        // those before: Nov 2, the last chunk took frame 0 into its encoder
+        // and failed, "Native encoder: The operation could not be completed").
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| frame >= open.1 || frame < open.0)
+        {
             self.close()?;
         }
         if self.open.is_none() {
@@ -2287,6 +2345,8 @@ impl Sink {
 /// Decoder threads per export: one plays the current clip while the others
 /// open and seek the next ones.
 const DECODERS: usize = 3;
+/// A focused export renders this much from the playhead before the sound's mix (seconds).
+const FOCUS_AHEAD_SECONDS: f64 = 60.0;
 /// Frames the planner (and so the decoders) may run ahead of the compositor.
 const LOOKAHEAD: usize = 48;
 /// Readback buffers in flight between the compositor and the encoder.
@@ -3056,6 +3116,39 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// A focused export (smooth playback: the playhead's chunks first, then
+    /// on, then those before) makes the same file as one in order: every
+    /// frame where it belongs, made of chunks, not exported whole.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_focused_export_renders_from_the_playhead_and_joins_in_order() {
+        let dir = temp_dir("focused");
+        let red = source(&dir, "red.mp4", "red", 0.5);
+        let blue = source(&dir, "blue.mp4", "blue", 1.0);
+        let options = ExportOptions::default();
+        let cache = dir.join("cache");
+        let project = cuts(&red, &blue, &[], 0);
+        let mut plan = export_plan(&project, &options).unwrap();
+        plan.focus = Some(1500);
+        let output = dir.join("focused.mp4");
+        export_file(
+            &project,
+            &options,
+            &plan,
+            &output,
+            &cache,
+            &HashMap::new(),
+            &AtomicBool::new(false),
+            |_| {},
+        )
+        .unwrap();
+        let made = manifest(&cache);
+        assert!(made.chunks.len() >= 3, "{:?}", made.chunks);
+        assert_eq!(made.output, output, "made of chunks, not exported whole");
+        shows(&output, |frame| (frame / 30) % 2 == 1, 3000);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn only_the_native_encoders_failures_are_tried_again_with_ffmpeg() {
         assert!(is_native_encoder_error("Native encoder stalled"));
@@ -3192,12 +3285,14 @@ mod tests {
             "{}",
             duration(&three, "a:0")
         );
-        // Nothing's left in the chunk folder but the manifest.
-        let left: Vec<_> = std::fs::read_dir(crate::chunks::folder(&cache, "chunky"))
+        // Nothing's left in the chunk folder but the manifest and the plan.
+        let mut left: Vec<String> = std::fs::read_dir(crate::chunks::folder(&cache, "chunky"))
             .unwrap()
             .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(left.len(), 1);
+        left.sort();
+        assert_eq!(left, vec!["manifest-v1.json", "plan-v1.json"]);
         std::fs::remove_dir_all(dir).ok();
     }
 

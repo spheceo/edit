@@ -8,6 +8,7 @@ import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
 import { clipEnd, paramAt, projectDuration, validateProject } from "./edit";
 import { peopleProblem } from "./people";
 import { mutePoints } from "./mutes";
+import { SmoothStream } from "./smoothStream";
 import { savedFrame, saveFrame } from "./storage";
 import type { Clip, Media, Project, Sections, Track } from "./types";
 import { rate } from "./types";
@@ -113,6 +114,8 @@ class Preview {
   private runningClock = false;
   private playbackStats = { videoMisses: 0, audioUnderruns: 0 };
   private loop = 0;
+  /** When a streamed render was last asked for what's near the playhead while it played. */
+  private poked = 0;
   /**
    * Smooth playback: the edit rendered small (apps/server/src/playback_render.ts),
    * played and scrubbed as a video instead of drawing it live, when it shows
@@ -121,6 +124,13 @@ class Preview {
    */
   private smooth: string | null = null;
   private video: HTMLVideoElement | null = null;
+  /**
+   * A render played a chunk at a time (`stream:<project>:<rev>`,
+   * smoothStream.ts): only where its chunks are appended is it shown, the
+   * rest drawn live; its sound plays from `streamSound`.
+   */
+  private stream: SmoothStream | null = null;
+  private streamSound: HTMLAudioElement | null = null;
   /** The rendered video is what the viewer shows (playing, or paused on its frame). */
   smoothShown = false;
   private listeners = new Set<Listener>();
@@ -181,6 +191,8 @@ class Preview {
   setSmooth(url: string | null) {
     if (url === this.smooth) return;
     this.smooth = url;
+    this.stream?.close();
+    this.stream = null;
     if (url !== null) { this.useSmooth(url); return; }
     if (!this.smoothShown) return;
     const playing = playhead.playing;
@@ -195,15 +207,39 @@ class Preview {
   private useSmooth(url: string) {
     const video = this.video;
     if (!video || !this.project) return;
-    if (video.getAttribute("src") !== url) video.src = url;
+    const streamed = /^stream:([^:]+):(\d+)$/.exec(url);
+    if (streamed !== null && this.stream === null) {
+      this.streamSound ??= new Audio();
+      this.stream = new SmoothStream(streamed[1]!, Number(streamed[2]), rate(this.project.settings), this.duration, () => playhead.frame, this.streamSound, () => {
+        // Its chunk at the resting playhead just came: shown there now.
+        if (!playhead.playing && !this.smoothShown && this.smooth === url) this.showSmooth(playhead.frame);
+      });
+    }
+    const src = this.stream?.url ?? url;
+    if (video.getAttribute("src") !== src) video.src = src;
     if (playhead.playing && !this.smoothShown) return; // live playback carries on; the next play is smooth
     this.showSmooth(playhead.frame);
   }
 
-  /** Puts the rendered video at `frame` (a hair into it, so it never lands on the frame before). */
+  /** Whether the render shows `frame` (and the next `ahead` frames) now: a streamed one only where its chunks are in. */
+  private smoothAt(frame: number, ahead = 0): boolean {
+    return this.stream === null || this.stream.covers(frame, ahead);
+  }
+
+  /** Puts the rendered video at `frame` (a hair into it, so it never lands on the frame before); drawn live where a streamed render has nothing yet. */
   private showSmooth(frame: number) {
     const video = this.video;
     if (!video || !this.project) return;
+    this.stream?.poke();
+    if (!this.smoothAt(frame)) {
+      if (this.smoothShown) {
+        this.smoothShown = false;
+        this.renderedFrame = null;
+        this.notify();
+        this.invalidate();
+      }
+      return;
+    }
     const time = (Math.floor(frame) + 0.25) / rate(this.project.settings);
     if (Math.abs(video.currentTime - time) > 0.5 / rate(this.project.settings)) video.currentTime = time;
     if (!this.smoothShown) {
@@ -545,7 +581,7 @@ class Preview {
   play() {
     if (!this.project || playhead.playing || this.duration <= 0 || this.error) return;
     if (playhead.frame >= this.duration - 1) playhead.frame = 0;
-    if (this.smooth && this.video) { this.playSmooth(this.video); return; }
+    if (this.smooth && this.video && this.smoothAt(playhead.frame, Math.round(rate(this.project.settings)))) { this.playSmooth(this.video); return; }
     playhead.playing = true;
     this.pendingScenes.clear();
     this.direction = 1;
@@ -576,7 +612,9 @@ class Preview {
     this.playedFrom = playhead.frame;
     this.resetClock();
     this.showSmooth(playhead.frame);
-    video.muted = false;
+    // A streamed render's sound is its own element's.
+    video.muted = this.stream !== null;
+    this.stream?.follow(video.currentTime, true);
     void video.play().catch((error: unknown) => {
       // Refused (no user gesture, a file that won't play): drawn live instead.
       note("warn", "preview", `smooth playback didn't start: ${error}`);
@@ -598,6 +636,21 @@ class Preview {
       if (out !== null && this.playedFrom < out && frame >= out && out < this.duration) { playhead.frame = out; this.pause(); return; }
       if (video.ended || frame >= this.duration - 1) { playhead.frame = Math.max(0, this.duration - 1); this.pause(); return; }
       playhead.frame = Math.max(0, frame);
+      if (this.stream !== null) {
+        // Half a second from a chunk not in yet: carried on live from here.
+        if (!this.stream.covers(frame, Math.round(fps / 2))) {
+          video.pause();
+          this.stream.follow(video.currentTime, false);
+          playhead.playing = false;
+          this.smoothShown = false;
+          this.renderedFrame = null;
+          this.notify();
+          this.play();
+          return;
+        }
+        this.stream.follow(video.currentTime, true);
+        if (performance.now() - this.poked >= 1000) { this.poked = performance.now(); this.stream.poke(); }
+      }
       if (performance.now() - this.persistedAt >= 1000) this.remember();
       playhead.emit();
       this.loop = requestAnimationFrame(tick);
@@ -614,6 +667,7 @@ class Preview {
     this.resetClock();
     if (this.smoothShown && this.video && !this.video.paused) {
       this.video.pause();
+      this.stream?.follow(this.video.currentTime, false);
       if (this.project) playhead.frame = Math.max(0, this.video.currentTime * rate(this.project.settings) - 0.25);
     }
     if (!playing) return;

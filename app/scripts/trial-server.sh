@@ -39,7 +39,7 @@ start() {
     # Dev talks to dev: its own relay (edit-relay-dev: Infisical dev's keys, Modal's dev environment, dev's Convex and R2). Installed builds use the live one.
     export EDIT_RELAY_URL="${EDIT_RELAY_URL:-https://edit-relay-dev.sphe-g-personal.workers.dev}"
     export EDIT_TRIALS=1 EDIT_HOME="$HOME_DIR" EDIT_CLOUD_HOLDER="$(scutil --get LocalHostName 2>/dev/null || hostname)-trials"
-    export EDIT_MODAL_EXPORTS="${EDIT_MODAL_EXPORTS:-1}" EDIT_WORKER_ROOT="${EDIT_WORKER_ROOT:-$APP}"
+    export EDIT_MODAL_EXPORTS="${EDIT_MODAL_EXPORTS:-0}" EDIT_WORKER_ROOT="${EDIT_WORKER_ROOT:-$APP}"
     nohup bun apps/server/src/main.ts serve --port "$PORT" --home "$HOME_DIR" >> "$LOG" 2>&1 &
     echo $! > "$PIDFILE"
   )

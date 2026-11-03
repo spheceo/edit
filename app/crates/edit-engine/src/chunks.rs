@@ -37,6 +37,7 @@ pub const MAX_SECONDS: f64 = 120.0;
 /// A new layout of the manifest or the keys is a new version.
 const VERSION: u32 = 1;
 const MANIFEST: &str = "manifest-v1.json";
+const PLAN: &str = "plan-v1.json";
 
 /// Frames `[start, end)` of the timeline and what's in them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -288,6 +289,34 @@ pub fn made(dir: &Path, key: &str, extension: &str) -> PathBuf {
     dir.join(format!("{key}.{extension}"))
 }
 
+/// The chunks an export is making, written as it starts
+/// (`plan-v1.json`: each one's frames and key, and the files' extension), so
+/// smooth playback can serve every chunk the moment its file is there.
+pub fn write_plan(dir: &Path, chunks: &[Chunk], extension: &str) -> Result<(), String> {
+    let text = serde_json::json!({
+        "version": VERSION,
+        "extension": extension,
+        "chunks": chunks
+            .iter()
+            .map(|chunk| serde_json::json!({"start": chunk.start, "end": chunk.end, "key": chunk.key}))
+            .collect::<Vec<_>>(),
+    })
+    .to_string();
+    let temporary = dir.join(format!("{PLAN}.partial"));
+    std::fs::write(&temporary, text).map_err(|error| error.to_string())?;
+    std::fs::rename(&temporary, dir.join(PLAN)).map_err(|error| error.to_string())
+}
+
+/// Where `chunk` comes in an export focused on frame `focus`: the one
+/// holding it and those after, in order, then those before, nearest first.
+pub fn focus_order(chunk: &Chunk, focus: i64) -> (u8, i64) {
+    if chunk.end > focus {
+        (0, chunk.start)
+    } else {
+        (1, -chunk.start)
+    }
+}
+
 /// Removes everything in `dir` but the manifest and the chunks in `keep`.
 pub fn tidy(dir: &Path, keep: &[&Chunk], extension: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -295,7 +324,7 @@ pub fn tidy(dir: &Path, keep: &[&Chunk], extension: &str) {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name == MANIFEST {
+        if name == MANIFEST || name == PLAN {
             continue;
         }
         if keep
@@ -463,6 +492,36 @@ pub fn setup_hash(file: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_focused_export_makes_the_chunk_at_the_playhead_first_then_on_then_back() {
+        let chunk = |start: i64, end: i64| Chunk {
+            start,
+            end,
+            key: format!("{start}"),
+        };
+        let mut todo = [
+            chunk(0, 300),
+            chunk(300, 600),
+            chunk(600, 900),
+            chunk(900, 1200),
+        ];
+        todo.sort_by_key(|one| focus_order(one, 450));
+        let order: Vec<i64> = todo.iter().map(|one| one.start).collect();
+        assert_eq!(order, vec![300, 600, 900, 0]);
+        let dir = std::env::temp_dir().join(format!("edit-chunks-plan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        write_plan(&dir, &todo, "mp4").unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(PLAN)).unwrap()).unwrap();
+        assert_eq!(written["chunks"][0]["start"], 300);
+        assert_eq!(written["extension"], "mp4");
+        // The plan stays when the folder is tidied.
+        tidy(&dir, &[], "mp4");
+        assert!(dir.join(PLAN).exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     use super::*;
 
     #[test]

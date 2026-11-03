@@ -16,7 +16,18 @@ last) with a `.json` saying which picture it shows. `lib/playback.ts` shows it i
 save: play follows the video's clock, a seek sets its time, and nothing is decoded live.
 An edit drops back to the live preview below until the next render lands (a smooth play
 that goes stale pauses there), and the page asks for none while the agent is mid-turn.
-An edit whose footage is all in the cloud renders on Modal instead (`modal_exports.run`,
+Since Nov 2 (Sphe: Edit off Modal) it renders on this Mac whatever its footage, and plays
+a chunk at a time while it renders (`playback_stream.ts`, `lib/smoothStream.ts`): the
+render does the chunks from the viewer's playhead first (`Plan.focus`, the page sends its
+frame), the minute from it before the sound's mix and the rest after, and the page appends
+each finished chunk to a MediaSource as it lands (fragmented MP4, remuxed from the chunk
+file or the joined file on request), the sound in an `<audio>` beside it once mixed. Where
+no chunk is in yet the viewer draws live. Measured Nov 2 on the 16-Year-Old (26.7 min, 54
+chunks): with the render done, a seek anywhere shows it in 0.5–1.6 s and it plays at 30 fps;
+with it under way, the first chunk showed 17 s after the render started (it had waited
+142 s for the whole sound's mix), and on a Mac with nothing cached and the machine loaded,
+138 s. The whole render took 16 min 49 s here (48 fps).
+Until Nov 2 an edit whose footage is all in the cloud rendered on Modal instead (`modal_exports.run`,
 the house export's pool, its sections and sound cached there so a render after an edit
 redoes only what it touched), kept in R2 as `edit/playback/<project>/<picture hash>.mp4`
 (any Mac opening the same picture uses it at once) and streamed to the viewer through

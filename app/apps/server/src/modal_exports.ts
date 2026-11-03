@@ -6,12 +6,17 @@
  * and the footage stay in Modal's cache: exporting again after a small
  * change renders only what it touched.
  *
- * On when the server starts with `EDIT_MODAL_EXPORTS=1` and `EDIT_WORKER_ROOT`
- * (the checkout's `app/`, whose worker it runs); Infisical's CLI gives the
- * driver R2's keys for that process only (`infisical run`, Platform's
- * `/edit-relay` folder), so nothing needs Repack's checkout or project; Modal is signed in on the Mac. The house export of a whole edit whose footage is all in the
- * cloud goes there, whatever this Mac is doing, its chapters added when the file is joined; anything else (another
- * format, size or shape, a span, footage only on this Mac) is exported here as before.
+ * Off unless the server starts with `EDIT_MODAL_EXPORTS=1` (Sphe, Nov 2: Edit
+ * moves off Modal and runs on the team's Macs; the code stays, behind the
+ * flag, until he says to delete it). On, a checkout drives it with
+ * `EDIT_WORKER_ROOT` (the checkout's `app/`, whose worker it runs; Infisical's
+ * CLI gives the driver R2's keys for that process only: `infisical run`,
+ * Platform's `/edit-relay` folder; Modal signed in on the Mac), an installed
+ * Edit through the relay. Even then only the house export of a whole edit
+ * whose footage is all in the cloud goes there, and only when this Mac really
+ * can't (`cloudBetter`: it's already exporting, busy, or would take over 25
+ * minutes); anything else (another format, size or shape, a span, footage
+ * only on this Mac) is exported here.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -37,12 +42,11 @@ function workerRoot(): string {
 }
 
 /**
- * Whether exports go to Modal: by default whenever its worker is here (the
- * team, Oct 29: "we use Modal as the default … we should only revert to the
- * local Mac if there's something wrong with Modal"); EDIT_MODAL_EXPORTS=0
- * keeps them on this Mac.
+ * Whether exports may go to Modal: only with EDIT_MODAL_EXPORTS=1 and its
+ * worker here (or the relay's). It was on by default from Oct 29 (the team:
+ * "we use Modal as the default") until Nov 2 (Sphe: everything on the Macs).
  */
-export const enabled = () => process.env.EDIT_MODAL_EXPORTS !== "0" && (here() || relayOn);
+export const enabled = () => process.env.EDIT_MODAL_EXPORTS === "1" && (here() || relayOn);
 
 /**
  * Whether this Mac drives Modal itself (a developer's checkout with the
@@ -75,7 +79,7 @@ export const onProdRelay = (): boolean => relay.url() === relay.DEFAULT_RELAY;
 let relayOn = false;
 let askedAt = 0;
 export async function ready(): Promise<void> {
-  if (process.env.EDIT_MODAL_EXPORTS === "0" || here() || Date.now() - askedAt < 10 * 60_000 || !cloud.enabled()) return;
+  if (process.env.EDIT_MODAL_EXPORTS !== "1" || here() || Date.now() - askedAt < 10 * 60_000 || !cloud.enabled()) return;
   askedAt = Date.now();
   try {
     relayOn = (await cloud.relayJson("v3/config", {})).enabled === true;

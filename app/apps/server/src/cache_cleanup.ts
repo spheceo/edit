@@ -335,6 +335,7 @@ const KEYED = ["originals/", "excerpts/", "proxies/", "sound/", "analysis/"];
 /** The footage `key` (an R2 key, `edit/…`) is of, as `<kind>/<id>` (`drive/1AbC…`), or the project's for a playback render (`playback:<project>`); null for anything else. */
 export function ownerToken(key: string): string | null {
   let rest = key.startsWith("edit/") ? key.slice("edit/".length) : key;
+  if (rest.startsWith("exports/playback/")) rest = rest.slice("exports/".length);
   if (rest.startsWith("playback/")) {
     const project = rest.slice("playback/".length).split("/")[0];
     return project ? `playback:${project}` : null;

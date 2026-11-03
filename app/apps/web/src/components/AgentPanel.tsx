@@ -46,6 +46,7 @@ import {
   useClaudeSupport,
   stopAgent,
   useAgent,
+  watchClaudeSupport,
   type AgentEntry,
 } from "../lib/agent";
 import { buildTurns, callTitle, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
@@ -139,11 +140,12 @@ export function ChatShell({
           const node = event.currentTarget;
           stick.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
         }}
-        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-3"
+        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
       >
-        {loading ? <ChatLoading /> : children}
+        {/* Not itself a flex column: a scrolling flex item that is also a flex container can refuse to shrink, and the composer below gets clipped. */}
+        <div className="flex flex-col gap-4">{loading ? <ChatLoading /> : children}</div>
       </div>
-      {footer}
+      {footer ? <div className="shrink-0">{footer}</div> : null}
     </section>
   );
 }
@@ -210,16 +212,32 @@ function MainAgentPanel() {
   const { status, entries, running, loaded } = useAgent();
   // Entries already there when the chat loaded don’t animate in.
   const { turns, known } = useChatTurns(loaded ? projectId : "loading", entries, running);
+  // Not ready, with the conversation already on screen: the setup card used
+  // to stand in for an empty chat only, so this hid the composer and never
+  // asked again (a project opened while Claude was still being checked).
+  const blocked = Boolean(status && !status.ready);
 
   useEffect(() => {
     if (projectId) void openAgent(projectId);
   }, [projectId]);
 
+  useEffect(() => {
+    if (!blocked) return;
+    return watchClaudeSupport();
+  }, [blocked]);
+
   return (
     <ChatShell
       loading={!loaded}
       resetKey={loaded ? projectId : "loading"}
-      footer={!(status && !status.ready) && <Composer disabled={!status?.ready} projectId={projectId} />}
+      footer={
+        entries.length > 0 || !blocked ? (
+          <>
+            {blocked && <NotReadyNote />}
+            <Composer disabled={!status?.ready} projectId={projectId} />
+          </>
+        ) : undefined
+      }
     >
       {!entries.length && status && !status.ready ? (
         status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
@@ -230,6 +248,15 @@ function MainAgentPanel() {
       )}
     </ChatShell>
   );
+}
+
+/** Why the composer is waiting, above it: the sign-in card when someone has to act, otherwise one line while Edit finishes checking. */
+function NotReadyNote() {
+  const status = useAgent((state) => state.status);
+  const phase = useClaudeSupport((state) => state.status?.phase);
+  if (status?.provider === "codex") return <p className="px-3 pt-2 text-[12px] leading-relaxed text-muted">Codex isn't ready on this Mac, so this chat can't take a message yet.</p>;
+  if (status?.state === "missing" || phase === "needs_login" || phase === "error" || phase === "signing_in") return <ClaudeSetupCard />;
+  return <p className="px-3 pt-2 text-[12px] leading-relaxed text-muted">Getting Claude ready. You can type again in a moment.</p>;
 }
 
 /** True once nothing has streamed or changed for `quiet` ms (so "Thinking" doesn’t blink between steps). */

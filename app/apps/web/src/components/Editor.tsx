@@ -224,9 +224,10 @@ function AgentDock() {
         initial={false}
         animate={{ width: show ? width + 8 : 0, opacity: show ? 1 : 0 }}
         transition={dragging ? { duration: 0 } : spring}
-        className="shrink-0 overflow-hidden"
+        className="flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden"
       >
-        <div className="h-full shrink-0 pr-2" style={{ width: width + 8 }}>
+        {/* A flex column with a real height, so a long transcript scrolls and the composer stays at the bottom. */}
+        <div className="flex min-h-0 w-full flex-1 flex-col pr-2" style={{ width: width + 8 }}>
           <AgentPanel />
         </div>
       </motion.aside>

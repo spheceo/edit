@@ -17,8 +17,6 @@ import { AgentPanel } from "./AgentPanel";
 import { CloudBanner } from "./CloudBanner";
 import { DocChangesBar } from "./DocChangesBar";
 import { MissingBanner } from "./MissingBanner";
-import { MediaPanel } from "./MediaPanel";
-import { SidePanel } from "./SidePanel";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
 import { ProblemView } from "./ProblemView";
@@ -27,62 +25,8 @@ import { Loader } from "./Logo";
 import { toggleFullscreen, Viewer } from "./Viewer";
 import { rate } from "../lib/types";
 
-const MEDIA_WIDTH = 280;
-const SIDE_WIDTH = 296;
-
-/** A panel that springs open and closed, keeping its gap to the viewer. */
-/** Panels keep their share of the window: sized for a ~1640 px wide window and
- * grown in step on wider ones (an ultrawide), so the viewer doesn’t take all the extra width. */
-function usePanelScale() {
-  const scale = () => Math.min(2.4, Math.max(1, window.innerWidth / 1640));
-  const [value, setValue] = useState(scale);
-  useEffect(() => {
-    const onResize = () => setValue(scale());
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return value;
-}
-
-function SlideIn({
-  show,
-  width: base,
-  side,
-  fixed = false,
-  children,
-}: {
-  show: boolean;
-  width: number;
-  side: "left" | "right";
-  /** Keeps its width on wide windows (the chat reads best narrow). */
-  fixed?: boolean;
-  children: React.ReactNode;
-}) {
-  const scale = usePanelScale();
-  const width = fixed ? base : Math.round(base * scale);
-  return (
-    <AnimatePresence initial={false}>
-      {show && (
-        <motion.aside
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: width + 8, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={spring}
-          className={side === "right" ? "flex shrink-0 justify-end overflow-hidden" : "shrink-0 overflow-hidden"}
-        >
-          <div className={side === "right" ? "h-full shrink-0 pl-2" : "h-full shrink-0 pr-2"} style={{ width: width + 8 }}>
-            {children}
-          </div>
-        </motion.aside>
-      )}
-    </AnimatePresence>
-  );
-}
-
 export function Editor({ id }: { id: string }) {
   const project = useEditor((state) => state.project);
-  const showMedia = useEditor((state) => state.showMedia);
-  const showInspector = useEditor((state) => state.showInspector);
   const timelineHeight = useEditor((state) => state.timelineHeight);
   const [resizing, setResizing] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -167,13 +111,8 @@ export function Editor({ id }: { id: string }) {
       {/* No padding on the right: the chat's edge sits there, at the window's very edge while the chat is closed. */}
       <div className="flex min-h-0 flex-1 pb-2 pl-2">
         <div className="flex min-w-0 flex-1 flex-col">
+          {/* Experiment (Nov 3): no media/script panel and no Info/Presets/Transcript panel — the viewer takes the whole left side. Their components and state stay; only this layout stopped mounting them, so putting them back is this block again. */}
           <div className="flex min-h-0 flex-1">
-            <SlideIn show={showMedia} width={MEDIA_WIDTH} side="left">
-              <MediaPanel onImport={() => setImporting(true)} onResearch={() => setResearching(true)} />
-            </SlideIn>
-            <SlideIn show={showInspector} width={SIDE_WIDTH} side="left">
-              <SidePanel />
-            </SlideIn>
             <Viewer />
           </div>
           <ResizeBar resizing={resizing} setResizing={setResizing} />

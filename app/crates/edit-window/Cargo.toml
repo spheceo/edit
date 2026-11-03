@@ -13,6 +13,11 @@ path = "src/main.rs"
 [dependencies]
 tauri = { version = "2", features = [] }
 
+# Catches an Objective-C exception in event handling (src/events.rs); already
+# in the build through tao, with this feature on.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", features = ["exception"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

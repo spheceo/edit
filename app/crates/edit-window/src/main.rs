@@ -12,6 +12,9 @@
 //!   restart that didn't come back: Nov 1, the window sat at "Restarting…"
 //!   with nothing behind it) is started again: the new build, after an update.
 
+#[cfg(target_os = "macos")]
+mod events;
+
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command, Stdio};
@@ -60,6 +63,8 @@ fn main() {
 /// `watch_stdin`, until stdin closes).
 fn run(url: &str, server: Option<(Child, u16)>, watch_stdin: bool) -> ! {
     let url: Url = url.parse().unwrap_or_else(|_| fail("bad URL"));
+    #[cfg(target_os = "macos")]
+    events::guard();
     let closing = Arc::new(AtomicBool::new(false));
     let port = server.as_ref().map(|(_, port)| *port);
     let server = Arc::new(Mutex::new(server.map(|(child, _)| child)));

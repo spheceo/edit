@@ -6,10 +6,12 @@
 // dropped or pasted anywhere join the thumbnail and go to Claude with the
 // next message.
 
-import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Paperclip, Plus, Redo2, SlidersHorizontal, Trash2, Type, Undo2, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Plus, Redo2, SlidersHorizontal, Trash2, Type, Undo2, Upload } from "lucide-react";
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ChatComposer, ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
+import { ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
+import { ChatComposer } from "../components/ChatComposer";
+import { attachFiles, attachLanded, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { toggleMenu } from "../components/ContextMenu";
 import { Button, cx, IconButton, Modal, Scrub, Select, Spinner, Switch } from "../components/ui";
@@ -87,7 +89,6 @@ export function ThumbnailScreen({ id }: { id: string }) {
   // The layer whose Camera Raw (a picture) or text dialog is open.
   const [openLayer, setOpenLayer] = useState<string | null>(null);
   const [library, setLibrary] = useState<Asset[]>([]);
-  const [attached, setAttached] = useState<string[]>([]);
   const [uploading, setUploading] = useState(0);
   const [saving, setSaving] = useState<"saving" | "saved" | "error" | null>(null);
   const [credits, setCredits] = useState<string | null>(null);
@@ -208,13 +209,26 @@ export function ThumbnailScreen({ id }: { id: string }) {
     setSelected(layer.id);
   };
 
-  const upload = async (files: File[], attach: boolean) => {
+  // The chat's uploader (lib/chatFiles.ts): a picture into the thumbnail's images, given to Claude with the message.
+  const chatKey = `thumb:${id}`;
+  const chatUpload = useMemo<Uploader>(
+    () => async (file, progress, signal) => {
+      const { image, thumb } = (await postFile(`/api/thumbnails/${encodeURIComponent(id)}/images?name=${encodeURIComponent(file.name)}`, file, progress, signal, { "content-type": file.type })) as { image: { id: string }; thumb: Thumbnail };
+      setThumb(thumb);
+      return image.id;
+    },
+    [id],
+  );
+  const attachToChat = (files: File[]) => {
+    const refused = attachFiles(chatKey, files, chatUpload, picturesOnly);
+    if (refused.length > 0) toastError(new Error(refused.join(" · ")), "attach the files");
+  };
+  const upload = async (files: File[]) => {
     setUploading((n) => n + files.length);
     for (const file of files) {
       try {
-        const { image, thumb } = await thumbnailsApi.upload(id, file);
+        const { thumb } = await thumbnailsApi.upload(id, file);
         setThumb(thumb);
-        if (attach) setAttached((last) => [...last, image.id]);
       } catch (error) {
         toastError(error, "add the picture");
       } finally {
@@ -228,7 +242,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
       const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
       if (files.length === 0) return;
       event.preventDefault();
-      void upload(files, true);
+      attachToChat(files);
     };
     const onKey = (event: KeyboardEvent) => {
       const typing = event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
@@ -286,7 +300,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
         const files = [...event.dataTransfer.files].filter((file) => file.type.startsWith("image/"));
         if (files.length === 0) return;
         event.preventDefault();
-        void upload(files, true);
+        attachToChat(files);
       }}
     >
       <Header
@@ -317,7 +331,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
               <PicturesPanel
                 thumb={thumb}
                 uploading={uploading}
-                onUpload={(files) => void upload(files, false)}
+                onUpload={(files) => void upload(files)}
                 onUse={(imageId, how) => {
                   if (how === "base") {
                     const bottom = design.layers[0];
@@ -330,7 +344,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
                     addLayer({ id: newId(), kind: "image", name: image?.name ?? "picture", opacity: 100, source: imageId, x: (WIDTH - width) / 2, y: (HEIGHT - height) / 2, width, height, fit: "contain" });
                   }
                 }}
-                onAttach={(imageId) => setAttached((last) => (last.includes(imageId) ? last : [...last, imageId]))}
+                onAttach={(imageId) => attachLanded(chatKey, { name: thumb.images.find((one) => one.id === imageId)?.name ?? "picture", kind: "image", preview: sourceUrl(id, imageId), landed: imageId })}
                 onRemove={(imageId) =>
                   void thumbnailsApi.removeImage(id, imageId).then(
                     ({ thumb }) => setThumb(thumb),
@@ -377,13 +391,8 @@ export function ThumbnailScreen({ id }: { id: string }) {
             <Chat
               id={id}
               thumb={thumb}
-              attached={attached}
-              onDetach={(imageId) => setAttached((last) => last.filter((one) => one !== imageId))}
-              onAttachFiles={(files) => void upload(files, true)}
-              onAsked={() => {
-                setAttached([]);
-                void load();
-              }}
+              upload={chatUpload}
+              onAsked={() => void load()}
             />
           )}
         </aside>
@@ -1036,8 +1045,8 @@ function entriesOf(thumb: Thumbnail): { entries: AgentEntry[]; running: boolean 
   thumb.chat.forEach((turn, index) => {
     if (turn.role === "you") {
       asked = turn.at;
-      const pictures = turn.images?.length ? `${turn.text ? "\n\n" : ""}(${turn.images.length} ${turn.images.length === 1 ? "picture" : "pictures"})` : "";
-      entries.push({ id: `turn-${index}`, kind: "user", text: `${turn.text}${pictures}`, at: turn.at });
+      const attachments = (turn.images ?? []).map((image) => ({ name: thumb.images.find((one) => one.id === image)?.name ?? "picture", kind: "image" as const, url: sourceUrl(thumb.id, image) }));
+      entries.push({ id: `turn-${index}`, kind: "user", text: turn.text, at: turn.at, ...(attachments.length > 0 ? { attachments } : {}) });
       return;
     }
     const began = turn.workedMs !== undefined ? turn.at - turn.workedMs : asked;
@@ -1069,10 +1078,9 @@ function ChatShell({ loading, children }: { loading?: boolean; children?: ReactN
   );
 }
 
-function Chat({ id, thumb, attached, onDetach, onAttachFiles, onAsked }: { id: string; thumb: Thumbnail; attached: string[]; onDetach: (id: string) => void; onAttachFiles: (files: File[]) => void; onAsked: () => void }) {
+function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; upload: Uploader; onAsked: () => void }) {
   const list = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const input = useRef<HTMLInputElement>(null);
   const toastError = useEditor((state) => state.toastError);
   const { entries, running } = entriesOf(thumb);
   const turns = buildTurns(entries, running);
@@ -1099,31 +1107,15 @@ function Chat({ id, thumb, attached, onDetach, onAttachFiles, onAsked }: { id: s
           <ChatTurns turns={turns} known={known.current.ids} thinking={running ? `${thumb.run?.step ?? "Working"}${other}` : undefined} />
         )}
       </div>
-      {attached.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 border-t border-line px-3 pt-2">
-          {attached.map((imageId) => (
-            <span key={imageId} className="relative">
-              <img src={sourceUrl(id, imageId)} alt="" className="h-12 w-[86px] rounded-md object-cover ring-1 ring-line" />
-              <button onClick={() => onDetach(imageId)} aria-label="Take it out" className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-fg text-bg">
-                <X size={10} strokeWidth={3} />
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex items-center gap-1 px-3 pt-1.5">
-        <input ref={input} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden onChange={(event) => onAttachFiles(filesOf(event.currentTarget))} />
-        <button onClick={() => input.current?.click()} className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] text-faint hover:bg-hover hover:text-fg">
-          <Paperclip size={12} /> Add pictures
-        </button>
-      </div>
       <ChatComposer
         running={running}
         disabled={false}
         modelName="Opus 5.5"
         placeholder={running ? "Working…" : "Ask for a thumbnail, or a change…"}
         draft={`thumbnails.chat-draft.${id}`}
-        onSend={(message) => void thumbnailsApi.chat(id, message, attached).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
+        chat={`thumb:${id}`}
+        files={{ upload, accept: picturesOnly }}
+        onSend={(message, files) => void thumbnailsApi.chat(id, message, files.map((one) => one.landed as string)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
         onStop={() => void thumbnailsApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
       />
     </ChatShell>

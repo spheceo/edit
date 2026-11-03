@@ -1,7 +1,6 @@
 import { explain } from "@edit/types/problems";
 import {
   ArrowLeft,
-  ArrowUp,
   AudioLines,
   Check,
   ChevronRight,
@@ -29,11 +28,10 @@ import {
   Wrench,
   ScanEye,
   Pencil,
-  Plus,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -50,13 +48,12 @@ import {
 } from "../lib/agent";
 import { buildTurns, callTitle, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
-import { api, useMachine } from "../lib/api";
-import { attach, clear, uploading, useAttachments, withAttachments } from "../lib/attachments";
+import { api, mediaUrl, useMachine } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
-import { useSettled } from "../lib/settled";
+import { projectUploader } from "../lib/upload";
 import { useEditor } from "../lib/store";
-import { AttachmentTray } from "./AttachmentTray";
+import { ChatComposer, SentFiles } from "./ChatComposer";
 import { NoteQueue } from "./NoteQueue";
 import { ProblemView } from "./ProblemView";
 import { Button, cx } from "./ui";
@@ -185,8 +182,7 @@ function MainAgentPanel() {
         )}
       </div>
 
-      {projectId && <ResetCard projectId={projectId} />}
-      {!(status && !status.ready) && <Composer disabled={!status?.ready} />}
+      {!(status && !status.ready) && <Composer disabled={!status?.ready} projectId={projectId} />}
     </section>
   );
 }
@@ -242,8 +238,14 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
   const working = turn.live && said === undefined && isWorking(elapsed, lastGroup !== undefined);
   const thinking = turn.live && (working || ((said !== undefined || quiet) && !toolRunning));
   const fresh = (id: string) => !known.has(id);
+  const project = useEditor((state) => state.project?.id);
   return (
     <div className="flex flex-col gap-1.5">
+      {turn.user?.attachments !== undefined && turn.user.attachments.length > 0 && (
+        <motion.div {...appear(fresh(turn.user.id) && !turn.user.id.startsWith("user-"))} className="flex flex-col">
+          <SentFiles files={turn.user.attachments.map((one) => ({ name: one.name, kind: one.kind, url: one.url ?? (one.kind === "image" && one.media !== undefined && project !== undefined ? mediaUrl(project, one.media, "proxy") : null) }))} />
+        </motion.div>
+      )}
       {turn.user && (
         <motion.div
           {...appear(fresh(turn.user.id) && !turn.user.id.startsWith("user-"))}
@@ -561,9 +563,7 @@ const MARKDOWN: Components = {
  * user accepts or rejects here, and the agent, waiting on the answer, carries on.
  */
 function ResetCard({ projectId }: { projectId: string }) {
-  const asked = useEditor((state) => state.resetAsked);
   const [answering, setAnswering] = useState(false);
-  if (!asked) return null;
   const answer = (accept: boolean) => {
     setAnswering(true);
     void api
@@ -573,7 +573,8 @@ function ResetCard({ projectId }: { projectId: string }) {
       .finally(() => setAnswering(false));
   };
   return (
-    <div className="mx-2.5 mb-1 shrink-0 rounded-xl border border-line-strong bg-raised p-3">
+    // A row of the composer's island (ChatComposer's tray), as the queue and the notes are.
+    <div className="px-3 pt-2.5 pb-2">
       <div className="flex items-center gap-2 text-[13px] font-medium">
         <RotateCcw size={14} className="shrink-0 text-warning" />
         Reset the edit?
@@ -601,215 +602,27 @@ function Markdown({ text }: { text: string }) {
   );
 }
 
-function Composer({ disabled }: { disabled: boolean }) {
+function Composer({ disabled, projectId }: { disabled: boolean; projectId: string | undefined }) {
   const running = useAgent((state) => state.running);
   const modelName = useAgent((state) => state.modelName);
   const notes = useNotes((state) => queued(state.notes).length);
-  const project = useEditor((state) => state.project?.id ?? null);
-  const attachments = useAttachments((state) => (state.project === project ? state.items : NONE));
-  // Another project's attachments never ride along.
-  useEffect(() => {
-    if (useAttachments.getState().project !== project) clear(project);
-  }, [project]);
-  // The tray on top of the composer: what's attached, then the queued notes.
-  const trays = [attachments.length > 0 && <AttachmentTray key="files" />, notes > 0 && <NoteQueue key="notes" />].filter(Boolean);
+  const resetAsked = useEditor((state) => state.resetAsked);
+  const upload = useMemo(() => (projectId === undefined ? undefined : { upload: projectUploader(projectId) }), [projectId]);
+  // On the composer's top edge: the agent asking to reset, then the team's queued notes.
+  const tray = [projectId !== undefined && resetAsked && <ResetCard key="reset" projectId={projectId} />, notes > 0 && <NoteQueue key="notes" />].filter(Boolean);
   return (
     <ChatComposer
-      above={trays.length > 0 ? <ComposerTray>{trays}</ComposerTray> : undefined}
+      chat={`project:${projectId ?? ""}`}
+      files={upload}
+      tray={tray.length > 0 ? tray : undefined}
       running={running}
       disabled={disabled}
       modelName={modelName ?? ""}
-      placeholder={running ? "Working…" : "Start the editing workflow, or ask for a change…"}
-      onAttach={project === null ? undefined : (files) => attach(project, files)}
-      waiting={uploading(attachments) ? "Uploading the attached files…" : undefined}
-      canSendEmpty={attachments.length > 0}
+      placeholder={running ? "Working… anything you send now waits its turn" : "Start the editing workflow, or ask for a change…"}
       // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
-      onSend={(message) => {
-        void sendToAgent(withAttachments(message, attachments), playhead.frame);
-        clear(project);
-      }}
+      onSend={(message, files) => void sendToAgent(message, playhead.frame, files)}
       onStop={stopAgent}
     />
-  );
-}
-
-const NONE: never[] = [];
-
-/** What sits on the composer's top edge, attached to it: each tray a row, a line between. */
-export function ComposerTray({ children }: { children: ReactNode }) {
-  return <div className="divide-y divide-line rounded-t-xl border border-b-0 border-line bg-raised">{children}</div>;
-}
-
-/** The chat's composer: a message, the model it runs on, Send or Stop. */
-export function ChatComposer({
-  running,
-  disabled,
-  modelName,
-  placeholder,
-  onSend,
-  onStop,
-  draft,
-  above,
-  onAttach,
-  waiting,
-  canSendEmpty = false,
-}: {
-  running: boolean;
-  disabled: boolean;
-  modelName: string;
-  placeholder: string;
-  onSend: (message: string) => void;
-  onStop: () => void;
-  /** Where an unsent message is kept (localStorage), if anywhere. */
-  draft?: string;
-  /** Attached to the composer's top (ComposerTray: attachments, the queued notes). */
-  above?: ReactNode;
-  /** Files picked with +, dropped on the composer or pasted into it; without it, no +. */
-  onAttach?: (files: File[]) => void;
-  /** Why Send waits (attachments still uploading). */
-  waiting?: string;
-  /** Send with no words (only attachments). */
-  canSendEmpty?: boolean;
-}) {
-  const [text, setText] = useState(() => (draft === undefined ? "" : (localStorage.getItem(draft) ?? "")));
-  // Stop takes a click only once the turn has run a moment: never the send's own second click.
-  const stoppable = useSettled(running);
-  const input = useRef<HTMLTextAreaElement>(null);
-  const picker = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
-  useEffect(() => {
-    if (draft === undefined) return;
-    if (text) localStorage.setItem(draft, text);
-    else localStorage.removeItem(draft);
-  }, [draft, text]);
-
-  const send = () => {
-    const message = text.trim();
-    if ((!message && !canSendEmpty) || running || disabled || waiting !== undefined) return;
-    setText("");
-    onSend(message || "Here are the files I've attached.");
-  };
-  const hasFiles = (event: DragEvent) => onAttach !== undefined && event.dataTransfer.types.includes("Files");
-
-  return (
-    // A plain form + labelled textarea: what dictation tools (Wispr Flow) look for to paste into.
-    <form
-      className="shrink-0 p-2.5"
-      onSubmit={(event) => {
-        event.preventDefault();
-        send();
-      }}
-    >
-      {above}
-      {/* In focus its edge goes a light grey, not white (Sphe, Nov 2: "remove the white on click like the outline make it a light gray"). */}
-      <div
-        className={cx(
-          "border bg-black p-2.5 transition-colors focus-within:border-line-strong",
-          above === undefined ? "rounded-xl" : "rounded-b-xl",
-          dragging ? "border-dashed border-white/50 bg-white/[0.03]" : "border-line",
-          disabled && "opacity-50",
-        )}
-        // A file dropped here is attached (and stops here, so the window's own drop doesn't take it too).
-        onDragOver={(event) => {
-          if (!hasFiles(event)) return;
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
-        }}
-        onDrop={(event) => {
-          setDragging(false);
-          if (!hasFiles(event)) return;
-          event.preventDefault();
-          event.stopPropagation();
-          onAttach?.([...event.dataTransfer.files]);
-        }}
-      >
-        <textarea
-          ref={input}
-          name="message"
-          aria-label="Message the agent"
-          autoComplete="off"
-          value={text}
-          disabled={disabled}
-          rows={3}
-          placeholder={placeholder}
-          onChange={(event) => setText(event.target.value)}
-          // A pasted screenshot is attached.
-          onPaste={(event) => {
-            const files = [...event.clipboardData.files];
-            if (onAttach === undefined || files.length === 0) return;
-            event.preventDefault();
-            onAttach(files);
-          }}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              send();
-            }
-          }}
-          className="max-h-48 min-h-[60px] w-full resize-none bg-transparent px-1 text-[13px] leading-[19px] text-fg outline-none placeholder:text-faint"
-          style={{ height: Math.min(192, 60 + Math.max(0, text.split("\n").length - 3) * 19) }}
-        />
-        <div className="mt-1.5 flex items-center gap-1.5">
-          {onAttach !== undefined && (
-            <>
-              <button
-                type="button"
-                aria-label="Attach files"
-                title="Attach files (or drop them here)"
-                disabled={disabled}
-                onClick={() => picker.current?.click()}
-                className="flex size-7 items-center justify-center rounded-full bg-white/[0.08] text-secondary transition-[background,color,transform] hover:bg-white/[0.14] hover:text-fg active:scale-90 disabled:opacity-40"
-              >
-                <Plus size={15} strokeWidth={2.2} />
-              </button>
-              <input
-                ref={picker}
-                type="file"
-                multiple
-                hidden
-                onChange={(event) => {
-                  const files = [...(event.target.files ?? [])];
-                  event.target.value = "";
-                  if (files.length > 0) onAttach(files);
-                }}
-              />
-            </>
-          )}
-          {/* A grey pill, its words light enough to read (Sphe, Nov 3). */}
-          <span className="flex h-7 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[11.5px] font-medium text-secondary" title="Edit picks the model and how hard it thinks">
-            {/* Claude's orange mark before a Claude model (Sphe, Nov 2), in every chat that uses this composer. */}
-            {/^(Opus|Sonnet|Haiku|Fable|Claude)\b/u.test(modelName) && <ClaudeMark size={12} />}
-            {modelName}
-          </span>
-          {running ? (
-            <button
-              type="button"
-              aria-label="Stop"
-              title="Stop"
-              disabled={!stoppable}
-              onClick={onStop}
-              className="ml-auto flex size-7 items-center justify-center rounded-full bg-white text-black transition-transform active:scale-90 disabled:opacity-60"
-            >
-              <Square size={11} fill="currentColor" />
-            </button>
-          ) : (
-            <button
-              type="submit"
-              aria-label="Send"
-              title={waiting ?? "Send (Enter)"}
-              disabled={(!text.trim() && !canSendEmpty) || disabled || waiting !== undefined}
-              className="ml-auto flex size-7 items-center justify-center rounded-full bg-white text-black transition-[transform,opacity] active:scale-90 disabled:opacity-25"
-            >
-              <ArrowUp size={14} strokeWidth={2.4} />
-            </button>
-          )}
-        </div>
-      </div>
-    </form>
   );
 }
 

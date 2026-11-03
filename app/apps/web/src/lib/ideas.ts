@@ -2,7 +2,7 @@
 // idea page. An idea is the team's (mamagi, through the relay); this Mac's
 // server runs Claude on it and answers what it's doing as it goes.
 
-import type { Idea, IdeaPlace, IdeasHome, Niche, Workspace } from "@edit/types/ideas";
+import type { Idea, IdeaImage, IdeaPlace, IdeasHome, Niche, Workspace } from "@edit/types/ideas";
 
 import type { Account } from "./account";
 
@@ -69,7 +69,7 @@ export const ideasApi = {
   change: (id: string, change: IdeaChange) => call<{ idea: Idea; rev: number }>("PUT", `/api/ideas/${encodeURIComponent(id)}`, change),
   remove: (id: string) => call<void>("DELETE", `/api/ideas/${encodeURIComponent(id)}`),
   repackage: (id: string, options: { improve?: boolean; changes?: boolean; steer?: string } = {}) => call<{ ok: true }>("POST", `/api/ideas/${encodeURIComponent(id)}/repackage`, options),
-  chat: (id: string, text: string) => call<{ ok: true }>("POST", `/api/ideas/${encodeURIComponent(id)}/chat`, { text }),
+  chat: (id: string, text: string, images: IdeaImage[] = []) => call<{ ok: true }>("POST", `/api/ideas/${encodeURIComponent(id)}/chat`, { text, images }),
   stop: (id: string) => call<{ stopped: boolean }>("POST", `/api/ideas/${encodeURIComponent(id)}/stop`, {}),
   comments: (id: string) => call<{ changes: Idea["changes"] }>("POST", `/api/ideas/${encodeURIComponent(id)}/comments`, {}),
   send: (id: string, lane: string, anyway = false) => call<{ idea: Idea }>("POST", `/api/ideas/${encodeURIComponent(id)}/send`, { lane, anyway }),
@@ -81,6 +81,9 @@ export const ideasApi = {
     return parsed.idea;
   },
 };
+
+/** A picture attached to a chat message. */
+export const chatImageUrl = (id: string, image: string) => `/api/ideas/${encodeURIComponent(id)}/chat-images/${encodeURIComponent(image)}`;
 
 /** A picture's address on this server. */
 export const imageUrl = (id: string, image: string) => `/api/ideas/${encodeURIComponent(id)}/images/${encodeURIComponent(image)}`;

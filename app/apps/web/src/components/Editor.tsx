@@ -1,15 +1,16 @@
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
 import { addElement, addMarker, clipEnd, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
-import { api, ApiError, useMachine } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { cloudApi } from "../lib/cloud";
 import { clientId, connectEvents, leave, settled, syncScriptJob, useEditor } from "../lib/store";
 import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
 import { goToEnd, goToStart, useView } from "../lib/timelineView";
 import { followNotes, startNote } from "../lib/notes";
-import { attach } from "../lib/attachments";
+import { attachFiles } from "../lib/chatFiles";
+import { projectUploader } from "../lib/upload";
 import { ShareDialog } from "./ShareDialog";
 import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
@@ -82,8 +83,7 @@ export function Editor({ id }: { id: string }) {
   }, [id]);
 
   useShortcuts({ onImport: () => setImporting(true), onExport: () => setSharing(true) });
-  const dropping = useFileDrop();
-  const machine = useMachine();
+  useDropToChat();
 
   if (error) {
     return (
@@ -126,80 +126,39 @@ export function Editor({ id }: { id: string }) {
       </div>
       <FileBrowser open={importing} onClose={() => setImporting(false)} />
       <Research open={researching} onClose={() => setResearching(false)} />
-      <AnimatePresence>
-        {dropping && (
-          <motion.div
-            className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/55 backdrop-blur-[2px]"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.12 }}
-          >
-            <motion.div
-              initial={{ scale: 0.96 }}
-              animate={{ scale: 1 }}
-              transition={spring}
-              className="rounded-2xl border border-dashed border-white/40 bg-panel/90 px-8 py-6 text-center"
-            >
-              <div className="text-[15px] font-medium">Drop to upload to {machine}</div>
-              <div className="mt-1 text-[12px] text-muted">It’s attached to your next message · drop on the timeline to place it there</div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
       <ShareDialog open={sharing} onClose={() => setSharing(false)} />
     </div>
   );
 }
 
-/** True while files from the OS are dragged over the window; drops outside the timeline go to the bin. */
-function useFileDrop() {
-  const [active, setActive] = useState(false);
+/**
+ * Files dropped anywhere off the timeline (which places its own) are attached
+ * to the chat's next message, as a drop on the composer is. No overlay over
+ * the page: the composer shows it takes them (Sphe, Nov 3: the big "Drop to
+ * upload to kenobi" in the middle "should go").
+ */
+function useDropToChat() {
   useEffect(() => {
-    let depth = 0;
     const hasFiles = (event: DragEvent) => event.dataTransfer?.types.includes("Files") ?? false;
-    const enter = (event: DragEvent) => {
-      if (!hasFiles(event)) return;
-      depth += 1;
-      setActive(true);
-    };
-    const leave = (event: DragEvent) => {
-      if (!hasFiles(event)) return;
-      depth = Math.max(0, depth - 1);
-      if (!depth) setActive(false);
-    };
     const over = (event: DragEvent) => {
       if (hasFiles(event)) event.preventDefault();
     };
-    // Bubble phase: only drops nothing else handled (the timeline stops its own).
+    // Bubble phase: only drops nothing else handled (the timeline and the composer stop their own).
     const drop = (event: DragEvent) => {
       if (!hasFiles(event)) return;
       event.preventDefault();
-      // Attached to the chat's next message, so they show (the media panel that listed them is gone).
       const project = useEditor.getState().project?.id;
-      if (project !== undefined) attach(project, [...(event.dataTransfer?.files ?? [])]);
+      if (project === undefined) return;
+      const refused = attachFiles(`project:${project}`, [...(event.dataTransfer?.files ?? [])], projectUploader(project));
+      if (refused.length > 0) useEditor.getState().toast(refused.join(" · "), "error");
     };
-    // Capture phase sees every drop, so the overlay always clears.
-    const reset = () => {
-      depth = 0;
-      setActive(false);
-    };
-    window.addEventListener("dragenter", enter);
-    window.addEventListener("dragleave", leave);
     window.addEventListener("dragover", over);
     window.addEventListener("drop", drop);
-    window.addEventListener("drop", reset, true);
-    window.addEventListener("dragend", reset);
     return () => {
-      window.removeEventListener("dragenter", enter);
-      window.removeEventListener("dragleave", leave);
       window.removeEventListener("dragover", over);
       window.removeEventListener("drop", drop);
-      window.removeEventListener("drop", reset, true);
-      window.removeEventListener("dragend", reset);
     };
   }, []);
-  return active;
 }
 
 /**

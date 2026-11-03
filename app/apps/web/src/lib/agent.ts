@@ -3,6 +3,8 @@
 import { create } from "zustand";
 
 import { fetchRetrying } from "./api";
+import type { ChatFile, FileKind } from "./chatFiles";
+import type { ProjectFile } from "./upload";
 import { readSetting, writeSetting } from "./storage";
 
 export interface AgentEntry {
@@ -16,6 +18,8 @@ export interface AgentEntry {
   detail?: string;
   at?: number;
   updated?: number;
+  /** A person's message: the files attached to it (the server's chat_attachments.ts), shown above it. */
+  attachments?: { name: string; kind: FileKind; media?: string; file?: string; url?: string | null }[];
 }
 
 export type AgentProvider = "claude" | "codex";
@@ -232,22 +236,35 @@ export async function openAgent(project: string) {
   }
 }
 
-/** `playhead`: the editor's frame when the message was written, so the agent starts there. */
-export async function sendToAgent(text: string, playhead?: number) {
+/**
+ * `playhead`: the editor's frame when the message was written, so the agent
+ * starts there. `files`: what's attached, already in the project (the chat's
+ * uploader); pictures reach the model as pictures.
+ */
+export async function sendToAgent(text: string, playhead?: number, files: ChatFile[] = []) {
   const state = useAgent.getState();
   if (!state.project) return;
+  const attachments = files.map((one) => {
+    const landed = (one.landed ?? {}) as ProjectFile;
+    return { name: one.name, kind: one.kind, ...(landed.media === undefined ? {} : { media: landed.media }), ...(landed.file === undefined ? {} : { file: landed.file }) };
+  });
   // Show the message now; the server's copy replaces it when it arrives.
   const now = Date.now();
+  const shown = files.map((one, index) => ({ ...attachments[index]!, url: one.kind === "image" ? one.preview : null }));
   useAgent.setState({
     running: true,
     activityAt: now,
-    entries: [...state.entries, { id: `pending-${now}`, kind: "user", text, at: now, updated: now }],
+    entries: [...state.entries, { id: `pending-${now}`, kind: "user", text, at: now, updated: now, ...(shown.length > 0 ? { attachments: shown } : {}) }],
   });
   try {
     await fetchRetrying(`/api/projects/${state.project}/agent`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(playhead === undefined ? { text } : { text, playhead: String(Math.round(playhead)) }),
+      body: JSON.stringify({
+        text,
+        ...(playhead === undefined ? {} : { playhead: String(Math.round(playhead)) }),
+        ...(attachments.length === 0 ? {} : { attachments: JSON.stringify(attachments) }),
+      }),
     }).then(json);
   } catch (error) {
     useAgent.setState((current) => ({

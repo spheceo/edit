@@ -10,14 +10,16 @@
 import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, Loader, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ChatComposer, ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
+import { ChatLoading, ChatTurns, Empty } from "../components/AgentPanel";
+import { ChatComposer } from "../components/ChatComposer";
+import { picturesOnly, postFile } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { StartedBy } from "../components/StartedBy";
 import { Button, cx, Modal, Spinner } from "../components/ui";
 import type { AgentEntry } from "../lib/agent";
 import { buildTurns } from "../lib/agentTurns";
 import { footageIn, footageLine, WORKSPACE_NAMES, type IdeaFootage, type IdeaImage } from "@edit/types/ideas";
-import { ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
+import { chatImageUrl, ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 
@@ -988,7 +990,8 @@ export function entriesOf(idea: Idea): { entries: AgentEntry[]; running: boolean
   idea.chat.forEach((turn, index) => {
     if (turn.role === "you") {
       asked = turn.at;
-      entries.push({ id: `turn-${index}`, kind: "user", text: turn.text, at: turn.at });
+      const attachments = (turn.images ?? []).map((image) => ({ name: image.name, kind: "image" as const, url: chatImageUrl(idea.id, image.id) }));
+      entries.push({ id: `turn-${index}`, kind: "user", text: turn.text, at: turn.at, ...(attachments.length > 0 ? { attachments } : {}) });
       return;
     }
     const began = turn.workedMs !== undefined ? turn.at - turn.workedMs : asked;
@@ -1024,6 +1027,15 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
     if (node && stick.current) node.scrollTop = node.scrollHeight;
   });
   const other = running && idea.run !== null && idea.run.tools === undefined && idea.run.said === undefined ? ` · on ${idea.run.holder}` : "";
+  // Pictures attached to a message are kept beside the idea's own, not among its eight.
+  const files = useMemo(
+    () => ({
+      accept: picturesOnly,
+      upload: async (file: File, progress: (loaded: number) => void, signal: AbortSignal) =>
+        ((await postFile(`/api/ideas/${encodeURIComponent(id)}/chat-images?name=${encodeURIComponent(file.name)}`, file, progress, signal, { "content-type": file.type })) as { image: IdeaImage }).image,
+    }),
+    [id],
+  );
   return (
     <ChatShell>
       <div
@@ -1046,7 +1058,9 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
         modelName="Opus 5.5"
         placeholder={running ? "Working…" : "Ask for another angle, or a change…"}
         draft={`ideas.chat-draft.${id}`}
-        onSend={(message) => void ideasApi.chat(id, message).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
+        chat={`idea:${id}`}
+        files={files}
+        onSend={(message, attached) => void ideasApi.chat(id, message, attached.map((one) => one.landed as IdeaImage)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
         onStop={() => void ideasApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
       />
     </ChatShell>

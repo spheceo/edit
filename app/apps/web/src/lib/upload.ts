@@ -3,6 +3,7 @@
 
 import { create } from "zustand";
 
+import { postFile, type Uploader } from "./chatFiles";
 import { placeMedia } from "./edit";
 import { clientId, useEditor } from "./store";
 import type { Project } from "./types";
@@ -30,8 +31,6 @@ interface Job {
   file: File;
   projectId: string;
   placement?: Placement;
-  /** Attached in the chat: the tray shows where it is, so no toast when a file lands. */
-  quiet: boolean;
 }
 
 export const useUploads = create<{ uploads: Upload[] }>(() => ({ uploads: [] }));
@@ -59,23 +58,41 @@ function forget(id: number, delay: number) {
   setTimeout(() => useUploads.setState(({ uploads }) => ({ uploads: uploads.filter((upload) => upload.id !== id) })), delay);
 }
 
-/** Queues files for upload. With `placement`, each lands on the timeline after the previous one. Answers each file queued with its upload's id. */
-export function uploadFiles(files: File[], placement?: Placement, { quiet = false }: { quiet?: boolean } = {}): { id: number; file: File }[] {
+/** Queues files for upload. With `placement`, each lands on the timeline after the previous one. */
+export function uploadFiles(files: File[], placement?: Placement) {
   const project = useEditor.getState().project;
-  if (!project) return [];
+  if (!project) return;
   const accepted = files.filter(UPLOADABLE);
   const rejected = files.length - accepted.length;
   if (rejected) useEditor.getState().toast(`Skipped ${rejected} empty file${rejected > 1 ? "s" : ""} or folder${rejected > 1 ? "s" : ""}.`, "error");
-  const queued: { id: number; file: File }[] = [];
   for (const [index, file] of accepted.entries()) {
     const upload: Upload = { id: ++nextId, name: file.name, size: file.size, loaded: 0, state: "queued" };
     useUploads.setState(({ uploads }) => ({ uploads: [...uploads, upload] }));
     // Only the first carries an explicit frame; the rest follow it.
-    queue.push({ upload, file, projectId: project.id, placement: placement && { ...placement, frame: index === 0 ? placement.frame : -1 }, quiet });
-    queued.push({ id: upload.id, file });
+    queue.push({ upload, file, projectId: project.id, placement: placement && { ...placement, frame: index === 0 ? placement.frame : -1 } });
   }
   void pump();
-  return queued;
+}
+
+/**
+ * The editor chat's uploader (lib/chatFiles.ts): the file into the project as
+ * a drop is (media, or one of its files), the project caught up, and what it
+ * became for the message.
+ */
+export function projectUploader(projectId: string): Uploader {
+  return async (file, progress, signal) => {
+    const query = new URLSearchParams({ name: file.name, size: String(file.size), origin: `upload-${clientId}` });
+    const result = (await postFile(`/api/projects/${projectId}/upload?${query}`, file, progress, signal, { "content-type": "application/octet-stream" })) as Landed;
+    const state = useEditor.getState();
+    if (result.project !== null && state.project?.id === projectId && state.rev < result.rev) state.adopt(result.rev, result.project);
+    return { media: result.added[0], file: result.file } satisfies ProjectFile;
+  };
+}
+
+/** What a chat upload became: media, or one of the project's files. */
+export interface ProjectFile {
+  media?: string;
+  file?: string;
 }
 
 let followFrame = 0;
@@ -168,7 +185,7 @@ function send(job: Job): Promise<Landed> {
 function land(job: Job, result: Landed) {
   if (result.file !== undefined) {
     useUploadedFiles.setState(({ version }) => ({ version: version + 1 }));
-    if (!job.quiet) useEditor.getState().toast(`“${result.file}” is uploaded: the agent can read it.`, "info");
+    useEditor.getState().toast(`“${result.file}” is uploaded: the agent can read it.`, "info");
     return;
   }
   const state = useEditor.getState();

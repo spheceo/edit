@@ -65,8 +65,14 @@ function patch(key: string, id: number, change: Partial<ChatFile>): void {
 export function attachFiles(key: string, files: File[], upload: Uploader, accept?: Accept): string[] {
   const refused: string[] = [];
   const taken: { item: ChatFile; file: File }[] = [];
+  // The same file already on this message (a paste heard twice, the page's
+  // listener and the composer's) is attached once, not uploaded twice.
+  const present = new Set((useChatFiles.getState().chats[key] ?? []).map((one) => `${one.name}\n${one.size}`));
   for (const file of files) {
     if (file.name === "" || file.name.startsWith(".")) continue;
+    const signature = `${file.name}\n${file.size}`;
+    if (present.has(signature)) continue;
+    present.add(signature);
     const no = accept?.(file) ?? null;
     if (no !== null) {
       refused.push(`${file.name}: ${no}`);

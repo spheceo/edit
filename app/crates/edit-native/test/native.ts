@@ -10,9 +10,7 @@ export const native: typeof Native = require("../edit-native.node");
 
 export const home = mkdtempSync(join(tmpdir(), "edit-native-test-"));
 export const cache = join(home, "cache");
-export const drive = join(home, "drive");
 mkdirSync(cache, { recursive: true });
-mkdirSync(drive, { recursive: true });
 
 export const logs: Native.NativeLog[] = [];
 
@@ -21,7 +19,6 @@ native.init({
   cacheDir: cache,
   ffmpeg: process.env.EDIT_FFMPEG || "ffmpeg",
   ffprobe: process.env.EDIT_FFPROBE || "ffprobe",
-  mediaFolders: [drive],
   log: (line) => {
     logs.push(line);
   },

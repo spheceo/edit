@@ -184,9 +184,8 @@ export declare function holdLock(path: string): boolean
 export declare function imageSize(path: string): Promise<[number, number]>
 
 /**
- * Sets the engine up: FFmpeg, the cache, the media folders and where its log
- * lines go. Call once, before anything else; later calls change only the
- * media folders.
+ * Sets the engine up: FFmpeg, the cache, and where its log lines go. Call
+ * once, before anything else.
  */
 export declare function init(options: InitOptions): void
 
@@ -197,17 +196,12 @@ export interface InitOptions {
   cacheDir: string
   ffmpeg: string
   ffprobe: string
-  /**
-   * Every media folder ever set (`media_drive` `Layout.known`): files there
-   * keep the cache keys of their place in the data folder.
-   */
-  mediaFolders: Array<string>
   log: (line: NativeLog) => void
 }
 
 /**
- * Whether another process holds `path`'s lock (`edit media move` asks
- * before touching a data folder).
+ * Whether another process holds `path`'s lock (a second Edit on the same
+ * data folder).
  */
 export declare function isLocked(path: string): boolean
 
@@ -328,9 +322,8 @@ export interface MediaFramesRequest {
 }
 
 /**
- * A media file's cache key: a hash of its name (a file on the media drive
- * named by its place in the data folder), size and modification time. The
- * only implementation: TS never hashes these itself.
+ * A media file's cache key: a hash of its path, size and modification time.
+ * The only implementation: TS never hashes these itself.
  */
 export declare function mediaKey(path: string): string
 
@@ -499,9 +492,6 @@ export declare function seatsScenes(gray: Buffer): Promise<Scenes>
 
 /** The edit's intro, cut-ins, story and outro (`edit_core::sections`). */
 export declare function sections(project: ProjectInput): Sections
-
-/** The media folders changed (`store.publish_layout` / `set_media_dir`). */
-export declare function setMediaFolders(known: Array<string>): void
 
 /** A contact sheet's model tokens at most unless asked otherwise. */
 export declare const SHEET_BUDGET: number

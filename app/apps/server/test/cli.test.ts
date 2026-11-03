@@ -4,7 +4,6 @@ import * as nodePath from "node:path";
 
 import { HELP, mcpText } from "../src/cli.ts";
 import { VERSION } from "../src/version.ts";
-import { scratch } from "./helpers/home.ts";
 
 const MAIN = nodePath.join(import.meta.dir, "../src/main.ts");
 
@@ -34,19 +33,4 @@ test("edit --version, help, mcp and refusals print what they should", () => {
   });
   // A dev build never updates itself.
   expect(edit(["update"]).stdout).toBe(`This build of Edit (v${VERSION}) doesn't update itself; pull and rebuild.\n`);
-});
-
-test("edit media says where media goes, from the data folder given", () => {
-  const { dir, cleanup } = scratch("cli-media");
-  try {
-    const home = `${dir}/home`;
-    const shown = edit(["media", "status", "--home", home, "--port", "1"], { EDIT_MEDIA_DIR: "" });
-    expect(shown.code).toBe(0);
-    expect(shown.stdout).toBe(`Media stays in ${home} (no media drive set).\n`);
-    // The subcommand comes first.
-    expect(edit(["media", "--home", home]).stderr).toContain("edit: unknown media command --home\n\nedit media — ");
-    expect(edit(["media", "help"]).stdout.startsWith("edit media — where Edit keeps its big media files")).toBe(true);
-  } finally {
-    cleanup();
-  }
 });

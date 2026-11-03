@@ -131,7 +131,7 @@ export interface Updater {
 }
 
 export interface ServerSeam {
-  /** `<exports folder>/<name>.mp4`: the media drive's `Exports` when one is set, else ~/Movies/Edit. */
+  /** `<exports folder>/<name>.mp4`, in ~/Movies/Edit (or ~/Videos/Edit). */
   defaultExportPath(store: Store, project: Project): string;
   /** Sets a found image's status; kept the first time, it goes into the media bin, named after its caption (research.reviewFound's). */
   reviewFound(app: App, id: string, item: string, status: string, origin: string): Promise<ResearchItem>;
@@ -195,7 +195,7 @@ export interface CloudMediaSeam {
   /** A finished video of ours (`review:<project>/<version>`) among the originals, fetched from its review once; the local copy too (the caller removes it). */
   reviewOriginal(file: string, scratch: string, progress: (bytes: number, total: number | null, name: string) => void): Promise<[Original, string | null]>;
   /** `project` as an export of frames start..end reads it: cloud media pointing at their originals (presigned URLs). */
-  forExport(project: Project, start: number, end: number, cache: string, cancelled?: () => boolean): Promise<[Project, Originals]>;
+  forExport(project: Project, start: number, end: number, cache: string, cancelled?: () => boolean, onPrep?: (phase: string, ratio: number) => void): Promise<[Project, Originals]>;
   /** The cloud stills a render of `project` reads, fetched again where the cache dropped them. */
   restoreStills(app: App, project: Project): Promise<void>;
   /** Puts a file from this machine in the cloud (deduplicated by content) and returns the media to add; footage's uploads finish in the background. */
@@ -846,6 +846,10 @@ export interface Agents {
  * answer only `status` and `ask`.
  */
 export interface AgentPanel extends Agents {
+  /** Told each time a project's chat is saved (its mirror to the cloud). */
+  onChatSaved?: ((project: string) => void) | null;
+  /** Whether a project's chat has been loaded here. */
+  chatLoaded?(project: string): boolean;
   /** Local Claude maintenance, diagnosis and browser sign-in (no credential data). */
   claudeSetup?(action?: import("./claude_support.ts").SupportAction | "cancel"): import("./claude_support.ts").SupportStatus;
   /** Resumes an older authentication failure in the open conversation once verified. */

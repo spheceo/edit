@@ -4,6 +4,7 @@ import { openPage } from "./api";
 import { clock } from "./clips";
 import { Spinner } from "../components/ui";
 import { Icon } from "./ui";
+import { shownText } from "../lib/agentTurns";
 import { useSettled } from "../lib/settled";
 
 export function useChatDraft(id: string) {
@@ -102,10 +103,12 @@ export function Working({ stage, since, hint }: { stage: string; since: number |
 
 /** What the producer asked, as their side of the conversation. */
 export function Asked({ text, at, onRetry }: { text: string; at?: number; onRetry?: () => void }) {
-  const quoted = /^Quoted from narration (\d+) \(clip [^\n]+\):\n“([\s\S]*?)”\n\n([\s\S]*)$/.exec(text);
+  const shown = shownText(text);
+  if (shown === "") return null;
+  const quoted = /^Quoted from narration (\d+) \(clip [^\n]+\):\n“([\s\S]*?)”\n\n([\s\S]*)$/.exec(shown);
   return (
     <div className="user">
-      <div className="bubble">{quoted ? <><span className="bubble-quote"><span>Quoted from narration {quoted[1]}</span><span>{quoted[2]}</span></span>{quoted[3]}</> : text}</div>
+      <div className="bubble">{quoted ? <><span className="bubble-quote"><span>Quoted from narration {quoted[1]}</span><span>{quoted[2]}</span></span>{quoted[3]}</> : shown}</div>
       <MessageActions text={text} at={at} onRetry={onRetry} />
     </div>
   );

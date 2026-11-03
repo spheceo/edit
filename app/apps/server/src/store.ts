@@ -22,10 +22,9 @@ import * as kinds from "./kinds.ts";
 import { enforceOneLine } from "./one_line.ts";
 import { enforcePointers } from "./pointers.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
-import * as mediaDrive from "./media_drive/layout.ts";
 import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "./model.ts";
 import { native, type Prepared } from "./native/index.ts";
-import { extension, fileStem, join } from "./paths.ts";
+import { canonical, extension, fileStem, join } from "./paths.ts";
 import { clipEnd, duration, mediaOf, newProject } from "./project.ts";
 import { asSerdeRead, jsonForSerde } from "./rust.ts";
 import { RELEASE } from "./version.ts";
@@ -100,10 +99,6 @@ export class Events {
 
 export class Store {
   readonly home: string;
-  /** Where media goes (the media drive, when set) and how it's found. */
-  private currentLayout: mediaDrive.Layout;
-  /** Layout changes reach cache keys (`mediaDrive.publish`): the server's store. */
-  private publishes = false;
   private projects = new Map<string, Live>();
   /** Summaries of projects not loaded, by id, with the file version (size:mtime) they were read from. */
   private summaries = new Map<string, { stamp: string; summary: ProjectSummary; media: string[] }>();
@@ -136,17 +131,15 @@ export class Store {
    */
   marksDev = devBuild();
 
-  private constructor(home: string, layout: mediaDrive.Layout) {
+  private constructor(home: string) {
     this.home = home;
-    this.currentLayout = layout;
   }
 
   static open(home: string): Store {
-    fs.mkdirSync(join(home, "projects"), { recursive: true });
-    fs.mkdirSync(join(home, "cache"), { recursive: true });
-    const layout = mediaDrive.Layout.load(home);
-    mediaDrive.prepareEnv(layout);
-    return new Store(home, layout);
+    const root = canonical(home);
+    fs.mkdirSync(join(root, "projects"), { recursive: true });
+    fs.mkdirSync(join(root, "cache"), { recursive: true });
+    return new Store(root);
   }
 
   /** Makes this store's writes go through `cloud` (the server's store). */
@@ -168,59 +161,14 @@ export class Store {
     return join(this.home, "cache");
   }
 
-  /**
-   * Where footage downloaded from Google Drive is kept, one folder per file
-   * (shared by projects): on the media drive when one is set, and an error
-   * (never the internal disk) while it isn't connected.
-   */
+  /** Where footage downloaded from Google Drive is kept, one folder per file (shared by projects). */
   driveDir(): string {
-    return join(this.layout().mediaRoot(), "media", "drive");
+    return join(this.home, "media", "drive");
   }
 
-  /**
-   * Where media made for a project is kept (uploads from other devices,
-   * voice-over takes, stills, smoothed shots, map renders): on the media drive
-   * when one is set, as `driveDir`.
-   */
+  /** Where media made for a project is kept (uploads, voice-over takes, stills, smoothed shots, map renders). */
   uploadsDir(project: string): string {
-    return join(this.layout().mediaRoot(), "media", project);
-  }
-
-  /** Where media goes and how it's found (`media_drive`). */
-  layout(): mediaDrive.Layout {
-    return this.currentLayout.clone();
-  }
-
-  /** Makes this store's layout the one cache keys use (the server's store). */
-  publishLayout(): void {
-    this.publishes = true;
-    mediaDrive.publish(this.currentLayout);
-  }
-
-  /**
-   * Sets (or, with null, turns off) the media drive and saves it in
-   * `settings.json`. Files already somewhere stay there.
-   */
-  setMediaDir(dir: string | null): mediaDrive.Layout {
-    if (this.currentLayout.fromEnv) {
-      throw new Error(`${mediaDrive.ENV} is set, and it decides the media drive: change or unset it instead.`);
-    }
-    const next = this.currentLayout.clone();
-    if (dir !== null) {
-      const made = mediaDrive.prepare(next.home, dir);
-      if (!next.known.includes(made)) next.known.push(made);
-      next.media = made;
-    } else {
-      next.media = null;
-    }
-    mediaDrive.save(next);
-    this.currentLayout = next;
-    if (this.publishes) mediaDrive.publish(next);
-    diag.info(
-      "media",
-      next.media !== null ? `new media goes to the media drive, ${next.media}` : `new media goes to ${next.home}`,
-    );
-    return next.clone();
+    return join(this.home, "media", project);
   }
 
   subscribe(listener: (event: Event, text: () => string) => void): () => void {
@@ -327,11 +275,7 @@ export class Store {
       return [summary, []];
     }
     const project = loaded.project;
-    // Paths as saved and as found here (a file on the media drive).
-    const media = project.media.map((item) => item.path);
-    this.currentLayout.resolveProject(project);
-    for (const item of project.media) if (!media.includes(item.path)) media.push(item.path);
-    return [summaryOf(project, modifiedMs), media];
+    return [summaryOf(project, modifiedMs), project.media.map((item) => item.path)];
   }
 
   get(id: string): Live | null {
@@ -356,8 +300,6 @@ export class Store {
     const read = this.read(id);
     if (read === null || "problem" in read) return read;
     const project = read.project;
-    // Files moved to (or back from) the media drive are found.
-    this.currentLayout.resolveProject(project);
     this.resolveMedia?.(project);
     const live: Live = { rev: this.firstRev, project: deepFreeze(project) };
     this.projects.set(id, live);
@@ -432,7 +374,6 @@ export class Store {
     const project = structuredClone(given) as Project;
     const id = project.id;
     if (!validId(id)) throw new Error(`not a project id: ${JSON.stringify(id)}`);
-    this.currentLayout.resolveProject(project);
     this.resolveMedia?.(project);
     const prepared = native().projectPrepare(id, jsonForSerde(project));
     for (let attempt = 0; attempt < 5; attempt++) {

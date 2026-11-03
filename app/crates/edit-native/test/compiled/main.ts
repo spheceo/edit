@@ -11,7 +11,6 @@ native.init({
   cacheDir: `${home}/cache`,
   ffmpeg: "ffmpeg",
   ffprobe: "ffprobe",
-  mediaFolders: [],
   log: () => {},
 });
 const project = {

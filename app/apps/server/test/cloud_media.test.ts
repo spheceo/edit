@@ -71,7 +71,7 @@ echo "EDIT-FILE $out/scene.mp4"
 function home(name: string): Fixture & { proxies: string[] } {
   const fixture = fixtureHome(name);
   const raw = createStub();
-  raw.init({ home: fixture.home, cacheDir: `${fixture.home}/cache`, ffmpeg: "ffmpeg", ffprobe: "ffprobe", mediaFolders: [], log: () => {} });
+  raw.init({ home: fixture.home, cacheDir: `${fixture.home}/cache`, ffmpeg: "ffmpeg", ffprobe: "ffprobe", log: () => {} });
   const proxies: string[] = [];
   raw.makeCloudProxy = async (source: string, _probe: Probe, out: string) => {
     proxies.push(source);

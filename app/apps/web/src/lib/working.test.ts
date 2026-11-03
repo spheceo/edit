@@ -2,12 +2,18 @@
 
 import { expect, test } from "vitest";
 
-import { buildTurns, editWorked, formatSpan, formatWorking, isWorking } from "./agentTurns";
+import { buildTurns, editWorked, formatSpan, formatWorking, isWorking, shownText } from "./agentTurns";
 
 test("a turn is working once it calls a tool or a few seconds in", () => {
   expect(isWorking(1200, false)).toBe(false);
   expect(isWorking(1200, true)).toBe(true);
   expect(isWorking(5000, false)).toBe(true);
+});
+
+test("a picture's placeholder text is not shown; its words are", () => {
+  expect(shownText("[Image: image.png; ref=image_c0a2255e-e6ec-4af2-9baf-0b98ead27093]")).toBe("");
+  expect(shownText("Use this one [Image: a.jpg; ref=x]\n\nand make it pop")).toBe("Use this one\n\nand make it pop");
+  expect(shownText("An [Image] is worth a thousand words")).toBe("An [Image] is worth a thousand words");
 });
 
 test("working reads to the second", () => {

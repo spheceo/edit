@@ -2,6 +2,10 @@
 
 Ideas and next steps that aren't started yet. Newest at the top.
 
+## Ideas and thumbnails: a feedback link (future)
+
+A way to send an idea or a thumbnail off to a feedback link — share it outside Edit for review, the way an edit goes to its review link, and have what comes back land where the work is. Not built yet; wanted so ideas and thumbnails can be sent for feedback without a screenshot and a message.
+
 ## Thumbnails: what's not built yet (get back to this)
 
 Thumbnails is a working draft (Nov 2; `docs/thumbnails.md`; commits 39a833aa, 44f9aedd, b7e7952d). Paused there ("we'll get back to this later"). Not built yet:

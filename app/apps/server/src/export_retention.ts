@@ -11,7 +11,7 @@
 // the exports list keeps its entry, marked removed with where it still is.
 // Never the newest, never one exporting, being read (a share making its
 // copies), or uploading to Drive, and only a file Edit wrote into its own
-// export folders (~/Movies/Edit, <home>/exports, the media drive's Exports)
+// export folders (~/Movies/Edit, <home>/exports)
 // and listed in <home>/exports.json. With the disk nearly full (under the
 // cache's floor, storage.ts FREE_FLOOR_BYTES: Sphe, Nov 2), older versions go
 // at once, without the week's wait, the oldest first, until there's room

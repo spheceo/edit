@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { cache, drive, home, native } from "./native";
+import { cache, home, native } from "./native";
 
 describe("cache keys", () => {
   test("a file's key is its name, size and mtime", () => {
@@ -16,24 +16,6 @@ describe("cache keys", () => {
     writeFileSync(file, "two!");
     expect(native.mediaKey(file)).not.toBe(key);
     expect(native.mediaCache(file)).toBe(join(cache, native.mediaKey(file)));
-  });
-
-  test("a file on the media drive keeps the key of its place in the data folder", () => {
-    mkdirSync(join(drive, "media"), { recursive: true });
-    mkdirSync(join(home, "media"), { recursive: true });
-    const onDrive = join(drive, "media", "b.mp4");
-    const atHome = join(home, "media", "b.mp4");
-    for (const path of [onDrive, atHome]) {
-      writeFileSync(path, "same bytes");
-      utimesSync(path, 1_700_000_000, 1_700_000_000);
-    }
-    expect(native.mediaKey(onDrive)).toBe(native.mediaKey(atHome));
-    expect(native.mediaKey(onDrive)).toBe(native.keyOf(atHome, onDrive));
-    // Without the drive among the media folders it's keyed by its own path.
-    native.setMediaFolders([]);
-    expect(native.mediaKey(onDrive)).not.toBe(native.mediaKey(atHome));
-    native.setMediaFolders([drive]);
-    expect(native.mediaKey(onDrive)).toBe(native.mediaKey(atHome));
   });
 
   test("no light preview until one is made", () => {

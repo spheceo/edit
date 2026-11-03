@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
-import { parent } from "../src/paths.ts";
+import { defaultExportsDir, parent } from "../src/paths.ts";
 
 import type { App } from "../src/app.ts";
 import { ExportRegistry, resumeSnapshot } from "../src/exports.ts";
@@ -304,7 +304,7 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     expect(await (await send(`/api/projects/${id}/export/cancel`, { method: "POST" })).json()).toEqual({ cancelled: false });
     // The default name: the project's, made safe, in the exports folder.
     const project = store.get(id)!.project;
-    expect(defaultExportPath(store, project)).toBe(`${store.layout().exportsDir()}/Teen_ the edit_.mp4`);
+    expect(defaultExportPath(store, project)).toBe(`${defaultExportsDir()}/Teen_ the edit_.mp4`);
   } finally {
     useNative(before);
     cleanup();

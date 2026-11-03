@@ -34,6 +34,7 @@ import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as remote from "./remote_actions.ts";
 import { chunkFolder, clipMap, deleteExport, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport, withWatermarkKey } from "./exports.ts";
+import { shareLine } from "./export_prep.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
@@ -155,6 +156,36 @@ function update<T>(home: string, change: (state: State) => T): T {
 
 /** Shares in progress (project id → what it's doing), for the UI. */
 const sharing = new Map<string, string>();
+const shareFollowed = new WeakSet<object>();
+
+/**
+ * A stage the share says for itself, around the export: slowed shots still
+ * rendering, then the review copy. An export's events must not paint over those.
+ */
+function ownsItsStage(current: string): boolean {
+  return current === "cancelling" || current === "waiting for slowed shots" || /^(making the review copy|describing it|fetching the export back from the cloud|uploading|making it v1|publishing)\b/.test(current);
+}
+
+/** The share's row, from one export event. Null when this stage isn't the export's to change. */
+function noteShare(id: string, event: { state?: unknown; waiting?: unknown; phase?: unknown; progress?: unknown }): void {
+  const current = sharing.get(id);
+  if (current === undefined || ownsItsStage(current)) return;
+  const next = shareLine(current, event);
+  if (next !== null) sharing.set(id, next);
+}
+
+/**
+ * Copies an export's queue and prep onto the share's row. Once per store.
+ * exportOnce listens too and says the same thing, so the two don't disagree.
+ */
+export function followShares(store: { subscribe(listener: (event: Record<string, unknown>) => void): () => void }): void {
+  if (shareFollowed.has(store)) return;
+  shareFollowed.add(store);
+  store.subscribe((event) => {
+    if (event.type !== "export" || typeof event.id !== "string") return;
+    noteShare(event.id, event);
+  });
+}
 /** A share the person stopped. Checked between stages, and its upload is aborted. */
 const droppedShares = new Set<string>();
 const shareAbort = new Map<string, AbortController>();
@@ -512,11 +543,10 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
         yield* Effect.acquireRelease(
           Effect.sync(() =>
             app.store.subscribe((event) => {
-              const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string };
+              const one = event as { type?: string; id?: string; state?: string; progress?: number; path?: string; error?: string; waiting?: string; phase?: string };
               if (one.type !== "export" || one.id !== projectId) return;
-              if (one.state === "queued") sharing.set(projectId, "queued for export");
-              else if (one.state === "running") sharing.set(projectId, `exporting ${Math.round((one.progress ?? 0) * 100)}%`);
-              else if (one.state === "done" && one.path !== undefined) Deferred.doneUnsafe(end, Exit.succeed({ file: one.path }));
+              noteShare(projectId, one);
+              if (one.state === "done" && one.path !== undefined) Deferred.doneUnsafe(end, Exit.succeed({ file: one.path }));
               else if (one.state === "failed" || one.state === "cancelled") Deferred.doneUnsafe(end, Exit.succeed({ failed: one.state === "cancelled" ? "the export was cancelled" : `the export failed: ${one.error ?? "see the log"}` }));
             }),
           ),
@@ -1760,6 +1790,16 @@ export function resumeFixes(app: App): void {
   }
 }
 
+/**
+ * A new share replaces the latest version when that version has no reviewer
+ * comments, and is the next version when it has any (Sphe, Nov 3). Replies
+ * and the app's own notes are not comments. A commented version is never
+ * replaced, whatever the caller asked.
+ */
+export function shareReplacesLatest(versionCount: number, commentsOnLatest: number): boolean {
+  return versionCount > 0 && commentsOnLatest === 0;
+}
+
 /** The reviewers' notes (not replies, not the agent's) on a project's latest shared version. */
 export function onLatest(home: string, project: string): Note[] {
   const state = read(home);
@@ -1859,8 +1899,9 @@ async function shareAgain(app: App, project: string, reviewId: string): Promise<
 /** Exports and shares the fixes: in place of the latest version unless it has comments, else as the next one; the share ends the request on the page. `note`: what the Exports panel says beside its export ("Trying again after the update"). */
 export async function shareFixes(app: App, project: string, reviewId: string | null, name: string, note?: string): Promise<void> {
   const home = app.store.home;
-  const latest = read(home).shared[project]?.versions.reduce((most, one) => Math.max(most, one.n), 0) ?? 0;
-  const replace = latest > 0 && onLatest(home, project).length === 0;
+  const versions = read(home).shared[project]?.versions ?? [];
+  const latest = versions.reduce((most, one) => Math.max(most, one.n), 0);
+  const replace = shareReplacesLatest(versions.length, onLatest(home, project).length);
   const next = replace ? latest : latest + 1;
   await progress(reviewId, { state: "sharing", stage: replace ? `Exporting v${next} again (no comments on it)` : `Exporting v${next}` });
   // Say how the export and upload are going while they run.
@@ -1912,6 +1953,7 @@ export function view(app: App, projectId: string): unknown {
         text: note.text,
         status: note.status,
         reply_to: note.parentId,
+        from_app: note.fromApp === true,
         frame,
         fix: note.fix === undefined ? null : { summary: note.fix.summary, ranges: live === null ? note.fix.ranges : bandsNow(live.project, note.fix) },
         unfixed: note.unfixed ?? null,
@@ -2148,8 +2190,9 @@ export function routes(router: Router<App>): void {
     // From Home (no options): the last Share's settings, and in place of the latest version unless it has comments, as a fix goes up.
     const home = context.app.store.home;
     const options = typeof given?.options === "object" && given.options !== null && !Array.isArray(given.options) ? (given.options as Partial<ExportOptions>) : (read(home).shareOptions?.[id] ?? {});
+    // Comments decide. No comments on the latest version: this replaces it. Any comment: the next version. The dialog's flags do not override that.
     const versions = read(home).shared[id]?.versions.length ?? 0;
-    const replace = given?.byRule === true ? versions > 0 && onLatest(home, id).length === 0 : given?.replace === true;
+    const replace = shareReplacesLatest(versions, onLatest(home, id).length);
     // The dialog's watermark: a channel's picture id, or null for none; from Home, the last Share's.
     const watermark = typeof given?.watermark === "string" && given.watermark !== "" ? given.watermark : given?.watermark === null ? null : undefined;
     const started = exportAndShare(context.app, id, options, replace, undefined, watermark);
@@ -2185,8 +2228,12 @@ export function routes(router: Router<App>): void {
     const given = (await readJson<unknown>(context).catch(() => ({}))) as Record<string, unknown>;
     const id = context.params.id ?? "";
     const path = typeof given?.path === "string" ? given.path : null;
+    // The same rule as Share: a commented latest version is kept, and a new export takes the next number.
+    const home = context.app.store.home;
+    const versions = read(home).shared[id]?.versions.length ?? 0;
+    const replace = shareReplacesLatest(versions, onLatest(home, id).length);
     // A minute or two (the review copy, the upload): it runs on, and the review says how it's going.
-    const started = share(context.app, id, path, given?.replace === true);
+    const started = share(context.app, id, path, replace);
     started.catch((error: unknown) => {
       const message = diag.messageOf(error);
       if (message === "the share was cancelled" || message === "the export was cancelled") return;

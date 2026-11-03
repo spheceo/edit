@@ -1,7 +1,6 @@
 // The server's generic handlers (health, diagnostics, setup, the file browser,
-// the media drive, updates, projects, imports and uploads, media files,
-// frames, exports) and `buildRouter`, which puts them together with every
-// package's routes.
+// updates, projects, imports and uploads, media files, frames, exports) and
+// `buildRouter`, which puts them together with every package's routes.
 
 import * as windowFocus from "./window_focus.ts";
 import * as accounts from "./accounts.ts";
@@ -25,7 +24,6 @@ import { badShape, pathEndingAt, readJson, showPath, type RouteContext, type Rou
 import { baseRouter } from "./http/server.ts";
 import { importPaths } from "./import.ts";
 import { routes as mediaRoutes } from "./media_tools.ts";
-import { check as checkDrive, status as driveStatus } from "./media_drive/layout.ts";
 import { isMediaPath, Semaphore } from "./media.ts";
 import type { ExportOptions, Project, Style } from "./model.ts";
 import { withProjectAsync } from "./native/index.ts";
@@ -85,9 +83,7 @@ export function buildRouter(): Router<App> {
       Bun.spawn(["open", "-R", join(app.store.home, "logs", "edit.log")], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
       return json({ ok: true });
     })
-    .get("/api/setup", setup)
-    .get("/api/media-drive", mediaDrive)
-    .post("/api/media-drive", setMediaDrive);
+    .get("/api/setup", setup);
   seams.cloudProjects.routes(router);
   // Before /api/projects/{id}: /api/projects/status is its own.
   reviews.routes(router);
@@ -372,23 +368,6 @@ async function setup({ app }: Context): Promise<Response> {
   }
   const loggedOut = codex.state === "logged_out";
   const checks: Record<string, unknown>[] = [];
-  // Only when a media drive is set (`media_drive`).
-  const layout = app.store.layout();
-  if (layout.media !== null) {
-    let ok = true;
-    try {
-      checkDrive(layout.media);
-    } catch {
-      ok = false;
-    }
-    checks.push({
-      fix: "Plug it in, or turn it off with: edit media off",
-      id: "media-drive",
-      ok,
-      title: `The media drive (${layout.media})`,
-      why: "Its footage shows as missing, and imports, downloads and exports to it are refused until it's back.",
-    });
-  }
   checks.push(
     {
       fix: "curl -fsSL https://raw.githubusercontent.com/spheceo/edit/main/install.sh | sh",
@@ -421,28 +400,6 @@ async function setup({ app }: Context): Promise<Response> {
     },
   );
   return json({ checks });
-}
-
-/** The media drive setting: where new media goes, whether the drive is connected, what's still in the data folder. */
-function mediaDrive({ app }: Context): Response {
-  try {
-    return json(driveStatus(app.store.layout()));
-  } catch (error) {
-    return json({ error: diag.messageOf(error) });
-  }
-}
-
-async function setMediaDrive(context: Context): Promise<Response> {
-  const given = await body(context);
-  const raw = field<string>(given, "dir", "string");
-  const trimmed = raw?.trim() ?? "";
-  const dir = trimmed === "" ? null : expandHome(trimmed);
-  try {
-    const layout = context.app.store.setMediaDir(dir);
-    return json(driveStatus(layout));
-  } catch (error) {
-    throw bad(diag.messageOf(error));
-  }
 }
 
 /** The UI's own problems, kept with the server's so one report has both. */

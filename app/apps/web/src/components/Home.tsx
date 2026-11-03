@@ -4,6 +4,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode 
 
 import { editStyles, useAccount, writesScripts } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
+import { shareChip } from "../lib/export-face";
 import { hasImportLinks, importPaste } from "../lib/import-input";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
@@ -1040,9 +1041,9 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
         </span>
       ),
     state.sharing !== null && (
-        <span key="sharing" title={`Sharing: ${state.sharing}`} className={cx(CHIP, "text-info")}>
-          <Share2 size={12} />
-          Sharing
+        <span key="sharing" title={`Sharing: ${state.sharing}`} className={cx(CHIP, "max-w-[220px] text-info")}>
+          <Share2 size={12} className="shrink-0" />
+          <span className="min-w-0 truncate">{shareChip(state.sharing)}</span>
         </span>
       ),
     state.approved !== null && (

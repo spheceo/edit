@@ -142,8 +142,8 @@ export function ChatShell({
         }}
         className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
       >
-        {/* Not itself a flex column: a scrolling flex item that is also a flex container can refuse to shrink, and the composer below gets clipped. */}
-        <div className="flex flex-col gap-4">{loading ? <ChatLoading /> : children}</div>
+        {/* The scroller stays a plain block. A flex item that is also a flex column can refuse to shrink and clip the composer. This inner column is at least as tall as the scroller, so an empty chat centers, and a long transcript still grows and scrolls. */}
+        <div className="flex min-h-full flex-col gap-4">{loading ? <ChatLoading /> : children}</div>
       </div>
       {footer ? <div className="shrink-0">{footer}</div> : null}
     </section>
@@ -590,7 +590,7 @@ function CopyLine({ text, index }: { text: string; index?: number }) {
 
 export function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {
   return (
-    <div className="flex min-h-full flex-col justify-center px-2 text-center">
+    <div className="flex flex-1 flex-col justify-center px-2 text-center">
       <div className="font-medium">{title}</div>
       <p className="mx-auto mt-1 max-w-[270px] text-[12px] leading-relaxed text-muted">{detail}</p>
       {children}

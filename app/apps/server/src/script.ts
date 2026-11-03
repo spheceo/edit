@@ -2107,7 +2107,6 @@ async function footageToDisk(app: App, id: string, index: number, file: string):
   const progress = fileProgress(app, id, index);
   const video = youtube.idOf(file);
   const path = await diag.timeOnAsync("script", "script: download", video === null ? `Drive file ${file}` : `YouTube video ${video}`, async () => {
-    // The media drive not connected: said, not downloaded elsewhere.
     if (video !== null) {
       const dir = join(app.store.driveDir(), "youtube", video);
       return (await youtube.download(app.store.home, video, dir, progress)).path;

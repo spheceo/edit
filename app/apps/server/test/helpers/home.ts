@@ -39,7 +39,6 @@ export function freshNative(home: string): Native {
     cacheDir: nodePath.join(home, "cache"),
     ffmpeg: "ffmpeg",
     ffprobe: "ffprobe",
-    mediaFolders: [],
     log: () => {},
   });
   useNative(native);

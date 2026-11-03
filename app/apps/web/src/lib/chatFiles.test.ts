@@ -29,6 +29,19 @@ describe("files attached in a chat", () => {
     expect(useChatFiles.getState().chats.t1).toEqual([]);
   });
 
+  it("attaches the same file once when a paste is heard twice", async () => {
+    let uploads = 0;
+    const upload = async () => {
+      uploads++;
+      return "id-a.png";
+    };
+    attachFiles("twice", [picture("a.png")], upload);
+    attachFiles("twice", [picture("a.png")], upload);
+    await settle();
+    expect(uploads).toBe(1);
+    expect(takeFiles("twice")).toHaveLength(1);
+  });
+
   it("keeps each chat's files its own", async () => {
     attachFiles("one", [picture("a.png")], async () => "a");
     await settle();

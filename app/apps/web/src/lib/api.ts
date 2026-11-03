@@ -167,6 +167,8 @@ export interface ExportActivity {
   note?: string;
   /** Queued: what it waits for ("waiting for the encoder (this Mac has one)"). */
   waiting?: string;
+  /** Running, before frames encode: "cutting the footage, 12 of 225". */
+  phase?: string;
   /** A script share in the same queue. Absent on an edit's export. */
   kind?: "edit" | "script";
   /** A script share's stage ("uploading the footage 42%"). */
@@ -291,8 +293,6 @@ export const api = {
   answerFootage: (id: string, file: string, answer: { url: string } | { skip: true }) =>
     request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/footage`, { file, ...answer }),
   resumeScript: (id: string, recut = false) => request<{ job: ScriptJob | null }>("POST", `/api/projects/${id}/script/job${recut ? "?recut=true" : ""}`),
-  /** Where Edit keeps big media files (the media drive, set in code or with `edit media use`). */
-  mediaDrive: () => request<MediaDrive>("GET", "/api/media-drive"),
   /** Per project: open review notes, a finished edit, and whether what it is now is exported. */
   projectStatus: () => request<Record<string, ProjectStatus>>("GET", "/api/projects/status"),
   /** A new project's first message to its agent, sent when its import is done. */
@@ -309,9 +309,9 @@ export const api = {
   shareReview: (id: string, path?: string) =>
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/review/share`, path === undefined ? {} : { path }),
   /** Approves the latest shared version: the review closes and the other versions' files (and their exports here) are deleted. */
-  /** Share: exports the whole edit, then puts it on the project's review link (a new version after the first). */
-  /** `options` null: the last Share's settings; `byRule`: in place of the latest version unless it has comments (Home's Share). */
-  /** `watermark`: a channel's picture id, or null for none; left out, the last Share's. */
+  /** Share: exports the whole edit, then puts it on the project's review link. */
+  /** The latest version is replaced when it has no comments, and the next version is added when it has any. `replace` and `byRule` are ignored. */
+  /** `options` null: the last Share's settings. `watermark`: a channel's picture id, or null for none; left out, the last Share's. */
   shareProject: (id: string, options: ExportOptions | null, replace = false, byRule = false, watermark?: string | null) =>
     request<{ started?: boolean; url?: string; version?: number }>("POST", `/api/projects/${id}/share`, { ...(options === null ? {} : { options }), replace, byRule, ...(watermark === undefined ? {} : { watermark }) }),
   /** The channels with a watermark: the pictures in the team's Watermarks folder on Drive. */
@@ -403,6 +403,8 @@ export interface ReviewNote {
   text: string;
   status: "open" | "done";
   reply_to: string | null;
+  /** Written from Edit, not by a reviewer. It does not keep the version from being replaced. */
+  from_app?: boolean;
   /** Its moment on the timeline now (null: no moment). */
   frame: number | null;
   /** What the agent changed for it: its words, and the stretches (frames) on the timeline now. */
@@ -417,24 +419,6 @@ export interface Review {
   watermark?: string | null;
   review: { url: string; versions: { n: number; path: string }[]; approved: { version: number; by: string; at: number } | null } | null;
   notes: ReviewNote[];
-}
-
-/** The media drive: an optional folder (usually on an external drive) for downloads, uploads and exports. */
-export interface MediaDrive {
-  dir: string | null;
-  /** Set by EDIT_MEDIA_DIR (the setting can't change it). */
-  env: boolean;
-  state: "off" | "connected" | "offline";
-  problem: string | null;
-  home: string;
-  /** Where exports go by default. */
-  exports: string;
-  /** Media still in the data folder (media/ and uploads/). */
-  internal_bytes: number;
-  /** The command that moves it to the media drive. */
-  move_command: string | null;
-  /** Drives mounted under /Volumes. */
-  volumes: { name: string; path: string }[];
 }
 
 /**

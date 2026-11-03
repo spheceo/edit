@@ -1,9 +1,9 @@
-import { explain } from "@edit/types/problems";
 import { Download, FileText, Film, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { api, type ExportActivity as Activity } from "../lib/api";
+import { cardFace, exportLabel } from "../lib/export-face";
 import { cancelScriptShare } from "../writer/api";
 import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
@@ -13,40 +13,7 @@ import { Button, cx, IconButton, Modal } from "./ui";
 
 export const exportActive = (job: Activity) => job.state === "queued" || job.state === "running";
 
-function stageLine(stage: string | undefined): string {
-  const text = stage?.trim() || "sharing";
-  return `${text.charAt(0).toUpperCase()}${text.slice(1)}…`;
-}
-
-export function exportLabel(job: Activity): string {
-  if (job.kind === "script") return stageLine(job.stage);
-  if (job.state === "queued") return `Queued · ${job.waiting ?? "waiting for the renderer"}`;
-  if (job.state === "running") return `Exporting · ${Math.round(job.progress * 100)}%`;
-  if (job.state === "done") return "Export ready";
-  if (job.state === "cancelled") return "Cancelled";
-  return job.error ? explain(job.error, "export it").title : "Export failed";
-}
-
 const jobKey = (job: Activity) => `${job.kind ?? "edit"}:${job.id}`;
-
-/** The card's one number: the average of what's still going (a queued edit counts as 0). Done fills the card; a failure doesn't. */
-function overallOf(jobs: Activity[]): { percent: number | null; subtitle: string; attention: boolean } {
-  const active = jobs.filter(exportActive);
-  if (active.length > 0) {
-    const ratio = active.reduce((sum, job) => sum + (job.state === "queued" ? 0 : job.progress), 0) / active.length;
-    const rendering = active.filter((job) => job.state === "running").length;
-    const queued = active.filter((job) => job.state === "queued").length;
-    const subtitle =
-      active.length === 1
-        ? active[0].name
-        : [rendering ? `${rendering} exporting` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(" · ");
-    return { percent: Math.round(ratio * 100), subtitle, attention: false };
-  }
-  if (jobs.some((job) => job.state === "failed")) return { percent: null, subtitle: "Needs attention", attention: true };
-  if (jobs.some((job) => job.state === "done")) return { percent: 100, subtitle: "Exports ready", attention: false };
-  if (jobs.some((job) => job.state === "cancelled")) return { percent: null, subtitle: "Cancelled", attention: false };
-  return { percent: null, subtitle: "Exports", attention: false };
-}
 
 /** One face. The red sits behind it, so a word is never half one colour and half another. */
 function QueueFace({ subtitle, percent, attention }: { subtitle: string; percent: number | null; attention: boolean }) {
@@ -123,7 +90,7 @@ export function ExportActivity() {
     }
   };
   if (!visible.length) return null;
-  const face = overallOf(visible);
+  const face = cardFace(visible);
   const dismiss = (job: Activity) => setHidden((previous) => ({ ...previous, [jobKey(job)]: job.updated_ms }));
   return (
     <>
@@ -132,8 +99,8 @@ export function ExportActivity() {
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={face.percent === null ? `Exports, ${face.subtitle}` : `Exports, ${face.subtitle}, ${face.percent}%`}
-        title={face.subtitle}
+        aria-label={face.percent === null ? `Exports, ${face.title}` : `Exports, ${face.title}, ${face.percent}%`}
+        title={face.title}
         className="relative mb-1 w-full min-w-0 overflow-hidden rounded-xl border border-line bg-panel text-left transition-colors hover:bg-hover"
       >
         {face.percent !== null && face.percent > 0 && (

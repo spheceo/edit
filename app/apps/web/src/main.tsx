@@ -3,11 +3,13 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
 import { installDiagnostics, reactErrors } from "./lib/diagnostics";
+import { installQuietInputs } from "./lib/quietInputs";
 import { startScrollbars } from "./lib/scrollbars";
 import { watchForFreezes } from "./lib/watchdog";
 import "./index.css";
 
 installDiagnostics();
+installQuietInputs();
 watchForFreezes();
 startScrollbars();
 

@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useConnection } from "../lib/api";
 import { syncLabel } from "../lib/cloud";
+import { capitalize } from "../lib/export-face";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
@@ -58,7 +59,12 @@ export function TopBar({ onShare }: { onShare: () => void }) {
         <DocChangesButton />
         <History />
         <SyncState />
-        <Button variant="primary" className="ml-1.5" onClick={onShare}>
+        <Button
+          variant="primary"
+          className="ml-1.5"
+          onClick={onShare}
+          title={exportState?.state === "running" && exportState.phase ? capitalize(exportState.phase) : exportState?.state === "queued" && exportState.waiting ? capitalize(exportState.waiting) : undefined}
+        >
           {exportState?.state === "running" ? (
             <span className="tabular">{Math.round(exportState.progress * 100)}%</span>
           ) : (

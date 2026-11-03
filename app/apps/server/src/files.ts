@@ -1,5 +1,4 @@
-// Writing files safely (atomic writes and friends), apart from the
-// store so the media drive's layout can use them without importing it.
+// Writing files safely (atomic writes and friends).
 
 import * as fs from "node:fs";
 

@@ -138,13 +138,14 @@ function drawPicture(context: Context, layer: ImageLayer, surfaces: Surfaces, wi
 
 /**
  * Photoshop's few, on the pixels: exposure in stops, contrast about the middle,
- * saturation against the luminance, warmth (orange up, blue down), shadows and
- * highlights by how dark or bright each pixel is, a vignette, an unsharp mask.
+ * saturation against the luminance, vibrance on the muted pixels, warmth
+ * (orange up, blue down), shadows and highlights by how dark or bright each
+ * pixel is, a vignette, an unsharp mask.
  */
 export function adjustPixels(context: Context, adjust: Adjust, width: number, height: number): void {
   const image = context.getImageData(0, 0, width, height);
   const data = image.data;
-  const gain = Math.pow(2, adjust.exposure / 50);
+  const gain = Math.pow(2, adjust.exposure);
   const contrast = adjust.contrast >= 0 ? 1 + adjust.contrast / 50 : 1 + adjust.contrast / 100;
   const saturation = adjust.saturation >= 0 ? 1 + adjust.saturation / 50 : 1 + adjust.saturation / 100;
   const warmth = adjust.warmth * 0.35;
@@ -179,6 +180,16 @@ export function adjustPixels(context: Context, adjust: Adjust, width: number, he
     r = luma + (r - luma) * saturation;
     g = luma + (g - luma) * saturation;
     b = luma + (b - luma) * saturation;
+    if (adjust.vibrance !== 0) {
+      // Vibrance: the muted pixels take the push, the vivid ones (skin above
+      // all) are already there. How vivid this one is, 0…1 from its spread.
+      const vivid = Math.max(r, g, b) - Math.min(r, g, b);
+      const pushVibrance = 1 + (adjust.vibrance / 100) * clamp(1 - vivid, 0, 1);
+      const grey = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      r = grey + (r - grey) * pushVibrance;
+      g = grey + (g - grey) * pushVibrance;
+      b = grey + (b - grey) * pushVibrance;
+    }
     if (warmth !== 0) {
       r += warmth / 255;
       g += (warmth * 0.25) / 255;

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api, type Review } from "../lib/api";
 import { projectDuration } from "../lib/edit";
+import { capitalize } from "../lib/export-face";
 import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "../lib/exporting";
 import { preview } from "../lib/playback";
 import { flushSave, useEditor } from "../lib/store";
@@ -17,7 +18,8 @@ import { Button, cx, Modal, Select } from "./ui";
  * 320 kbps sound, −14 LUFS, the script's chapters) and puts it on the
  * project's review link, where anyone with it watches and leaves notes at a
  * moment, and the notes come back to the agent. The first share makes the
- * link; every share after is a new version on it.
+ * link. A later share replaces the latest version when it has no comments,
+ * and adds the next version when it has any.
  */
 const HOUSE: Omit<ExportOptions, "range" | "chapters"> = { ...DEFAULTS, size: null, fps: null, preset: "youtube" };
 
@@ -29,8 +31,6 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [starting, setStarting] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
-  // Put this revision over the latest version (same number, same link) instead of adding one.
-  const [replace, setReplace] = useState(false);
   // Deleting the link is asked first (it can't be undone), and needs “Share for review”.
   const [deleting, setDeleting] = useState<"ask" | "running" | null>(null);
   const mayDelete = useGrants().has(CAN.share);
@@ -123,7 +123,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       const span: [number, number] = [0, duration];
       const embedded = chaptersInSpan(chapters, span, rate(project.settings));
       const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [] };
-      await api.shareProject(project.id, options, replace && latest !== null, false, marked && channel !== null ? channel : null);
+      await api.shareProject(project.id, options, false, true, marked && channel !== null ? channel : null);
       setReview(await api.review(project.id));
     } catch (error) {
       setProblem((error as Error).message);
@@ -156,7 +156,6 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       await api.deleteReview(project.id);
       toast("Review link deleted", "info");
       setSaid(null);
-      setReplace(false);
       setReview(await api.review(project.id));
     } catch (error) {
       setProblem((error as Error).message);
@@ -165,8 +164,10 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
+  // A reviewer's comment on the latest version (not a reply) means the next share is a new version. The server decides the same way.
+  const commented = latest !== null && (review?.notes.some((note) => note.version === latest && note.reply_to === null && note.from_app !== true) ?? false);
   const exporting = exportState?.state === "queued" || exportState?.state === "running";
-  const progress = exportState?.state === "queued" ? "Export queued · you can keep editing" : exportState?.state === "running" ? `Exporting… ${Math.round(exportState.progress * 100)}%` : sharing ? `${sharing[0]!.toUpperCase()}${sharing.slice(1)}…` : null;
+  const progress = exportState?.state === "queued" ? (exportState.waiting ? `Export queued · ${exportState.waiting}` : "Export queued · you can keep editing") : exportState?.state === "running" ? (exportState.phase ? capitalize(exportState.phase) : `Exporting… ${Math.round(exportState.progress * 100)}%`) : sharing ? `${capitalize(sharing)}…` : null;
   const ended = !busy && !exporting && (stopped || exportState?.state === "failed" || exportState?.state === "cancelled");
   const retry = async () => {
     if (busy || retrying) return;
@@ -209,8 +210,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
         <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Share</h2>
         <p className="mt-1 text-[13px] leading-relaxed text-muted">
           {link
-            ? "Each share exports the edit as it is now and adds it to this link as a new version. Only people signed in can open the link, watch it and leave notes at a moment; the notes come back to the agent."
-            : "Exports the whole edit and makes a review link. Only people signed in can open it, watch and leave notes at a moment; the notes come back to the agent. Later shares go on the same link as new versions."}
+            ? "Each share exports the edit as it is now. When the latest version has no comments, this replaces it. When someone has commented, it is added as the next version. Only people signed in can open the link, watch it and leave notes at a moment; the notes come back to the agent."
+            : "Exports the whole edit and makes a review link. Only people signed in can open it, watch and leave notes at a moment; the notes come back to the agent. Later shares replace the latest version until someone comments, then they add the next one."}
         </p>
 
         {link && (
@@ -310,12 +311,6 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
               </span>
             )}
           </div>
-          {link && latest !== null && (
-            <label className="flex items-center gap-1.5 text-[12px] text-muted" title={`Puts this export over v${latest}: same number, same link, instead of a new version`}>
-              <input type="checkbox" checked={replace} disabled={busy} onChange={(event) => setReplace(event.target.checked)} />
-              Replace v{latest}
-            </label>
-          )}
           {(exporting || sharing !== null) && (
             <Button variant="ghost" disabled={stopping || sharing === "cancelling"} onClick={() => void stop()}>
               {stopping || sharing === "cancelling" ? "Stopping…" : "Cancel"}
@@ -330,7 +325,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
             Close
           </Button>
           <Button variant="primary" disabled={busy || retrying || projectDuration(project) <= 0} onClick={() => void share()}>
-            {busy ? "Sharing…" : link && latest !== null ? (replace ? `Replace v${latest}` : `Share v${latest + 1}`) : "Share"}
+            {busy ? "Sharing…" : link && latest !== null ? (commented ? `Share v${latest + 1}` : `Replace v${latest}`) : "Share"}
           </Button>
         </div>
       </div>

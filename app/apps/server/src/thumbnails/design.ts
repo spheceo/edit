@@ -3,7 +3,7 @@
 // or the library's, a colour a colour. What's left out takes the house's
 // defaults, so "a REC overlay" or "white caption, black box" is a short ask.
 
-import { assetOf, HEIGHT, NO_ADJUST, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail } from "@edit/types/thumbnails";
+import { assetOf, HEIGHT, NO_ADJUST, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail, type ThumbVersion } from "@edit/types/thumbnails";
 
 type Args = Record<string, unknown>;
 
@@ -27,12 +27,14 @@ const newId = () => Math.random().toString(36).slice(2, 10);
 function adjustOf(given: unknown, before: Adjust | undefined): Adjust | undefined {
   if (given === undefined) return before;
   if (given === null) return undefined;
-  if (!isRecord(given)) throw new Error("adjust is an object: exposure, contrast, saturation, warmth, shadows, highlights (-100…100), vignette, sharpen (0…100).");
+  if (!isRecord(given)) throw new Error("adjust is an object: exposure in stops (-5…+5), contrast, saturation, vibrance, warmth, shadows, highlights (-100…100), vignette, sharpen (0…100).");
   const base = before ?? NO_ADJUST;
   const out: Adjust = { ...base };
   for (const key of Object.keys(NO_ADJUST) as (keyof Adjust)[]) {
-    const low = key === "vignette" || key === "sharpen" ? 0 : -100;
-    out[key] = number(given[key], base[key], low, 100, `adjust.${key}`);
+    // Exposure is in stops, as Camera Raw's (-5…+5, to two decimals); the rest are -100…100.
+    const low = key === "exposure" ? -5 : key === "vignette" || key === "sharpen" ? 0 : -100;
+    const high = key === "exposure" ? 5 : 100;
+    out[key] = number(given[key], base[key], low, high, `adjust.${key}`);
   }
   return out;
 }
@@ -160,11 +162,36 @@ export function layerOf(given: unknown, before: Layer | undefined, sources: Set<
   if (rotation !== 0) layer.rotation = rotation;
   const box = boxOf(given.box, was?.box);
   if (box !== undefined) layer.box = box;
-  const stroke = strokeOf(given.stroke, was?.stroke);
+  // A caption with no box takes the house's border and shadow by default (the
+  // white-and-red style): black stroke round the letters, a soft dark shadow.
+  // `stroke: null` / `shadow: null` says plain, and a boxed caption is its own style.
+  let stroke = strokeOf(given.stroke, was?.stroke);
+  if (stroke === undefined && was === undefined && box === undefined && given.stroke !== null) stroke = { color: "#000000", width: 4 };
   if (stroke !== undefined) layer.stroke = stroke;
-  const shadow = shadowOf(given.shadow, was?.shadow);
+  let shadow = shadowOf(given.shadow, was?.shadow);
+  if (shadow === undefined && was === undefined && box === undefined && given.shadow !== null && given.shadow !== false) shadow = { ...DEFAULT_SHADOW, opacity: 70, size: 20 };
   if (shadow !== undefined) layer.shadow = shadow;
   return layer;
+}
+
+/**
+ * One editable layer per thing: a copy stacked in the same place as a layer
+ * already there (the same picture in the same box, the same words in the same
+ * place) is never a change, it's a duplicate the next edit trips over. Change
+ * the layer that's there, by id, instead.
+ */
+export function checkStacked(layers: Layer[]): void {
+  for (let at = 0; at < layers.length; at++) {
+    const one = layers[at]!;
+    if (one.hidden) continue;
+    for (const other of layers.slice(at + 1)) {
+      if (other.hidden || other.kind !== one.kind) continue;
+      if (one.kind === "image" && other.kind === "image" && one.source === other.source && Math.round(one.x) === Math.round(other.x) && Math.round(one.y) === Math.round(other.y) && Math.round(one.width) === Math.round(other.width) && Math.round(one.height) === Math.round(other.height))
+        throw new Error(`"${other.name}" stacks the same picture in the same place as layer ${one.id}: change that layer instead (its adjustments live on it), or remove it first.`);
+      if (one.kind === "text" && other.kind === "text" && one.text.trim().replace(/\s+/g, " ").toLowerCase() === other.text.trim().replace(/\s+/g, " ").toLowerCase() && Math.round(one.x) === Math.round(other.x) && Math.round(one.y) === Math.round(other.y))
+        throw new Error(`"${other.text}" is already a caption in that place (layer ${one.id}): change that layer's words, colour or style instead of adding another on top.`);
+    }
+  }
 }
 
 /** A whole design as given: its layers, bottom first, each checked; ids kept apart. */
@@ -181,6 +208,7 @@ export function designOf(given: unknown, before: Design, sources: Set<string>): 
     seen.add(layer.id);
     return layer;
   });
+  checkStacked(out);
   return { layers: out };
 }
 
@@ -232,7 +260,57 @@ export function record(thumb: Thumbnail, next: Design, by: string): boolean {
   thumb.future = [];
   thumb.design = next;
   thumb.render = null;
+  syncVersion(thumb);
   return true;
+}
+
+/** The layout showing kept in its version's slot, once the thumbnail has versions. */
+export function syncVersion(thumb: Thumbnail): void {
+  if (thumb.versions === undefined || thumb.activeVersion === undefined) return;
+  const active = thumb.versions.find((one) => one.id === thumb.activeVersion);
+  if (active !== undefined) active.design = thumb.design;
+}
+
+/**
+ * A new version (the person's "make another version", or Claude's): the layout
+ * as it stands becomes a version if it isn't one yet (V1), and a copy of it
+ * starts as the next, showing. Each keeps its own layers from there.
+ */
+export function makeVersion(thumb: Thumbnail, by: string): ThumbVersion {
+  const versions = thumb.versions ?? [];
+  if (versions.length === 0) {
+    const first: ThumbVersion = { id: newId(), name: "V1", design: structuredClone(thumb.design), at: Date.now(), by };
+    versions.push(first);
+    thumb.finalVersion ??= first.id;
+  }
+  const made: ThumbVersion = { id: newId(), name: `V${versions.length + 1}`, design: structuredClone(thumb.design), at: Date.now(), by };
+  thumb.versions = [...versions, made];
+  thumb.activeVersion = made.id;
+  thumb.history = [];
+  thumb.future = [];
+  thumb.render = null;
+  return made;
+}
+
+/** Take a version as the final one (what ships), whichever is showing. */
+export function takeFinal(thumb: Thumbnail, wanted: string): ThumbVersion | null {
+  const target = (thumb.versions ?? []).find((one) => one.id === wanted || one.name.toLowerCase() === wanted.trim().toLowerCase());
+  if (target === undefined) return null;
+  thumb.finalVersion = target.id;
+  return target;
+}
+
+/** Show another version: the one left keeps its layout, the one taken gets its own undo timeline from here. */
+export function switchVersion(thumb: Thumbnail, wanted: string): ThumbVersion | null {
+  syncVersion(thumb);
+  const target = (thumb.versions ?? []).find((one) => one.id === wanted || one.name.toLowerCase() === wanted.trim().toLowerCase());
+  if (target === undefined || target.id === thumb.activeVersion) return null;
+  thumb.design = structuredClone(target.design);
+  thumb.activeVersion = target.id;
+  thumb.history = [];
+  thumb.future = [];
+  thumb.render = null;
+  return target;
 }
 
 /** One step back (undo) or forward (redo): the step taken, or null when there's none. */
@@ -252,5 +330,6 @@ export function step(thumb: Thumbnail, back: boolean): Step | null {
   }
   thumb.design = taken.design;
   thumb.render = null;
+  syncVersion(thumb);
   return taken;
 }

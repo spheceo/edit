@@ -203,11 +203,13 @@ export function ChatComposer({
           rows={3}
           placeholder={armed ? "Drop to attach" : placeholder}
           onChange={(event) => setText(event.target.value)}
-          // A pasted screenshot is attached.
+          // A pasted screenshot is attached. Stopped here, so a page's own
+          // paste listener (a thumbnail's, an idea's) doesn't attach it again.
           onPaste={(event) => {
             const pasted = [...event.clipboardData.files];
             if (files === undefined || pasted.length === 0) return;
             event.preventDefault();
+            event.stopPropagation();
             attach(pasted);
           }}
           onKeyDown={(event) => {

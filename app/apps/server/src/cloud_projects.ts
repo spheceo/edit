@@ -43,6 +43,7 @@ import { ConvexFailure } from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import * as diag from "./diag.ts";
 import { inArea, runtime } from "./effect/runtime.ts";
+import * as chatSync from "./chat_sync.ts";
 import * as researchCloud from "./research_cloud.ts";
 import { readState as readStateFile } from "./files.ts";
 import { markOpened } from "./opened.ts";
@@ -1581,6 +1582,10 @@ async function download(app: App, cloudProjects: Cloud, id: string): Promise<voi
   });
   void researchCloud.pull(app, id).catch((error: unknown) => {
     diag.warn("cloud", `fetching ${id}'s research: ${diag.messageOf(error)}`);
+  });
+  // Its chat too, so the conversation continues here (chat_sync.ts).
+  void chatSync.pull(app.store, id, (app.agents as { chatLoaded?: (project: string) => boolean }).chatLoaded?.(id) ?? false).catch((error: unknown) => {
+    diag.warn("cloud", `fetching ${id}'s chat: ${diag.messageOf(error)}`);
   });
 }
 

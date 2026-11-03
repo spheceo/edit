@@ -153,7 +153,7 @@ test("past the cache's limit or with the disk nearly full, the previews of the p
   }
 });
 
-test("with a project's footage missing (a drive unplugged), no media folder is taken for unused; a hard-linked preview counts once", async () => {
+test("with a project's footage missing, no media folder is taken for unused; a hard-linked preview counts once", async () => {
   const { dir, app, store, cleanup } = fixtureHome("cache-unplugged");
   try {
     const cache = store.cacheDir();

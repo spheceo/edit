@@ -7,12 +7,9 @@ import type { InboxLesson } from "@edit/types/lessons";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
 import { lessonsText } from "./lesson_text.ts";
-import { runCli as mediaCli } from "./media_drive/move.ts";
-import { initNative } from "./native/index.ts";
 import { join } from "./paths.ts";
 import * as seams from "./seams.ts";
 import { fail, start } from "./serve.ts";
-import * as tools from "./tools.ts";
 import { runCli as updateCli } from "./update.ts";
 import { BUILD } from "./version.ts";
 import { runSupport } from "./support_cli.ts";
@@ -32,9 +29,6 @@ USAGE
       devices use \`tailscale serve --bg http://127.0.0.1:7700\`).
   edit mcp
       Print how to connect Codex / Claude Code to the editor.
-  edit media [use DIR | off | move --to DIR]
-      Keep big media files (downloads, uploads, exports) on another drive;
-      \`edit media help\` says more.
   edit cloud [url | put | get | head | ls | rm | convex] …
       Try Edit's cloud storage (R2) and Convex through the relay by hand;
       \`edit cloud help\` says more.
@@ -59,7 +53,6 @@ USAGE
 
 ENV
   EDIT_HOME   data directory (default ~/.edit)
-  EDIT_MEDIA_DIR  keep big media files here instead (overrides the setting)
   EDIT_HOSTS  extra Host names to accept, comma-separated
   EDIT_RELAY_URL, EDIT_RELAY_TOKEN
               another relay (default Edit's), and the token it wants (cloud needs it;
@@ -168,18 +161,6 @@ export async function main(args: string[]): Promise<void> {
         if (!response.ok) fail(typeof value.error === "string" ? value.error : "the lessons inbox didn't take it");
         console.log(`${id}: ${status}`);
       } catch (error) { fail(diag.messageOf(error)); }
-      return;
-    }
-    case "media": {
-      const where = home();
-      initNative({
-        home: where,
-        cacheDir: join(where, "cache"),
-        ffmpeg: tools.ffmpeg(),
-        ffprobe: tools.ffprobe(),
-        mediaFolders: [],
-      });
-      await mediaCli(where, port(), args.slice(1), fail);
       return;
     }
     case "cloud":

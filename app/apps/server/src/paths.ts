@@ -82,7 +82,7 @@ export function withExtension(path: string, ext: string): string {
   return `${dir}${stem}${ext === "" ? "" : `.${ext}`}`;
 }
 
-/** `canonicalize`, else the path as given (as media_drive's `canonical`). */
+/** `canonicalize`, else the path as given. */
 export function canonical(path: string): string {
   try {
     return fs.realpathSync(path);
@@ -118,6 +118,13 @@ export function exists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** Where exports go: ~/Movies/Edit when Movies exists, else ~/Videos/Edit. */
+export function defaultExportsDir(): string {
+  const home = userHome();
+  const movies = join(home, "Movies");
+  return isDir(movies) ? join(movies, "Edit") : join(home, "Videos", "Edit");
 }
 
 /** The user's home folder ($HOME, else "."). */

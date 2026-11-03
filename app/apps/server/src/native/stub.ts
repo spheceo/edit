@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import { playbackKey } from "../cloud_playback.ts";
 
 import { ANIMATABLE, type ClipType, type ExportOptions, type Format, type Probe, type Project } from "../model.ts";
-import { extension, join, stripPrefix, withExtension as replaceExtension } from "../paths.ts";
+import { extension, join, withExtension as replaceExtension } from "../paths.ts";
 import { clipEnd, clipMedia, sample, trackLabel } from "../project.ts";
 import {
   STALE,
@@ -173,7 +173,6 @@ export function createStub(): Stub {
     cacheDir: "",
     ffmpeg: "ffmpeg",
     ffprobe: "ffprobe",
-    mediaFolders: [],
   };
   const locks = new Set<string>();
   // (id, rev) → project JSON, the last two revs of at most 16 projects, as the engine keeps them.
@@ -187,14 +186,6 @@ export function createStub(): Stub {
     const json = projects.get(input.ref.id)?.get(input.ref.rev);
     if (json === undefined) throw new Error(STALE);
     return JSON.parse(json) as Project;
-  };
-
-  const keyPath = (path: string): string => {
-    for (const dir of config.mediaFolders) {
-      const rest = stripPrefix(path, dir);
-      if (rest !== null && config.home !== "") return join(config.home, rest);
-    }
-    return path;
   };
 
   const keyOf = (name: string, file: string): string => {
@@ -213,7 +204,7 @@ export function createStub(): Stub {
   const mediaKey = (path: string) => {
     const cloud = playbackKey(path);
     const name = cloud === null ? path : `cloud:${encodeURIComponent(cloud)}`;
-    return keyOf(cloud === null ? keyPath(path) : name, name);
+    return keyOf(name, name);
   };
 
   const probe = async (path: string): Promise<Probe> => {
@@ -292,9 +283,6 @@ export function createStub(): Stub {
     stub: true,
     init(given) {
       config = { ...given };
-    },
-    setMediaFolders(known) {
-      config.mediaFolders = [...known];
     },
     shutdown() {},
     holdLock(path) {

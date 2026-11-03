@@ -14,7 +14,7 @@ import { readBytes, readJson, type RouteContext, type Router } from "../http/rou
 import { mayIdeas } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { designOf, record, step } from "./design.ts";
+import { designOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
@@ -65,7 +65,15 @@ export function routes(router: Router<App>): void {
       guard();
       const body = await readJson<{ title?: unknown; brief?: unknown }>(context).catch(() => ({}) as Record<string, unknown>);
       const who = by();
-      const thumb = run.fresh(newId("t"), who, typeof body.title === "string" ? body.title.trim().slice(0, 120) : "", typeof body.brief === "string" ? body.brief.trim().slice(0, 600) : "");
+      // A new one starts under a placeholder title ("Thumbnail 1", the next free number) until the person names it.
+      let title = typeof body.title === "string" ? body.title.trim().slice(0, 120) : "";
+      if (title === "") {
+        const taken = new Set((await cloud.list().catch(() => [])).map((row) => row.summary.title));
+        let next = 1;
+        while (taken.has(`Thumbnail ${next}`)) next++;
+        title = `Thumbnail ${next}`;
+      }
+      const thumb = run.fresh(newId("t"), who, title, typeof body.brief === "string" ? body.brief.trim().slice(0, 600) : "");
       try {
         await cloud.commit(thumb, 0, who);
         return json({ id: thumb.id });
@@ -204,6 +212,43 @@ export function routes(router: Router<App>): void {
         return json({ ok: true });
       } catch (error) {
         if (error instanceof Error && /^(Write what|Keep the message|Claude is)/.test(error.message)) throw bad(error.message);
+        failed(error);
+      }
+    })
+    // Another version of the thumbnail (V2…), and showing one of them.
+    .post("/api/thumbnails/{id}/versions", async ({ params }: Context) => {
+      guard();
+      try {
+        let name = "";
+        const { thumb, rev } = await cloud.change(params.id!, by(), (thumb) => {
+          name = makeVersion(thumb, by()).name;
+        });
+        return json({ thumb, rev, version: name });
+      } catch (error) {
+        failed(error);
+      }
+    })
+    .post("/api/thumbnails/{id}/versions/final", async (context: Context) => {
+      guard();
+      const body = await readJson<{ version?: unknown }>(context);
+      try {
+        const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
+          if (typeof body.version !== "string" || takeFinal(thumb, body.version) === null) throw bad(`No version ${String(body.version)} to take as final.`);
+        });
+        return json({ thumb, rev });
+      } catch (error) {
+        failed(error);
+      }
+    })
+    .post("/api/thumbnails/{id}/versions/switch", async (context: Context) => {
+      guard();
+      const body = await readJson<{ version?: unknown }>(context);
+      try {
+        const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
+          if (typeof body.version !== "string" || switchVersion(thumb, body.version) === null) throw bad(`No version ${String(body.version)} to show.`);
+        });
+        return json({ thumb, rev });
+      } catch (error) {
         failed(error);
       }
     })

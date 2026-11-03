@@ -20,6 +20,15 @@ export interface Turn {
   live: boolean;
 }
 
+/** A picture given with a message is shown above it; a client that writes it into the words as "[Image: image.png; ref=…]" has that text dropped. */
+export function shownText(text: string): string {
+  return text
+    .replace(/\[Image:[^\]]*\]/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export function buildTurns(entries: AgentEntry[], running: boolean): Turn[] {
   const turns: Turn[] = [];
   let current: { user?: AgentEntry; parts: TurnPart[] } | null = null;

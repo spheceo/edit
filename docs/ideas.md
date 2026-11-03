@@ -5,8 +5,7 @@ turned into 3–5 titles and a thumbnail guide, then sent to its board as a
 card. Two kinds (workspaces), chosen in New idea: **Interrogation** (the
 Interrogation board) and **Bodycam** (Nov 1: the Raw Channels board). It runs on
 each person's own Claude Code (Opus 5.5), so the team's subscriptions pay
-instead of the AI gateway. The plan and the user's words:
-`docs/plans/2026-10-31-ideas.md`.
+instead of the AI gateway.
 
 The craft is Repack's Interrogation teachings word for word (Nov 1, the
 user: "replicate the interrogation teachings… that we have on the Repack

@@ -48,6 +48,50 @@ test("a_3_2_tape_fills_a_16_9_frame_cropped_top_and_bottom_and_its_own_border_is
   expect(bordered.x).toBeLessThan(0);
 });
 
+test("blur_bars_shows_the_whole_picture_over_a_blurred_copy_and_leaves_a_callout", () => {
+  const p = project("short", { width: 1080, height: 1920, fps: 30 });
+  p.media.push(media({ id: "cam", name: "cam.mp4", path: "/footage/cam.mp4", kind: "video", duration: 60, width: 1920, height: 1080, has_audio: true }));
+  p.media.push(media({ id: "still", name: "callout.png", path: "/footage/callout.png", kind: "image", duration: 5, width: 1920, height: 1080 }));
+  const [v1, v2] = [p.tracks[0]!.id, p.tracks[1]!.id];
+  p.clips.push(clip({
+    id: "c1", track: v1, start: 0, duration: 90, type: "video", media: "cam", source_in: 1, speed: 1, link: "k1",
+    transform: { x: -400, y: 0, scale: 3.1604939, rotation: 0 },
+    keyframes: { x: [{ frame: 0, value: -400, ease: "hold" }, { frame: 89, value: 200, ease: "linear" }], opacity: [{ frame: 0, value: 0, ease: "linear" }, { frame: 8, value: 1, ease: "linear" }] },
+  }));
+  p.clips.push(clip({
+    id: "c2", track: v1, start: 90, duration: 40, type: "video", media: "cam", source_in: 4, speed: 1,
+    transform: { x: 120, y: 0, scale: 3.1604939, rotation: 0 },
+  }));
+  p.clips.push(clip({
+    id: "face", track: v2, start: 30, duration: 20, type: "video", media: "still", source_in: 0, speed: 1,
+    transform: { x: 100, y: 40, scale: 3.95, rotation: 0 },
+  }));
+  const before = p.clips.length;
+  apply(p, [{ op: "blur_bars" }]);
+  const sharp = p.clips.find((own) => own.id === "c1") as VideoClip;
+  const second = p.clips.find((own) => own.id === "c2") as VideoClip;
+  const plate = p.clips.find((own) => own.name === "Blur plate · c1") as VideoClip;
+  const face = p.clips.find((own) => own.id === "face") as VideoClip;
+  const blur = p.clips.find((own) => own.name === "Blur bars");
+  expect(sharp.transform).toMatchObject({ x: 0, y: 0, scale: 1, rotation: 0 });
+  expect(sharp.keyframes?.x).toBeUndefined();
+  expect(sharp.keyframes?.opacity).toHaveLength(2);
+  expect(sharp.link).toBe("k1");
+  expect(second.transform.scale).toBe(1);
+  expect(plate.link).toBeUndefined();
+  expect(plate.transform.scale).toBeGreaterThan(3.16);
+  expect(plate.keyframes?.opacity).toHaveLength(2);
+  expect(plate.keyframes?.x).toBeUndefined();
+  expect(face.transform.scale).toBeCloseTo(3.95, 2);
+  expect(blur).toMatchObject({ type: "adjustment", start: 0, duration: 130 });
+  const level = (id: string) => p.tracks.findIndex((track) => track.id === id);
+  expect(level(plate.track)).toBeLessThan(level(blur!.track));
+  expect(level(blur!.track)).toBeLessThan(level(sharp.track));
+  expect(letterboxed(p)).toEqual([]);
+  apply(p, [{ op: "blur_bars" }]);
+  expect(p.clips.length).toBe(before + 3);
+});
+
 test("footage_at_fit_is_letterboxed_and_fill_frame_fills_it_keeping_its_push_and_x_inside", () => {
   const p = tape();
   expect(letterboxed(p).map((one) => one.clip)).toEqual(["c1"]);

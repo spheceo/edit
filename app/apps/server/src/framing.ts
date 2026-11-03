@@ -14,10 +14,11 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
+import { clipFrom } from "./clips.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import { isReal } from "./native/index.ts";
 import { join } from "./paths.ts";
-import { clipEnd, mediaOf, trackOf } from "./project.ts";
+import { clipEnd, freshId, mediaOf, trackOf } from "./project.ts";
 import { round } from "./rust.ts";
 import * as tools from "./tools.ts";
 
@@ -317,6 +318,90 @@ export function fillFrame(project: Project, args: Record<string, unknown>): Reco
     changed.push(clip.id);
   }
   return { filled: changed.length, clips: changed.slice(0, 40) };
+}
+
+/** A clip this op put behind the sharp picture, named with the sharp clip's id. */
+export const BLUR_PLATE = "Blur plate · ";
+/** The bars' blur at a 1080-wide frame (~35 leaves a face unrecognisable). */
+const BAR_BLUR = 48;
+
+/**
+ * `{"op":"blur_bars"}` (optionally `clips: [ids]`): a wide picture in a tall
+ * frame, or a tall one in a wide frame, shown whole and centred, over a
+ * blurred copy of itself that fills the bars. The crop's pan and punch-in go.
+ * A designed still (a callout, a photo with a frame) is left as it is. Asked
+ * for one Short (Sphe, Nov 3: zoom out, blurred bars top and bottom), not the
+ * way every Short is framed.
+ */
+export function blurBars(project: Project, args: Record<string, unknown>): Record<string, unknown> {
+  const only = Array.isArray(args.clips) ? new Set(args.clips.map(String)) : null;
+  const chosen = project.clips.filter((clip): clip is VideoClip => {
+    if (clip.type !== "video" || (clip.name ?? "").startsWith(BLUR_PLATE) || clip.frame != null) return false;
+    if (only !== null && !only.has(clip.id)) return false;
+    if (project.clips.some((other) => other.name === `${BLUR_PLATE}${clip.id}`)) return false;
+    const media = mediaOf(project, clip.media);
+    return media !== undefined && media.kind === "video" && leavesBars(project, media);
+  });
+  if (chosen.length === 0) return { plates: 0, clips: [] };
+  const under = Math.min(...chosen.map((clip) => project.tracks.findIndex((track) => track.id === clip.track)));
+  const plateTrack = freshId(project, "v");
+  const blurTrack = freshId(project, "v");
+  const track = (id: string) => ({ id, kind: "video" as const, hidden: false, muted: false, locked: false });
+  project.tracks.splice(Math.max(under, 0), 0, track(plateTrack), track(blurTrack));
+  const made: string[] = [];
+  for (const clip of chosen) {
+    const placed = fill(project, mediaOf(project, clip.media)!);
+    const plate = structuredClone(clip);
+    plate.id = freshId(project, "c");
+    plate.track = plateTrack;
+    plate.name = `${BLUR_PLATE}${clip.id}`;
+    delete plate.link;
+    delete plate.frame;
+    plate.transform = { ...plate.transform, x: placed.x, y: placed.y, scale: placed.scale, rotation: 0 };
+    dropMoveKeys(plate);
+    project.clips.push(plate);
+    clip.transform = { ...clip.transform, x: 0, y: 0, scale: 1, rotation: 0 };
+    delete clip.crop;
+    dropMoveKeys(clip);
+    made.push(clip.id);
+  }
+  const radius = round((BAR_BLUR * project.settings.width) / 1080);
+  const blurs: string[] = [];
+  for (const [start, end] of merged(chosen.map((clip) => [clip.start, clipEnd(clip)] as [number, number]))) {
+    const id = freshId(project, "c");
+    project.clips.push(clipFrom({ id, track: blurTrack, start, duration: end - start, name: "Blur bars", type: "adjustment", opacity: 1, blur: { radius } }));
+    blurs.push(id);
+  }
+  return { plates: made.length, clips: made, blurs };
+}
+
+/** x, y and scale keys are the crop's pan. Opacity and the rest stay, so a fade still matches. */
+function dropMoveKeys(clip: VideoClip): void {
+  if (clip.keyframes === undefined) return;
+  delete clip.keyframes.x;
+  delete clip.keyframes.y;
+  delete clip.keyframes.scale;
+  if (Object.keys(clip.keyframes).length === 0) delete clip.keyframes;
+}
+
+/** Fit leaves a bar: the picture's shape is not the frame's. */
+function leavesBars(project: Project, media: Media): boolean {
+  const { width: W, height: H } = project.settings;
+  const [w, h] = [Math.max(media.width ?? W, 1), Math.max(media.height ?? H, 1)];
+  const fit = Math.min(W / w, H / h);
+  return w * fit < W - 4 || h * fit < H - 4;
+}
+
+/** Overlapping and touching spans, joined. */
+function merged(spans: [number, number][]): [number, number][] {
+  const sorted = [...spans].sort((a, b) => a[0] - b[0]);
+  const out: [number, number][] = [];
+  for (const [start, end] of sorted) {
+    const last = out[out.length - 1];
+    if (last !== undefined && start <= last[1]) last[1] = Math.max(last[1], end);
+    else out.push([start, end]);
+  }
+  return out;
 }
 
 /** A clip's smallest scale (its keys', else its own). */

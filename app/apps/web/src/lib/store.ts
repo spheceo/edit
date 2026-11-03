@@ -33,6 +33,10 @@ export interface ExportState {
   bytes?: number;
   /** A Drive upload follows (a whole subtitled video). */
   drive?: boolean;
+  /** Queued: what it waits for. */
+  waiting?: string;
+  /** Running, before frames encode: "cutting the footage, 12 of 225". */
+  phase?: string;
 }
 
 /** The upload of an export to Drive (`drive` events from apps/server/src/drive.ts). */

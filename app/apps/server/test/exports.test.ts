@@ -432,7 +432,7 @@ test("smooth playback's render waits only for the export rendering, goes before 
     releases.set(name, release);
     return { cancel: () => release(), wait: async () => { await wait; fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; } };
   });
-  const events: { id?: string; state?: string }[] = [];
+  const events: { id?: string; state?: string; waiting?: string; phase?: string }[] = [];
   const unsubscribe = store.subscribe((event) => { if (event.type === "export") events.push(event as never); });
   try {
     // Nothing exporting: a place at once, and nothing waits on it as on an export.
@@ -459,6 +459,8 @@ test("smooth playback's render waits only for the export rendering, goes before 
     // "two" in line behind "one"; playback asks after it and still goes first.
     await registry.start(store, app.library, projects[1]!, options, `${dir}/two.mp4`, { drive: false, keepLocal: true });
     expect(registry.activity().find(one => one.name === "two")).toMatchObject({ state: "queued", waiting: "waiting for the encoder (this Mac has one)" });
+    expect(events.find(one => one.id === projects[1]!.id && one.state === "queued")).toMatchObject({ waiting: "waiting for the encoder (this Mac has one)" });
+    expect(events.some(one => one.id === projects[0]!.id && one.phase === "starting the export")).toBe(true);
     let given: (() => void) | null = null;
     const turn = registry.takeTurn((release) => { given = release; });
     expect(turn.release).toBeNull();

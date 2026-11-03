@@ -24,18 +24,22 @@ export type ThumbImage = {
   prompt?: string;
   model?: string;
   references?: string[];
+  /** The person's own request in the turn that made it, kept with the prompt so it can be pulled again after the chat has moved on. */
+  request?: string;
   at: number;
   by: string;
 };
 
 /** Photoshop's few that the team uses, each 0 when untouched. */
 export type Adjust = {
-  /** -100…100: darker to brighter. */
+  /** -5…+5, in stops as Camera Raw's (0.60 is +0.60 of a stop): darker to brighter. */
   exposure: number;
   /** -100…100. */
   contrast: number;
   /** -100…100: grey to vivid. */
   saturation: number;
+  /** -100…100: colour pushed hardest where it's muted, vivid colour (and skin) left nearer alone. */
+  vibrance: number;
   /** -100…100: cool (blue) to warm (orange). */
   warmth: number;
   /** -100…100: the dark parts lifted (positive) or crushed. */
@@ -48,7 +52,7 @@ export type Adjust = {
   sharpen: number;
 };
 
-export const NO_ADJUST: Adjust = { exposure: 0, contrast: 0, saturation: 0, warmth: 0, shadows: 0, highlights: 0, vignette: 0, sharpen: 0 };
+export const NO_ADJUST: Adjust = { exposure: 0, contrast: 0, saturation: 0, vibrance: 0, warmth: 0, shadows: 0, highlights: 0, vignette: 0, sharpen: 0 };
 
 /** A drop shadow as Photoshop's: its spread chokes it solid before the blur (size). */
 export type Shadow = {
@@ -180,6 +184,9 @@ export type Step = {
   label: string;
 };
 
+/** One saved version of a thumbnail's layout (V1, V2…): switching keeps each one's layers as they were. */
+export type ThumbVersion = { id: string; name: string; design: Design; at: number; by: string };
+
 export type Thumbnail = {
   id: string;
   title: string;
@@ -195,6 +202,11 @@ export type Thumbnail = {
   history?: Step[];
   /** What undo stepped back from, for redo (cleared by a new change). */
   future?: Step[];
+  /** Its versions, once it has more than one; the one showing is `activeVersion`, its layout also in `design`. */
+  versions?: ThumbVersion[];
+  activeVersion?: string;
+  /** The version taken as final (the one the team ships), picked apart from whichever is showing. */
+  finalVersion?: string;
   createdAt: number;
   createdBy: string;
   updatedAt: number;

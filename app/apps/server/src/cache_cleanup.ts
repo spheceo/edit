@@ -40,7 +40,7 @@ import * as drive from "./drive.ts";
 import { beingRead } from "./exports.ts";
 import * as retention from "./export_retention.ts";
 import * as later from "./later.ts";
-import { defaultExportsDir } from "./media_drive/layout.ts";
+import { defaultExportsDir } from "./paths.ts";
 import * as reviews from "./reviews.ts";
 import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { createHash } from "node:crypto";
@@ -257,7 +257,7 @@ function age(path: string, now: number): number {
  */
 function used(app: App): Used | null {
   const paths = new Set<string>();
-  // Files a project uses that aren't here (a drive unplugged): their key can't be known.
+  // Files a project uses that aren't here: their key can't be known.
   let missing = 0;
   const keys = new Set<string>();
   // Each key's latest save of a project using it.
@@ -466,11 +466,6 @@ export function cleanCache(
   // Only Edit's own Drive downloads (<media root>/media/[<project>/]drive/<file id>/<file>),
   // never a file of the user's whose path happens to say "drive" or "uploads".
   const roots = new Set<string>([join(app.store.home, "media")]);
-  try {
-    roots.add(join(app.store.layout().mediaRoot(), "media"));
-  } catch {
-    // The media drive isn't connected: only the internal one's.
-  }
   for (const [key, entry] of Object.entries(known)) {
     const root = [...roots].find((one) => entry.path.startsWith(`${one}/`));
     if (root === undefined || !/^(?:[A-Za-z0-9_-]+\/)?drive\/[A-Za-z0-9_-]{10,}\/[^/]+$/.test(entry.path.slice(root.length + 1))) continue;
@@ -492,7 +487,7 @@ export function cleanCache(
   // them; a cloud project's sound is its cloud copy). Each comes back when
   // it's asked for again.
   if (inUse !== null) {
-    // A script's original can be one of these when it couldn't be hard-linked (a media drive on another disk).
+    // A script's original can be one of these when it couldn't be hard-linked (another disk).
     const scripts = writerStore.originals(writerStore.dataDir(app.store.home));
     const generated = (relative: string) => /(?:^|\/)smooth\/[^/]+$/.test(relative) || /^(?:[A-Za-z0-9_-]+\/)?drive\/youtube\/[A-Za-z0-9_-]{6,}\/[^/]+$/.test(relative);
     const places: [string, (relative: string) => boolean][] = [...[...roots].map((root): [string, (relative: string) => boolean] => [root, generated]), [join(app.store.home, "library"), () => true]];
@@ -665,11 +660,6 @@ export function cleanExports(app: App, dryRun: boolean, now = Date.now()): { fil
     return { files: 0, bytes: 0, decisions: [] };
   }
   const roots = new Set([defaultExportsDir(), join(home, "exports")]);
-  try {
-    roots.add(app.store.layout().exportsDir());
-  } catch {
-    // The media drive isn't connected: its Exports aren't looked at.
-  }
   const shared = reviews.read(home).shared;
   const free = freeSpace(app.store.cacheDir());
   const decisions = retention.decide(records, {

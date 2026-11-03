@@ -327,6 +327,13 @@ export class Agents implements seams.AgentPanel {
     return [...new Set([...this.chats.entries()].flatMap(([project, chat]) => (chat.running ? [projectOf(project)] : [])))];
   }
   readonly claudeSupport: ClaudeSupport;
+  /** Told each time a chat is saved (app.ts mirrors it to the cloud, chat_sync.ts). */
+  onChatSaved: ((project: string) => void) | null = null;
+
+  /** Whether a project's chat has been loaded here (a cloud copy must not land over it). */
+  chatLoaded(project: string): boolean {
+    return this.chats.has(project);
+  }
   /** Failed messages survive app restarts, but never Stop, New Chat or a newer message. */
   private authPending = new Map<string, { text: string; user: string; model: string | null; effort: string | null; continued: boolean; retried: boolean }>();
   private authRetried = new Set<string>();
@@ -737,9 +744,10 @@ export class Agents implements seams.AgentPanel {
 
   private save(project: string): void {
     const chat = this.withChat(project);
-    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, ...(chat.tools === null ? {} : { tools: chat.tools }), entries: chat.entries.map(entryJson) };
+    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, ...(chat.tools === null ? {} : { tools: chat.tools }), entries: chat.entries.map(entryJson), savedAt: Date.now() };
     try {
       writeAtomic(this.store.chatPath(project), JSON.stringify(snapshot));
+      this.onChatSaved?.(project);
     } catch {
       // Kept in memory; the next save tries again.
     }

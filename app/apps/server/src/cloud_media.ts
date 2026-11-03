@@ -59,6 +59,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as cloudBlocks from "./cloud_blocks.ts";
 import * as exportExcerpts from "./export_excerpts.ts";
+import { prepLine } from "./export_prep.ts";
 import * as pieces from "./proxy_pieces.ts";
 import * as cloud from "./cloud.ts";
 import { PLAYBACK_ROUTE, playbackKey, playbackPath } from "./cloud_playback.ts";
@@ -1789,7 +1790,15 @@ function clipSource(clip: Clip): string | null {
  * to the native renderer and encoder. Sounds and pictures whose own file is
  * here are used as they are.
  */
-export async function forExport(project: Project, start: number, end: number, cache: string, cancelled: () => boolean = () => false): Promise<[Project, Originals]> {
+export async function forExport(
+  project: Project,
+  start: number,
+  end: number,
+  cache: string,
+  cancelled: () => boolean = () => false,
+  /** How far the excerpts and sound copies are (0–1), so the card moves before a frame is encoded. */
+  onPrep?: (phase: string, ratio: number) => void,
+): Promise<[Project, Originals]> {
   const out = structuredClone(project) as Project;
   const originals = new ExportOriginals();
   const needed: [string, string][] = [];
@@ -1828,6 +1837,8 @@ export async function forExport(project: Project, start: number, end: number, ca
   if (onDisk.size > 0) diag.info("export", `${project.id}: reading ${onDisk.size} cloud originals from this machine's copies`);
   if (needed.length === 0) return [out, originals];
   if (!cloud.enabled()) throw new Error("this edit's footage is in the cloud: exporting it needs the cloud: sign in to Edit");
+  // Stills and presigns have no count yet. The card names them until the cuts do.
+  onPrep?.("preparing the footage", 0);
   // Stills come to this machine (they're small): ImageIO reads files, not
   // URLs, and a still read through its URL failed the whole export (Nov 2:
   // Kroger, its saved paths another machine's cache, 17 min in: "ImageIO
@@ -1865,14 +1876,33 @@ export async function forExport(project: Project, start: number, end: number, ca
     if (media !== undefined) media.path = url;
   }
   // The picture is read from excerpts cut to this machine (export_excerpts.ts),
-  // made while the sound copies come.
+  // made while the sound copies come. Both report in, and the card names whichever has more left.
   // EDIT_EXPORT_EXCERPTS=0 reads the originals over HTTPS as before (to compare the two).
-  const excerpts = (process.env.EDIT_EXPORT_EXCERPTS === "0" ? Promise.resolve([]) : exportExcerpts.prepare(project, start, end, cache, urls, new Map(needed), cancelled)).catch((error: unknown) => {
+  const heard = needed.filter(([mediaId]) => mediaOf(project, mediaId)?.has_audio === true);
+  let cut = { done: 0, total: 0 };
+  let soundsDone = 0;
+  let lastSaid = "";
+  const say = (): void => {
+    if (onPrep === undefined) return;
+    const line = prepLine(cut.total > 0 ? cut : null, heard.length > 0 ? { done: soundsDone, total: heard.length } : null);
+    if (line === null) return;
+    // The count is in the line. Emit when the percent or the named part changes, so a few hundred cells don't each push an event.
+    const kind = line.phase.startsWith("copying the sound") ? "sound" : "footage";
+    const key = `${kind}:${Math.round(line.ratio * 100)}`;
+    if (key === lastSaid) return;
+    lastSaid = key;
+    onPrep(line.phase, line.ratio);
+  };
+  const excerpts = (process.env.EDIT_EXPORT_EXCERPTS === "0" ? Promise.resolve([]) : exportExcerpts.prepare(project, start, end, cache, urls, new Map(needed), cancelled, {
+    onStep: (done, total) => {
+      cut = { done, total };
+      say();
+    },
+  })).catch((error: unknown) => {
     diag.warn("export", `${project.id}: excerpts: ${diag.messageOf(error)}; the originals are read from the cloud`);
     return [];
   });
   // The sound is mixed from each original's sound copy, on this machine.
-  const heard = needed.filter(([mediaId]) => mediaOf(project, mediaId)?.has_audio === true);
   const copies = new Semaphore(3);
   await Promise.all(
     heard.map(async ([mediaId, key]) => {
@@ -1881,6 +1911,8 @@ export async function forExport(project: Project, start: number, end: number, ca
         const copy = await soundCopy(cache, key, urls.get(mediaId)!);
         if (copy !== null) originals.sounds[mediaId] = copy;
       } finally {
+        soundsDone += 1;
+        say();
         release();
       }
     }),

@@ -370,8 +370,7 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
     app.native.smoothSupported() ? "vt-frame-rate-conversion-v1" : "bounded-optical-flow-v2",
     app.native.mediaKey(source.path),
     `${project.settings.width}x${project.settings.height}`,
-    // Named as its cache key names it, so a move to the media drive keeps it.
-    app.store.layout().keyPath(source.path),
+    source.path,
     fixed(clip.source_in, 4),
     fixed(length, 4),
     fixed(speed, 4),

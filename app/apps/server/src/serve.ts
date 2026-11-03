@@ -22,8 +22,8 @@ import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
 import { registerMediaTools } from "./media_tools.ts";
 import { allowedHosts } from "./http/host.ts";
-import { holdLock } from "./media_drive/layout.ts";
-import { initNative } from "./native/index.ts";
+import { initNative, native } from "./native/index.ts";
+import { join } from "./paths.ts";
 import * as archive from "./archive.ts";
 import * as firstPrompt from "./first_prompt.ts";
 import * as researchCloud from "./research_cloud.ts";
@@ -152,6 +152,15 @@ export function endLeftovers(pid = process.pid): string[] {
   return ended;
 }
 
+/** The data folder's lock for the life of this process, so a second Edit on the same folder is noticed. */
+function holdDataLock(home: string): void {
+  try {
+    if (!native().holdLock(join(home, "server.lock"))) diag.warn("edit", `another Edit is using ${home}`);
+  } catch {
+    // No addon: nothing to lock with.
+  }
+}
+
 export function start(home: string, host: string | null, port: number): { app: App; servers: Server<unknown>[] } {
   diag.open(home);
   const ended = endLeftovers();
@@ -177,20 +186,12 @@ export function start(home: string, host: string | null, port: number): { app: A
     fail(`${home}: ${diag.messageOf(error)}`);
   }
   initNative({
-    home: store.layout().home,
+    home: store.home,
     cacheDir: store.cacheDir(),
     ffmpeg: tools.ffmpeg(),
     ffprobe: tools.ffprobe(),
-    mediaFolders: store.layout().known,
   });
-  store.publishLayout();
-  holdLock(home);
-  try {
-    const drive = store.layout().drive();
-    if (drive !== null) diag.info("media", `media drive: ${drive}`);
-  } catch (error) {
-    diag.warn("media", diag.messageOf(error));
-  }
+  holdDataLock(store.home);
   const ip = tailscaleIp();
   const app = createApp({
     store,

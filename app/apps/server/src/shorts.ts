@@ -14,6 +14,7 @@ import { subtitleStyle } from "./captions.ts";
 import { clipFrom } from "./clips.ts";
 import * as diag from "./diag.ts";
 import { rgbaPng } from "./evidence_highlight.ts";
+import { BLUR_PLATE } from "./framing.ts";
 import { fillsFrame, framingAt } from "./frames_fill.ts";
 import { importPaths } from "./import.ts";
 import * as library from "./library.ts";
@@ -94,6 +95,16 @@ function visibleClips(project: Project): Clip[] {
   return project.clips.filter((clip) => trackOf(project, clip.track)?.hidden !== true);
 }
 
+/** A picture on a lower track covers the frame through this clip's middle (the blurred plate behind blur_bars). */
+function fillBehind(project: Project, clip: Clip): boolean {
+  const level = (id: string) => project.tracks.findIndex((track) => track.id === id);
+  const own = level(clip.track);
+  const mid = clip.start + Math.floor(clip.duration / 2);
+  return project.clips.some(
+    (other) => other !== clip && other.type === "video" && level(other.track) < own && other.start <= mid && mid < clipEnd(other) && fillsFrame(project, other),
+  );
+}
+
 /** What the audit says about a Short (with its checks for every edit: gaps, footage run out). */
 export function issues(project: Project): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
@@ -105,9 +116,14 @@ export function issues(project: Project): Record<string, unknown>[] {
     out.push({ kind: "short_length", seconds: Math.round(seconds * 10) / 10, fix: `cut it to 45–60 s of the video's highlights (it's ${Math.round(seconds)} s)` });
   }
   const clips = visibleClips(project);
-  const footage = clips.filter((clip): clip is Extract<Clip, { type: "video" }> => clip.type === "video" && mediaOf(project, clip.media)?.kind === "video");
+  const footage = clips.filter(
+    (clip): clip is Extract<Clip, { type: "video" }> =>
+      clip.type === "video" && mediaOf(project, clip.media)?.kind === "video" && !(clip.name ?? "").startsWith(BLUR_PLATE),
+  );
   for (const clip of footage) {
+    // A whole picture over a blurred copy that fills the bars is filled (blur_bars). The plate is not a shot to reframe.
     if (!fillsFrame(project, clip)) {
+      if (fillBehind(project, clip)) continue;
       out.push({ kind: "short_unfilled", clip: clip.id, start: clip.start, fix: "reframe it (fills the 9:16 frame and follows the subject)" });
       continue;
     }

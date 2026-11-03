@@ -117,7 +117,14 @@ test("a cell that can't be cut leaves its stretch to the cloud, the export going
     // One original that won't read, one in a container the cells don't take: neither has excerpts, and nothing throws.
     const urls = new Map([["gone", `${dir}/missing.mp4`], ["mkv", `${dir}/a.mkv`]]);
     const originals = new Map([["gone", "edit/originals/sha256/aa/missing.mp4"], ["mkv", "edit/originals/sha256/bb/a.mkv"]]);
-    expect(await prepare(edit, 0, 60, cache, urls, originals)).toEqual([]);
+    const steps: [number, number][] = [];
+    expect(await prepare(edit, 0, 60, cache, urls, originals, () => false, { onStep: (done, total) => steps.push([done, total]) })).toEqual([]);
+    // Said once up front, then once per cell, including a cell that can't be cut.
+    const total = steps[0]?.[1] ?? 0;
+    expect(steps[0]?.[0]).toBe(0);
+    expect(total).toBeGreaterThan(0);
+    expect(steps.at(-1)).toEqual([total, total]);
+    expect(steps).toHaveLength(total + 1);
     expect(fs.readdirSync(`${cache}/cloud/tmp`)).toEqual([]);
     // Cancelled: it says so, and nothing is left half cut.
     await expect(prepare(edit, 0, 60, cache, urls, originals, () => true)).rejects.toThrow("cancelled");

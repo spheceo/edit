@@ -264,11 +264,14 @@ export async function prepare(
   urls: Map<string, string>,
   originals: Map<string, string>,
   cancelled: () => boolean = () => false,
-  options: { atOnce?: number; behindViewer?: boolean; restMaxMs?: number } = {},
+  options: { atOnce?: number; behindViewer?: boolean; restMaxMs?: number; onStep?: (done: number, total: number) => void } = {},
 ): Promise<ExportExcerpt[]> {
   const cells = cellsOf(project, start, end, new Set(urls.keys()));
   if (cells.length === 0) return [];
   const began = performance.now();
+  // Said before the first cut, so the card names the work while the first cells are still opening.
+  options.onStep?.(0, cells.length);
+  let finished = 0;
   const slots = new Semaphore(Math.max(1, Math.min(options.atOnce ?? AT_ONCE, AT_ONCE)));
   const counts = { here: 0, cut: 0, failed: 0 };
   // A cancel ends the cuts under way, not just the ones not started.
@@ -294,14 +297,24 @@ export async function prepare(
   }
   let made: (ExportExcerpt | null)[];
   try {
+    const count = (): void => {
+      finished += 1;
+      options.onStep?.(finished, cells.length);
+    };
     made = await Promise.all(
       cells.map(async (cell): Promise<ExportExcerpt | null> => {
         const url = urls.get(cell.media);
         const original = originals.get(cell.media);
         const item = media.get(cell.media);
-        if (url === undefined || original === undefined || item === undefined) return null;
+        if (url === undefined || original === undefined || item === undefined) {
+          count();
+          return null;
+        }
         const key = cellKey(original, item.fps, cell.index);
-        if (key === null) return null;
+        if (key === null) {
+          count();
+          return null;
+        }
         const release = await slots.acquire();
         try {
           if (cancelled() || stop.signal.aborted) return null;
@@ -322,6 +335,7 @@ export async function prepare(
           counts[file.how] += 1;
           return { object: objectOf(url), from: cell.from, to: last ? TO_THE_END : cell.to, path: file.path };
         } finally {
+          count();
           release();
         }
       }),

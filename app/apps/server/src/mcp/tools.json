@@ -2588,7 +2588,7 @@
           "type": "boolean"
         },
         "path": {
-          "description": "Output path (default <name>.mp4 in the media drive's Exports folder when one is set, else ~/Movies/Edit); the extension follows the format.",
+          "description": "Output path (default <name>.mp4 in ~/Movies/Edit, or ~/Videos/Edit); the extension follows the format.",
           "type": "string"
         },
         "project_id": {

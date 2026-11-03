@@ -251,9 +251,7 @@ fn parse_rate(rate: Option<&str>) -> Option<f64> {
     (num.is_finite() && den.is_finite() && num > 0.0 && den > 0.0).then_some(num / den)
 }
 
-/// Identity of a source file's content for cache reuse across projects. A
-/// file on the media drive is named by its place in the data folder
-/// (`media_drive::key_path`), so moving it there keeps its key.
+/// Identity of a source file's content for cache reuse across projects.
 pub fn media_key(path: &Path) -> String {
     // The loopback endpoint is only a range transport. Its port can change
     // between machines; the immutable R2 key is the analysis identity.
@@ -266,7 +264,7 @@ pub fn media_key(path: &Path) -> String {
             return key_of(Path::new(&name), Path::new(&name));
         }
     }
-    key_of(&crate::util::key_path(path), path)
+    key_of(path, path)
 }
 
 /// The key of `file` (its size and modification time) under `name`.

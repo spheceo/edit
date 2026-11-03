@@ -96,8 +96,7 @@ export function probe(path: string): Promise<Probe> {
 }
 
 /**
- * Identity of a source file's content for cache reuse across projects (the
- * addon's: a file on the media drive is named by its data-folder place).
+ * Identity of a source file's content for cache reuse across projects (the addon's).
  */
 export function mediaKey(path: string): string {
   return native().mediaKey(path);

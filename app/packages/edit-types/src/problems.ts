@@ -114,7 +114,7 @@ const RULES: Rule[] = [
   })],
   [/ENOENT|No such file or directory/i, () => ({
     title: "A file Edit needs is missing",
-    fix: "If it was on an external drive, plug the drive in. Otherwise import the file again.",
+    fix: "Import the file again.",
   })],
 
   // Edit's own server and the internet.

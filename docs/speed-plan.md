@@ -4,7 +4,7 @@ Cloud functionality remains required for every project.
 
 Changes to make Edit much faster from import to export, more reliable, lighter on RAM and disk, and good over Tailscale. Numbers come from `~/.edit/logs/edit.log` (Oct 15–17) unless noted.
 
-Status: in progress (see *Progress*); Workers Paid is available. Server items land in `apps/server`, engine items in `crates/edit-engine`, cloud items in `apps/relay` (reusing R2 and the existing Convex registry). File references in the tables are to the code as it was when the plan was written.
+Status: landed Oct 18 (see *Progress*). Later speed work is `docs/plans/2026-11-02-off-modal.md`. File references in the tables are to the code as it was when the plan was written.
 
 ## Progress (Oct 18)
 

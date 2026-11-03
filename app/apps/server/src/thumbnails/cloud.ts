@@ -33,9 +33,22 @@ export async function list(): Promise<ThumbRow[]> {
   return rows.map(({ thumbId, ...row }) => ({ id: thumbId, ...row }));
 }
 
+/**
+ * A thumbnail as now read: exposure was Edit's own units (50 to a stop) before
+ * it was Camera Raw's stops; a stored one beyond a stop's range is an old one,
+ * divided back to the stops it meant. Saved again, it's in stops for good.
+ */
+export function withStops(thumb: Thumbnail): Thumbnail {
+  for (const layer of thumb.design.layers) {
+    if (layer.kind !== "image" || layer.adjust === undefined) continue;
+    if (Math.abs(layer.adjust.exposure) > 5) layer.adjust = { ...layer.adjust, exposure: layer.adjust.exposure / 50 };
+  }
+  return thumb;
+}
+
 export async function get(id: string): Promise<{ thumb: Thumbnail; rev: number } | null> {
   const found = (await call("query", "thumbnails:get", { thumbId: id })) as { body: Thumbnail; rev: number } | null;
-  return found === null ? null : { thumb: found.body, rev: found.rev };
+  return found === null ? null : { thumb: withStops(found.body), rev: found.rev };
 }
 
 export async function commit(thumb: Thumbnail, baseRev: number, by: string): Promise<number> {

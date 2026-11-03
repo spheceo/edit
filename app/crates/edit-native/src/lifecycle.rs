@@ -1,5 +1,5 @@
-//! Lifecycle and process: `init`, the media folders, `shutdown`, the data
-//! folder's lock, and exec-in-place for updates.
+//! Lifecycle and process: `init`, `shutdown`, the data folder's lock, and
+//! exec-in-place for updates.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -73,9 +73,6 @@ pub struct InitOptions {
     pub cache_dir: String,
     pub ffmpeg: String,
     pub ffprobe: String,
-    /// Every media folder ever set (`media_drive` `Layout.known`): files there
-    /// keep the cache keys of their place in the data folder.
-    pub media_folders: Vec<String>,
     #[napi(ts_type = "(line: NativeLog) => void")]
     pub log: LogFn,
 }
@@ -89,9 +86,8 @@ pub(crate) fn home() -> Result<PathBuf, String> {
         .ok_or_else(|| "the native engine isn't initialised (call init first)".to_owned())
 }
 
-/// Sets the engine up: FFmpeg, the cache, the media folders and where its log
-/// lines go. Call once, before anything else; later calls change only the
-/// media folders.
+/// Sets the engine up: FFmpeg, the cache, and where its log lines go. Call
+/// once, before anything else.
 #[napi]
 pub fn init(options: InitOptions) -> napi::Result<()> {
     let InitOptions {
@@ -99,26 +95,12 @@ pub fn init(options: InitOptions) -> napi::Result<()> {
         cache_dir,
         ffmpeg,
         ffprobe,
-        media_folders,
         log,
     } = options;
     edit_engine::log::use_sink(Box::new(ToJs(log)));
     edit_engine::util::use_tools(ffmpeg.into(), ffprobe.into());
     edit_engine::util::use_cache_dir(cache_dir.into());
-    let home = PathBuf::from(home);
-    edit_engine::util::use_media_folders(
-        home.clone(),
-        media_folders.into_iter().map(PathBuf::from).collect(),
-    );
-    let _ = HOME.set(home);
-    Ok(())
-}
-
-/// The media folders changed (`store.publish_layout` / `set_media_dir`).
-#[napi]
-pub fn set_media_folders(known: Vec<String>) -> napi::Result<()> {
-    let home = home().map_err(crate::fail)?;
-    edit_engine::util::use_media_folders(home, known.into_iter().map(PathBuf::from).collect());
+    let _ = HOME.set(PathBuf::from(home));
     Ok(())
 }
 
@@ -161,8 +143,8 @@ pub fn hold_lock(path: String) -> bool {
     true
 }
 
-/// Whether another process holds `path`'s lock (`edit media move` asks
-/// before touching a data folder).
+/// Whether another process holds `path`'s lock (a second Edit on the same
+/// data folder).
 #[napi]
 pub fn is_locked(path: String) -> bool {
     let path = PathBuf::from(path);

@@ -1,8 +1,7 @@
 //! What the engine needs from its host: where FFmpeg is, where the media
-//! cache is, the media folders cache keys are named through, atomic writes,
-//! and containing panics. The Rust server re-exports these as its own
-//! (`tools`, `store::write_atomic`, `guard::catch`); the native addon sets
-//! them from `init`.
+//! cache is, atomic writes, and containing panics. The Rust server
+//! re-exports these as its own (`tools`, `store::write_atomic`,
+//! `guard::catch`); the native addon sets them from `init`.
 
 use std::any::Any;
 use std::ffi::OsString;
@@ -10,7 +9,7 @@ use std::io::Write;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
@@ -208,47 +207,6 @@ pub fn cache_dir() -> Option<&'static Path> {
 /// waveform), for work that has no store at hand.
 pub fn media_cache(source: &Path) -> Option<PathBuf> {
     Some(CACHE_DIR.get()?.join(crate::media::media_key(source)))
-}
-
-/// The data folder and every media folder ever set (the server's
-/// `media_drive::Layout`: `home` and `known`), for cache keys.
-struct Folders {
-    home: PathBuf,
-    known: Vec<PathBuf>,
-}
-
-/// Unset (tests, CLI) means keys are plain paths.
-static FOLDERS: RwLock<Option<Folders>> = RwLock::new(None);
-
-/// Says where the data folder and the media folders are; called again
-/// whenever the media drive changes.
-pub fn use_media_folders(home: PathBuf, known: Vec<PathBuf>) {
-    *FOLDERS
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Folders { home, known });
-}
-
-/// [`key_path_in`] with the folders the host gave ([`use_media_folders`]).
-pub fn key_path(path: &Path) -> PathBuf {
-    match &*FOLDERS
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-    {
-        Some(folders) => key_path_in(&folders.home, &folders.known, path),
-        None => path.to_path_buf(),
-    }
-}
-
-/// The name a file's cache key uses: a file in a media folder (`known`) is
-/// named by its place in the data folder (`home`), so moving it there (or
-/// importing it there in the first place) keeps its key.
-pub fn key_path_in(home: &Path, known: &[PathBuf], path: &Path) -> PathBuf {
-    for dir in known {
-        if let Ok(rest) = path.strip_prefix(dir) {
-            return home.join(rest);
-        }
-    }
-    path.to_path_buf()
 }
 
 // ---------------------------------------------------------------------------
@@ -515,18 +473,5 @@ mod tests {
         assert!(error.contains("job crashed (boom)"), "{error}");
         let error = catch("job", || -> u8 { panic!("{}", String::from("owned")) }).unwrap_err();
         assert!(error.contains("owned"), "{error}");
-    }
-
-    #[test]
-    fn keys_are_named_through_the_media_folders() {
-        let (home, known) = (Path::new("/home/me/.edit"), ["/Volumes/Drive/Edit".into()]);
-        assert_eq!(
-            key_path_in(home, &known, Path::new("/Volumes/Drive/Edit/media/a.mp4")),
-            PathBuf::from("/home/me/.edit/media/a.mp4")
-        );
-        assert_eq!(
-            key_path_in(home, &known, Path::new("/elsewhere/a.mp4")),
-            PathBuf::from("/elsewhere/a.mp4")
-        );
     }
 }

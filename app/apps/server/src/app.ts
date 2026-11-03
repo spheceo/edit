@@ -5,13 +5,16 @@
 import * as os from "node:os";
 
 import { Agents as CodexAgents } from "./agent.ts";
+import * as chatSync from "./chat_sync.ts";
 import { Library as DriveLibrary } from "./library.ts";
 import { useGoogleSignIn } from "./script.ts";
 import { Processor } from "./media.ts";
 import { native, type Native } from "./native/index.ts";
 import * as progress from "./progress.ts";
+import { followShares } from "./reviews.ts";
 import {
   stubServices,
+  type AgentPanel,
   type Agents,
   type Exports,
   type Library,
@@ -57,11 +60,15 @@ export function createApp(options: AppOptions): App {
     library: options.services?.library ?? new DriveLibrary(),
     ...options.services,
   };
+  // A saved project chat is mirrored to the cloud, to continue on any Mac.
+  (services.agents as AgentPanel).onChatSaved = (project: string) => chatSync.schedulePush(options.store, project);
   // Docs and Drive files are read with the team's sign-in first (script.ts).
   const library = services.library;
   useGoogleSignIn(() => library.accessToken());
   // Exports say how long they have left, as the agent's other background work does.
   progress.followExports(options.store);
+  // A share's row follows the same events, so the chip names the queue and the prep.
+  followShares(options.store);
   return {
     store: options.store,
     media: new Processor(options.store),

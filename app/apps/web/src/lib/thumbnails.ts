@@ -38,6 +38,9 @@ export const thumbnailsApi = {
   /** One step back (undo) or forward (redo) on the layout's timeline, the person's changes and Claude's alike: what it was, or null when there's none. */
   step: (id: string, back: boolean) => call<{ thumb: Thumbnail; rev: number; step: string | null }>("POST", `${base(id)}/${back ? "undo" : "redo"}`),
   stop: (id: string) => call<{ stopped: boolean }>("POST", `${base(id)}/stop`),
+  newVersion: (id: string) => call<{ thumb: Thumbnail; rev: number; version: string }>("POST", `${base(id)}/versions`),
+  switchVersion: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/switch`, { version }),
+  takeFinal: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/final`, { version }),
   upload: (id: string, file: File) => call<{ image: ThumbImage; thumb: Thumbnail }>("POST", `${base(id)}/images?name=${encodeURIComponent(file.name)}`, undefined, { bytes: file, type: file.type }),
   removeImage: (id: string, image: string) => call<{ thumb: Thumbnail }>("DELETE", `${base(id)}/images/${encodeURIComponent(image)}`),
   saveRender: (id: string, png: Blob) => call<{ key: string }>("PUT", `${base(id)}/render`, undefined, { bytes: png, type: "image/png" }),

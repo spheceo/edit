@@ -19,7 +19,7 @@ import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { describe, designOf, layerOf, record, step } from "./design.ts";
+import { checkStacked, describe, designOf, layerOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import { sizeOf } from "./size.ts";
@@ -80,16 +80,24 @@ const toolsOf = (turn: live.Turn): ThumbTool[] =>
 
 // ---------------------------------------------------------------- the tools
 
-type Session = { id: string; by: string; context: Context; folder: string; signal: AbortSignal; looked: boolean; changed: boolean; made: number };
+type Session = { id: string; by: string; context: Context; folder: string; signal: AbortSignal; looked: boolean; changed: boolean; made: number; asked: string };
 const sessions = new Map<string, Session>();
 
-/** The model a picture is made on when Claude names none: the first of these OpenArt has. */
-export const PREFERRED_MODELS = [/nano[\s-]?banana[\s-]?pro/i, /nano[\s-]?banana/i, /gpt[\s-]?image/i, /seedream/i, /flux.*kontext/i];
+/**
+ * The model a picture is made on when Claude names none, in the team's order
+ * (Sphe, Nov 3): Nano Banana Pro for a new or complex picture, Nano Banana 2
+ * for a touch-up of a picture given (cleaning a base, a small fix on top),
+ * and Seedream Pro when Pro's look isn't wanted. The first of these OpenArt
+ * has (and the account can afford) wins, so a renamed or new model is picked
+ * up from OpenArt's own list.
+ */
+export const COMPLEX_MODELS = [/nano[\s-]?banana[\s-]?pro/i, /seedream.*pro/i, /seedream/i, /nano[\s-]?banana[\s-]?2/i, /nano[\s-]?banana/i, /gpt[\s-]?image/i, /flux.*kontext/i];
+export const TOUCH_UP_MODELS = [/nano[\s-]?banana[\s-]?2/i, /nano[\s-]?banana[\s-]?pro/i, /seedream.*pro/i, /seedream/i, /nano[\s-]?banana/i, /gpt[\s-]?image/i, /flux.*kontext/i];
 
 const LAYER_SCHEMA = {
   type: "object",
   description:
-    'A layer. Picture: {kind:"image", source (an image id, or asset:<id> for a library overlay), x, y, width, height (canvas px; the canvas is 1280×720), fit ("cover" | "contain" | "stretch"), zoom (cover: 1+), focusX/focusY (cover: 0…1, the point kept in the middle), flip, rotation, opacity (0…100), adjust {exposure, contrast, saturation, warmth, shadows, highlights: -100…100; vignette, sharpen: 0…100}, shadow}. Text: {kind:"text", text, x, y (its centre), width (wraps there), font, weight (100…900), size (px), color, align, lineHeight, uppercase, italic, rotation, box {color, opacity, padX, padY, radius} (a solid box behind it), stroke {color, width}, shadow {color, opacity, angle, distance, spread (0…100), size}}. Give id and name to keep track; anything left out keeps its value (a change) or the default.',
+    'A layer. Picture: {kind:"image", source (an image id, or asset:<id> for a library overlay), x, y, width, height (canvas px; the canvas is 1280×720), fit ("cover" | "contain" | "stretch"), zoom (cover: 1+), focusX/focusY (cover: 0…1, the point kept in the middle), flip, rotation, opacity (0…100), adjust {exposure in stops (-5…+5, as +0.60), contrast, saturation, vibrance, warmth, shadows, highlights: -100…100; vignette, sharpen: 0…100}, shadow}. Text: {kind:"text", text, x, y (its centre), width (wraps there), font, weight (100…900), size (px), color, align, lineHeight, uppercase, italic, rotation, box {color, opacity, padX, padY, radius} (a solid box behind it), stroke {color, width}, shadow {color, opacity, angle, distance, spread (0…100), size}}. Give id and name to keep track; anything left out keeps its value (a change) or the default.',
   additionalProperties: true,
 };
 
@@ -97,20 +105,42 @@ export const TOOLS = [
   {
     name: "make_picture",
     description:
-      'Make a picture on OpenArt (the team\'s account, mamagi-openart-1; it costs credits, so make what you mean to use). From the prompt alone, or from pictures you give (references: the thumbnail\'s image ids or asset:<id>): an edit of one ("remove every overlay, caption, logo and bodycam text; keep everything else exactly as it is"), or a new picture using them. It\'s added to the thumbnail\'s images; Read the file it names before you use it.',
+      'Make a picture on OpenArt (the team\'s account, mamagi-openart-1; it costs credits, so make what you mean to use). From the prompt alone, or from pictures you give (references: the thumbnail\'s image ids or asset:<id>): an edit of one ("remove every overlay, caption, logo and bodycam text; keep everything else exactly as it is"), or a new picture using them. A small detail added to the scene already on the canvas ("add children in the background") takes that base image\'s id as the only reference and a prompt that adds the detail and keeps everything else exactly as it is. Left unnamed, the model is the house\'s: Nano Banana Pro for a new or complex picture, Nano Banana 2 for a touch-up of a picture given; name Seedream Pro (from openart_models) when Pro\'s look isn\'t wanted. It\'s added to the thumbnail\'s images; Read the file it names before you use it.',
     inputSchema: {
       type: "object",
       additionalProperties: false,
       properties: {
         prompt: { type: "string" },
         references: { type: "array", items: { type: "string" }, maxItems: 6 },
-        model: { type: "string", description: "An OpenArt model id from openart_models; left out, the house's default." },
+        model: { type: "string", description: "An OpenArt model id from openart_models; left out, the house's default (Nano Banana Pro, or Nano Banana 2 for a touch-up of a picture given)." },
         aspect_ratio: { type: "string", description: 'Default "16:9".' },
         name: { type: "string", description: 'What it is, for the images list ("base, overlays removed").' },
         options: { type: "object", description: "The model's own options (model_options names them)." },
       },
       required: ["prompt"],
     },
+  },
+  {
+    name: "picture_prompt",
+    description:
+      "A made picture's stored prompts, pulled again at any time (long after the chat has moved on): the person's own request that turn, and the exact OpenArt prompt and model that made it. For a different moment, framing or scene, start from that exact prompt and change the one thing asked, not a new prompt from memory. A small detail added to the scene that's already there is not this: make_picture with that picture as the only reference.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { image: { type: "string", description: "The picture's image id." } }, required: ["image"] },
+  },
+  {
+    name: "new_version",
+    description:
+      "Start another version of this thumbnail (V2, then V3…): the layout as it stands is kept as V1 if it isn't a version yet, and a copy of it becomes the new version, showing. Each version keeps its own layers from there. Only when the person asks for another version.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "switch_version",
+    description: "Show another version of this thumbnail (its name, V1 / V2…). The one left keeps its layers. Draws it: Read it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } }, required: ["version"] },
+  },
+  {
+    name: "take_final",
+    description: "Take a version as the final one (what the team ships), whichever is showing: its name, V1 / V2…. Only when the person picks it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } }, required: ["version"] },
   },
   {
     name: "openart_models",
@@ -124,12 +154,12 @@ export const TOOLS = [
   },
   {
     name: "set_layers",
-    description: "Lay the thumbnail out: its whole list of layers, bottom first (the picture, then overlays, then text). Layers you name by id keep what you leave out. Draws it and names the file: Read it.",
+    description: "Lay the thumbnail out: its whole list of layers, bottom first (the picture, then overlays, then text). One editable layer per thing: the picture's adjustments live on its layer, a caption is its own text layer. Layers you name by id keep what you leave out. Draws it and names the file: Read it.",
     inputSchema: { type: "object", additionalProperties: false, properties: { layers: { type: "array", items: LAYER_SCHEMA, maxItems: 40 } }, required: ["layers"] },
   },
   {
     name: "change_layers",
-    description: "Change some layers in place (each by id, only what you give), add some on top (add), remove some (remove: ids), or reorder them all (order: every id, bottom first). Draws it and names the file: Read it.",
+    description: "Change some layers in place (each by id, only what you give), add some on top (add), remove some (remove: ids), or reorder them all (order: every id, bottom first). To change a picture's grade or a caption's words or style, change its layer by id — never add a copy on top of it. Draws it and names the file: Read it.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -251,6 +281,7 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
         prompt,
         model,
         ...(asked.length > 0 ? { references: asked } : {}),
+        ...(session.asked.trim() !== "" ? { request: session.asked.trim().slice(0, 4000) } : {}),
         at: Date.now(),
         by: session.by,
       };
@@ -262,15 +293,65 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
     }
     case "openart_models": {
       const list = await openart.imageModels(session.signal);
-      const fallback = await defaultModel(true, session.signal).catch(() => "");
+      const complex = pickModel(list, false);
+      const touchUp = pickModel(list, true);
       return list
-        .map((one) => `- ${one.id}: ${one.name}${one.credits !== null ? `, ${one.credits} credits` : ""}${one.edits ? ", edits pictures" : ""}${one.affordable ? "" : ", NOT affordable now"}${one.id === fallback ? " (the default)" : ""}`)
+        .map((one) => `- ${one.id}: ${one.name}${one.credits !== null ? `, ${one.credits} credits` : ""}${one.edits ? ", edits pictures" : ""}${one.affordable ? "" : ", NOT affordable now"}${one.id === complex && one.id === touchUp ? " (the default)" : one.id === complex ? " (default for a new or complex picture)" : one.id === touchUp ? " (default for a touch-up)" : ""}`)
         .join("\n");
     }
     case "model_options": {
       if (typeof args.model !== "string") throw new Error("model is an OpenArt model id.");
       const form = await openart.formOf(args.model, args.edits === true, session.signal);
       return [`Aspect ratios: ${form.aspects.join(", ") || "not set"}`, `Pictures it takes: ${form.maxReferences}`, "Options:", ...form.options.map((one) => `- ${one}`)].join("\n");
+    }
+    case "picture_prompt": {
+      const found = await cloud.get(session.id);
+      if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      const image = found.thumb.images.find((one) => one.id === args.image);
+      if (image === undefined) throw new Error(`There's no image ${String(args.image)}: give one of the thumbnail's image ids.`);
+      if (image.prompt === undefined) return `${image.id} “${image.name}” wasn't made on OpenArt here, so no prompt is stored for it.`;
+      return [
+        `The person's request: ${image.request ?? "(not kept — made before requests were kept)"}`,
+        `The exact OpenArt prompt (${image.model ?? "unknown model"}): ${image.prompt}`,
+        ...(image.references !== undefined && image.references.length > 0 ? [`Made from: ${image.references.join(", ")}`] : []),
+        `A small detail added to this scene (“add children in the background”) is not a new prompt from this: make_picture with ${image.id} as the only reference, and a prompt that adds the detail and keeps everything else exactly as it is. Start from this prompt only for a different moment, framing or scene.`,
+      ].join("\n");
+    }
+    case "new_version": {
+      let name = "";
+      let design: Design | null = null;
+      await cloud.change(session.id, session.by, (thumb) => {
+        name = makeVersion(thumb, "claude").name;
+        design = thumb.design;
+      });
+      session.changed = true;
+      const path = await drawn(session, design!, false);
+      return `Started ${name}: a copy of how it stands, now showing; the one before is kept as it was.\n${describe(design!)}\nRead the drawing: ${path}`;
+    }
+    case "switch_version": {
+      if (typeof args.version !== "string") throw new Error("version is a version's name (V1, V2…).");
+      let design: Design | null = null;
+      let name = "";
+      await cloud.change(session.id, session.by, (thumb) => {
+        const taken = switchVersion(thumb, args.version as string);
+        if (taken === null) throw new Error(`There's no version ${String(args.version)} to show: ${(thumb.versions ?? []).map((one) => one.name).join(", ") || "this thumbnail has one version"}.`);
+        name = taken.name;
+        design = thumb.design;
+        return true;
+      });
+      session.changed = true;
+      const path = await drawn(session, design!, false);
+      return `Showing ${name}.\n${describe(design!)}\nRead the drawing: ${path}`;
+    }
+    case "take_final": {
+      if (typeof args.version !== "string") throw new Error("version is a version's name (V1, V2…).");
+      let name = "";
+      await cloud.change(session.id, session.by, (thumb) => {
+        const taken = takeFinal(thumb, args.version as string);
+        if (taken === null) throw new Error(`There's no version ${String(args.version)}: ${(thumb.versions ?? []).map((one) => one.name).join(", ") || "this thumbnail has one version"}.`);
+        name = taken.name;
+      });
+      return `${name} is the final version.`;
     }
     case "set_layers":
     case "change_layers": {
@@ -352,17 +433,44 @@ export function changed(design: Design, args: Args, sources: Set<string>): Desig
     layers = order.map((id) => layers.find((one) => one.id === id)!);
   }
   if (layers.length > 40) throw new Error("At most 40 layers.");
+  checkStacked(layers);
   return { layers };
 }
 
-async function defaultModel(edits: boolean, signal: AbortSignal): Promise<string> {
-  const list = (await openart.imageModels(signal)).filter((one) => one.affordable && (!edits || one.edits));
-  for (const pattern of PREFERRED_MODELS) {
-    const found = list.find((one) => pattern.test(one.id) || pattern.test(one.name));
+/**
+ * What a turn is told about the picture already on the canvas (Sphe, Nov 3:
+ * “try add children in the background” means this exact scene again, with
+ * that detail — the base goes to OpenArt as the reference). A different
+ * moment, framing or scene is the only time to start from the stored prompt.
+ */
+export function baseBrief(thumb: Thumbnail): string {
+  const layer = thumb.design.layers.find((one) => one.kind === "image" && !one.source.startsWith("asset:"));
+  if (layer === undefined || layer.kind !== "image") return "";
+  const image = thumb.images.find((one) => one.id === layer.source);
+  const who = image !== undefined ? `${layer.source} “${image.name}”` : layer.source;
+  const edit = `A small detail added to this exact scene (“add children in the background”, “try add one or two kids”) is an edit of it: make_picture with ${layer.source} as the only reference and a prompt that adds the detail and keeps everything else exactly as it is, then point layer ${layer.id} at the new picture (change its source by id; never stack the new picture on top). Only a different moment, framing or scene is a fresh generation.`;
+  const scene = `# The picture on the canvas\nThe scene is ${who}, layer ${layer.id}. ${edit}`;
+  if (image?.prompt === undefined) return scene;
+  return [
+    scene,
+    `# The base picture's stored prompts (still here after the chat has moved on)\nThe person's request: ${image.request ?? "(not kept)"}\nThe exact OpenArt prompt (${image.model ?? "?"}): ${image.prompt}\nFor a different moment, framing or scene, start from that exact prompt and change the one thing asked — never write a fresh prompt from memory of it.`,
+  ].join("\n\n");
+}
+
+/** The house's pick from OpenArt's models: a touch-up (a picture given) takes Nano Banana 2 first, a new or complex picture Nano Banana Pro. */
+export function pickModel(list: openart.Model[], edits: boolean): string | null {
+  const usable = list.filter((one) => one.affordable && (!edits || one.edits));
+  for (const pattern of edits ? TOUCH_UP_MODELS : COMPLEX_MODELS) {
+    const found = usable.find((one) => pattern.test(one.id) || pattern.test(one.name));
     if (found !== undefined) return found.id;
   }
-  if (list[0] === undefined) throw new Error("OpenArt has no image model the team's account can use now.");
-  return list[0].id;
+  return usable[0]?.id ?? null;
+}
+
+async function defaultModel(edits: boolean, signal: AbortSignal): Promise<string> {
+  const picked = pickModel(await openart.imageModels(signal), edits);
+  if (picked === null) throw new Error("OpenArt has no image model the team's account can use now.");
+  return picked;
 }
 
 // ---------------------------------------------------------------- the prompt
@@ -372,7 +480,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
   const images: string[] = [];
   for (const image of thumb.images.slice(-24)) {
     const path = await fileOf(session, image).catch(() => null);
-    images.push(`- ${image.id} “${image.name}” (${image.from}${image.model ? `, ${image.model}` : ""}, ${image.width}×${image.height})${given.includes(image.id) ? " — given with this message" : ""}${path !== null ? `: ${path}` : ""}`);
+    images.push(`- ${image.id} “${image.name}” (${image.from}${image.model ? `, ${image.model}` : ""}, ${image.width}×${image.height})${image.prompt !== undefined ? `, its OpenArt prompt is stored (picture_prompt ${image.id})` : ""}${given.includes(image.id) ? " — given with this message" : ""}${path !== null ? `: ${path}` : ""}`);
   }
   const current = thumb.render !== null ? await assets.localPath(session.context.cacheDir, thumb.render.key).then((path) => {
     const copy = join(session.folder, "current.png");
@@ -385,6 +493,8 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
     `Canvas ${WIDTH}×${HEIGHT}.`,
     images.length > 0 ? `# Its images (Read the ones you use)\n${images.join("\n")}` : "# Its images\nNone yet.",
     `# The layers now, bottom first\n${describe(thumb.design)}`,
+    baseBrief(thumb),
+    (thumb.versions ?? []).length > 1 ? `# Versions: ${(thumb.versions ?? []).map((one) => `${one.name}${one.id === thumb.activeVersion ? " (showing)" : ""}${one.id === thumb.finalVersion ? " (final)" : ""}`).join(", ")}` : "",
     current !== null ? `# As it looks now (Read it)\n${current}` : "",
     (thumb.history ?? []).length > 0 ? `# Recent changes to the layout (newest last; undo steps back through them)\n${(thumb.history ?? []).slice(-8).map((one) => `- ${one.by === "claude" ? "you" : one.by}: ${one.label}`).join("\n")}` : "",
     `# The library (asset:<id> as a layer's source or a reference)\n${library.map((one) => `- asset:${one.id} “${one.name}” (${one.kind}, ${one.width}×${one.height}${one.builtIn ? "" : `, the team's`}): ${one.note}`).join("\n")}`,
@@ -432,7 +542,7 @@ async function work(context: Context, id: string, asked: string, given: string[]
         thumb.run = { ...thumb.run, state: "running", step: running.step };
       });
       fs.mkdirSync(folder, { recursive: true });
-      const session: Session = { id, by: context.by, context, folder, signal, looked: false, changed: false, made: 0 };
+      const session: Session = { id, by: context.by, context, folder, signal, looked: false, changed: false, made: 0, asked };
       const token = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
       sessions.set(token, session);
       try {

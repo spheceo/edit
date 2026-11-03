@@ -37,8 +37,6 @@ export interface InitConfig {
   cacheDir: string;
   ffmpeg: string;
   ffprobe: string;
-  /** media_drive Layout.known: every media folder ever set (key_path names files there by their data-folder place). */
-  mediaFolders: string[];
   log: (line: NativeLog) => void;
 }
 
@@ -189,7 +187,6 @@ export interface ExportJobClass {
 export interface Native {
   // Lifecycle and process
   init(config: InitConfig): void; // S
-  setMediaFolders(known: string[]): void; // S
   shutdown(): void; // S
   holdLock(path: string): boolean; // S: flock, held for the life of the process
   isLocked(path: string): boolean; // S
@@ -328,8 +325,8 @@ export function isReal(): boolean {
 }
 
 /**
- * Starts the addon: its log lines go to diag (scrubbed there), its caches
- * under `cacheDir`, its cache keys name media-drive files by `mediaFolders`.
+ * Starts the addon: its log lines go to diag (scrubbed there) and its caches
+ * live under `cacheDir`.
  */
 export function initNative(config: Omit<InitConfig, "log">): Native {
   const addon = native();

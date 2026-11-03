@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 use edit_engine::media::{self, CachePaths as Paths, Probe};
 use napi_derive::napi;
 
-/// A media file's cache key: a hash of its name (a file on the media drive
-/// named by its place in the data folder), size and modification time. The
-/// only implementation: TS never hashes these itself.
+/// A media file's cache key: a hash of its path, size and modification time.
+/// The only implementation: TS never hashes these itself.
 #[napi]
 pub fn media_key(path: String) -> String {
     media::media_key(Path::new(&path))

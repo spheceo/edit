@@ -11,6 +11,7 @@ import { Effect } from "effect";
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
 import * as capacity from "./export_capacity.ts";
+import { shownProgress } from "./export_prep.ts";
 import { runPromise } from "./effect/runtime.ts";
 import * as jobs from "./jobs.ts";
 import { ioMessage, nowMs, writeAtomic } from "./files.ts";
@@ -126,6 +127,8 @@ export interface ExportActivity {
   note?: string;
   /** Queued: what it waits for ("waiting for the encoder (this Mac has one)", export_capacity.ts). */
   waiting?: string;
+  /** Running, before frames are encoding: "cutting the footage, 12 of 225". Absent once the encoder reports, so the line goes back to the percent. */
+  phase?: string;
 }
 
 /**
@@ -592,14 +595,19 @@ export class ExportRegistry implements seams.Exports {
   }
 
   private publish(store: Store, project: Project, running: Running, state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}): void {
-    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }), ...(state === "queued" && running.waiting !== undefined ? { waiting: running.waiting } : {}) });
+    const phase = typeof extra.phase === "string" && extra.phase !== "" ? extra.phase : undefined;
+    const waiting = state === "queued" && typeof running.waiting === "string" && running.waiting !== "" ? running.waiting : undefined;
+    const rest = { ...extra };
+    delete rest.phase;
+    this.recent.set(project.id, { id: project.id, name: project.name, path: running.output, state, progress, updated_ms: nowMs(), ...(typeof extra.error === "string" ? { error: extra.error } : {}), ...(running.note === undefined ? {} : { note: running.note }), ...(waiting !== undefined ? { waiting } : {}), ...(phase !== undefined ? { phase } : {}) });
     // Keep every active job and only the latest completed outcomes.
     const ended = [...this.recent.values()].filter(one => one.state !== "queued" && one.state !== "running").sort((a, b) => b.updated_ms - a.updated_ms);
     for (const old of ended.slice(20)) {
       this.recent.delete(old.id);
       this.held.delete(old.id);
     }
-    store.emit({ type: "export", id: project.id, state, progress, path: running.output, ...extra });
+    // `waiting` rides the event too: the share chip reads it, and a queued publish used to leave it off.
+    store.emit({ type: "export", id: project.id, state, progress, path: running.output, ...rest, ...(phase !== undefined ? { phase } : {}), ...(waiting !== undefined ? { waiting } : {}) });
   }
 
   /** Starts what waits in line while this Mac has room for another (export_capacity.ts). */
@@ -682,8 +690,6 @@ export class ExportRegistry implements seams.Exports {
     const edit = project;
     if (extra.watermark !== undefined) project = await seams.channelMarks.addWatermark({ library }, store.cacheDir(), project, plan, extra.watermark);
     let path = addon.withExtension(output, options.format);
-    // Never into an unplugged media drive's folder (or the empty mount point it leaves behind).
-    store.layout().writable(path);
     const above = parent(path);
     const folder = above === null || above === "" ? "." : above;
     try {
@@ -797,7 +803,24 @@ export class ExportRegistry implements seams.Exports {
   ): Promise<void> {
     const id = project.id;
     const emit = (state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}) => this.publish(store, project, running, state, progress, extra);
-    emit("running", 0);
+    // Cutting excerpts, copying sound, and fetching the last export fill the first slice of the bar.
+    // "preparing the footage" alone does not count: a local export, and a stills fetch, stay on the 0–1 bar.
+    let prepared = false;
+    let prepRatio = 0;
+    const tell = (phase: string, ratio: number) => {
+      prepared = true;
+      prepRatio = Math.max(prepRatio, ratio);
+      emit("running", shownProgress(prepRatio, null), { phase });
+    };
+    const onPrep = (phase: string, ratio: number) => {
+      if (phase === "preparing the footage") {
+        emit("running", shownProgress(prepared ? prepRatio : null, null), { phase });
+        return;
+      }
+      // The last export's download, when there is one, takes the rest of the prep slice.
+      tell(phase, ratio * 0.85);
+    };
+    emit("running", 0, { phase: "preparing the footage" });
     const started = performance.now();
     // A speed sample (`fresh_fps`): rendered here from the start, every frame new, never restarted.
     let fresh = options.format === "h264" && nothingToReuse(store.cacheDir(), id);
@@ -816,7 +839,7 @@ export class ExportRegistry implements seams.Exports {
             let exported = project;
             let originals: seams.Originals | null = null;
             try {
-              [exported, originals] = await seams.cloudMedia.forExport(project, plan.start, plan.end, store.cacheDir(), () => running.cancelled);
+              [exported, originals] = await seams.cloudMedia.forExport(project, plan.start, plan.end, store.cacheDir(), () => running.cancelled, onPrep);
             } catch (error) {
               if (!seams.isUnavailable(error)) throw error;
             }
@@ -834,7 +857,21 @@ export class ExportRegistry implements seams.Exports {
                 );
               }
               if (running.cancelled) throw new Error("cancelled");
-              if (attempt === 1) restored = this.home === null ? null : await restorePrevious(store.cacheDir(), this.home, project.id);
+              if (attempt === 1) {
+                let fetched = -1;
+                restored = this.home === null ? null : await restorePrevious(store.cacheDir(), this.home, project.id, (key, dest) => cloud.download(key, dest, (got, size) => {
+                  const ratio = size > 0 ? Math.min(1, Math.max(0, got / size)) : 0;
+                  const pct = Math.round(ratio * 100);
+                  if (pct === fetched) return;
+                  fetched = pct;
+                  tell(`fetching the last export, ${pct}%`, 0.85 + 0.15 * ratio);
+                }));
+              }
+              // Prep is over. The encode fills from there to 1; leaving the ratio at the footage's 0.85 would end the bar at 97%.
+              if (prepared) {
+                prepRatio = 1;
+                emit("running", shownProgress(1, null), { phase: "starting the export" });
+              } else emit("running", 0, { phase: "starting the export" });
               let moved = performance.now();
               let last = -1;
               const job = native().ExportJob.start(
@@ -847,7 +884,8 @@ export class ExportRegistry implements seams.Exports {
                     moved = performance.now();
                   }
                   try {
-                    emit("running", progress);
+                    // No phase: the line goes back to the percent, and a stale "cutting the footage" doesn't stick.
+                    emit("running", shownProgress(prepared ? 1 : null, progress));
                   } catch (error) {
                     diag.warn("export", `progress: ${diag.messageOf(error)}`);
                   }

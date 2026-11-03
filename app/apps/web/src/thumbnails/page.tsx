@@ -7,7 +7,7 @@
 // next message.
 
 import { ArrowDown, ArrowLeft, ArrowUp, Download, Eye, EyeOff, Image as ImageIcon, Layers, MoreHorizontal, Plus, Redo2, SlidersHorizontal, Trash2, Type, Undo2, Upload } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
@@ -87,6 +87,8 @@ export function ThumbnailScreen({ id }: { id: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   // The layer whose Camera Raw (a picture) or text dialog is open.
   const [openLayer, setOpenLayer] = useState<string | null>(null);
+  // The picture whose big dialog is open (its options moved there).
+  const [openPicture, setOpenPicture] = useState<string | null>(null);
   const [library, setLibrary] = useState<Asset[]>([]);
   const [uploading, setUploading] = useState(0);
   const [saving, setSaving] = useState<"saving" | "saved" | "error" | null>(null);
@@ -198,6 +200,29 @@ export function ThumbnailScreen({ id }: { id: string }) {
   };
   const undo = () => void walk(true);
   const redo = () => void walk(false);
+  /** A version made or shown: its layout replaces what's drawn here. */
+  const applyVersion = (next: Thumbnail) => {
+    setThumb(next);
+    setDesign(next.design);
+    setSelected(null);
+    dirty.current = false;
+  };
+  const makeVersion = () =>
+    void save()
+      .then(() => thumbnailsApi.newVersion(id))
+      .then(({ thumb, version }) => {
+        applyVersion(thumb);
+        toast(`Started ${version}: a copy of how it stands.`);
+      }, (error: unknown) => toastError(error, "make a new version"));
+  const showVersion = (version: string) =>
+    void save()
+      .then(() => thumbnailsApi.switchVersion(id, version))
+      .then(({ thumb }) => applyVersion(thumb), (error: unknown) => toastError(error, "show that version"));
+  const takeFinal = (version: string) =>
+    void thumbnailsApi.takeFinal(id, version).then(({ thumb }) => {
+      setThumb(thumb);
+      toast(`${thumb.versions?.find((one) => one.id === thumb.finalVersion)?.name ?? version} is the final version.`);
+    }, (error: unknown) => toastError(error, "take that version as final"));
   const changeLayer = (layerId: string, patch: Partial<ImageLayer> | Partial<TextLayer>, keep = true) => {
     if (design === null) return;
     change({ layers: design.layers.map((one) => (one.id === layerId ? ({ ...one, ...patch } as Layer) : one)) }, keep);
@@ -238,6 +263,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
   // Pictures dropped or pasted anywhere on the page: given to Claude with the next message.
   useEffect(() => {
     const onPaste = (event: ClipboardEvent) => {
+      // Into a field (the chat's composer above all) is that field's own paste.
+      const typing = event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName));
+      if (typing) return;
       const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
       if (files.length === 0) return;
       event.preventDefault();
@@ -315,6 +343,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
           )
         }
         onDownload={download}
+        onNewVersion={makeVersion}
         onDelete={() =>
           void thumbnailsApi.remove(id).then(
             () => navigate("/thumbnails"),
@@ -329,27 +358,10 @@ export function ThumbnailScreen({ id }: { id: string }) {
               <LayersPanel design={design} selected={selected} onSelect={setSelected} onOpen={setOpenLayer} onChange={change} onAddText={() => addLayer(newText())} />
               <PicturesPanel
                 thumb={thumb}
+                used={new Map(design.layers.flatMap((layer, index) => (layer.kind === "image" && !layer.source.startsWith("asset:") ? [[layer.source, index === 0 ? "Base" : "Used"] as const] : [])))}
                 uploading={uploading}
                 onUpload={(files) => void upload(files)}
-                onUse={(imageId, how) => {
-                  if (how === "base") {
-                    const bottom = design.layers[0];
-                    if (bottom?.kind === "image" && !bottom.source.startsWith("asset:")) changeLayer(bottom.id, { source: imageId, fit: "cover", x: 0, y: 0, width: WIDTH, height: HEIGHT });
-                    else addLayer({ id: newId(), kind: "image", name: "base", opacity: 100, source: imageId, x: 0, y: 0, width: WIDTH, height: HEIGHT, fit: "cover" }, true);
-                  } else {
-                    const image = thumb.images.find((one) => one.id === imageId);
-                    const width = 480;
-                    const height = image !== undefined ? Math.round((width * image.height) / image.width) : 270;
-                    addLayer({ id: newId(), kind: "image", name: image?.name ?? "picture", opacity: 100, source: imageId, x: (WIDTH - width) / 2, y: (HEIGHT - height) / 2, width, height, fit: "contain" });
-                  }
-                }}
-                onAttach={(imageId) => attachLanded(chatKey, { name: thumb.images.find((one) => one.id === imageId)?.name ?? "picture", kind: "image", preview: sourceUrl(id, imageId), landed: imageId })}
-                onRemove={(imageId) =>
-                  void thumbnailsApi.removeImage(id, imageId).then(
-                    ({ thumb }) => setThumb(thumb),
-                    (error: unknown) => toastError(error, "remove the picture"),
-                  )
-                }
+                onOpen={setOpenPicture}
               />
               <LibraryPanel
                 library={library}
@@ -364,8 +376,61 @@ export function ThumbnailScreen({ id }: { id: string }) {
             <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
           ) : (
             <>
+              {(thumb.versions ?? []).length > 1 && (
+                <div className="flex h-8 shrink-0 items-center gap-1.5 px-1">
+                  {(thumb.versions ?? []).map((version) => (
+                    <button key={version.id} type="button" onClick={() => version.id !== thumb.activeVersion && showVersion(version.id)} className={cx("flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium", version.id === thumb.activeVersion ? "border-line-strong bg-white/[0.10] text-fg" : "border-line text-muted hover:bg-hover hover:text-fg")}>
+                      {version.name}
+                      {version.id === thumb.finalVersion && <span className="rounded-full bg-emerald-400/20 px-1.5 text-[10px] font-semibold text-emerald-300">Final</span>}
+                    </button>
+                  ))}
+                  {thumb.activeVersion !== undefined && thumb.activeVersion !== thumb.finalVersion && (
+                    <button type="button" onClick={() => takeFinal(thumb.activeVersion!)} className="ml-auto flex h-7 items-center rounded-full border border-emerald-300/30 px-2.5 text-[12px] text-emerald-300 hover:bg-emerald-400/10">
+                      Take {thumb.versions?.find((one) => one.id === thumb.activeVersion)?.name} as final
+                    </button>
+                  )}
+                  <button type="button" onClick={makeVersion} className={cx("flex h-7 items-center gap-1 rounded-full border border-line px-2.5 text-[12px] text-muted hover:bg-hover hover:text-fg", thumb.activeVersion !== undefined && thumb.activeVersion !== thumb.finalVersion ? "" : "ml-auto")}>
+                    <Plus size={12} /> New version
+                  </button>
+                </div>
+              )}
               <Stage canvas={canvas} design={design} selected={selected} onSelect={setSelected} onOpen={(layerId) => setOpenLayer(layerId)} onMove={(layerId, patch, keep) => changeLayer(layerId, patch, keep)} running={running} step={thumb.run?.step} />
-              <LayerBar layer={layer} empty={design.layers.length === 0} onOpen={() => layer !== null && setOpenLayer(layer.id)} onDelete={() => layer !== null && (change({ layers: design.layers.filter((one) => one.id !== layer.id) }), setSelected(null))} />
+              <LayerBar layer={layer} onOpen={() => layer !== null && setOpenLayer(layer.id)} onDelete={() => layer !== null && (change({ layers: design.layers.filter((one) => one.id !== layer.id) }), setSelected(null))} />
+              {openPicture !== null && thumb.images.find((one) => one.id === openPicture) !== undefined && (
+                <PictureDialog
+                  thumbId={id}
+                  image={thumb.images.find((one) => one.id === openPicture)!}
+                  used={design.layers.some((one) => one.kind === "image" && one.source === openPicture) ? (design.layers[0]?.kind === "image" && design.layers[0].source === openPicture ? "Base" : "Used") : null}
+                  onClose={() => setOpenPicture(null)}
+                  onUse={(how) => {
+                    const imageId = openPicture;
+                    setOpenPicture(null);
+                    if (how === "base") {
+                      const bottom = design.layers[0];
+                      if (bottom?.kind === "image" && !bottom.source.startsWith("asset:")) changeLayer(bottom.id, { source: imageId, fit: "cover", x: 0, y: 0, width: WIDTH, height: HEIGHT });
+                      else addLayer({ id: newId(), kind: "image", name: "base", opacity: 100, source: imageId, x: 0, y: 0, width: WIDTH, height: HEIGHT, fit: "cover" }, true);
+                    } else {
+                      const image = thumb.images.find((one) => one.id === imageId);
+                      const width = 480;
+                      const height = image !== undefined ? Math.round((width * image.height) / image.width) : 270;
+                      addLayer({ id: newId(), kind: "image", name: image?.name ?? "picture", opacity: 100, source: imageId, x: (WIDTH - width) / 2, y: (HEIGHT - height) / 2, width, height, fit: "contain" });
+                    }
+                  }}
+                  onAttach={() => {
+                    attachLanded(chatKey, { name: thumb.images.find((one) => one.id === openPicture)?.name ?? "picture", kind: "image", preview: sourceUrl(id, openPicture), landed: openPicture });
+                    setOpenPicture(null);
+                  }}
+                  onRemove={() =>
+                    void thumbnailsApi.removeImage(id, openPicture).then(
+                      ({ thumb }) => {
+                        setThumb(thumb);
+                        setOpenPicture(null);
+                      },
+                      (error: unknown) => toastError(error, "remove the picture"),
+                    )
+                  }
+                />
+              )}
               {opened !== null && (
                 <LayerDialog
                   key={opened.id}
@@ -404,26 +469,45 @@ const newText = (): TextLayer => ({ id: newId(), kind: "text", name: "caption", 
 
 // ---------------------------------------------------------------- the header
 
-function Header({ thumb, onUndo, onRedo, saving, credits, onTitle, onDownload, onDelete }: { thumb: Thumbnail | null; onUndo: () => void; onRedo: () => void; saving: string | null; credits: string | null; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void; onDelete: () => void }) {
+function Header({ thumb, onUndo, onRedo, saving, credits, onTitle, onDownload, onNewVersion, onDelete }: { thumb: Thumbnail | null; onUndo: () => void; onRedo: () => void; saving: string | null; credits: string | null; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void; onNewVersion: () => void; onDelete: () => void }) {
   const last = thumb?.history?.at(-1);
   const next = thumb?.future?.at(-1);
   const who = (by: string) => (by === "claude" ? "Claude" : by.split(" ")[0]);
   const [title, setTitle] = useState(thumb?.title ?? "");
   const [confirm, setConfirm] = useState(false);
   useEffect(() => setTitle(thumb?.title ?? ""), [thumb?.title]);
+  // The title's box fits its words, as the edit page's name does: measured, capped.
+  const titleInput = useRef<HTMLInputElement>(null);
+  const [titleWidth, setTitleWidth] = useState(120);
+  useLayoutEffect(() => {
+    const node = titleInput.current;
+    if (!node) return;
+    const style = getComputedStyle(node);
+    const canvas = document.createElement("canvas").getContext("2d");
+    if (!canvas) return;
+    canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const text = Math.ceil(canvas.measureText(title || node.placeholder || " ").width);
+    setTitleWidth(Math.min(480, Math.max(56, text + 20)));
+  }, [title]);
   return (
     <header className="flex h-12 shrink-0 items-center gap-2 px-3">
       <IconButton label="Thumbnails" onClick={() => navigate("/thumbnails")}>
         <ArrowLeft size={16} />
       </IconButton>
       <input
+        ref={titleInput}
         value={title}
-        placeholder="New thumbnail"
+        placeholder="Thumbnail 1"
         onChange={(event) => setTitle(event.target.value)}
-        onBlur={() => title !== (thumb?.title ?? "") && onTitle(title)}
+        onBlur={() => {
+          if (title.trim() === "") setTitle(thumb?.title ?? "");
+          else if (title !== (thumb?.title ?? "")) onTitle(title);
+        }}
         onKeyDown={(event) => event.key === "Enter" && (event.target as HTMLInputElement).blur()}
-        className="h-8 min-w-0 flex-1 rounded-md bg-transparent px-2 text-[14px] font-semibold text-fg outline-none placeholder:text-faint hover:bg-hover focus:bg-hover"
+        className="h-8 min-w-0 shrink rounded-md bg-white/[0.06] px-2 text-[14px] font-semibold text-fg outline-none placeholder:text-faint"
+        style={{ width: titleWidth, maxWidth: "38vw" }}
       />
+      <div className="flex-1" />
       <IconButton label={last ? `Undo ${who(last.by)}'s change: ${last.label} (⌘Z)` : "Nothing to undo"} disabled={last === undefined} onClick={onUndo}>
         <Undo2 size={15} />
       </IconButton>
@@ -445,7 +529,7 @@ function Header({ thumb, onUndo, onRedo, saving, credits, onTitle, onDownload, o
       >
         <Download size={14} /> Download
       </Button>
-      <IconButton label="More" onClick={(event) => toggleMenu(event.currentTarget, [{ label: "Delete thumbnail", danger: true, icon: <Trash2 size={14} />, onSelect: () => setConfirm(true) }], { width: 180 })}>
+      <IconButton label="More" onClick={(event) => toggleMenu(event.currentTarget, [{ label: "New version", icon: <Plus size={14} />, onSelect: onNewVersion }, { label: "Delete thumbnail", danger: true, icon: <Trash2 size={14} />, onSelect: () => setConfirm(true) }], { width: 180 })}>
         <MoreHorizontal size={16} />
       </IconButton>
       <AppMenu />
@@ -493,8 +577,8 @@ function Stage({ canvas, design, selected, onSelect, onOpen, onMove, running, st
   const scale = size.width / WIDTH;
   const drag = useRef<{ id: string; mode: "move" | "resize"; x: number; y: number; start: Layer; kept: boolean } | null>(null);
   const layer = design.layers.find((one) => one.id === selected) ?? null;
-  // Only something smaller than the canvas shows where it is (a caption, a sticker): the picture and full overlays never do.
-  const box = layer !== null && !covers(layer) ? boundsOf(layer) : null;
+  // Whatever is picked shows where it is, the whole-canvas picture included.
+  const box = layer !== null ? boundsOf(layer) : null;
   const pointAt = (event: ReactPointerEvent) => {
     const rect = frame.current!.getBoundingClientRect();
     return { x: (event.clientX - rect.left) / scale, y: (event.clientY - rect.top) / scale };
@@ -544,7 +628,7 @@ function Stage({ canvas, design, selected, onSelect, onOpen, onMove, running, st
       <div
         ref={frame}
         style={{ width: size.width, height: size.height }}
-        className="relative shrink-0 overflow-hidden rounded-lg bg-[#0d0d0d] select-none"
+        className="relative shrink-0 select-none"
         onPointerDown={(event) => {
           const point = pointAt(event);
           const hit = pick(point.x, point.y);
@@ -559,15 +643,21 @@ function Stage({ canvas, design, selected, onSelect, onOpen, onMove, running, st
         onPointerMove={move}
         onPointerUp={() => (drag.current = null)}
       >
-        <canvas ref={canvas} width={WIDTH} height={HEIGHT} className="block size-full" />
+        <canvas ref={canvas} width={WIDTH} height={HEIGHT} className="block size-full rounded-lg bg-[#0d0d0d]" />
         {box !== null && layer !== null && (
-          <div className="pointer-events-none absolute outline outline-1 outline-white/45 outline-dashed" style={{ left: box.x * scale, top: box.y * scale, width: box.width * scale, height: box.height * scale }}>
-            <div
-              className="pointer-events-auto absolute -right-1 -bottom-1 size-2 cursor-nwse-resize rounded-full bg-white shadow"
+          <div className="pointer-events-none absolute outline outline-1 outline-[#4a9eff]" style={{ left: box.x * scale, top: box.y * scale, width: box.width * scale, height: box.height * scale }}>
+            <span className="absolute -top-[5px] -left-[5px] size-[9px] rounded-[2px] border border-[#4a9eff] bg-white" />
+            <span className="absolute -top-[5px] -right-[5px] size-[9px] rounded-[2px] border border-[#4a9eff] bg-white" />
+            <span className="absolute -bottom-[5px] -left-[5px] size-[9px] rounded-[2px] border border-[#4a9eff] bg-white" />
+            <span
+              className="pointer-events-auto absolute -right-[5px] -bottom-[5px] size-[9px] cursor-nwse-resize rounded-[2px] border border-[#4a9eff] bg-white"
               onPointerDown={(event) => begin(event, "resize", layer)}
               onPointerMove={move}
               onPointerUp={() => (drag.current = null)}
             />
+            <span className="absolute -bottom-7 left-1/2 -translate-x-1/2 rounded-[4px] bg-[#2f7de1] px-1.5 py-0.5 font-mono text-[10.5px] leading-none whitespace-nowrap text-white">
+              {Math.round(box.width)}×{Math.round(box.height)}
+            </span>
           </div>
         )}
         {design.layers.length === 0 && (
@@ -590,9 +680,8 @@ function Stage({ canvas, design, selected, onSelect, onOpen, onMove, running, st
 const covers = (layer: Layer): boolean => layer.kind === "image" && layer.x <= 0 && layer.y <= 0 && layer.x + layer.width >= WIDTH && layer.y + layer.height >= HEIGHT;
 
 /** Under the canvas: the selected layer, and the way into its dialog. */
-function LayerBar({ layer, empty, onOpen, onDelete }: { layer: Layer | null; empty: boolean; onOpen: () => void; onDelete: () => void }) {
-  if (layer === null)
-    return <p className="flex h-9 shrink-0 items-center px-1 text-[12px] text-faint">{empty ? "Ask Claude in the chat, or drop a picture in and choose Use as base." : "Claude does the adjusting: ask in the chat. To do it by hand, choose a layer and open its settings."}</p>;
+function LayerBar({ layer, onOpen, onDelete }: { layer: Layer | null; onOpen: () => void; onDelete: () => void }) {
+  if (layer === null) return <div className="h-9 shrink-0" />;
   return (
     <div className="flex h-9 shrink-0 items-center gap-2 px-1">
       {layer.kind === "text" ? <Type size={13} className="text-faint" /> : <ImageIcon size={13} className="text-faint" />}
@@ -676,7 +765,7 @@ function filesOf(input: HTMLInputElement): File[] {
   return files;
 }
 
-function PicturesPanel({ thumb, uploading, onUpload, onUse, onAttach, onRemove }: { thumb: Thumbnail; uploading: number; onUpload: (files: File[]) => void; onUse: (id: string, how: "base" | "layer") => void; onAttach: (id: string) => void; onRemove: (id: string) => void }) {
+function PicturesPanel({ thumb, used, uploading, onUpload, onOpen }: { thumb: Thumbnail; used: Map<string, string>; uploading: number; onUpload: (files: File[]) => void; onOpen: (id: string) => void }) {
   const input = useRef<HTMLInputElement>(null);
   return (
     <Panel
@@ -697,22 +786,11 @@ function PicturesPanel({ thumb, uploading, onUpload, onUse, onAttach, onRemove }
             <button
               key={image.id}
               title={image.prompt ?? image.name}
-              onClick={(event) =>
-                toggleMenu(
-                  event.currentTarget,
-                  [
-                    { label: "Use as base", onSelect: () => onUse(image.id, "base") },
-                    { label: "Add on top", onSelect: () => onUse(image.id, "layer") },
-                    { label: "Give to Claude", onSelect: () => onAttach(image.id) },
-                    { label: "Open full size", onSelect: () => window.open(sourceUrl(thumb.id, image.id), "_blank") },
-                    { label: "Remove", danger: true, onSelect: () => onRemove(image.id) },
-                  ],
-                  { width: 170 },
-                )
-              }
+              onClick={() => onOpen(image.id)}
               className="relative aspect-video overflow-hidden rounded-md bg-black ring-1 ring-line hover:ring-line-strong"
             >
               <img src={sourceUrl(thumb.id, image.id)} alt={image.name} loading="lazy" className="size-full object-cover" />
+              {used.get(image.id) !== undefined && <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[10px] text-white/85">{used.get(image.id)}</span>}
               {image.from === "openart" && <span className="absolute right-1 bottom-1 rounded bg-black/70 px-1 text-[10px] text-white/80">OpenArt</span>}
             </button>
           ))}
@@ -822,6 +900,53 @@ function AssetDialog({ file, onClose, onAdded }: { file: File | null; onClose: (
   );
 }
 
+/**
+ * A picture, big, with what can be done with it in one place (Sphe, Nov 3:
+ * clicking a picture should open a big dialog, the options moved there): what
+ * it is, whether it's used, the prompts stored for it, and its actions.
+ */
+function PictureDialog({ thumbId, image, used, onClose, onUse, onAttach, onRemove }: { thumbId: string; image: Thumbnail["images"][number]; used: string | null; onClose: () => void; onUse: (how: "base" | "layer") => void; onAttach: () => void; onRemove: () => void }) {
+  const width = Math.min(1100, window.innerWidth - 48);
+  return (
+    <Modal open onClose={onClose} width={width}>
+      <div className="flex h-[min(700px,calc(100vh-48px))] flex-col">
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-4">
+          <ImageIcon size={15} className="text-muted" />
+          <h2 className="truncate text-[14px] font-semibold">{image.name}</h2>
+          {used !== null && <span className="rounded-full border border-line px-2 py-0.5 text-[11px] text-muted">{used}</span>}
+          <span className="text-[12px] text-faint">{image.width}×{image.height}{image.model ? ` · ${image.model}` : image.from === "openart" ? " · OpenArt" : ""}</span>
+        </div>
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-w-0 flex-1 items-center justify-center bg-black p-5">
+            <img src={sourceUrl(thumbId, image.id)} alt={image.name} className="max-h-full max-w-full rounded-md object-contain" />
+          </div>
+          <div className="flex w-[300px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-line p-4">
+            <Button variant="light" onClick={() => onUse("base")}>Use as base</Button>
+            <Button variant="subtle" onClick={() => onUse("layer")}>Add on top</Button>
+            <Button variant="subtle" onClick={onAttach}>Give to Claude</Button>
+            <Button variant="subtle" onClick={() => window.open(sourceUrl(thumbId, image.id), "_blank")}>Open full size</Button>
+            {image.request !== undefined && (
+              <div className="mt-2">
+                <div className="text-[11px] font-medium tracking-wide text-faint uppercase">Your request</div>
+                <p className="mt-1 text-[12.5px] leading-relaxed whitespace-pre-wrap text-secondary">{image.request}</p>
+              </div>
+            )}
+            {image.prompt !== undefined && (
+              <div className="mt-2">
+                <div className="text-[11px] font-medium tracking-wide text-faint uppercase">OpenArt prompt</div>
+                <p className="mt-1 text-[12.5px] leading-relaxed whitespace-pre-wrap text-secondary">{image.prompt}</p>
+              </div>
+            )}
+            <div className="mt-auto pt-4">
+              <Button variant="destructive" onClick={onRemove}>Remove</Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ---------------------------------------------------------------- a layer's dialog (Camera Raw for a picture)
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -833,14 +958,27 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** Camera Raw's slider: drag the bar, or scrub the number; double-click the bar to put it back. */
-function Slider({ label, value, min, max, onChange, suffix, reset = 0 }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void; suffix?: string; reset?: number }) {
+/**
+ * Camera Raw's control, as the team's other tools show one (Sphe, Nov 3): a
+ * rounded box, dark grey, its lighter fill showing how full it is with the
+ * number on top, − and + at its sides, the number scrubbable and typeable.
+ * Double-click the number to put it back.
+ */
+function Slider({ label, value, min, max, onChange, suffix, reset = 0, step = 1, precision = 0 }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void; suffix?: string; reset?: number; step?: number; precision?: number }) {
+  const by = step < 1 ? step * 5 : step;
+  const clamp = (next: number) => Math.min(max, Math.max(min, Number(next.toFixed(Math.max(precision, 3)))));
+  const full = max > min ? Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) : 0;
+  const button = "flex h-8 w-7 shrink-0 items-center justify-center rounded-md border border-line bg-white/[0.04] text-[14px] text-secondary transition-colors hover:bg-white/[0.09] hover:text-fg active:scale-95";
   return (
     <Row label={label}>
-      <input type="range" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} onDoubleClick={() => onChange(reset)} className="h-1 min-w-0 flex-1 accent-white" />
-      <div className="w-16 shrink-0">
-        <Scrub value={value} min={min} max={max} onChange={onChange} suffix={suffix} />
-      </div>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <button type="button" aria-label={`${label} down`} onClick={() => onChange(clamp(value - by))} className={button}>−</button>
+        <span className="relative h-8 min-w-0 flex-1 overflow-hidden rounded-md border border-line bg-white/[0.04]" onDoubleClick={() => onChange(reset)}>
+          <span className="absolute inset-y-0 left-0 bg-white/[0.13]" style={{ width: `${full}%` }} />
+          <Scrub value={value} min={min} max={max} step={step} precision={precision} onChange={onChange} suffix={suffix} className="relative h-8 justify-center bg-transparent px-1.5 hover:bg-transparent" />
+        </span>
+        <button type="button" aria-label={`${label} up`} onClick={() => onChange(clamp(value + by))} className={button}>+</button>
+      </span>
     </Row>
   );
 }
@@ -869,19 +1007,22 @@ function Section({ title, on, onToggle, children }: { title: string; on?: boolea
   );
 }
 
-const BASIC: { key: keyof Adjust; label: string; min: number }[] = [
-  { key: "exposure", label: "Exposure", min: -100 },
-  { key: "contrast", label: "Contrast", min: -100 },
-  { key: "highlights", label: "Highlights", min: -100 },
-  { key: "shadows", label: "Shadows", min: -100 },
+type AdjustSlider = { key: keyof Adjust; label: string; min: number; max: number; step?: number; precision?: number };
+const BASIC: AdjustSlider[] = [
+  // As Camera Raw's: exposure in stops, to two decimals; the rest whole numbers.
+  { key: "exposure", label: "Exposure", min: -5, max: 5, step: 0.01, precision: 2 },
+  { key: "contrast", label: "Contrast", min: -100, max: 100 },
+  { key: "highlights", label: "Highlights", min: -100, max: 100 },
+  { key: "shadows", label: "Shadows", min: -100, max: 100 },
 ];
-const COLOUR: { key: keyof Adjust; label: string; min: number }[] = [
-  { key: "warmth", label: "Temperature", min: -100 },
-  { key: "saturation", label: "Saturation", min: -100 },
+const COLOUR: AdjustSlider[] = [
+  { key: "warmth", label: "Temperature", min: -100, max: 100 },
+  { key: "saturation", label: "Saturation", min: -100, max: 100 },
+  { key: "vibrance", label: "Vibrance", min: -100, max: 100 },
 ];
-const EFFECTS: { key: keyof Adjust; label: string; min: number }[] = [
-  { key: "sharpen", label: "Sharpening", min: 0 },
-  { key: "vignette", label: "Vignette", min: 0 },
+const EFFECTS: AdjustSlider[] = [
+  { key: "sharpen", label: "Sharpening", min: 0, max: 100 },
+  { key: "vignette", label: "Vignette", min: 0, max: 100 },
 ];
 
 const DEFAULT_SHADOW: Shadow = { color: "#000000", opacity: 75, angle: 120, distance: 6, spread: 20, size: 18 };
@@ -929,7 +1070,6 @@ function LayerDialog({ layer, design, picture, tick, onClose, onApply }: { layer
           <SlidersHorizontal size={15} className="text-muted" />
           <h2 className="text-[14px] font-semibold">{draft.kind === "image" ? "Camera Raw" : "Text settings"}</h2>
           <span className="truncate text-[13px] text-muted">· {draft.kind === "text" ? draft.text : draft.name}</span>
-          <span className="ml-auto text-[12px] text-faint">Claude usually sets these: ask it in the chat.</span>
         </div>
         <div className="flex min-h-0 flex-1">
           <div className="flex min-w-0 flex-1 items-center justify-center bg-black p-5">
@@ -958,7 +1098,7 @@ function LayerDialog({ layer, design, picture, tick, onClose, onApply }: { layer
 
 function PictureSections({ layer, set }: { layer: ImageLayer; set: (patch: Partial<ImageLayer>) => void }) {
   const adjust = (key: keyof Adjust, value: number) => set({ adjust: { ...NO_ADJUST, ...layer.adjust, [key]: value } });
-  const sliders = (list: typeof BASIC) => list.map((one) => <Slider key={one.key} label={one.label} value={layer.adjust?.[one.key] ?? 0} min={one.min} max={100} onChange={(value) => adjust(one.key, value)} />);
+  const sliders = (list: AdjustSlider[]) => list.map((one) => <Slider key={one.key} label={one.label} value={layer.adjust?.[one.key] ?? 0} min={one.min} max={one.max} step={one.step} precision={one.precision} onChange={(value) => adjust(one.key, value)} />);
   return (
     <>
       <Section title="Basic">{sliders(BASIC)}</Section>
@@ -1076,7 +1216,7 @@ function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; up
           running={running}
           disabled={false}
           modelName="Opus 5.5"
-          placeholder={running ? "Working…" : "Ask for a thumbnail, or a change…"}
+          placeholder="Ask for a thumbnail, or a change…"
           draft={`thumbnails.chat-draft.${id}`}
           chat={`thumb:${id}`}
           files={{ upload, accept: picturesOnly }}

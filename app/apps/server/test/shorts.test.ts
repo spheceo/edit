@@ -6,8 +6,10 @@ import { expect, test } from "bun:test";
 import type { Face } from "../src/faces.ts";
 import type { AudioClip, Media, Project, VideoClip } from "../src/model.ts";
 import { newProject, SHORTS_SETTINGS } from "../src/project.ts";
+import { apply } from "../src/edit_plan.ts";
 import { cameraKeys, fillScale, subjectPath } from "../src/reframe.ts";
 import { issues } from "../src/shorts.ts";
+import { stubNative } from "./helpers/model.ts";
 import { headerStyle } from "../src/script.ts";
 import { linesOf, lineText } from "../src/captions.ts";
 
@@ -65,6 +67,23 @@ test("a Short's audit asks for its length, filling, subtitles and music", () => 
   p.media.push({ id: "m2", name: "song.m4a", path: "/nowhere/song.m4a", kind: "audio", duration: 200, width: 0, height: 0, fps: 0, has_audio: true });
   p.clips.push({ id: "a1", track: a1, start: 0, duration: 30 * FPS, color: "green", fade_in: 0, fade_out: 0, type: "audio", media: "m2", source_in: 0, speed: 1, volume_db: -24 } as AudioClip);
   expect(issues(p).map((issue) => issue.kind)).toEqual(["short_unsubtitled", "short_music_stops"]);
+});
+
+test("a whole picture over blur bars is not an unfilled shot", () => {
+  stubNative();
+  const p: Project = newProject("p", "short", SHORTS_SETTINGS, "shorts");
+  p.media.push({ id: "m1", name: "cam.mp4", path: "/nowhere/cam.mp4", kind: "video", duration: 600, width: 1920, height: 1080, fps: 30, has_audio: true });
+  const v1 = p.tracks.find((track) => track.kind === "video")!.id;
+  p.clips.push({
+    id: "c1", track: v1, start: 0, duration: 50 * FPS, color: "blue", fade_in: 0, fade_out: 0, type: "video", media: "m1",
+    source_in: 0, speed: 1, transform: { x: -400, y: 0, scale: fillScale([1920, 1080], [1080, 1920]), rotation: 0 }, opacity: 1,
+    keyframes: { x: [{ frame: 0, value: -400, ease: "hold" }, { frame: 40, value: 200, ease: "linear" }] },
+  } as VideoClip);
+  apply(p, [{ op: "blur_bars" }]);
+  expect(issues(p).some((issue) => issue.kind === "short_unfilled" || issue.kind === "short_subject_off")).toBe(false);
+  const sharp = p.clips.find((clip) => clip.id === "c1") as VideoClip;
+  expect(sharp.transform).toMatchObject({ x: 0, y: 0, scale: 1 });
+  expect(sharp.keyframes?.x).toBeUndefined();
 });
 
 test("a script headed SHORTS is a Short", () => {

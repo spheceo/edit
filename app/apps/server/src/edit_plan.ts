@@ -435,6 +435,8 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return looks.filmLook(project, args);
     case "fill_frame":
       return framing.fillFrame(project, args);
+    case "blur_bars":
+      return framing.blurBars(project, args);
     case "ease_vignettes":
       return vignettes.ease(project, args);
     case "red_quote": {
@@ -525,7 +527,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
         throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
       }
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, ease_vignettes, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, blur_marks, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, blur_bars, ease_vignettes, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, blur_marks, tidy_tracks`,
       );
   }
 }

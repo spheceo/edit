@@ -1,7 +1,8 @@
 // A note being left on the player (lib/notes.ts): at the playhead's frame (or
 // the In–Out span when the playhead is in it), with a box dragged on the
 // picture if wanted, written in a small bubble at the player's bottom left.
-// Enter queues it in the row above the chat's composer; Esc lets it go. The agent gets the queue when someone tells it to
+// Enter queues it in the row above the chat's composer, Shift+Enter starts a
+// new line; Esc lets it go. The agent gets the queue when someone tells it to
 // implement the feedback.
 
 import { ArrowUp, SquareDashed } from "lucide-react";
@@ -72,13 +73,20 @@ export function NoteBoxLayer({ wrap }: { wrap: HTMLDivElement | null }) {
  * above the playhead's time (Sphe, Nov 2: first "it makes no sense to have the
  * comment box be HUGE … and be in FRONT of the thing we're giving feedback
  * for", then "like a poped out buble but maybe have it more on the left but
- * make it minimal and animate in and out well"). One line: the time, the
- * note, a box to mark the spot, send. Enter queues, Esc lets it go.
+ * make it minimal and animate in and out well"). The time, the note, a box
+ * to mark the spot, send. The note grows downwards as it's written, up to
+ * MOST_LINES, then scrolls (Sphe, Nov 3: one line scrolled a long note out of
+ * sight as it was typed); Enter queues, Shift+Enter a new line, Esc lets it go.
  */
 export function NoteDraft() {
   const draft = useNotes((state) => state.draft);
   return <AnimatePresence>{draft !== null && <NoteBubble key="note" />}</AnimatePresence>;
 }
+
+/** Lines the note shows before it scrolls. */
+const MOST_LINES = 5;
+/** Its line height (px): `leading-5`. */
+const LINE = 20;
 
 function NoteBubble() {
   const draft = useNotes((state) => state.draft);
@@ -88,8 +96,15 @@ function NoteBubble() {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
   useEffect(() => input.current?.focus(), []);
+  // As tall as what's written, from one line to MOST_LINES.
+  useEffect(() => {
+    const field = input.current;
+    if (field === null) return;
+    field.style.height = "auto";
+    field.style.height = `${Math.min(field.scrollHeight, MOST_LINES * LINE + 12)}px`;
+  }, [text]);
   // Kept while it animates out, after the draft is gone.
   const last = useRef(draft);
   if (draft !== null) last.current = draft;
@@ -118,13 +133,14 @@ function NoteBubble() {
         void queue();
       }}
     >
-      <div className="flex h-10 items-center gap-1 rounded-full border border-line-strong bg-[#161616]/95 py-1 pr-1 pl-3 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur">
-        <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11px] text-muted tabular @max-[260px]:hidden" title={inSpan ? "On the In–Out span" : "At the playhead"}>
+      <div className="flex min-h-10 items-end gap-1 rounded-[20px] border border-line-strong bg-[#161616]/95 py-1 pr-1 pl-3 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur">
+        <span className="flex h-8 shrink-0 items-center gap-1.5 self-start font-mono text-[11px] text-muted tabular @max-[260px]:hidden" title={inSpan ? "On the In–Out span" : "At the playhead"}>
           <span className="size-1.5 rounded-full bg-warning" />
           {where}
         </span>
-        <input
+        <textarea
           ref={input}
+          rows={1}
           aria-label="The note"
           value={text}
           placeholder={error ?? "Add a note…"}
@@ -138,9 +154,13 @@ function NoteBubble() {
             if (event.key === "Escape") {
               event.preventDefault();
               cancelNote();
+            } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              // Enter queues it, as the one-line field did; Shift+Enter is a new line.
+              event.preventDefault();
+              void queue();
             }
           }}
-          className={cx("h-8 min-w-0 flex-1 bg-transparent px-1.5 text-[13px] text-fg outline-none placeholder:text-faint", error !== null && "placeholder:text-danger")}
+          className={cx("min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-[13px] leading-5 text-fg outline-none placeholder:text-faint", error !== null && "placeholder:text-danger")}
         />
         <button
           type="button"
@@ -155,7 +175,7 @@ function NoteBubble() {
         <button
           type="submit"
           aria-label="Queue"
-          title={error ?? "Queue it for the agent (Enter) · Esc to cancel"}
+          title={error ?? "Queue it for the agent (Enter) · Shift+Enter for a new line · Esc to cancel"}
           disabled={text.trim() === "" || busy}
           className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-[transform,opacity] active:scale-90 disabled:opacity-25"
         >

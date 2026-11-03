@@ -216,7 +216,12 @@ test("an export that stops moving is started again by itself", async () => {
     await registry.start(store, app.library, structuredClone(store.get(id)!.project), native.exportDefaults(), `${dir}/stalls.mp4`, { drive: false, keepLocal: true });
     for (let tries = 0; registry.running() && tries < 500; tries++) await Bun.sleep(5);
     expect(starts).toBe(2);
-    expect(registry.activity().find((one) => one.id === id)?.state).toBe("done");
+    expect(registry.activity().find((one) => one.id === id)).toMatchObject({ state: "done", onDisk: true, saved: `${dir}/stalls.mp4` });
+    // The archive (or anything else) can remove it after done: the next read says so, and stops naming a path.
+    fs.rmSync(`${dir}/stalls.mp4`);
+    const gone = registry.activity().find((one) => one.id === id);
+    expect(gone).toMatchObject({ state: "done", onDisk: false });
+    expect(gone?.saved).toBeUndefined();
   } finally {
     Object.assign(stall, was);
     render.mockRestore(); archive.mockRestore(); plan.mockRestore(); cleanup();

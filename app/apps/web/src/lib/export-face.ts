@@ -68,6 +68,20 @@ export function cardFace(jobs: FaceJob[]): CardFace {
   return { percent: null, subtitle: "Exports", title: "Exports", attention: false };
 }
 
+/**
+ * Where a finished export is. `place` is the file already on this Mac.
+ * `download` follows the "Download a copy" link: the browser's Downloads folder, a second file when `place` is set.
+ */
+export function exportWhere(job: { onDisk?: boolean; saved?: string }): { place: string | null; download: string } {
+  const place = job.onDisk === true && job.saved ? `Saved on this Mac at ${job.saved}` : null;
+  return { place, download: place ? "another one, in your Downloads folder." : "to your Downloads folder." };
+}
+
+/** Settings → Exports. `shown` is the folder with home as `~`. */
+export function folderDetail(chosen: boolean, shown: string): string {
+  return chosen ? `Exports go to ${shown}.` : `Not chosen yet. Exports go to ${shown} until you pick a folder.`;
+}
+
 /** The row's chip. "exporting" with no count is still just Sharing; a named stage is said. */
 export function shareChip(stage: string): string {
   if (stage === "exporting") return "Sharing";

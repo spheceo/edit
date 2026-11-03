@@ -138,3 +138,11 @@ export function expandHome(path: string): string {
   if (path.startsWith("~/")) return join(process.env.HOME ?? "", path.slice(2));
   return path;
 }
+
+/** `path` with the home folder written as `~` (`~/Movies/Edit/Name.mp4`). A path outside home stays as it is. */
+export function homePath(path: string): string {
+  const home = userHome();
+  if (home === "." || home === "") return path;
+  if (path === home) return "~";
+  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}

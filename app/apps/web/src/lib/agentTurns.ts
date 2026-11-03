@@ -3,7 +3,10 @@
 
 import type { AgentEntry } from "./agent";
 
-export type TurnPart = { kind: "group"; id: string; calls: AgentEntry[] } | { kind: "entry"; entry: AgentEntry };
+export type TurnPart =
+  | { kind: "group"; id: string; calls: AgentEntry[] }
+  | { kind: "entry"; entry: AgentEntry }
+  | { kind: "thinking"; id: string; text: string; active: boolean };
 
 export interface Turn {
   id: string;
@@ -47,7 +50,7 @@ export function buildTurns(entries: AgentEntry[], running: boolean): Turn[] {
       if (part.kind === "entry" && (index === lastAssistant || part.entry.kind === "error" || part.entry.kind === "subagent")) answer.push(part.entry);
       else work.push(part);
     });
-    const all = [current.user, ...parts.flatMap((part) => (part.kind === "group" ? part.calls : [part.entry]))].filter(Boolean) as AgentEntry[];
+    const all = [current.user, ...parts.flatMap((part) => (part.kind === "group" ? part.calls : part.kind === "entry" ? [part.entry] : []))].filter(Boolean) as AgentEntry[];
     const start = current.user?.at ?? all[0]?.at ?? 0;
     const end = Math.max(...all.map((entry) => entry.updated || entry.at || 0));
     turns.push({ id: current.user?.id ?? all[0]?.id ?? String(turns.length), user: current.user, parts, work, answer, workedMs: Math.max(0, end - start), startedAt: start, live: false });
@@ -64,6 +67,8 @@ export function buildTurns(entries: AgentEntry[], running: boolean): Turn[] {
     if (entry.kind === "tool") {
       if (last?.kind === "group") last.calls.push(entry);
       else current.parts.push({ kind: "group", id: entry.id, calls: [entry] });
+    } else if (entry.kind === "thinking") {
+      current.parts.push({ kind: "thinking", id: entry.id, text: entry.text, active: entry.status === "running" });
     } else {
       current.parts.push({ kind: "entry", entry });
     }
@@ -96,9 +101,29 @@ const IDEA_TOOLS: Record<string, string> = {
 /** A script's tools carry their own human label in the entry's text (writer/chat/turn.ts). */
 const SCRIPT_TOOLS = new Set(["build_script", "plan_part", "read_timeline", "read_passages", "find_words", "remove_words", "insert_words", "arrange_word_clips", "arrange_time_clips", "insert_cut_in", "set_reuse_link", "move_clips", "reorder_clip", "trim_clip", "split_clip", "delete_items", "close_gaps", "set_label", "correct_word", "history", "select_clips", "move_playhead", "start_export", "inspect_frames", "read_assets", "curate_assets", "read_doc_comments", "find_silences", "read_audio", "review_cuts", "polish_clips", "remove_silences", "load_writing_skill", "read_script", "write_cut_ins", "set_outline", "set_opening", "add_section", "finish_section", "read_plan", "review_plan", "replace_items", "remove_items", "finish"]);
 
+/** A thumbnail tool, as what it is doing and what it did. */
+const THUMB_TOOLS: Record<string, [string, string]> = {
+  make_picture: ["Making a picture", "Made a picture"],
+  picture_prompt: ["Reading the picture's prompt", "Read the picture's prompt"],
+  new_version: ["Starting another version", "Started another version"],
+  switch_version: ["Switching version", "Switched version"],
+  take_final: ["Taking the final version", "Took the final version"],
+  openart_models: ["Checking OpenArt's models", "Checked OpenArt's models"],
+  model_options: ["Reading a model's options", "Read a model's options"],
+  set_layers: ["Laying out the thumbnail", "Laid out the thumbnail"],
+  change_layers: ["Changing the layers", "Changed the layers"],
+  undo: ["Undoing a change", "Undid a change"],
+  redo: ["Redoing a change", "Redid a change"],
+  look: ["Looking at the thumbnail", "Looked at the thumbnail"],
+  rename: ["Renaming the thumbnail", "Renamed the thumbnail"],
+  Read: ["Looking at a picture", "Looked at a picture"],
+};
+
 /** A short, human title for one call. */
 export function callTitle(entry: AgentEntry): string {
   if (entry.tool !== undefined && SCRIPT_TOOLS.has(entry.tool) && entry.text) return entry.text;
+  const thumb = entry.tool !== undefined ? THUMB_TOOLS[entry.tool] : undefined;
+  if (thumb !== undefined) return entry.status === "running" ? thumb[0] : thumb[1];
   const a = args(entry);
   switch (entry.tool) {
     // The idea page's run (ideas/run.ts): the tool's own first sentence says what it did.
@@ -111,8 +136,6 @@ export function callTitle(entry: AgentEntry): string {
       return entry.text || IDEA_TOOLS[entry.tool];
     case "skip_case":
       return "Skipped the case";
-    case "Read":
-      return "Looked at a picture";
     case "get_project":
       return "Read the project";
     case "list_projects":
@@ -178,6 +201,19 @@ export function groupSummary(calls: AgentEntry[]): string {
       save_summary: "wrote the summary",
       skip_case: "skipped the case",
       Read: "picture",
+      make_picture: "made",
+      picture_prompt: "read a picture's prompt",
+      new_version: "started another version",
+      switch_version: "switched version",
+      take_final: "took the final version",
+      openart_models: "checked OpenArt's models",
+      model_options: "read a model's options",
+      set_layers: "laid out the thumbnail",
+      change_layers: "changed the layers",
+      undo: "undid a change",
+      redo: "redid a change",
+      look: "looked at the thumbnail",
+      rename: "renamed the thumbnail",
     })[tool ?? ""] ?? "step";
   for (const call of calls) {
     const key = bucket(call.tool);
@@ -204,6 +240,8 @@ export function groupSummary(calls: AgentEntry[]): string {
         return `looked at ${plural(count, "frame")}`;
       case "picture":
         return `looked at ${plural(count, "picture")}`;
+      case "made":
+        return `made ${plural(count, "picture")}`;
       case "step":
         return `ran ${plural(count, "step")}`;
       default:

@@ -40,7 +40,7 @@ import * as drive from "./drive.ts";
 import { beingRead } from "./exports.ts";
 import * as retention from "./export_retention.ts";
 import * as later from "./later.ts";
-import { defaultExportsDir } from "./paths.ts";
+import { exportRoots } from "./export_folder.ts";
 import * as reviews from "./reviews.ts";
 import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalOriginals } from "./cloud_media.ts";
 import { createHash } from "node:crypto";
@@ -659,7 +659,7 @@ export function cleanExports(app: App, dryRun: boolean, now = Date.now()): { fil
   } catch {
     return { files: 0, bytes: 0, decisions: [] };
   }
-  const roots = new Set([defaultExportsDir(), join(home, "exports")]);
+  const roots = new Set(exportRoots(home));
   const shared = reviews.read(home).shared;
   const free = freeSpace(app.store.cacheDir());
   const decisions = retention.decide(records, {

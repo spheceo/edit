@@ -139,6 +139,8 @@ export async function ask(question: Question): Promise<Answer> {
     ...(question.resume ? { resume: question.resume } : {}),
     ...(question.maxTurns ? { maxTurns: question.maxTurns } : {}),
     ...(question.effort ? { effort: question.effort } : {}),
+    // Reasoning and tool calls as they happen, for the chat's live trace. The finished assistant message still follows.
+    ...(question.tools ? { includePartialMessages: true } : {}),
     // And a check of every Read's path, whatever the rules allow.
     canUseTool: async (tool, input) => {
       if (tool === "Read") {
@@ -163,14 +165,15 @@ export async function ask(question: Question): Promise<Answer> {
   const run = query({ prompt: question.prompt, options });
   try {
     for await (const message of run) {
-      if (message.type === "assistant") {
+      if (message.type === "stream_event" && question.tools) {
+        noteStream(message as { parent_tool_use_id?: unknown; event?: unknown });
+      } else if (message.type === "system" && question.tools && message.subtype === "thinking_tokens") {
+        // A redacted reasoning block streams token counts and no text. The chat still shows Thinking.
+        live.thinkingBegan();
+      } else if (message.type === "assistant") {
         const reply = message.message as { stop_reason?: string | null; usage?: { output_tokens?: number }; content?: unknown };
-        // The chat's live turn (live.ts): its words, and each tool as it starts.
-        if (question.tools && Array.isArray(reply.content))
-          for (const block of reply.content as { type?: string; text?: string; id?: string; name?: string }[]) {
-            if (block.type === "text" && typeof block.text === "string") live.said(block.text);
-            else if (block.type === "tool_use" && typeof block.id === "string") live.tool({ id: block.id, tool: (block.name ?? "").replace(/^mcp__writer__/, ""), label: "", state: "running" });
-          }
+        // The chat's live turn (live.ts): its reasoning, its words, and each tool as it starts.
+        if (question.tools && Array.isArray(reply.content)) recordReply(reply.content);
         answer.replies++;
         answer.biggestReply = Math.max(answer.biggestReply, reply.usage?.output_tokens ?? 0);
         if (reply.stop_reason === "max_tokens" || reply.stop_reason === "refusal") stops.push(reply.stop_reason);
@@ -216,6 +219,38 @@ export async function ask(question: Question): Promise<Answer> {
   answer.structured = typeof result.structured_output === "object" && result.structured_output !== null ? (result.structured_output as Record<string, unknown>) : null;
   diag.info("writer", `${question.label}: answered in ${seconds(began)} ($${answer.costUsd.toFixed(2)} at API prices; ${why})`);
   return answer;
+}
+
+type ReplyBlock = { type?: string; text?: string; thinking?: string; id?: string; name?: string; input?: unknown };
+
+/** One finished assistant message, in block order, onto the live turn. */
+function recordReply(content: unknown[]): void {
+  const blocks = content as ReplyBlock[];
+  const carried = blocks.some((block) => block.type === "thinking" && typeof block.thinking === "string" && block.thinking.trim() !== "");
+  // The reply has the reasoning text: drop the stream's copy and place each block where it happened.
+  // It doesn't (redacted): keep whatever the stream did send, ahead of this reply's words.
+  if (carried) live.dropThinking();
+  else live.endThinking();
+  for (const block of blocks) {
+    if (block.type === "thinking" && typeof block.thinking === "string") live.keepThought(block.thinking);
+    else if (block.type === "text" && typeof block.text === "string") live.said(block.text);
+    else if (block.type === "tool_use" && typeof block.id === "string") {
+      const detail = live.inputDetail(block.input);
+      live.tool({ id: block.id, tool: (block.name ?? "").replace(/^mcp__writer__/, ""), label: "", state: "running", ...(detail ? { detail } : {}) });
+    }
+  }
+}
+
+/** A streaming event: reasoning as it is written. Words and tools wait for the finished message, so they are recorded once. */
+function noteStream(message: { parent_tool_use_id?: unknown; event?: unknown }): void {
+  if (typeof message.parent_tool_use_id === "string") return;
+  const event = (message.event ?? {}) as { type?: string; content_block?: { type?: string }; delta?: { type?: string; thinking?: string } };
+  if (event.type === "content_block_start") {
+    const kind = event.content_block?.type;
+    if (kind === "thinking" || kind === "redacted_thinking") live.thinkingBegan();
+  } else if (event.type === "content_block_delta" && event.delta?.type === "thinking_delta" && typeof event.delta.thinking === "string") {
+    live.thinkingMore(event.delta.thinking);
+  }
 }
 
 const seconds = (since: number) => `${Math.round((Date.now() - since) / 1000)} s`;

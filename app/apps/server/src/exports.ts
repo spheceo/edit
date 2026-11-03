@@ -19,7 +19,7 @@ import { subtitleVideo } from "./drive.ts";
 import { catchBugsAsync } from "./guard.ts";
 import type { ExportOptions, Plan, Project } from "./model.ts";
 import { native } from "./native/index.ts";
-import { canonical, fileName, join, parent } from "./paths.ts";
+import { canonical, fileName, homePath, isFile, join, parent } from "./paths.ts";
 import { duration } from "./project.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
@@ -129,6 +129,10 @@ export interface ExportActivity {
   waiting?: string;
   /** Running, before frames are encoding: "cutting the footage, 12 of 225". Absent once the encoder reports, so the line goes back to the percent. */
   phase?: string;
+  /** The file is still on this Mac. Set only once the export is done, and checked again each time the queue is read: the archive deletes it after upload. */
+  onDisk?: boolean;
+  /** Where that file is, with home as `~` (`~/Movies/Edit/Name.mp4`). Set only while `onDisk`. */
+  saved?: string;
 }
 
 /**
@@ -591,7 +595,14 @@ export class ExportRegistry implements seams.Exports {
   }
 
   activity(): ExportActivity[] {
-    return [...this.recent.values()].map(one => ({ ...one })).sort((a, b) => b.updated_ms - a.updated_ms);
+    return [...this.recent.values()].map((one) => this.withPlace(one)).sort((a, b) => b.updated_ms - a.updated_ms);
+  }
+
+  /** A finished export says whether its file is still on this Mac, and where. Checked on each read, not stored: the archive may delete it after this was marked done. */
+  private withPlace(job: ExportActivity): ExportActivity {
+    if (job.state !== "done" || job.path === "") return { ...job };
+    if (!isFile(job.path)) return { ...job, onDisk: false };
+    return { ...job, onDisk: true, saved: homePath(job.path) };
   }
 
   private publish(store: Store, project: Project, running: Running, state: ExportActivity["state"], progress: number, extra: Record<string, unknown> = {}): void {

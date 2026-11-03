@@ -303,12 +303,14 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
   const activityAt = useAgent((state) => state.activityAt);
   const quiet = useQuiet(activityAt, 450);
   const lastGroup = [...turn.parts].reverse().find((part) => part.kind === "group");
-  const toolRunning = lastGroup?.kind === "group" && lastGroup.calls.some((call) => call.status === "running");
+  const toolRunning = turn.parts.some((part) => part.kind === "group" && part.calls.some((call) => call.status === "running"));
+  const thinkingNow = turn.parts.some((part) => part.kind === "thinking" && part.active);
   // Into real work (a tool called, or a few seconds in): "Working for 1m 12s", ticking, shown while tools run too.
   const now = useNow(turn.live);
   const elapsed = turn.live && turn.startedAt > 0 ? now - turn.startedAt : 0;
   const working = turn.live && said === undefined && isWorking(elapsed, lastGroup !== undefined);
-  const thinking = turn.live && (working || ((said !== undefined || quiet) && !toolRunning));
+  // A live reasoning row already says Thinking. A running tool says so on its own row.
+  const thinking = turn.live && !thinkingNow && (working || ((said !== undefined || quiet) && !toolRunning));
   const fresh = (id: string) => !known.has(id);
   const project = useEditor((state) => state.project?.id);
   return (
@@ -327,10 +329,12 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
         </motion.div>
       )}
       {turn.live ? (
-        // Live: everything in the order it happens.
-        turn.parts.map((part, index) =>
-          part.kind === "group" ? (
-            <ToolGroup key={part.id} calls={part.calls} live={index === turn.parts.length - 1} />
+        // Live: everything in the order it happens. A tool group stays live while one of its calls is still running, even after the model has said something.
+        turn.parts.map((part) =>
+          part.kind === "thinking" ? (
+            <ThinkingTrace key={part.id} text={part.text} active={part.active} />
+          ) : part.kind === "group" ? (
+            <ToolGroup key={part.id} calls={part.calls} live={part.calls.some((call) => call.status === "running")} />
           ) : (
             <EntryView key={part.entry.id} entry={part.entry} fresh={fresh(part.entry.id)} />
           ),
@@ -359,7 +363,13 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
                 className="flex flex-col gap-1.5 overflow-hidden"
               >
                 {turn.work.map((part) =>
-                  part.kind === "group" ? <ToolGroup key={part.id} calls={part.calls} live={false} /> : <EntryView key={part.entry.id} entry={part.entry} muted />,
+                  part.kind === "group" ? (
+                    <ToolGroup key={part.id} calls={part.calls} live={false} />
+                  ) : part.kind === "thinking" ? (
+                    <ThinkingTrace key={part.id} text={part.text} active={false} />
+                  ) : (
+                    <EntryView key={part.entry.id} entry={part.entry} muted />
+                  ),
                 )}
               </motion.div>
             )}
@@ -441,6 +451,14 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   save_summary: FileText,
   skip_case: CircleSlash,
   Read: Eye,
+  make_picture: Image,
+  picture_prompt: FileText,
+  set_layers: LayoutGrid,
+  change_layers: SlidersHorizontal,
+  look: Eye,
+  undo: RotateCcw,
+  redo: RotateCcw,
+  rename: Pencil,
   get_project: FileText,
   list_projects: FolderOpen,
   read_transcript: ScrollText,
@@ -459,7 +477,33 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
 
 const toolIcon = (tool?: string) => TOOL_ICONS[tool ?? ""] ?? Wrench;
 
-/** Consecutive tool calls: one row that shows the live step, then a summary (as in phi). */
+/** A reasoning block. While it is being written the words stay open; afterwards it folds to the label (as in phi). */
+function ThinkingTrace({ text, active }: { text: string; active: boolean }) {
+  const [open, setOpen] = useState(false);
+  const body = text.trim();
+  const ref = useRef<HTMLPreElement>(null);
+  useLayoutEffect(() => {
+    if (active && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [active, body]);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => body !== "" && setOpen((value) => !value)}
+        className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
+      >
+        <span className={cx("min-w-0 flex-1 truncate", active && "shimmer")}>Thinking</span>
+      </button>
+      {(active || open) && body !== "" && (
+        <pre ref={ref} className="mx-1.5 mt-0.5 mb-1.5 max-h-40 overflow-auto rounded-md bg-black px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted ring-1 ring-line">
+          {body}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** Consecutive tool calls: one row that shows the live step, then a summary (as in phi). Open it for each call. */
 function ToolGroup({ calls, live }: { calls: AgentEntry[]; live: boolean }) {
   const [open, setOpen] = useState(false);
   const current = live ? ([...calls].reverse().find((call) => call.status === "running") ?? calls.at(-1)) : undefined;

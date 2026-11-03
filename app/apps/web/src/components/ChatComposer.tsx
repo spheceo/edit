@@ -219,7 +219,8 @@ export function ChatComposer({
               send();
             }
           }}
-          className="max-h-48 min-h-[60px] w-full resize-none bg-transparent px-1 text-[13px] leading-[19px] text-fg outline-none placeholder:text-faint"
+          // Dim grey, the same ink phi uses for its composer placeholder.
+          className="max-h-48 min-h-[60px] w-full resize-none bg-transparent px-1 text-[13px] leading-[19px] text-fg outline-none placeholder:text-[#5b5b64]"
           style={{ height: Math.min(192, 60 + Math.max(0, text.split("\n").length - 3) * 19) }}
         />
         <div className="mt-1.5 flex items-center gap-1.5">

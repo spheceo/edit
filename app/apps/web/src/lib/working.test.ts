@@ -2,7 +2,8 @@
 
 import { expect, test } from "vitest";
 
-import { buildTurns, editWorked, formatSpan, formatWorking, isWorking, shownText } from "./agentTurns";
+import type { AgentEntry } from "./agent";
+import { buildTurns, callTitle, editWorked, formatSpan, formatWorking, groupSummary, isWorking, shownText } from "./agentTurns";
 
 test("a turn is working once it calls a tool or a few seconds in", () => {
   expect(isWorking(1200, false)).toBe(false);
@@ -14,6 +15,29 @@ test("a picture's placeholder text is not shown; its words are", () => {
   expect(shownText("[Image: image.png; ref=image_c0a2255e-e6ec-4af2-9baf-0b98ead27093]")).toBe("");
   expect(shownText("Use this one [Image: a.jpg; ref=x]\n\nand make it pop")).toBe("Use this one\n\nand make it pop");
   expect(shownText("An [Image] is worth a thousand words")).toBe("An [Image] is worth a thousand words");
+});
+
+test("a live thumbnail turn shows reasoning between the words and the tool still running", () => {
+  const entries: AgentEntry[] = [
+    { id: "u", kind: "user", text: "Lighten him", at: 1 },
+    { id: "think", kind: "thinking", text: "The officer is still too dark.", status: "done", at: 2 },
+    { id: "said", kind: "assistant", text: "I'm still on it.", at: 3 },
+    { id: "tool", kind: "tool", tool: "make_picture", text: "Lighten him", status: "running", at: 4 },
+    { id: "again", kind: "thinking", text: "", status: "running", at: 5 },
+  ];
+  const turn = buildTurns(entries, true)[0]!;
+  expect(turn.live).toBe(true);
+  expect(turn.parts.map((part) => part.kind)).toEqual(["thinking", "entry", "group", "thinking"]);
+  const running = turn.parts.find((part) => part.kind === "group");
+  expect(running?.kind === "group" && running.calls[0]?.status).toBe("running");
+  expect(callTitle({ id: "tool", kind: "tool", tool: "make_picture", text: "", status: "running" })).toBe("Making a picture");
+  expect(callTitle({ id: "tool", kind: "tool", tool: "Read", text: "", status: "done" })).toBe("Looked at a picture");
+  expect(groupSummary([
+    { id: "a", kind: "tool", tool: "Read", text: "" },
+    { id: "b", kind: "tool", tool: "Read", text: "" },
+    { id: "c", kind: "tool", tool: "Read", text: "" },
+    { id: "d", kind: "tool", tool: "make_picture", text: "" },
+  ])).toBe("Looked at 3 pictures, made a picture");
 });
 
 test("working reads to the second", () => {

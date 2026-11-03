@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityLine, cardFace, exportLabel, shareChip, type FaceJob } from "./export-face";
+import { activityLine, cardFace, exportLabel, exportWhere, folderDetail, shareChip, type FaceJob } from "./export-face";
 
 const job = (over: Partial<FaceJob>): FaceJob => ({ name: "Republican Chairman", state: "running", progress: 0, ...over });
 
@@ -35,6 +35,27 @@ describe("the exports card", () => {
     expect(exportLabel(job({ state: "queued", waiting: "waiting for the encoder (this Mac has one)" }))).toBe("Queued · waiting for the encoder (this Mac has one)");
     expect(exportLabel(job({ state: "queued" }))).toBe("Queued · waiting for the renderer");
     expect(exportLabel(job({ kind: "script", stage: "uploading the footage 42%" }))).toBe("Uploading the footage 42%…");
+  });
+});
+
+describe("where a finished export is", () => {
+  it("names the file on this Mac, and says a download is a second copy in Downloads", () => {
+    expect(exportWhere({ onDisk: true, saved: "~/Movies/Edit/Out.mp4" })).toEqual({
+      place: "Saved on this Mac at ~/Movies/Edit/Out.mp4",
+      download: "another one, in your Downloads folder.",
+    });
+  });
+
+  it("says only Downloads once the file on this Mac is gone", () => {
+    expect(exportWhere({ onDisk: false, saved: "~/Movies/Edit/Out.mp4" })).toEqual({ place: null, download: "to your Downloads folder." });
+    expect(exportWhere({})).toEqual({ place: null, download: "to your Downloads folder." });
+  });
+});
+
+describe("the exports folder", () => {
+  it("says where exports go, and that a folder still has to be picked", () => {
+    expect(folderDetail(true, "~/Movies/Edit")).toBe("Exports go to ~/Movies/Edit.");
+    expect(folderDetail(false, "~/Movies/Edit")).toBe("Not chosen yet. Exports go to ~/Movies/Edit until you pick a folder.");
   });
 });
 

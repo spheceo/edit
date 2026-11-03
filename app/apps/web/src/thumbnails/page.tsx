@@ -20,17 +20,23 @@ import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { sourceUrl, thumbnailsApi, working, type Adjust, type Asset, type Design, type ImageLayer, type Layer, type Shadow, type TextLayer, type Thumbnail } from "../lib/thumbnails";
 import { drawThumbnail, textBounds, type Context as DrawContext } from "@edit/types/thumbnail_render";
-import { FONTS, HEIGHT, NO_ADJUST, WIDTH } from "@edit/types/thumbnails";
+import { BLACK_BOX_FONT, captionShadow, FONTS, HEIGHT, HOUSE_SHADOW, NO_ADJUST, WHITE_RED_FONT, WIDTH } from "@edit/types/thumbnails";
 
 const newId = () => Math.random().toString(36).slice(2, 10);
 
-// Montserrat ships with Edit (the server has it); the other fonts are the Mac's own.
+// The caption faces ship with Edit (the server has them); Helvetica Neue, Arial Black and Impact are the Mac's own.
 let fontsAdded = false;
 function addFonts(): void {
   if (fontsAdded) return;
   fontsAdded = true;
-  const face = new FontFace("Montserrat", 'url("/api/thumbnails/fonts/Montserrat.ttf")', { weight: "100 900" });
-  void face.load().then((loaded) => document.fonts.add(loaded), () => {});
+  for (const [family, file] of [
+    ["Montserrat", "Montserrat.ttf"],
+    ["Arabic-font-2013", "Arabic-font-2013.ttf"],
+    ["ITC Avant Garde Gothic", "ITCAvantGardeGothic-Bold.otf"],
+  ] as const) {
+    const face = new FontFace(family, `url("/api/thumbnails/fonts/${encodeURIComponent(file)}")`, { weight: "100 900" });
+    void face.load().then((loaded) => document.fonts.add(loaded), () => {});
+  }
 }
 
 // ---------------------------------------------------------------- pictures, as the canvas loads them
@@ -107,7 +113,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
         .then(({ thumb }) => {
           setThumb(thumb);
           setMissing(null);
-          if (!dirty.current) setDesign(thumb.design);
+          if (!dirty.current) setDesign(settleCaptions(thumb.design));
         })
         .catch((error: unknown) => setMissing((error as Error).message)),
     [id],
@@ -185,7 +191,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
       await save();
       const { thumb, step } = await thumbnailsApi.step(id, back);
       setThumb(thumb);
-      setDesign(thumb.design);
+      setDesign(settleCaptions(thumb.design));
       dirty.current = false;
       if (step === null) toast(back ? "Nothing to undo." : "Nothing to redo.");
       else {
@@ -203,7 +209,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
   /** A version made or shown: its layout replaces what's drawn here. */
   const applyVersion = (next: Thumbnail) => {
     setThumb(next);
-    setDesign(next.design);
+    setDesign(settleCaptions(next.design));
     setSelected(null);
     dirty.current = false;
   };
@@ -441,7 +447,8 @@ export function ThumbnailScreen({ id }: { id: string }) {
                   onClose={() => setOpenLayer(null)}
                   onApply={(next) => {
                     setOpenLayer(null);
-                    change({ layers: design.layers.map((one) => (one.id === next.id ? next : one)) });
+                    const layer = next.kind === "text" && next.box === undefined ? (({ stroke: _stroke, ...rest }) => rest)(next) : next;
+                    change({ layers: design.layers.map((one) => (one.id === layer.id ? layer : one)) });
                   }}
                 />
               )}
@@ -465,7 +472,20 @@ export function ThumbnailScreen({ id }: { id: string }) {
   );
 }
 
-const newText = (): TextLayer => ({ id: newId(), kind: "text", name: "caption", opacity: 100, text: "Your words", x: WIDTH / 2, y: 140, width: 900, font: "Montserrat", weight: 800, size: 72, color: "#ffffff", align: "center", lineHeight: 1.05, box: { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 } });
+const newText = (): TextLayer => ({ id: newId(), kind: "text", name: "caption", opacity: 100, text: "your words", x: WIDTH / 2, y: 140, width: 900, font: BLACK_BOX_FONT, weight: 700, size: 72, color: "#ffffff", align: "center", lineHeight: 1.05, box: { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 } });
+
+/** A box-less caption still carrying an older house shadow shows the current one (opacity 100, spread 36, size 32, angle 90). */
+function settleCaptions(design: Design): Design {
+  let changed = false;
+  const layers = design.layers.map((layer) => {
+    if (layer.kind !== "text") return layer;
+    const shadow = captionShadow(layer);
+    if (shadow === layer.shadow) return layer;
+    changed = true;
+    return { ...layer, shadow: shadow === undefined ? undefined : { ...shadow } };
+  });
+  return changed ? { ...design, layers } : design;
+}
 
 // ---------------------------------------------------------------- the header
 
@@ -1025,15 +1045,13 @@ const EFFECTS: AdjustSlider[] = [
   { key: "vignette", label: "Vignette", min: 0, max: 100 },
 ];
 
-const DEFAULT_SHADOW: Shadow = { color: "#000000", opacity: 75, angle: 120, distance: 6, spread: 20, size: 18 };
-
 function ShadowSection({ shadow, set }: { shadow: Shadow | undefined; set: (shadow: Shadow | undefined) => void }) {
-  const value = shadow ?? DEFAULT_SHADOW;
+  const value = shadow ?? HOUSE_SHADOW;
   const one = (key: keyof Shadow, label: string, min: number, max: number, suffix?: string) => (
-    <Slider label={label} value={value[key] as number} min={min} max={max} suffix={suffix} reset={DEFAULT_SHADOW[key] as number} onChange={(next) => set({ ...value, [key]: next })} />
+    <Slider label={label} value={value[key] as number} min={min} max={max} suffix={suffix} reset={HOUSE_SHADOW[key] as number} onChange={(next) => set({ ...value, [key]: next })} />
   );
   return (
-    <Section title="Drop shadow" on={shadow !== undefined} onToggle={(on) => set(on ? DEFAULT_SHADOW : undefined)}>
+    <Section title="Drop shadow" on={shadow !== undefined} onToggle={(on) => set(on ? { ...HOUSE_SHADOW } : undefined)}>
       <Row label="Colour">
         <ColorInput value={value.color} onChange={(color) => set({ ...value, color })} />
       </Row>
@@ -1131,7 +1149,7 @@ function TextSections({ layer, set }: { layer: TextLayer; set: (patch: Partial<T
       <Section title="Words">
         <textarea value={layer.text} rows={2} onChange={(event) => set({ text: event.target.value })} className="my-1 rounded-md border border-line bg-bg px-2 py-1.5 text-[13px] text-fg outline-none focus:border-line-strong" />
         <Row label="Font">
-          <Select value={layer.font} options={FONTS.map((one) => ({ value: one.family as string, label: one.family }))} onChange={(font) => set({ font })} />
+          <Select value={layer.font} menuWidth={240} options={FONTS.map((one) => ({ value: one.family as string, label: one.family }))} onChange={(font) => set({ font })} />
         </Row>
         <Row label="Weight">
           <Select value={layer.weight} options={[400, 500, 600, 700, 800, 900].map((one) => ({ value: one, label: String(one) }))} onChange={(weight) => set({ weight })} />
@@ -1144,13 +1162,21 @@ function TextSections({ layer, set }: { layer: TextLayer; set: (patch: Partial<T
         <Row label="Align">
           <Select value={layer.align} options={[{ value: "left", label: "Left" }, { value: "center", label: "Centre" }, { value: "right", label: "Right" }]} onChange={(align) => set({ align })} />
         </Row>
-        <Row label="Capitals">
-          <Switch checked={layer.uppercase === true} onChange={(uppercase) => set({ uppercase })} />
+        <Row label="Case">
+          <Select
+            value={layer.casing === "upper" || (layer.casing === undefined && layer.uppercase === true) ? "upper" : layer.casing === "keep" ? "keep" : "lower"}
+            options={[
+              { value: "lower", label: "Lower case" },
+              { value: "upper", label: "Capitals" },
+              { value: "keep", label: "As written" },
+            ]}
+            onChange={(casing) => set({ casing, uppercase: undefined })}
+          />
         </Row>
         <Slider label="Rotation" value={layer.rotation ?? 0} min={-180} max={180} suffix="°" onChange={(rotation) => set({ rotation })} />
         <Slider label="Opacity" value={layer.opacity} min={0} max={100} suffix="%" reset={100} onChange={(opacity) => set({ opacity })} />
       </Section>
-      <Section title="Box behind" on={layer.box !== undefined} onToggle={(on) => set({ box: on ? { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 } : undefined })}>
+      <Section title="Box behind" on={layer.box !== undefined} onToggle={(on) => set(on ? { box: { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 }, ...(layer.font === WHITE_RED_FONT ? { font: BLACK_BOX_FONT } : {}) } : { box: undefined, stroke: undefined, ...(layer.font === BLACK_BOX_FONT ? { font: WHITE_RED_FONT } : {}), shadow: layer.shadow === undefined || captionShadow({ shadow: layer.shadow }) === HOUSE_SHADOW ? { ...HOUSE_SHADOW } : layer.shadow })}>
         {layer.box !== undefined && (
           <>
             <Row label="Colour">
@@ -1162,7 +1188,7 @@ function TextSections({ layer, set }: { layer: TextLayer; set: (patch: Partial<T
           </>
         )}
       </Section>
-      <Section title="Stroke" on={layer.stroke !== undefined} onToggle={(on) => set({ stroke: on ? { color: "#000000", width: 4 } : undefined })}>
+      {layer.box !== undefined && <Section title="Stroke" on={layer.stroke !== undefined} onToggle={(on) => set({ stroke: on ? { color: "#000000", width: 4 } : undefined })}>
         {layer.stroke !== undefined && (
           <>
             <Row label="Colour">
@@ -1171,7 +1197,7 @@ function TextSections({ layer, set }: { layer: TextLayer; set: (patch: Partial<T
             <Slider label="Width" value={layer.stroke.width} min={0} max={30} suffix="px" reset={4} onChange={(width) => set({ stroke: { ...layer.stroke!, width } })} />
           </>
         )}
-      </Section>
+      </Section>}
     </>
   );
 }
@@ -1196,18 +1222,35 @@ function entriesOf(thumb: Thumbnail): { entries: AgentEntry[]; running: boolean 
   });
   const run = thumb.run;
   const running = working(thumb);
-  if (running && run !== null) {
-    (run.tools ?? []).forEach((tool, at) => entries.push({ id: `live-${run.startedAt}-${at}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: tool.state === "running" ? "running" : tool.state === "error" ? "failed" : "done", at: run.startedAt }));
-    if (run.said) entries.push({ id: `live-${run.startedAt}-said`, kind: "assistant", text: run.said, at: run.startedAt });
-  }
+  if (running && run !== null) entries.push(...liveEntries(run));
   return { entries, running };
+}
+
+/** The turn still running, in the order it happened: reasoning, words, tools. */
+function liveEntries(run: NonNullable<Thumbnail["run"]>): AgentEntry[] {
+  const at = run.startedAt;
+  const status = (state: "running" | "done" | "error"): AgentEntry["status"] => (state === "running" ? "running" : state === "error" ? "failed" : "done");
+  if (run.trace !== undefined) {
+    const entries: AgentEntry[] = [];
+    run.trace.forEach((part, index) => {
+      if (part.kind === "text") entries.push({ id: `live-${at}-text-${index}`, kind: "assistant", text: part.text, at });
+      else if (part.kind === "thinking") entries.push({ id: `live-${at}-think-${index}`, kind: "thinking", text: part.text, status: part.active ? "running" : "done", at });
+      else part.calls.forEach((tool, call) => entries.push({ id: tool.id ? `live-${tool.id}` : `live-${at}-tool-${index}-${call}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", ...(tool.detail ? { detail: tool.detail } : {}), status: status(tool.state), at }));
+    });
+    return entries;
+  }
+  const entries: AgentEntry[] = [];
+  (run.tools ?? []).forEach((tool, index) => entries.push({ id: `live-${at}-${index}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: status(tool.state), at }));
+  if (run.said) entries.push({ id: `live-${at}-said`, kind: "assistant", text: run.said, at });
+  return entries;
 }
 
 function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; upload: Uploader; onAsked: () => void }) {
   const toastError = useEditor((state) => state.toastError);
   const { entries, running } = entriesOf(thumb);
   const { turns, known } = useChatTurns(id, entries, running);
-  const other = running && thumb.run !== null && thumb.run.tools === undefined && thumb.run.said === undefined ? ` · on ${thumb.run.holder}` : "";
+  const quiet = running && thumb.run !== null && thumb.run.trace === undefined && thumb.run.tools === undefined && thumb.run.said === undefined;
+  const other = quiet ? ` · on ${thumb.run?.holder}` : "";
   return (
     <ChatShell
       resetKey={id}
@@ -1226,9 +1269,9 @@ function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; up
       }
     >
       {entries.length === 0 ? (
-        <Empty title="Make a thumbnail with Claude" detail="Drop in a frame or a thumbnail and say what you want: “clean this base and put the REC overlay on”, “three drafts of the mom at the door”, “add ‘He abused me’ in a black box”." />
+        <Empty title="Make a thumbnail with Claude" detail="Drop in a frame or a thumbnail and say what you want: “clean this base and put the REC overlay on”, “three drafts of the mom at the door”, “add ‘he abused me’ in a black box”." />
       ) : (
-        <ChatTurns turns={turns} known={known} thinking={running ? `${thumb.run?.step ?? "Working"}${other}` : undefined} />
+        <ChatTurns turns={turns} known={known} thinking={running ? `Thinking${other}` : undefined} />
       )}
     </ChatShell>
   );

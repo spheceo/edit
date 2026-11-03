@@ -187,6 +187,7 @@ export function Select<T extends string | number>({
   options,
   onChange,
   className,
+  menuWidth,
 }: {
   value: T;
   /** `disabled`: shown, not pickable; `hint`: muted words after its label ("Soon"). */
@@ -194,6 +195,8 @@ export function Select<T extends string | number>({
   onChange: (value: T) => void;
   /** Overrides the look (by default a compact right-aligned value, as in the Inspector). */
   className?: string;
+  /** The menu's width. Long labels (a font's name) need more than the default. */
+  menuWidth?: number;
 }) {
   const current = options.find((option) => option.value === value);
   return (
@@ -203,7 +206,7 @@ export function Select<T extends string | number>({
         toggleMenu(
           event.currentTarget,
           options.map((option) => ({ label: option.label, checked: option.value === value, ...(option.disabled ? { disabled: true } : {}), ...(option.hint ? { hint: option.hint } : {}), onSelect: () => onChange(option.value) })),
-          { width: 150 },
+          { width: menuWidth ?? 150 },
         )
       }
       className={cx(
@@ -235,6 +238,17 @@ export function Switch({ checked, onChange }: { checked: boolean; onChange: (val
   );
 }
 
+/** Open dialogs, oldest first. Escape closes the latest one, so a picker over Share doesn't close Share. */
+const openModals: { close: () => void }[] = [];
+
+function onEscape(event: KeyboardEvent) {
+  if (event.key !== "Escape") return;
+  const top = openModals[openModals.length - 1];
+  if (!top) return;
+  event.stopPropagation();
+  top.close();
+}
+
 export function Modal({
   open,
   onClose,
@@ -246,17 +260,19 @@ export function Modal({
   children: ReactNode;
   width?: number;
 }) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
   useEffect(() => {
     if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-      }
+    const entry = { close: () => onCloseRef.current() };
+    openModals.push(entry);
+    if (openModals.length === 1) window.addEventListener("keydown", onEscape, true);
+    return () => {
+      const at = openModals.indexOf(entry);
+      if (at !== -1) openModals.splice(at, 1);
+      if (openModals.length === 0) window.removeEventListener("keydown", onEscape, true);
     };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [open, onClose]);
+  }, [open]);
   return (
     <AnimatePresence>
       {open && (

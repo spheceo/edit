@@ -154,6 +154,19 @@ export interface ExportRecord {
   missing: boolean;
 }
 
+/** Where this Mac writes exports (apps/server/src/export_folder.ts). */
+export interface ExportFolder {
+  path: string;
+  /** `path` with the home folder as `~`. */
+  shown: string;
+  /** False until someone saves a folder. `path` is then only the suggestion. */
+  chosen: boolean;
+  suggested: string;
+  suggestedShown: string;
+  /** This Mac's home, so other folders can be shown as `~/…`. */
+  home: string;
+}
+
 /** Jobs on this Mac, independent of the project open in the editor. */
 export interface ExportActivity {
   id: string;
@@ -173,6 +186,10 @@ export interface ExportActivity {
   kind?: "edit" | "script";
   /** A script share's stage ("uploading the footage 42%"). */
   stage?: string;
+  /** The file is still on this Mac. Set once the export is done. */
+  onDisk?: boolean;
+  /** Where that file is, with home as `~` (`~/Movies/Edit/Name.mp4`). Set only while `onDisk`. */
+  saved?: string;
 }
 
 export const api = {
@@ -225,6 +242,10 @@ export const api = {
   /** `drive`: upload the finished file to Drive (by default only a whole subtitled video is). */
   exportProject: (id: string, path: string, options: ExportOptions, drive?: boolean) =>
     request<{ path: string }>("POST", `/api/projects/${id}/export`, drive === undefined ? { path, options } : { path, options, drive }),
+  /** The folder exports are written into (export_folder.ts). `chosen` is false until someone picks one. */
+  exportFolder: () => request<ExportFolder>("GET", "/api/exports/folder"),
+  /** Saves that folder. Later exports go there. */
+  setExportFolder: (path: string) => request<ExportFolder>("POST", "/api/exports/folder", { path }),
   /** Shows a finished export in Finder on the machine running Edit. */
   /** The project's Drive link, checked that the file is still there (null once it's gone). */
   driveLink: (id: string) => request<{ drive: DriveFile | null }>("GET", `/api/projects/${id}/drive`),

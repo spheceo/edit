@@ -11,6 +11,8 @@ import type { Asset } from "@edit/types/thumbnails";
 
 import recOverlay from "../../../../assets/thumbnails/overlays/bodycam-rec-axon.png" with { type: "file" };
 import montserrat from "../../../../assets/thumbnails/fonts/Montserrat.ttf" with { type: "file" };
+import arabic from "../../../../assets/thumbnails/fonts/Arabic-font-2013.ttf" with { type: "file" };
+import avant from "../../../../assets/thumbnails/fonts/ITCAvantGardeGothic-Bold.otf" with { type: "file" };
 
 import { join } from "../paths.ts";
 import * as cloud from "./cloud.ts";
@@ -29,7 +31,11 @@ export const BUILT_IN: (Asset & { file: string })[] = [
   },
 ];
 
-export const FONT_FILES: Record<string, string> = { "Montserrat.ttf": montserrat as unknown as string };
+export const FONT_FILES: Record<string, string> = {
+  "Montserrat.ttf": montserrat as unknown as string,
+  "Arabic-font-2013.ttf": arabic as unknown as string,
+  "ITCAvantGardeGothic-Bold.otf": avant as unknown as string,
+};
 
 let team: { at: number; list: Asset[] } | null = null;
 

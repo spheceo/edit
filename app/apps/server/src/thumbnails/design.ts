@@ -3,7 +3,8 @@
 // or the library's, a colour a colour. What's left out takes the house's
 // defaults, so "a REC overlay" or "white caption, black box" is a short ask.
 
-import { assetOf, HEIGHT, NO_ADJUST, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail, type ThumbVersion } from "@edit/types/thumbnails";
+import { captionShadow } from "@edit/types/thumbnail_render";
+import { assetOf, BLACK_BOX_FONT, HEIGHT, HOUSE_SHADOW, NO_ADJUST, WHITE_RED_FONT, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail, type ThumbVersion } from "@edit/types/thumbnails";
 
 type Args = Record<string, unknown>;
 
@@ -39,12 +40,10 @@ function adjustOf(given: unknown, before: Adjust | undefined): Adjust | undefine
   return out;
 }
 
-export const DEFAULT_SHADOW: Shadow = { color: "#000000", opacity: 75, angle: 120, distance: 6, spread: 20, size: 18 };
-
 function shadowOf(given: unknown, before: Shadow | undefined): Shadow | undefined {
   if (given === undefined) return before;
   if (given === null || given === false) return undefined;
-  const base = before ?? DEFAULT_SHADOW;
+  const base = before ?? HOUSE_SHADOW;
   if (given === true) return base;
   if (!isRecord(given)) throw new Error("shadow is an object: color, opacity (0…100), angle (degrees), distance (px), spread (0…100), size (px); or null for none.");
   return {
@@ -135,8 +134,10 @@ export function layerOf(given: unknown, before: Layer | undefined, sources: Set<
   if (text.length > 300) throw new Error("A thumbnail's text is at most 300 characters.");
   const align = given.align ?? was?.align ?? "center";
   if (align !== "left" && align !== "center" && align !== "right") throw new Error('align is "left", "center" or "right".');
-  const font = typeof given.font === "string" && given.font.trim() !== "" ? given.font.trim().slice(0, 60) : (was?.font ?? "Montserrat");
-  if (/["\\;{}]/.test(font)) throw new Error("font is a font's name (Montserrat, Helvetica Neue, Arial Black, Impact).");
+  const box = boxOf(given.box, was?.box);
+  // A box is the black-box caption (Avant Garde). No box is white and red (Arabic-font-2013).
+  const font = typeof given.font === "string" && given.font.trim() !== "" ? given.font.trim().slice(0, 60) : (was?.font ?? (box !== undefined ? BLACK_BOX_FONT : WHITE_RED_FONT));
+  if (/["\\;{}]/.test(font)) throw new Error("font is a font's name (Arabic-font-2013, ITC Avant Garde Gothic, Montserrat).");
   const layer: TextLayer = {
     id,
     kind: "text",
@@ -148,29 +149,31 @@ export function layerOf(given: unknown, before: Layer | undefined, sources: Set<
     y: number(given.y, was?.y ?? HEIGHT / 2, -HEIGHT, HEIGHT * 2, "y"),
     width: number(given.width, was?.width ?? 900, 40, WIDTH * 2, "width"),
     font,
-    weight: Math.round(number(given.weight, was?.weight ?? 800, 100, 900, "weight") / 100) * 100,
+    weight: Math.round(number(given.weight, was?.weight ?? 700, 100, 900, "weight") / 100) * 100,
     size: number(given.size, was?.size ?? 72, 8, 400, "size"),
     color: color(given.color, was?.color ?? "#ffffff", "color"),
     align,
     lineHeight: number(given.lineHeight, was?.lineHeight ?? 1.05, 0.6, 3, "lineHeight"),
   };
-  const uppercase = typeof given.uppercase === "boolean" ? given.uppercase : was?.uppercase;
-  if (uppercase) layer.uppercase = true;
+  // Lower case unless asked otherwise. An older layer's `uppercase` still means capitals.
+  const casing = given.casing === "lower" || given.casing === "upper" || given.casing === "keep" ? given.casing : typeof given.uppercase === "boolean" ? (given.uppercase ? "upper" : "lower") : was?.casing ?? (was?.uppercase ? "upper" : "lower");
+  if (casing === "upper" || casing === "keep") layer.casing = casing;
   const italic = typeof given.italic === "boolean" ? given.italic : was?.italic;
   if (italic) layer.italic = true;
   const rotation = number(given.rotation, was?.rotation ?? 0, -360, 360, "rotation");
   if (rotation !== 0) layer.rotation = rotation;
-  const box = boxOf(given.box, was?.box);
   if (box !== undefined) layer.box = box;
-  // A caption with no box takes the house's border and shadow by default (the
-  // white-and-red style): black stroke round the letters, a soft dark shadow.
-  // `stroke: null` / `shadow: null` says plain, and a boxed caption is its own style.
-  let stroke = strokeOf(given.stroke, was?.stroke);
-  if (stroke === undefined && was === undefined && box === undefined && given.stroke !== null) stroke = { color: "#000000", width: 4 };
+  // White and red (no box) never has a stroke. The black edge is the drop
+  // shadow. A stroke on an older caption, or one sent with the layer, is dropped.
+  const stroke = box === undefined ? undefined : strokeOf(given.stroke, was?.stroke);
   if (stroke !== undefined) layer.stroke = stroke;
   let shadow = shadowOf(given.shadow, was?.shadow);
-  if (shadow === undefined && was === undefined && box === undefined && given.shadow !== null && given.shadow !== false) shadow = { ...DEFAULT_SHADOW, opacity: 70, size: 20 };
-  if (shadow !== undefined) layer.shadow = shadow;
+  if (shadow === undefined && was === undefined && box === undefined && given.shadow !== null && given.shadow !== false) shadow = { ...HOUSE_SHADOW };
+  // A box-less caption still carrying an older house shadow (opacity 70, size
+  // 20, angle 120, and the rest of those) takes the current one. One someone
+  // set themselves is left alone. `shadow: null` stays off.
+  if (box === undefined && shadow !== undefined) shadow = captionShadow({ shadow }) ?? shadow;
+  if (shadow !== undefined) layer.shadow = { ...shadow };
   return layer;
 }
 
@@ -222,7 +225,8 @@ export function describe(design: Design): string {
         const extra = [layer.zoom ? `zoom ${layer.zoom}` : "", layer.adjust ? `adjust ${JSON.stringify(Object.fromEntries(Object.entries(layer.adjust).filter(([, value]) => value !== 0)))}` : "", layer.shadow ? "shadow" : ""].filter(Boolean).join(", ");
         return `${at}: picture ${layer.source}, ${layer.fit}, box ${Math.round(layer.x)},${Math.round(layer.y)} ${Math.round(layer.width)}×${Math.round(layer.height)}${extra ? `, ${extra}` : ""}`;
       }
-      return `${at}: text “${layer.text}”, ${layer.font} ${layer.weight} ${layer.size}px ${layer.color}, centred at ${Math.round(layer.x)},${Math.round(layer.y)} (wraps at ${Math.round(layer.width)})${layer.box ? `, box ${layer.box.color}` : ""}${layer.stroke ? `, stroke ${layer.stroke.width}px` : ""}${layer.shadow ? `, shadow spread ${layer.shadow.spread} size ${layer.shadow.size}` : ""}`;
+      const casing = layer.casing === "upper" || (layer.casing === undefined && layer.uppercase) ? ", capitals" : layer.casing === "keep" ? ", as written" : "";
+      return `${at}: text “${layer.text}”, ${layer.font} ${layer.weight} ${layer.size}px ${layer.color}${casing}, centred at ${Math.round(layer.x)},${Math.round(layer.y)} (wraps at ${Math.round(layer.width)})${layer.box ? `, box ${layer.box.color}` : ""}${layer.stroke ? `, stroke ${layer.stroke.width}px` : ""}${layer.shadow ? `, shadow spread ${layer.shadow.spread} size ${layer.shadow.size}` : ""}`;
     })
     .join("\n");
 }

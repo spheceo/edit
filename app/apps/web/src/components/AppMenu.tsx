@@ -11,6 +11,7 @@ import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { api, type YoutubeSignIn } from "../lib/api";
 import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
+import { ExportFolderPrompt, ExportsSettings } from "./ExportFolder";
 import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
 
 /** `row`: as Home's sidebar has it (the study portal's): the photo, the name and a chevron across the sidebar's top. */
@@ -91,6 +92,7 @@ export function AppDialogs() {
         <LogsView />
       </Modal>
       <ReportDialog />
+      <ExportFolderPrompt />
     </>
   );
 }
@@ -365,6 +367,7 @@ function SettingsDialog() {
       <div className="flex max-h-[72vh] flex-col gap-[18px] overflow-y-auto px-6">
         {person && <p className="text-[13px] text-muted">Signed in as {person.email}</p>}
         <YoutubeGroup />
+        <ExportsSettings />
         <Group title="Updates">
           <Row name="Channel" detail={said} bad={error ?? undefined}>
             <Select

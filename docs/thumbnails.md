@@ -27,16 +27,19 @@ sidebar), `/thumbnails` and `/thumbnails/<id>`.
 | Drawing | `app/packages/edit-types/src/thumbnail_render.ts`: Canvas 2D, the one drawing for the page and for Claude (the server hands it, transpiled, to a headless Chrome kept open five minutes: `thumbnails/render.ts`) |
 | UI | `app/apps/web/src/thumbnails/` (`list.tsx`, `page.tsx`) |
 | Craft | `agent/thumbnails/guide.md` |
-| Edit's own overlays and font | `app/assets/thumbnails/` (the REC overlay, `bodycam-rec`; Montserrat, OFL) |
+| Edit's own overlays and fonts | `app/assets/thumbnails/` (the REC overlay, `bodycam-rec`; Arabic-font-2013 for white and red, ITC Avant Garde Gothic Bold for a black box, Montserrat) |
 
 ## A thumbnail
 
 Layers on a 1280×720 canvas, bottom first: pictures (the thumbnail's images,
 or `asset:<id>` from the library) with cover/contain/stretch, zoom and focus,
 and Photoshop's few (exposure, contrast, saturation, warmth, shadows,
-highlights, vignette, sharpen); text with its font, weight, size, colour, a box
-behind it, a stroke; and a drop shadow on either, as Photoshop's (colour,
-opacity, angle, distance, spread, size). The page edits them by hand (drag,
+highlights, vignette, sharpen); text in lower case unless asked otherwise, with
+its font, weight, size, colour, a box behind it, a stroke when one is asked
+for; and a drop shadow on either, as Photoshop's (colour, opacity, angle,
+distance, spread, size). White and red is Arabic-font-2013 with no stroke and
+the house shadow (opacity 100, spread 36, size 32, angle 90). A black box is ITC Avant
+Garde Gothic Bold. The page edits them by hand (drag,
 the corner to resize, arrows, ⌘Z) and saves them; Claude edits them through
 its tools:
 

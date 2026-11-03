@@ -59,7 +59,7 @@ export type Shadow = {
   color: string;
   /** 0…100. */
   opacity: number;
-  /** Photoshop's angle in degrees: where the light comes from (120: from the top left). */
+  /** Photoshop's angle in degrees: where the light comes from (90: from above). */
   angle: number;
   /** px: how far the shadow falls. */
   distance: number;
@@ -74,13 +74,27 @@ export type Stroke = { color: string; width: number };
 
 export type Fonts = (typeof FONTS)[number]["family"];
 
+/** White and red captions. The face ships with Edit (assets/thumbnails/fonts). */
+export const WHITE_RED_FONT = "Arabic-font-2013" as const;
+/** Black-box captions: the bold cut, shipped with Edit. */
+export const BLACK_BOX_FONT = "ITC Avant Garde Gothic" as const;
+
 /**
- * The fonts a text can take: Montserrat ships with Edit (assets/thumbnails/fonts);
- * the rest are every Mac's own.
+ * Photoshop's drop shadow for the white-and-red captions: opacity 100, spread
+ * 36, size 32, angle 90 (the light above, so it falls straight down), distance
+ * 6. It lives beside the drawing, which is what the page and Chrome both run.
+ */
+export { HOUSE_SHADOW, captionShadow } from "./thumbnail_render.ts";
+
+/**
+ * The fonts a text can take. The first three ship with Edit
+ * (assets/thumbnails/fonts); Helvetica Neue, Arial Black and Impact are the Mac's own.
  */
 export const FONTS = [
-  { family: "Montserrat", note: "rounded, geometric: the black-box captions" },
-  { family: "Helvetica Neue", note: "plain and strong: white and red captions" },
+  { family: WHITE_RED_FONT, note: "the white and red captions" },
+  { family: BLACK_BOX_FONT, note: "bold: the black-box captions" },
+  { family: "Montserrat", note: "the older black-box face" },
+  { family: "Helvetica Neue", note: "the Mac's own" },
   { family: "Arial Black", note: "heavy and wide" },
   { family: "Impact", note: "tall and condensed" },
 ] as const;
@@ -135,6 +149,9 @@ export type TextLayer = LayerBase & {
   align: "left" | "center" | "right";
   /** Lines apart, as a multiple of the size. */
   lineHeight: number;
+  /** Shown in lower case unless asked otherwise: "upper" for capitals, "keep" for the words as written. */
+  casing?: "lower" | "upper" | "keep";
+  /** Older layers: capitals. Prefer `casing`. */
   uppercase?: boolean;
   italic?: boolean;
   rotation?: number;
@@ -148,7 +165,13 @@ export type Layer = ImageLayer | TextLayer;
 /** The thumbnail as it's drawn: the layers bottom first. */
 export type Design = { layers: Layer[] };
 
-export type ThumbTool = { name: string; state: "running" | "done" | "error"; detail?: string };
+export type ThumbTool = { id?: string; name: string; state: "running" | "done" | "error"; detail?: string };
+
+/** One step of a live turn, in the order it happened. `thinking` with `active` is the block being written. */
+export type ThumbTrace =
+  | { kind: "thinking"; text: string; active: boolean }
+  | { kind: "text"; text: string }
+  | { kind: "tools"; calls: ThumbTool[] };
 
 export type ThumbTurn = {
   role: "you" | "claude";
@@ -172,6 +195,8 @@ export type ThumbRun = {
   error?: string;
   said?: string;
   tools?: ThumbTool[];
+  /** Words, reasoning and tools in order, while the turn is running on this Mac. */
+  trace?: ThumbTrace[];
 };
 
 /** A layout as it was before a change, and what the change was (Sphe, Nov 2: "we should have undo both for us and for the agent"). */

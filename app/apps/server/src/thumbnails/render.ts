@@ -27,6 +27,8 @@ function rendererScript(): string {
 export function page(): string {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
 @font-face { font-family: "Montserrat"; src: url("/api/thumbnails/fonts/Montserrat.ttf") format("truetype"); font-weight: 100 900; font-style: normal; }
+@font-face { font-family: "Arabic-font-2013"; src: url("/api/thumbnails/fonts/Arabic-font-2013.ttf") format("truetype"); font-weight: 100 900; font-style: normal; }
+@font-face { font-family: "ITC Avant Garde Gothic"; src: url("/api/thumbnails/fonts/ITCAvantGardeGothic-Bold.otf") format("opentype"); font-weight: 100 900; font-style: normal; }
 html, body { margin: 0; background: #000; }
 </style></head><body><script type="module">
 ${rendererScript()}

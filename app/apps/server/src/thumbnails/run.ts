@@ -10,7 +10,7 @@
 
 import * as fs from "node:fs";
 
-import { assetRef, FONTS, HEIGHT, WIDTH, type Design, type Layer, type Thumbnail, type ThumbImage, type ThumbRun, type ThumbTool, type ThumbTurn } from "@edit/types/thumbnails";
+import { assetRef, FONTS, HEIGHT, WIDTH, type Design, type Layer, type Thumbnail, type ThumbImage, type ThumbRun, type ThumbTool, type ThumbTrace, type ThumbTurn } from "@edit/types/thumbnails";
 
 import { thumbnailsGuide } from "../agent_text.ts";
 import * as diag from "../diag.ts";
@@ -60,10 +60,10 @@ async function slot<T>(work: () => Promise<T>): Promise<T> {
 type Running = { turn: live.Turn; abort: AbortController; step: string };
 const runs = new Map<string, Running>();
 
-export function liveOf(id: string): Pick<ThumbRun, "said" | "tools" | "step"> | null {
+export function liveOf(id: string): Pick<ThumbRun, "said" | "tools" | "step" | "trace"> | null {
   const run = runs.get(id);
   if (run === undefined) return null;
-  return { said: run.turn.text, tools: toolsOf(run.turn), step: run.step };
+  return { said: run.turn.text, tools: toolsOf(run.turn), trace: traceOf(run.turn), step: run.step };
 }
 
 export const isRunning = (id: string): boolean => runs.has(id);
@@ -75,8 +75,18 @@ export function stop(id: string): boolean {
   return true;
 }
 
-const toolsOf = (turn: live.Turn): ThumbTool[] =>
-  turn.trace.flatMap((group) => group.calls.map((call) => ({ name: call.tool ?? call.label, state: call.state, ...(call.detail ? { detail: call.detail } : {}) })));
+const toolOf = (call: { id: string; tool?: string; label: string; state: ThumbTool["state"]; detail?: string }): ThumbTool => ({
+  id: call.id,
+  name: call.tool ?? call.label,
+  state: call.state,
+  ...(call.detail ? { detail: call.detail } : {}),
+});
+
+const toolsOf = (turn: live.Turn): ThumbTool[] => turn.trace.flatMap((group) => group.calls.map(toolOf));
+
+/** The live turn in order: reasoning, words, then the tools that followed them. */
+const traceOf = (turn: live.Turn): ThumbTrace[] =>
+  live.partsOf(turn).map((part) => (part.kind === "tools" ? { kind: "tools", calls: part.calls.map(toolOf) } : part));
 
 // ---------------------------------------------------------------- the tools
 
@@ -97,7 +107,7 @@ export const TOUCH_UP_MODELS = [/nano[\s-]?banana[\s-]?2/i, /nano[\s-]?banana[\s
 const LAYER_SCHEMA = {
   type: "object",
   description:
-    'A layer. Picture: {kind:"image", source (an image id, or asset:<id> for a library overlay), x, y, width, height (canvas px; the canvas is 1280×720), fit ("cover" | "contain" | "stretch"), zoom (cover: 1+), focusX/focusY (cover: 0…1, the point kept in the middle), flip, rotation, opacity (0…100), adjust {exposure in stops (-5…+5, as +0.60), contrast, saturation, vibrance, warmth, shadows, highlights: -100…100; vignette, sharpen: 0…100}, shadow}. Text: {kind:"text", text, x, y (its centre), width (wraps there), font, weight (100…900), size (px), color, align, lineHeight, uppercase, italic, rotation, box {color, opacity, padX, padY, radius} (a solid box behind it), stroke {color, width}, shadow {color, opacity, angle, distance, spread (0…100), size}}. Give id and name to keep track; anything left out keeps its value (a change) or the default.',
+    'A layer. Picture: {kind:"image", source (an image id, or asset:<id> for a library overlay), x, y, width, height (canvas px; the canvas is 1280×720), fit ("cover" | "contain" | "stretch"), zoom (cover: 1+), focusX/focusY (cover: 0…1, the point kept in the middle), flip, rotation, opacity (0…100), adjust {exposure in stops (-5…+5, as +0.60), contrast, saturation, vibrance, warmth, shadows, highlights: -100…100; vignette, sharpen: 0…100}, shadow}. Text: {kind:"text", text (shown in lower case unless casing is "keep" or "upper"), x, y (its centre), width (wraps there), font, weight (100…900), size (px), color, align, lineHeight, casing ("keep" | "upper"; left out is lower case), italic, rotation, box {color, opacity, padX, padY, radius} (a solid box behind it), stroke {color, width}, shadow {color, opacity, angle, distance, spread (0…100), size}}. White and red (no box) is Arabic-font-2013 with no stroke and the house shadow (opacity 100, spread 36, size 32, angle 90): do not send stroke (one sent, or already on the layer, is dropped). Leave shadow out. A black box is ITC Avant Garde Gothic. Give id and name to keep track; anything left out keeps its value (a change) or the default.',
   additionalProperties: true,
 };
 

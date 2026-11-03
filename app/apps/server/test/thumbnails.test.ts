@@ -5,8 +5,8 @@ import { baseBrief, fresh, pickModel } from "../src/thumbnails/run.ts";
 import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
 import { withStops } from "../src/thumbnails/cloud.ts";
-import { NO_ADJUST } from "@edit/types/thumbnails";
-import { adjustPixels, type Context } from "@edit/types/thumbnail_render";
+import { HOUSE_SHADOW, NO_ADJUST } from "@edit/types/thumbnails";
+import { adjustPixels, captionShadow, shadowMetrics, shownText, type Context } from "@edit/types/thumbnail_render";
 import { canonical, changed } from "../src/thumbnails/run.ts";
 import { sizeOf } from "../src/thumbnails/size.ts";
 
@@ -18,7 +18,7 @@ test("a layer as given takes the house's defaults and is checked", () => {
   const base = layerOf({ kind: "image", source: "img1", adjust: { contrast: 15, saturation: 400 } }, undefined, sources);
   expect(base).toMatchObject({ fit: "cover", adjust: { contrast: 15, saturation: 100, exposure: 0 } });
   const caption = layerOf({ kind: "text", text: "“He abused me”", box: true, shadow: { spread: 30 } }, undefined, sources);
-  expect(caption).toMatchObject({ font: "Montserrat", weight: 800, color: "#ffffff", box: { color: "#000000" }, shadow: { spread: 30, size: 18 } });
+  expect(caption).toMatchObject({ font: "ITC Avant Garde Gothic", weight: 700, color: "#ffffff", box: { color: "#000000" }, shadow: { spread: 30, size: 32, opacity: 100 } });
   expect(() => layerOf({ kind: "image", source: "nope" }, undefined, sources)).toThrow("There's no picture nope");
   expect(() => layerOf({ kind: "text", text: "x", color: "url(evil)" }, undefined, sources)).toThrow("colour");
   expect(() => layerOf({ kind: "text", text: "x", font: 'a"; }' }, undefined, sources)).toThrow("font");
@@ -56,9 +56,19 @@ test("OpenArt's answers: a picture done, a job still going, a failure; a form's 
   expect(paramsOf(form, "a door", "21:9", [{ id: "r" }], { quality: "high" })).toEqual({ prompt: "a door", aspectRatio: "16:9", quality: "high", visualReferences: [{ id: "r" }] });
 });
 
-test("a box-less caption takes the house border and shadow; a copy in the same place is refused", () => {
-  const caption = layerOf({ kind: "text", text: "They’re", font: "Helvetica Neue", weight: 900 }, undefined, sources);
-  expect(caption).toMatchObject({ stroke: { color: "#000000", width: 4 }, shadow: { opacity: 70, spread: 20, size: 20 } });
+test("a box-less caption takes the house shadow and no stroke; a copy in the same place is refused", () => {
+  const caption = layerOf({ kind: "text", text: "They’re" }, undefined, sources);
+  expect(caption).toMatchObject({ font: "Arabic-font-2013", weight: 700, shadow: { color: "#000000", opacity: 100, spread: 36, size: 32, distance: 6, angle: 90 } });
+  expect(caption.kind === "text" && caption.stroke).toBeUndefined();
+  // A stroke sent with white and red, or left on an older caption, is dropped.
+  const sent = layerOf({ kind: "text", text: "they're", stroke: { color: "#000000", width: 4 } }, undefined, sources);
+  expect(sent.kind === "text" && sent.stroke).toBeUndefined();
+  const older = { id: "cap", kind: "text" as const, name: "they're", opacity: 100, text: "they're", x: 640, y: 200, width: 900, font: "Arabic-font-2013", weight: 700, size: 120, color: "#ffffff", align: "center" as const, lineHeight: 1.05, stroke: { color: "#000000", width: 4 }, shadow: { color: "#000000", opacity: 70, angle: 120, distance: 6, spread: 20, size: 20 } };
+  const kept = layerOf({ id: "cap", text: "they're evil" }, older, sources);
+  expect(kept.kind === "text" && kept.stroke).toBeUndefined();
+  expect(kept).toMatchObject({ shadow: { opacity: 100, spread: 36, size: 32, angle: 90, distance: 6 } });
+  const custom = { ...older, shadow: { color: "#000000", opacity: 40, angle: 45, distance: 12, spread: 0, size: 8 } };
+  expect(layerOf({ id: "cap", text: "they're evil" }, custom, sources)).toMatchObject({ shadow: { opacity: 40, angle: 45, distance: 12, size: 8 } });
   const plain = layerOf({ kind: "text", text: "Plain", stroke: null, shadow: null }, undefined, sources);
   expect(plain.kind === "text" && plain.stroke).toBeUndefined();
   expect(plain.kind === "text" && plain.shadow).toBeUndefined();
@@ -70,6 +80,24 @@ test("a box-less caption takes the house border and shadow; a copy in the same p
   // The same words or picture somewhere else, or a change to the layer that's there, is fine.
   expect(changed(design, { changes: [{ id: "cap", color: "#ff0000" }] }, sources).layers).toHaveLength(2);
   expect(changed(design, { add: [{ kind: "text", text: "They’re", x: 300, y: 600 }] }, sources).layers).toHaveLength(3);
+});
+
+test("captions are lower case unless asked otherwise, and the shadow is Photoshop's size", () => {
+  expect(shownText({ text: "They're Evil!" })).toBe("they're evil!");
+  expect(shownText({ text: "They're Evil!", casing: "upper" })).toBe("THEY'RE EVIL!");
+  expect(shownText({ text: "They're Evil!", uppercase: true })).toBe("THEY'RE EVIL!");
+  expect(shownText({ text: "They're Evil!", casing: "keep" })).toBe("They're Evil!");
+  expect(layerOf({ kind: "text", text: "They're", casing: "keep" }, undefined, sources)).toMatchObject({ casing: "keep" });
+  expect(layerOf({ kind: "text", text: "They're", casing: "upper" }, undefined, sources)).toMatchObject({ casing: "upper" });
+  // Size 32 at 36% spread: 11.52px solid, the rest a blur a little tighter than a CSS box-shadow.
+  const metrics = shadowMetrics(HOUSE_SHADOW);
+  expect(HOUSE_SHADOW).toMatchObject({ opacity: 100, spread: 36, size: 32, angle: 90, distance: 6 });
+  expect(metrics.spread).toBeCloseTo(11.52, 2);
+  expect(metrics.sigma).toBeCloseTo(20.48 / (2 * 1.136364), 2);
+  const earlier = { color: "#000000", opacity: 75, angle: 120, distance: 6, spread: 20, size: 18 };
+  expect(captionShadow({ shadow: earlier })).toEqual(HOUSE_SHADOW);
+  expect(captionShadow({ shadow: { color: "#000000", opacity: 100, angle: 120, distance: 6, spread: 36, size: 32 } })).toEqual(HOUSE_SHADOW);
+  expect(captionShadow({ box: { color: "#000000", opacity: 100, padX: 22, padY: 10, radius: 0 }, shadow: earlier })).toEqual(earlier);
 });
 
 test("the Camera Raw recipe parses, and vibrance lifts muted colour more than vivid", () => {

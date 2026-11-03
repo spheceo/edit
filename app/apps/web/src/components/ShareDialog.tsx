@@ -9,6 +9,7 @@ import { preview } from "../lib/playback";
 import { flushSave, useEditor } from "../lib/store";
 import { rate } from "../lib/types";
 import { CAN, useGrants } from "../writer/can";
+import { askExportFolder } from "./ExportFolder";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, Modal, Select } from "./ui";
 
@@ -116,6 +117,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     setStopped(false);
     setProblem(null);
     try {
+      await askExportFolder();
       useEditor.getState().endGesture();
       await flushSave();
       if (useEditor.getState().dirty) throw new Error("The latest changes couldn’t be saved. Try again once the connection returns.");

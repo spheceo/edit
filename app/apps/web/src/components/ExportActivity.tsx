@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { api, type ExportActivity as Activity } from "../lib/api";
-import { cardFace, exportLabel } from "../lib/export-face";
+import { cardFace, exportLabel, exportWhere } from "../lib/export-face";
 import { cancelScriptShare } from "../writer/api";
 import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
@@ -14,6 +14,38 @@ import { Button, cx, IconButton, Modal } from "./ui";
 export const exportActive = (job: Activity) => job.state === "queued" || job.state === "running";
 
 const jobKey = (job: Activity) => `${job.kind ?? "edit"}:${job.id}`;
+
+/** A finished edit: the file already on this Mac, and the download, which is a separate copy in Downloads. */
+function Finished({ job }: { job: Activity }) {
+  const where = exportWhere(job);
+  const reveal = async () => {
+    try {
+      await api.revealExport(job.path);
+    } catch (error) {
+      useEditor.getState().toastError(error, "show the export");
+    }
+  };
+  return (
+    <div className="mt-1.5 ml-[22px] text-[12px] leading-snug text-muted">
+      {where.place && (
+        <div className="break-all" title={job.path}>
+          {where.place}
+          {" · "}
+          <button type="button" className="text-fg hover:underline" onClick={() => void reveal()}>
+            Show in Finder
+          </button>
+        </div>
+      )}
+      <div>
+        <a className="inline-flex items-center gap-1.5 text-fg hover:underline" href={`/api/exports/file?path=${encodeURIComponent(job.path)}`} download>
+          <Download size={12} /> Download a copy
+        </a>
+        {where.place ? " — " : " "}
+        {where.download}
+      </div>
+    </div>
+  );
+}
 
 /** One face. The red sits behind it, so a word is never half one colour and half another. */
 function QueueFace({ subtitle, percent, attention }: { subtitle: string; percent: number | null; attention: boolean }) {
@@ -160,11 +192,7 @@ export function ExportActivity() {
                       <div className="h-full bg-primary transition-[width] duration-300 ease-out" style={{ width: `${Math.round(job.progress * 100)}%` }} />
                     </div>
                   )}
-                  {!script && job.state === "done" && job.path !== "" && (
-                    <a className="mt-2 ml-[22px] inline-flex items-center gap-1.5 text-[12px] text-fg hover:underline" href={`/api/exports/file?path=${encodeURIComponent(job.path)}`} download>
-                      <Download size={12} /> Download export
-                    </a>
-                  )}
+                  {!script && job.state === "done" && job.path !== "" && <Finished job={job} />}
                 </div>
               );
             })}

@@ -7,7 +7,7 @@ import type { Project } from "../src/model.ts";
 import { newProject } from "../src/project.ts";
 import * as tools from "../src/tools.ts";
 import { timing } from "../src/transcribe.ts";
-import { expandHome } from "../src/paths.ts";
+import { expandHome, homePath } from "../src/paths.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
 
@@ -136,6 +136,9 @@ test("a ~/ path is in the user's home", () => {
   expect(expandHome("~/Movies/a.mp4")).toBe(`${process.env.HOME}/Movies/a.mp4`);
   expect(expandHome("/abs/a.mp4")).toBe("/abs/a.mp4");
   expect(expandHome("~user/a.mp4")).toBe("~user/a.mp4");
+  expect(homePath(`${process.env.HOME}/Movies/Edit/Out.mp4`)).toBe("~/Movies/Edit/Out.mp4");
+  expect(homePath(`${process.env.HOME}`)).toBe("~");
+  expect(homePath("/tmp/Out.mp4")).toBe("/tmp/Out.mp4");
 });
 
 test("a subtitled video takes its footage's rate (NTSC ones exactly) or one it divides into evenly, at most 30", () => {

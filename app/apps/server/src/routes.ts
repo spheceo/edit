@@ -31,6 +31,7 @@ import * as patches from "./patch.ts";
 import { canonical, expandHome, extension, fileName, fileStem, isFile, join, parent } from "./paths.ts";
 import { DEFAULT_SETTINGS, SHORTS_SETTINGS } from "./project.ts";
 import * as seams from "./seams.ts";
+import { readExportFolder, saveExportFolder } from "./export_folder.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { listFiles, migrateMediaFiles, storageReport, verifyExports } from "./storage.ts";
 import { readLocalOriginals } from "./cloud_media.ts";
@@ -210,6 +211,8 @@ export function buildRouter(): Router<App> {
       const rank = (state: string) => (state === "running" || state === "queued" ? 0 : 1);
       return json([...edits, ...shares].sort((a, b) => rank(a.state) - rank(b.state) || b.updated_ms - a.updated_ms));
     })
+    .get("/api/exports/folder", ({ app }) => json(readExportFolder(app.store.home)))
+    .post("/api/exports/folder", setExportFolder)
     .get("/api/exports/file", exportedFile)
     .post("/api/exports/reveal", revealExport);
   seams.script.routes(router);
@@ -1181,6 +1184,17 @@ async function deleteProjectExport(context: Context): Promise<Response> {
     throw bad(diag.messageOf(error));
   }
   return json(listExports(context.app.store.home, context.params.id!));
+}
+
+/** Saves the exports folder. Future exports go there. */
+async function setExportFolder(context: Context): Promise<Response> {
+  const given = await body(context);
+  const path = field<string>(given, "path", "string", true);
+  try {
+    return json(saveExportFolder(context.app.store.home, path));
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
 }
 
 /** A finished export, downloaded to the device the editor is open on. */

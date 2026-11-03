@@ -3,14 +3,15 @@
 
 import type { App } from "./app.ts";
 import type { Project } from "./model.ts";
-import { defaultExportsDir, join } from "./paths.ts";
+import { exportsDir } from "./export_folder.ts";
+import { join } from "./paths.ts";
 import { isAlphanumeric } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
 
-/** `<exports folder>/<name>.mp4`, in ~/Movies/Edit (or ~/Videos/Edit). */
-export function defaultExportPath(_store: Store, project: Project): string {
-  const dir = defaultExportsDir();
+/** `<exports folder>/<name>.mp4`. The folder is the one saved in Settings, or ~/Movies/Edit (or ~/Videos/Edit) until then. */
+export function defaultExportPath(store: Store, project: Project): string {
+  const dir = exportsDir(store.home);
   const safe = [...project.name].map((char) => (isAlphanumeric(char) || " -_".includes(char) ? char : "_")).join("");
   const trimmed = safe.trim();
   return join(dir, `${trimmed === "" ? "Edit" : trimmed}.mp4`);

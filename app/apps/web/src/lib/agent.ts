@@ -10,7 +10,8 @@ import { readSetting, writeSetting } from "./storage";
 export interface AgentEntry {
   id: string;
   /** "subagent": a sub-agent's card (its chat key in `detail`), opened to view its own chat. */
-  kind: "user" | "assistant" | "tool" | "error" | "subagent";
+  /** "thinking": a reasoning block. `status` "running" while it is still being written. */
+  kind: "user" | "assistant" | "tool" | "error" | "subagent" | "thinking";
   text: string;
   tool?: string;
   status?: "running" | "done" | "failed" | "stopped";

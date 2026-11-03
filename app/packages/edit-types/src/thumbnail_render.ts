@@ -91,7 +91,8 @@ function drawLayer(context: Context, layer: Layer, surfaces: Surfaces, width: nu
   } else drawText(ownContext, layer);
   context.save();
   context.globalAlpha = clamp(layer.opacity, 0, 100) / 100;
-  if (layer.shadow !== undefined && layer.shadow.opacity > 0) dropShadow(context, own, layer.shadow, surfaces, width, height);
+  const shadow = layer.kind === "text" ? captionShadow(layer) : layer.shadow;
+  if (shadow !== undefined && shadow.opacity > 0) dropShadow(context, own, shadow, surfaces, width, height);
   context.drawImage(own, 0, 0);
   context.restore();
 }
@@ -231,10 +232,58 @@ function sharpen(data: Uint8ClampedArray, width: number, height: number, amount:
   }
 }
 
+/** The words as drawn: lower case unless asked otherwise. */
+export function shownText(layer: Pick<TextLayer, "text" | "uppercase" | "casing">): string {
+  const casing = layer.casing ?? (layer.uppercase ? "upper" : "lower");
+  if (casing === "upper") return layer.text.toUpperCase();
+  if (casing === "keep") return layer.text;
+  return layer.text.toLowerCase();
+}
+
+/**
+ * The house drop shadow for white and red (Nov 4): opacity 100, spread 36,
+ * size 32, angle 90. Angle 90 is the light from above, so the shadow falls
+ * straight down; distance 6 is how far. The drawing turns Size and Spread
+ * into Photoshop's solid edge and blur.
+ */
+export const HOUSE_SHADOW: Shadow = { color: "#000000", opacity: 100, angle: 90, distance: 6, spread: 36, size: 32 };
+
+/**
+ * What a box-less caption used to be given, before those numbers. One still
+ * carrying any of these is drawn with `HOUSE_SHADOW`. A shadow someone set
+ * themselves, and a black box's shadow, stay as they are.
+ */
+const EARLIER_SHADOWS: readonly Shadow[] = [
+  { color: "#000000", opacity: 70, angle: 120, distance: 6, spread: 20, size: 20 },
+  { color: "#000000", opacity: 75, angle: 120, distance: 6, spread: 20, size: 18 },
+  { color: "#000000", opacity: 100, angle: 120, distance: 6, spread: 36, size: 32 },
+];
+
+const sameShadow = (a: Shadow, b: Shadow): boolean => a.color.toLowerCase() === b.color.toLowerCase() && a.opacity === b.opacity && a.angle === b.angle && a.distance === b.distance && a.spread === b.spread && a.size === b.size;
+
+/** The shadow a caption is drawn with. A box-less one still on an older house shadow takes the current one. */
+export function captionShadow(layer: Pick<TextLayer, "box" | "shadow">): Shadow | undefined {
+  const shadow = layer.shadow;
+  if (shadow === undefined || layer.box !== undefined) return shadow;
+  return EARLIER_SHADOWS.some((one) => sameShadow(shadow, one)) ? HOUSE_SHADOW : shadow;
+}
+
+/**
+ * Photoshop's drop shadow as a solid spread (px) and the Gaussian sigma that
+ * canvas `blur()` takes. Spread is the share of Size that stays solid; the
+ * rest is the blur. Photoshop's Size is a little tighter than a CSS box-shadow
+ * of the same radius (about 1.136×), and a box-shadow radius is twice the sigma.
+ */
+export function shadowMetrics(shadow: Shadow): { spread: number; sigma: number } {
+  const spread = (shadow.size * clamp(shadow.spread, 0, 100)) / 100;
+  const blur = Math.max(0, shadow.size - spread);
+  return { spread, sigma: blur / (2 * 1.136364) };
+}
+
 /** The text's lines, wrapped at its width. */
 export function linesOf(context: Context, layer: TextLayer): string[] {
   context.font = fontOf(layer);
-  const text = layer.uppercase ? layer.text.toUpperCase() : layer.text;
+  const text = shownText(layer);
   const lines: string[] = [];
   for (const paragraph of text.split("\n")) {
     const words = paragraph.split(/\s+/).filter(Boolean);
@@ -287,7 +336,9 @@ function drawText(context: Context, layer: TextLayer): void {
     const lineWidth = context.measureText(line).width;
     const left = layer.align === "left" ? x : layer.align === "right" ? x + width - lineWidth : x + (width - lineWidth) / 2;
     const middle = y + layer.size / 2 + step * index;
-    if (layer.stroke !== undefined && layer.stroke.width > 0) {
+    // White and red (no box) has no stroke. The black edge is the drop shadow.
+    // A stroke left on an older caption is not drawn.
+    if (layer.box !== undefined && layer.stroke !== undefined && layer.stroke.width > 0) {
       context.lineJoin = "round";
       context.miterLimit = 2;
       context.lineWidth = layer.stroke.width * 2;
@@ -317,13 +368,12 @@ function roundRect(context: Context, x: number, y: number, width: number, height
  * the rest of the size, and moved `distance` away from the light's angle.
  */
 function dropShadow(context: Context, own: Canvas, shadow: Shadow, surfaces: Surfaces, width: number, height: number): void {
-  const choke = (shadow.size * clamp(shadow.spread, 0, 100)) / 100;
-  const blur = Math.max(0, shadow.size - choke);
+  const { spread, sigma } = shadowMetrics(shadow);
   const silhouette = surfaces.canvas(width, height);
   const paint = silhouette.getContext("2d") as Context | null;
   if (paint === null) return;
-  // Spread: the shape drawn round a circle of the choke's radius, so it grows solid before it softens.
-  const rings = choke <= 0 ? [[0, 0]] : ringOf(choke);
+  // Spread: the shape drawn round a circle of that radius, so it grows solid before it softens.
+  const rings = spread <= 0 ? [[0, 0]] : ringOf(spread);
   for (const [ox, oy] of rings) paint.drawImage(own, ox!, oy!);
   paint.globalCompositeOperation = "source-in";
   paint.fillStyle = shadow.color;
@@ -333,7 +383,7 @@ function dropShadow(context: Context, own: Canvas, shadow: Shadow, surfaces: Sur
   const dy = Math.sin(radians) * shadow.distance;
   context.save();
   context.globalAlpha *= clamp(shadow.opacity, 0, 100) / 100;
-  if (blur > 0) context.filter = `blur(${(blur / 2).toFixed(2)}px)`;
+  if (sigma > 0.05) context.filter = `blur(${sigma.toFixed(2)}px)`;
   context.drawImage(silhouette, dx, dy);
   context.restore();
 }

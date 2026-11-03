@@ -18,6 +18,7 @@ import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
 import { useKept } from "../lib/kept";
+import { askExportFolder } from "./ExportFolder";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { AsideStatus, BackMark, BY, Category, CATEGORY, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, LENGTH, LengthCell, layoutFor, NAME, PILL, ROW, RowButtons, StatusCell, TableShape, Updated, useAside, withAside } from "./HomeTable";
@@ -873,6 +874,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
   };
   const share = async () => {
     try {
+      await askExportFolder();
       await api.shareProject(project.id, null, false, true);
       toast(`Sharing “${project.name}”: exporting it now`, "info");
       onChanged();

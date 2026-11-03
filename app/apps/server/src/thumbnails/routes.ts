@@ -86,7 +86,8 @@ export function routes(router: Router<App>): void {
     .get("/api/thumbnails/fonts/{name}", async ({ params }: Context) => {
       const file = assets.FONT_FILES[params.name ?? ""];
       if (file === undefined) throw notFound("No such font.");
-      return picture(new Uint8Array(await Bun.file(file).arrayBuffer()), "font/ttf", "public, max-age=604800");
+      const type = (params.name ?? "").endsWith(".otf") ? "font/otf" : "font/ttf";
+      return picture(new Uint8Array(await Bun.file(file).arrayBuffer()), type, "public, max-age=604800");
     })
     .get("/api/thumbnails/openart", async () => {
       guard();

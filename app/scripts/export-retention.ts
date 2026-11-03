@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 
 import { apply, decide, type Kept } from "../apps/server/src/export_retention.ts";
-import { defaultExportsDir } from "../apps/server/src/paths.ts";
+import { exportRoots } from "../apps/server/src/export_folder.ts";
 
 const args = process.argv.slice(2);
 const home = args.find((arg) => !arg.startsWith("--")) ?? `${os.homedir()}/.edit`;
@@ -20,7 +20,7 @@ const read = <T>(path: string, fallback: T): T => {
 };
 const records = read<Record<string, Kept[]>>(`${home}/exports.json`, {});
 const shared = read<{ shared?: Record<string, { versions: { n: number; path: string }[] }> }>(`${home}/reviews.json`, {}).shared ?? {};
-const roots = [defaultExportsDir(), `${home}/exports`];
+const roots = exportRoots(home);
 const free = (() => {
   try {
     const stat = fs.statfsSync(home);

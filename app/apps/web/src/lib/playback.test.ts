@@ -7,7 +7,7 @@ const engine = vi.hoisted(() => ({
   sources: vi.fn((_frame: number) => "[]"),
 }));
 vi.mock("../engine/pkg/edit_wasm", () => ({ default: vi.fn(), createEngine: vi.fn(async () => engine) }));
-vi.mock("./api", () => ({ fetchRetrying: vi.fn(async () => new Response(new Uint8Array())), mediaUrl: (p: string, m: string) => `/${p}/${m}` }));
+vi.mock("./api", () => ({ fetchRetrying: vi.fn(async () => new Response(new Uint8Array())), mediaUrl: (p: string, m: string) => `/${p}/${m}`, mediaHost: (path: string) => path, request: vi.fn(() => new Promise(() => {})) }));
 
 const decoding = vi.hoisted(() => ({
   frames: new Map<string, object>(), sound: new Map<number, object>(), near: undefined as object | undefined,
@@ -382,6 +382,52 @@ describe("preview seeks and lifetime", () => {
     expect(playhead.playing).toBe(false);
     expect(preview.smoothShown).toBe(false);
     expect(decoding.requestVideo).toHaveBeenCalled();
+  });
+
+  it("stops the rendered video and its sound when a scrub moves past its chunks, so they never play on under the live sound", async () => {
+    // Nov 3, watching: paused, scrubbed back and forth, it glitched, played on by itself, two sounds at once.
+    class FakeMediaSource { addEventListener() {} }
+    class FakeSound {
+      currentTime = 0; paused = true; seeking = false; playbackRate = 1; src = "";
+      play = vi.fn(async () => { this.paused = false; });
+      pause = vi.fn(() => { this.paused = true; });
+      removeAttribute() {}
+    }
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("Audio", FakeSound);
+    (URL as unknown as { createObjectURL: unknown }).createObjectURL = vi.fn(() => "blob:render");
+    const listeners = new Map<string, () => void>();
+    const video = {
+      src: "", currentTime: 0, paused: true, ended: false, muted: true,
+      getAttribute(name: string) { return name === "src" ? this.src || null : null; },
+      play: vi.fn(function (this: { paused: boolean }) { this.paused = false; return Promise.resolve(); }),
+      pause: vi.fn(function (this: { paused: boolean }) { this.paused = true; }),
+      addEventListener: (name: string, listener: () => void) => listeners.set(name, listener),
+      removeEventListener: (name: string) => listeners.delete(name),
+    };
+    preview.attachVideo(video as unknown as HTMLVideoElement);
+    preview.setProject(fixture(), {}); draw();
+    preview.setSmooth("stream:p1:1");
+    type Internals = { stream: { info: unknown; appended: Map<number, string> } | null; streamSound: FakeSound };
+    const internals = preview as unknown as Internals;
+    const stream = internals.stream!;
+    stream.info = { segments: [{ start: 0, end: 90, key: "a", ready: true }], codec: null, sound: "ready", soundUrl: "/sound" };
+    stream.appended.set(0, "a");
+    preview.seek(30);
+    expect(preview.smoothShown).toBe(true);
+    // Playing, picture and sound both live.
+    video.paused = false;
+    internals.streamSound.paused = false;
+    // The scrub lands where the render has nothing (its chunks changed): both stop, there and then.
+    stream.info = { segments: [{ start: 0, end: 90, key: "b", ready: true }], codec: null, sound: "ready", soundUrl: "/sound" };
+    preview.seek(60);
+    expect(preview.smoothShown).toBe(false);
+    expect(video.pause).toHaveBeenCalled();
+    expect(internals.streamSound.pause).toHaveBeenCalled();
+    expect(internals.streamSound.paused).toBe(true);
+    // And playing live from there never brings the render's sound back under it.
+    preview.play(); draw();
+    expect(internals.streamSound.paused).toBe(true);
   });
 
   it("keeps scrubbing responsive after playback reaches the end", () => {

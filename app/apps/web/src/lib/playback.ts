@@ -236,6 +236,17 @@ class Preview {
     return this.stream === null || this.stream.covers(frame, ahead);
   }
 
+  /**
+   * Stops the rendered video and its sound together. Leaving smooth
+   * playback by only hiding it left both playing on their own clocks —
+   * the video under the live picture, its sound under the live sound
+   * (two sounds at once after a scrub past the render's chunks, Nov 3).
+   */
+  private stopSmooth() {
+    if (this.video && !this.video.paused) this.video.pause();
+    if (this.stream) this.stream.follow(this.video?.currentTime ?? 0, false);
+  }
+
   /** Puts the rendered video at `frame` (a hair into it, so it never lands on the frame before); drawn live where a streamed render has nothing yet. */
   private showSmooth(frame: number) {
     const video = this.video;
@@ -244,6 +255,7 @@ class Preview {
     if (!this.smoothAt(frame)) {
       if (this.smoothShown) {
         this.smoothShown = false;
+        this.stopSmooth();
         this.renderedFrame = null;
         this.notify();
         this.invalidate();
@@ -593,6 +605,8 @@ class Preview {
     if (!this.project || playhead.playing || this.duration <= 0 || this.error) return;
     if (playhead.frame >= this.duration - 1) playhead.frame = 0;
     if (this.smooth && this.video && this.smoothAt(playhead.frame, Math.round(rate(this.project.settings)))) { this.playSmooth(this.video); return; }
+    // Live from here: the render (hidden since a scrub past its chunks) is silent first.
+    this.stopSmooth();
     playhead.playing = true;
     this.pendingScenes.clear();
     this.direction = 1;
@@ -676,10 +690,14 @@ class Preview {
     cancelAnimationFrame(this.loop);
     this.loop = 0;
     this.resetClock();
-    if (this.smoothShown && this.video && !this.video.paused) {
-      this.video.pause();
-      this.stream?.follow(this.video.currentTime, false);
-      if (this.project) playhead.frame = Math.max(0, this.video.currentTime * rate(this.project.settings) - 0.25);
+    // Whether or not the render is what's shown: nothing of it plays on
+    // behind a pause (it once did, after a scrub had hidden it).
+    if (this.video && !this.video.paused) {
+      const shown = this.smoothShown;
+      this.stopSmooth();
+      if (shown && this.project) playhead.frame = Math.max(0, this.video.currentTime * rate(this.project.settings) - 0.25);
+    } else if (this.stream) {
+      this.stream.follow(this.video?.currentTime ?? 0, false);
     }
     if (!playing) return;
     playhead.frame = Math.round(playhead.frame);

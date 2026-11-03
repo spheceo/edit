@@ -36,6 +36,19 @@ import type { ExportExcerpt } from "./native/index.ts";
 import { extension, isFile, join } from "./paths.ts";
 import * as tools from "./tools.ts";
 
+/**
+ * The object a URL reads, as the engine names it (crates/edit-engine/src/util.rs
+ * `url_object`): a presigned original without its signature, a proxy read
+ * through this server's preview path (`…/api/cloud/preview?key=`) by its key.
+ */
+export function objectOf(url: string): string {
+  const [base = url, query = ""] = url.split("?", 2);
+  for (const pair of query.split("&")) {
+    if (pair.startsWith("key=")) return `cloud:${decodeURIComponent(pair.slice("key=".length).replace(/\+/g, " "))}`;
+  }
+  return base;
+}
+
 /** Seconds of the original in one excerpt. */
 export const CELL = 30;
 /**
@@ -290,7 +303,7 @@ export async function prepare(
             return null;
           }
           counts[file.how] += 1;
-          return { object: url.split("?")[0] ?? url, from: cell.from, to: last ? TO_THE_END : cell.to, path: file.path };
+          return { object: objectOf(url), from: cell.from, to: last ? TO_THE_END : cell.to, path: file.path };
         } finally {
           release();
         }

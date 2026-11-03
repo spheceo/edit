@@ -46,7 +46,9 @@ import { isFile, join } from "./paths.ts";
 import { duration } from "./project.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { jsonForSerde } from "./rust.ts";
+import * as exportExcerpts from "./export_excerpts.ts";
 import * as playbackStream from "./playback_stream.ts";
+import { playbackKey } from "./cloud_playback.ts";
 import * as seams from "./seams.ts";
 import { createHash } from "node:crypto";
 
@@ -363,13 +365,37 @@ async function render(app: App, project: Project, current: Running): Promise<voi
   const { plan } = native().exportPlan(input, options);
   if (plan.end <= plan.start) throw new ApiError(400, "nothing on the timeline to play");
   current.heard = plan.audio;
+  // The proxies it reads, cut to this Mac first as an export's originals are
+  // (export_excerpts.ts): AVFoundation reads them, where FFmpeg read each clip
+  // again over this server's preview URL (Nov 3: the 16-Year-Old rendered at 48 fps).
+  const urls = new Map<string, string>();
+  const keys = new Map<string, string>();
+  for (const media of project.media) {
+    const key = playbackKey(media.path);
+    if (key !== null && media.kind === "video") {
+      urls.set(media.id, media.path);
+      keys.set(media.id, key);
+    }
+  }
+  const excerpts = urls.size === 0 ? [] : await exportExcerpts.prepare(own, plan.start, plan.end, app.store.cacheDir(), urls, keys, () => current.cancelled).catch((error: unknown) => {
+    diag.warn("playback", `${project.name}: its proxies are read over the preview URL (${diag.messageOf(error)})`);
+    return [];
+  });
+  if (current.cancelled) return;
+  const unpin = exportExcerpts.pin(excerpts.map((one) => one.path));
   // The viewer's playhead's chunk first, then on from there (the viewer plays each as it lands).
   const at = focus.get(project.id);
   focus.delete(project.id);
-  const job = native().ExportJob.start({ project: input, options, plan: at === undefined ? plan : { ...plan, focus: at }, output, cacheDir: app.store.cacheDir() }, (progress) => {
-    current.progress = progress;
-    publishSoon(app, project.id);
-  });
+  let job: ExportJob;
+  try {
+    job = native().ExportJob.start({ project: input, options, plan: at === undefined ? plan : { ...plan, focus: at }, output, cacheDir: app.store.cacheDir(), excerpts }, (progress) => {
+      current.progress = progress;
+      publishSoon(app, project.id);
+    });
+  } catch (error) {
+    unpin();
+    throw error;
+  }
   current.job = job;
   if (current.cancelled) job.cancel();
   try {
@@ -377,6 +403,8 @@ async function render(app: App, project: Project, current: Running): Promise<voi
   } catch (error) {
     if (current.cancelled) return;
     throw error;
+  } finally {
+    unpin();
   }
 }
 

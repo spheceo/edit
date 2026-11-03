@@ -88,6 +88,54 @@ pub fn is_url(path: &Path) -> bool {
         .is_some_and(|text| text.starts_with("https://") || text.starts_with("http://"))
 }
 
+/// The object a URL reads, whatever signature or port it's read with: a
+/// presigned R2 URL without its query (the signature is new every time), and
+/// this server's preview URL (`…/api/cloud/preview?key=<R2 key>`) by its key,
+/// as `cloud:<key>`. Every proxy is read through the one preview path, so
+/// without the key they were all one object (Nov 3: chunk keys and excerpts
+/// of different proxies could be taken for each other's).
+pub fn url_object(path: &Path) -> Option<String> {
+    if !is_url(path) {
+        return None;
+    }
+    let text = path.to_string_lossy();
+    let (base, query) = text.split_once('?').unwrap_or((&text, ""));
+    for pair in query.split('&') {
+        if let Some(key) = pair.strip_prefix("key=") {
+            return Some(format!("cloud:{}", percent_decode(key)));
+        }
+    }
+    Some(base.to_owned())
+}
+
+/// `%XX` escapes (and `+`) in a URL's query value, decoded.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        let hex = bytes
+            .get(at + 1..at + 3)
+            .and_then(|pair| std::str::from_utf8(pair).ok())
+            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
+        match (byte, hex) {
+            (b'%', Some(value)) => {
+                out.push(value);
+                at += 3;
+            }
+            (b'+', _) => {
+                out.push(b' ');
+                at += 1;
+            }
+            (other, _) => {
+                out.push(other);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// The protocols FFmpeg may use to read `path`: files and pipes, plus HTTPS
 /// for a URL (never for a file, so a crafted playlist can't reach the network).
 pub fn protocols(path: &Path) -> &'static str {

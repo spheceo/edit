@@ -39,13 +39,10 @@ fn known() -> &'static Mutex<HashMap<String, Arc<Vec<Excerpt>>>> {
     KNOWN.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The object a cloud URL reads, without its signature (new every export).
+/// The object a cloud URL reads (`util::url_object`): an original without
+/// its signature, a proxy through this server's preview path by its key.
 pub fn object_of(path: &Path) -> Option<String> {
-    if !crate::util::is_url(path) {
-        return None;
-    }
-    let text = path.to_string_lossy();
-    Some(text.split('?').next().unwrap_or_default().to_owned())
+    crate::util::url_object(path)
 }
 
 /// Adds `excerpts` of `object` (a URL without its query) to what readers use.

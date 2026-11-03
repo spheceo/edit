@@ -57,11 +57,7 @@ impl Chunk {
 /// through a presigned URL (new every export), its object without the
 /// signature: objects are named by their content and never change.
 pub fn content_key(path: &Path) -> String {
-    if crate::util::is_url(path) {
-        let text = path.to_string_lossy();
-        return text.split('?').next().unwrap_or_default().to_owned();
-    }
-    crate::media::media_key(path)
+    crate::util::url_object(path).unwrap_or_else(|| crate::media::media_key(path))
 }
 
 fn hasher(seed: &str) -> std::collections::hash_map::DefaultHasher {
@@ -560,6 +556,19 @@ mod tests {
         assert_eq!(
             content_key(one),
             "https://r2.example/edit/originals/sha256/ab/x.mp4"
+        );
+        // Proxies read through this server's preview path: each its own, whatever the port.
+        let a =
+            Path::new("http://127.0.0.1:7700/api/cloud/preview?key=edit%2Fproxies%2Fdrive%2Fa.mp4");
+        let b =
+            Path::new("http://127.0.0.1:7710/api/cloud/preview?key=edit%2Fproxies%2Fdrive%2Fb.mp4");
+        assert_eq!(content_key(a), "cloud:edit/proxies/drive/a.mp4");
+        assert_ne!(content_key(a), content_key(b));
+        assert_eq!(
+            content_key(Path::new(
+                "http://127.0.0.1:7710/api/cloud/preview?key=edit%2Fproxies%2Fdrive%2Fa.mp4"
+            )),
+            content_key(a)
         );
     }
 

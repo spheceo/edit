@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { CELL, cellKey, cellSpan, cellsOf, pin, pinned, prepare, TO_THE_END } from "../src/export_excerpts.ts";
+import { CELL, cellKey, cellSpan, cellsOf, objectOf, pin, pinned, prepare, TO_THE_END } from "../src/export_excerpts.ts";
 import type { Project } from "../src/model.ts";
 import * as tools from "../src/tools.ts";
 import { scratch } from "./helpers/home.ts";
@@ -114,4 +114,12 @@ test("an export's excerpts are pinned against the cache's cleaner until it lets 
   expect(pinned("/c/b.mp4")).toBe(false);
   second();
   expect(pinned("/c/a.mp4")).toBe(false);
+});
+
+test("objects are named as the engine names them: an original without its signature, a proxy by its key whatever the port", () => {
+  expect(objectOf("https://r2.example/edit/originals/drive/abc/a.mp4?X-Amz-Signature=1")).toBe("https://r2.example/edit/originals/drive/abc/a.mp4");
+  const proxy = (port: number) => `http://127.0.0.1:${port}/api/cloud/preview?key=${encodeURIComponent("edit/proxies/drive/abc.mp4")}`;
+  expect(objectOf(proxy(7700))).toBe("cloud:edit/proxies/drive/abc.mp4");
+  expect(objectOf(proxy(7710))).toBe(objectOf(proxy(7700)));
+  expect(objectOf(`http://127.0.0.1:7700/api/cloud/preview?key=${encodeURIComponent("edit/proxies/drive/other.mp4")}`)).not.toBe(objectOf(proxy(7700)));
 });

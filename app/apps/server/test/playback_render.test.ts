@@ -48,6 +48,7 @@ test("while a changed edit renders, the old render is never offered as it", asyn
   const { fixtureHome } = await import("./helpers/home.ts");
   const playback = await import("../src/playback_render.ts");
   const { app, store, cleanup } = fixtureHome("playback-stale");
+  playback.hooks.waitMs = 10;
   try {
     Object.assign(app.exports, { localRunning: () => false, running: () => false });
     const id = store.create("stale", { width: 1920, height: 1080, fps: 30 }).project.id;
@@ -67,7 +68,13 @@ test("while a changed edit renders, the old render is never offered as it", asyn
     const asked = playback.request(app, id);
     expect(asked.rev).toBe(store.get(id)!.rev);
     expect(asked.url).toBeNull();
+    for (let tries = 0; playback.status(app, id).state !== "waiting" && tries < 200; tries++) await Bun.sleep(5);
+    expect(playback.status(app, id)).toMatchObject({ state: "waiting", url: null });
+    // The export over: it goes on (and ends, the stub having no renderer) before this test's app goes.
+    Object.assign(app.exports, { localRunning: () => false, running: () => false });
+    for (let tries = 0; ["waiting", "rendering"].includes(playback.status(app, id).state) && tries < 400; tries++) await Bun.sleep(5);
   } finally {
+    playback.hooks.waitMs = 10_000;
     cleanup();
   }
 });

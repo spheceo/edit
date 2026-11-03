@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, archiveFinished, deleteExport, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
+import { archiveExportFile, archiveFinished, deleteExport, dropKept, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as capacity from "../src/export_capacity.ts";
 import * as seams from "../src/seams.ts";
@@ -136,6 +136,9 @@ test("archiveExportFile deletes locally only after a size-verified upload", asyn
     expect(fs.existsSync(file)).toBe(true);
     // Room to spare: archived and kept, for the next re-export's chunks.
     expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50), () => 100e9)).toBe(true);
+    expect(fs.existsSync(file)).toBe(true);
+    // Under 60 GB but over 20 GB free (Sphe's M1, 26 GB): the newest stays too.
+    expect(await archiveExportFile(file, "edit/exports/p/Out.mp4", io(50), () => 26e9)).toBe(true);
     expect(fs.existsSync(file)).toBe(true);
     // A share reading it: archived, and the copy stays until it's done.
     const release = holdExport(file);
@@ -396,4 +399,153 @@ test("a finished export's upload is a job of its own: a restart meanwhile sends 
     release();
     render.mockRestore(); plan.mockRestore(); enabled.mockRestore(); upload.mockRestore(); head.mockRestore(); wanted.mockRestore(); cleanup();
   }
+});
+
+test("smooth playback's render waits only for the export rendering, goes before the ones in line, and isn't an export itself", async () => {
+  // Sphe, Nov 3: with three exports queued, the edit open here got no smooth playback until all were done ("cut the line").
+  const most = process.env.EDIT_LOCAL_EXPORTS;
+  process.env.EDIT_LOCAL_EXPORTS = "1";
+  const { dir, home, store, app, native, cleanup } = fixtureHome("playback-turn");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const started: string[] = [];
+  const releases = new Map<string, () => void>();
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job) => {
+    const name = JSON.parse(job.project.json).name as string;
+    started.push(name);
+    let release!: () => void;
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    releases.set(name, release);
+    return { cancel: () => release(), wait: async () => { await wait; fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; } };
+  });
+  const events: { id?: string; state?: string }[] = [];
+  const unsubscribe = store.subscribe((event) => { if (event.type === "export") events.push(event as never); });
+  try {
+    // Nothing exporting: a place at once, and nothing waits on it as on an export.
+    const alone = registry.takeTurn(() => { throw new Error("given at once"); });
+    expect(alone.release).not.toBeNull();
+    expect(registry.localRunning()).toBe(false);
+    expect(registry.running()).toBe(false);
+    // An export asked for meanwhile waits for it, saying so.
+    const projects: Project[] = [];
+    for (const name of ["one", "two"]) {
+      const id = store.create(name, { width: 64, height: 36, fps: 30 }).project.id;
+      await store.update(id, "test", p => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+      projects.push(structuredClone(store.get(id)!.project));
+    }
+    const options = native.exportDefaults();
+    await registry.start(store, app.library, projects[0]!, options, `${dir}/one.mp4`, { drive: false, keepLocal: true });
+    expect(started).toEqual([]);
+    expect(registry.activity().find(one => one.name === "one")).toMatchObject({ state: "queued", waiting: "waiting for smooth playback's render to finish" });
+    alone.release!();
+    alone.release!();
+    for (let tries = 0; started.length < 1 && tries < 100; tries++) await Bun.sleep(1);
+    expect(started).toEqual(["one"]);
+    expect(registry.localRunning()).toBe(true);
+    // "two" in line behind "one"; playback asks after it and still goes first.
+    await registry.start(store, app.library, projects[1]!, options, `${dir}/two.mp4`, { drive: false, keepLocal: true });
+    expect(registry.activity().find(one => one.name === "two")).toMatchObject({ state: "queued", waiting: "waiting for the encoder (this Mac has one)" });
+    let given: (() => void) | null = null;
+    const turn = registry.takeTurn((release) => { given = release; });
+    expect(turn.release).toBeNull();
+    // A wait dropped is never served; the one after it is.
+    const dropped = registry.takeTurn(() => { throw new Error("dropped"); });
+    dropped.cancel();
+    releases.get("one")!();
+    for (let tries = 0; given === null && tries < 100; tries++) await Bun.sleep(1);
+    expect(given).not.toBeNull();
+    expect(started).toEqual(["one"]);
+    // The queued one's reason was said again as it changed.
+    expect(registry.activity().find(one => one.name === "two")?.waiting).toBe("waiting for smooth playback's render to finish");
+    expect(events.filter(one => one.id === projects[1]!.id && one.state === "queued").length).toBeGreaterThan(1);
+    given!();
+    for (let tries = 0; started.length < 2 && tries < 100; tries++) await Bun.sleep(1);
+    expect(started).toEqual(["one", "two"]);
+    releases.get("two")!();
+    for (let tries = 0; registry.running() && tries < 100; tries++) await Bun.sleep(1);
+    expect(registry.running()).toBe(false);
+  } finally {
+    unsubscribe();
+    for (const release of releases.values()) release();
+    render.mockRestore(); archive.mockRestore(); plan.mockRestore();
+    if (most === undefined) delete process.env.EDIT_LOCAL_EXPORTS;
+    else process.env.EDIT_LOCAL_EXPORTS = most;
+    cleanup();
+  }
+});
+
+test("a share's export keeps for a restart the edit without its watermark, the watermark, and the share", async () => {
+  // The audit, Nov 3: a share's export cut by a restart came back a plain export, and its next Share exported the edit again.
+  const most = process.env.EDIT_LOCAL_EXPORTS;
+  process.env.EDIT_LOCAL_EXPORTS = "1";
+  const { dir, home, store, app, native, cleanup } = fixtureHome("share-resume");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const { timelineHash, withWatermarkKey, optionsKey } = await import("../src/exports.ts");
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
+  const marked = spyOn(seams.channelMarks, "addWatermark").mockImplementation(async (_app, _cache, project) => ({ ...project, media: [...project.media, { id: "watermark-sx", name: "SX watermark", path: "/tmp/logo.png", kind: "image", duration: 1, width: 64, height: 64, fps: 0, has_audio: false }] }) as Project);
+  let release!: () => void;
+  const render = spyOn(native.ExportJob, "start").mockImplementation((job) => {
+    const wait = new Promise<void>(resolve => { release = resolve; });
+    expect(JSON.parse(job.project.json).media.some((one: { id: string }) => one.id === "watermark-sx")).toBe(true);
+    return { cancel: () => release(), wait: async () => { await wait; fs.writeFileSync(job.output, "export"); return { seconds: 1, bytes: 6 }; } };
+  });
+  try {
+    const id = store.create("shared", { width: 64, height: 36, fps: 30 }).project.id;
+    await store.update(id, "test", p => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+    const edit = structuredClone(store.get(id)!.project);
+    const options = native.exportDefaults();
+    await registry.start(store, app.library, edit, options, `${dir}/shared.mp4`, { share: true, replace: true, note: "Fixes", watermark: "logo-1" });
+    const job = (JSON.parse(fs.readFileSync(`${home}/jobs.json`, "utf8")) as { kind: string; args: Record<string, unknown> }[]).find(one => one.kind === "export")!;
+    expect(job.args).toMatchObject({ share: true, replace: true, note: "Fixes", watermark: "logo-1" });
+    // The edit itself is kept: a restart puts the watermark on again, so the share that asked follows it.
+    const kept = resumeSnapshot(home, id, job.args)!;
+    expect(kept.media.some(one => one.id === "watermark-sx")).toBe(false);
+    expect(registry.runningFor(id)).toMatchObject({ timeline: timelineHash(kept), options: withWatermarkKey(optionsKey(options), "logo-1") });
+  } finally {
+    release?.();
+    for (let tries = 0; registry.running() && tries < 100; tries++) await Bun.sleep(1);
+    render.mockRestore(); archive.mockRestore(); plan.mockRestore(); marked.mockRestore();
+    if (most === undefined) delete process.env.EDIT_LOCAL_EXPORTS;
+    else process.env.EDIT_LOCAL_EXPORTS = most;
+    cleanup();
+  }
+});
+
+test("short of room, kept copies go older first: each project's newest stays while 20 GB is free", () => {
+  // Sphe, Nov 3: "keep newest per project"; at 60 GB every re-export on a 256 GB Mac fetched its last export back first.
+  const home = fs.mkdtempSync(`${os.tmpdir()}/edit-kept-`);
+  try {
+    const file = (name: string) => {
+      const path = `${home}/${name}.mp4`;
+      fs.writeFileSync(path, Buffer.alloc(10));
+      return path;
+    };
+    const record = (name: string, at: number, cloud = true) => ({ path: file(name), name: `${name}.mp4`, finished_ms: at, seconds: 1, bytes: 10, frames: 30, whole: true, format: "h264", ...(cloud ? { cloudKey: `edit/exports/${name}.mp4` } : {}) });
+    const write = () => fs.writeFileSync(`${home}/exports.json`, JSON.stringify({
+      a: [record("a1", 1), record("a2", 5)],
+      b: [record("b1", 2), record("b2", 3)],
+      c: [record("c1", 4, false)],
+      d: [record("d1", 6)],
+    }));
+    write();
+    const there = () => ["a1", "a2", "b1", "b2", "c1", "d1"].filter((name) => fs.existsSync(`${home}/${name}.mp4`));
+    // Room to spare: nothing goes.
+    expect(dropKept(home, `${home}/d1.mp4`, () => 100e9)).toBe(0);
+    expect(there()).toEqual(["a1", "a2", "b1", "b2", "c1", "d1"]);
+    // 26 GB free: the older copies go, each project's newest stays (c1 was never archived: always kept).
+    expect(dropKept(home, `${home}/d1.mp4`, () => 26e9)).toBe(20);
+    expect(there()).toEqual(["a2", "b2", "c1", "d1"]);
+    // Under 20 GB: other projects' newest go too, the oldest first, until there's room.
+    let free = 15e9;
+    const rm = fs.rmSync;
+    const removed = spyOn(fs, "rmSync").mockImplementation(((path: fs.PathLike, options?: fs.RmOptions) => { free += 6e9; rm(path, options); }) as typeof fs.rmSync);
+    try {
+      dropKept(home, `${home}/d1.mp4`, () => free);
+    } finally { removed.mockRestore(); }
+    expect(there()).toEqual(["a2", "c1", "d1"]);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

@@ -109,8 +109,10 @@ export interface Exports {
   running(): boolean;
   /** Project `id`'s export under way, if any: what it writes, its timeline hash and options key. */
   runningFor?(id: string): { output: string; timeline: string; options: string } | null;
-  /** Local hardware contention only: cloud renders leave imports/analysis running. */
+  /** Whether an export is rendering on this Mac (smooth playback's render isn't one). */
   localRunning?(): boolean;
+  /** A place for smooth playback's render, ahead of the exports in line (ExportRegistry.takeTurn). */
+  takeTurn?(ready: (release: () => void) => void): { release: (() => void) | null; cancel: () => void };
   /** Whether `path` is a file exported since the server started (only those are handed out). */
   exported(path: string): boolean;
   /** All active jobs and recent outcomes on this Mac. */

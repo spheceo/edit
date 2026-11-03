@@ -376,11 +376,30 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
     const live = app.store.get(projectId);
     if (live === null) throw new Error("no such project");
     const asked = { ...native().exportDefaults(), ...options } as ExportOptions;
-    path = await exportOnce(app, projectId, live.project, asked, note, mark);
+    path = await exportOnce(app, projectId, live.project, asked, note, mark, replace);
   } finally {
     sharing.delete(projectId);
   }
   return share(app, projectId, path, replace);
+}
+
+/**
+ * A share whose export a restart cut short: the export carried on with the
+ * edit it was asked for (`project`, the job's snapshot) and its watermark,
+ * then shared as it would have been. Before, the export came back as a plain
+ * one, its share forgotten, and the next Share exported the edit again.
+ */
+export async function resumeShare(app: App, projectId: string, project: Project, options: ExportOptions, output: { replace?: boolean; note?: string; watermark?: string }): Promise<void> {
+  if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
+  if (sharing.has(projectId)) throw new Error("this project is already being shared");
+  sharing.set(projectId, "exporting");
+  let path: string;
+  try {
+    path = await exportOnce(app, projectId, project, options, output.note, output.watermark, output.replace === true);
+  } finally {
+    sharing.delete(projectId);
+  }
+  await share(app, projectId, path, output.replace === true);
 }
 
 /** How long a share waits on an export already running for its project (a different one) before it gives up. */
@@ -407,7 +426,7 @@ type Ended = { readonly file: string } | { readonly failed: string } | { readonl
  * "already being shared" until Edit restarted; now it's exported again, and
  * after `exportWatch.silentEnds` such ends the share says so.
  */
-const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, projectId: string, project: Project, options: ExportOptions, note?: string, watermark?: string) {
+const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, projectId: string, project: Project, options: ExportOptions, note?: string, watermark?: string, replace = false) {
   const timeline = timelineHash(project);
   const wanted = withWatermarkKey(optionsKey(options), watermark);
   const began = Date.now();
@@ -460,7 +479,7 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
         // The share holds the file while it reads it (withExport), so the
         // archive never takes it away underneath.
         const started = yield* Effect.tryPromise({
-          try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), { share: true, ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) }),
+          try: () => app.exports.start(app.store, app.library, structuredClone(project) as Project, options, defaultExportPath(app.store, project), { share: true, ...(replace ? { replace: true } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) }),
           catch: (error) => error as Error,
         }).pipe(Effect.result);
         // Another export began between the look and the start: wait for it, as above.
@@ -484,8 +503,8 @@ const exportOnceEffect = Effect.fn("reviews.exportOnce")(function* (app: App, pr
   }
 });
 
-function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions, note?: string, watermark?: string): Promise<string> {
-  return runPromise(exportOnceEffect(app, projectId, project, options, note, watermark).pipe(inArea("review")));
+function exportOnce(app: App, projectId: string, project: Project, options: ExportOptions, note?: string, watermark?: string, replace = false): Promise<string> {
+  return runPromise(exportOnceEffect(app, projectId, project, options, note, watermark, replace).pipe(inArea("review")));
 }
 
 /**

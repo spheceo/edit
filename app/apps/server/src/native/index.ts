@@ -140,6 +140,8 @@ export interface ExportStart {
   sounds?: Record<string, string>;
   /** Stretches of cloud originals cut to this Mac, read instead of their URLs (export_excerpts.ts). */
   excerpts?: ExportExcerpt[];
+  /** Smooth playback's render: it doesn't take the foreground, so imports and background work run on beside it. */
+  background?: boolean;
 }
 
 /** Seconds `from..to` of the cloud object `object` (its URL without the query), in `path`, whose time 0 is `from`. */

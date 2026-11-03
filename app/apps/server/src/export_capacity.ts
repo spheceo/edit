@@ -16,9 +16,11 @@
 //     cores).
 //
 // Otherwise it waits in line, saying what for ("waiting for the encoder"), and
-// is looked at again as the room changes. An export running alone has the Mac
-// to itself: background FFmpeg (previews, smoothing) and smooth playback
-// renders stop while any export runs.
+// is looked at again as the room changes. While any export runs, background
+// work (light previews, smoothing, the censor check's frames) stops; an
+// import's proxy and a preview don't (someone waits on them: Nov 3, imports
+// sat at 99% behind a queue of exports). Smooth playback's render takes a
+// place as an export does (exports.ts `takeTurn`), ahead of the ones in line.
 
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";

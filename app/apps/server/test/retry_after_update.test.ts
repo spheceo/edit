@@ -240,7 +240,8 @@ test("the real retry of a share exports through the share, its export saying it'
   try {
     retry.noteBuild(app, "nightly-48");
     expect(await retry.step(app)).toBe("shared");
-    expect(started).toEqual([{ share: true, note: retry.NOTE }]);
+    // It says too whether it goes over the latest version, so a restart shares it the same way.
+    expect(started).toEqual([{ share: true, replace: true, note: retry.NOTE }]);
     // The fixture has no export on record, so the share stops after the export: still unshared, for the next build.
     expect((JSON.parse(fs.readFileSync(`${home}/reviews.json`, "utf8")) as { unshared?: Record<string, true> }).unshared?.[mom]).toBe(true);
     expect(retry.noteBuild(app, "nightly-49").some((one) => one.kind === "share" && one.project === mom)).toBe(true);

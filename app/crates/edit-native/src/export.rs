@@ -111,6 +111,9 @@ pub struct ExportStart {
     pub sounds: Option<std::collections::HashMap<String, String>>,
     /// Stretches of cloud originals cut to this Mac, read instead of their URLs (`edit_engine::excerpts`).
     pub excerpts: Option<Vec<ExportExcerpt>>,
+    /// Smooth playback's render: it doesn't take the foreground, so imports
+    /// and background work run on beside it (`media::as_background`).
+    pub background: Option<bool>,
 }
 
 /// Seconds `from..to` of the cloud object `object` (its URL without the query), in `path`, whose time 0 is `from`.
@@ -183,9 +186,10 @@ impl ExportJob {
         }
         let (send, done) = oneshot::channel();
         let stop = Arc::clone(&cancel);
+        let background = job.background == Some(true);
         std::thread::spawn(move || {
             let started = Instant::now();
-            let result = edit_engine::util::catch("the export", || {
+            let export = || {
                 edit_engine::render::export_file(
                     &project,
                     &options,
@@ -196,6 +200,13 @@ impl ExportJob {
                     &stop,
                     |progress| crate::report(&on_progress, f64::from(progress)),
                 )
+            };
+            let result = edit_engine::util::catch("the export", || {
+                if background {
+                    edit_engine::media::as_background(export)
+                } else {
+                    export()
+                }
             })
             .and_then(|result| result)
             .map(|()| ExportDone {

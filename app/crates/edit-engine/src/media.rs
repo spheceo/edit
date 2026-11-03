@@ -17,22 +17,65 @@ use edit_core::MediaKind;
 use serde_json::Value;
 
 /// Work the user is waiting on (an export) that's running now. Background
-/// previews pause while there is any: a fresh 30-minute import's two preview
-/// transcodes ran beside its export and slowed it from ~7 to 12 minutes.
+/// work (light previews, smoothing, the censor check's frames) pauses while
+/// there is any: a fresh 30-minute import's two preview transcodes ran beside
+/// its export and slowed it from ~7 to 12 minutes. An import's proxy and a
+/// preview never pause (`Pause::Never`): someone is waiting on them too, and
+/// with the exports, renders and proxies all on the Mac since Nov 3 an import
+/// sat at 99% until the last of the queued exports was done.
 static FOREGROUND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+thread_local! {
+    /// This thread's exports don't take the foreground (`as_background`).
+    static QUIET: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Held while foreground work runs.
-pub struct Foreground(());
+pub struct Foreground(bool);
 
 impl Drop for Foreground {
     fn drop(&mut self) {
-        FOREGROUND.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        if self.0 {
+            FOREGROUND.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        }
     }
 }
 
+/// Takes the foreground, unless this thread's work is background (`as_background`).
 pub fn foreground() -> Foreground {
-    FOREGROUND.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-    Foreground(())
+    let counted = !QUIET.with(std::cell::Cell::get);
+    if counted {
+        FOREGROUND.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+    Foreground(counted)
+}
+
+/// Runs `work` (an export) without taking the foreground: smooth playback's
+/// render, which gives way to real exports itself (playback_render.ts) and
+/// used to stop every import on the Mac for minutes after each agent turn.
+pub fn as_background<T>(work: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            QUIET.with(|quiet| quiet.set(self.0));
+        }
+    }
+    let _reset = Reset(QUIET.with(|quiet| quiet.replace(true)));
+    work()
+}
+
+/// Whether media work waits while an export runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pause {
+    /// Background work: it waits (FFmpeg stopped, native frames held).
+    ForExports,
+    /// An import's proxy or a preview: it runs beside the export.
+    Never,
+}
+
+/// Whether an export holds the foreground now.
+pub fn exporting() -> bool {
+    FOREGROUND.load(std::sync::atomic::Ordering::Acquire) > 0
 }
 
 /// Waits while foreground work runs (background work calls it as it goes).
@@ -258,6 +301,11 @@ pub struct CachePaths {
 /// from the export; FFmpeg children used to run on beside it (the same
 /// project's export took 4:33, 8:55 and 14:45).
 pub fn run_background(command: &mut Command) -> Result<Vec<u8>, String> {
+    run_paused(command, Pause::ForExports)
+}
+
+/// [`run_background`], or never stopped for an export when `pause` is `Never`.
+pub fn run_paused(command: &mut Command, pause: Pause) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut child = command
         .stdin(Stdio::null())
@@ -312,7 +360,7 @@ pub fn run_background(command: &mut Command) -> Result<Vec<u8>, String> {
             Ok(None) => {}
             Err(error) => return Err(error.to_string()),
         }
-        paused.set(FOREGROUND.load(std::sync::atomic::Ordering::Acquire) > 0);
+        paused.set(pause == Pause::ForExports && exporting());
         std::thread::sleep(Duration::from_millis(200));
     };
     drop(paused);
@@ -366,9 +414,24 @@ pub fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<()
         source
     };
     #[cfg(target_os = "macos")]
-    if hardware_video(input, probe, (1280, 720), 1_500_000, false, &partial)
-        || native_proxy(input, &partial, probe, 1280, 720, 1_500_000, |_| {})
-    {
+    if hardware_video(
+        input,
+        probe,
+        (1280, 720),
+        1_500_000,
+        false,
+        &partial,
+        Pause::ForExports,
+    ) || native_proxy(
+        input,
+        &partial,
+        probe,
+        1280,
+        720,
+        1_500_000,
+        Pause::ForExports,
+        |_| {},
+    ) {
         return std::fs::rename(&partial, &paths.light).map_err(|error| error.to_string());
     }
     let gop = (probe.fps / 2.0).round().max(1.0).to_string();
@@ -454,6 +517,7 @@ pub fn make_proxy(
             8_000_000,
             false,
             &video_tmp,
+            Pause::Never,
         ) || native_proxy(
             source,
             &video_tmp,
@@ -461,6 +525,7 @@ pub fn make_proxy(
             PROXY_MAX_WIDTH,
             PROXY_MAX_HEIGHT,
             8_000_000,
+            Pause::Never,
             &mut progress,
         ));
     #[cfg(not(target_os = "macos"))]
@@ -660,6 +725,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
         bitrate,
         true,
         &partial,
+        Pause::Never,
     ) {
         return std::fs::rename(&partial, out).map_err(|error| error.to_string());
     }
@@ -672,6 +738,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
             PROXY_MAX_WIDTH,
             PROXY_MAX_HEIGHT,
             bitrate,
+            Pause::Never,
             |_| {},
         );
     #[cfg(not(target_os = "macos"))]
@@ -757,7 +824,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
     // Never the command line in an error: a URL in it is a credential. FFmpeg's
     // own complaint can still name the URL, so callers scrub this error
     // (`cloud_media::scrub`) before showing or logging it.
-    run_background(&mut command).map_err(|error| format!("proxy: {error}"))?;
+    run_paused(&mut command, Pause::Never).map_err(|error| format!("proxy: {error}"))?;
     std::fs::rename(&partial, out).map_err(|error| error.to_string())
 }
 
@@ -836,6 +903,7 @@ fn hardware_video(
     bitrate: u64,
     sound: bool,
     partial: &Path,
+    pause: Pause,
 ) -> bool {
     if std::env::var_os("EDIT_FFMPEG_VIDEO").is_some()
         || std::env::var_os("EDIT_NO_HARDWARE_PROXY").is_some()
@@ -913,7 +981,7 @@ fn hardware_video(
         .arg(partial);
     // A rotated phone video: FFmpeg turns it on the GPU, or fails and the
     // other paths do it.
-    match run_background(&mut command) {
+    match run_paused(&mut command, pause) {
         Ok(_) => true,
         Err(error) => {
             let _ = std::fs::remove_file(partial);
@@ -936,6 +1004,7 @@ fn hardware_video(
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(clippy::too_many_arguments)]
 pub fn native_proxy(
     _source: &Path,
     _output: &Path,
@@ -943,12 +1012,14 @@ pub fn native_proxy(
     _max_w: u32,
     _max_h: u32,
     _bitrate: u64,
+    _pause: Pause,
     _progress: impl FnMut(f32),
 ) -> bool {
     false
 }
 
 #[cfg(target_os = "macos")]
+#[allow(clippy::too_many_arguments)]
 pub fn native_proxy(
     source: &Path,
     output: &Path,
@@ -956,6 +1027,7 @@ pub fn native_proxy(
     max_w: u32,
     max_h: u32,
     bitrate: u64,
+    pause: Pause,
     mut progress: impl FnMut(f32),
 ) -> bool {
     if std::env::var_os("EDIT_FFMPEG_VIDEO").is_some() {
@@ -994,7 +1066,7 @@ pub fn native_proxy(
         let order = crate::mac_media::Order::Bgra;
         let mut reported = Instant::now();
         for frame in 0..frames {
-            if frame % 8 == 0 {
+            if pause == Pause::ForExports && frame % 8 == 0 {
                 yield_to_foreground();
             }
             reader.frame(frame as f64 / fps, &mut bgra, order, frame > 0)?;
@@ -1144,6 +1216,25 @@ mod background_tests {
             "{:?}",
             started.elapsed()
         );
+        // An import's proxy (Pause::Never) runs on beside the export.
+        let held = std::thread::spawn(|| {
+            let _export = foreground();
+            std::thread::sleep(Duration::from_millis(1500));
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        run_paused(Command::new("sh").args(["-c", "sleep 0.3"]), Pause::Never).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_millis(1000),
+            "{:?}",
+            started.elapsed()
+        );
+        held.join().unwrap();
+        // Smooth playback's render doesn't take the foreground.
+        as_background(|| {
+            assert!(!foreground().0);
+        });
+        assert!(foreground().0);
         // Failures say what FFmpeg said last.
         let error =
             run_background(Command::new("sh").args(["-c", "echo first >&2; echo why >&2; exit 3"]))

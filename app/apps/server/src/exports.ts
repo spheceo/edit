@@ -40,6 +40,8 @@ export interface StartExtra {
   note?: string;
   /** A channel's watermark over the whole export (channel_marks.ts): its picture's Drive id in the Watermarks folder. */
   watermark?: string;
+  /** A share's export: its file goes over the review's latest version rather than adding one (reviews.share's `replace`), kept so a restart shares it the same way. */
+  replace?: boolean;
 }
 
 /**
@@ -235,11 +237,19 @@ function freeBytes(path: string): number {
 }
 
 /**
- * Room enough on the disk to keep an archived export here too: the next
+ * Room enough on the disk to keep every archived export here too: the next
  * re-export copies its unchanged chunks straight out of it instead of
  * fetching it back from the cloud first (2–3 minutes for a 90-minute edit).
  */
 export const KEEP_WHEN_FREE = 60e9;
+
+/**
+ * Below that, each project's newest export still stays while the disk keeps
+ * this much free: at 60 GB, a Mac with a 256 GB disk (Sphe's M1, 26 GB free)
+ * fetched the last export back from R2 before every re-export (Sphe, Nov 3:
+ * "keep newest per project"). The older copies go first (`dropKept`).
+ */
+export const KEEP_NEWEST_FREE = 20e9;
 
 export async function archiveExportFile(
   output: string,
@@ -254,8 +264,8 @@ export async function archiveExportFile(
     const found = await io.head(key);
     if (found === null || found.size !== size) return false;
   } catch { return false; }
-  // Archived; with room to spare it stays here too.
-  if (room(output) > KEEP_WHEN_FREE) return true;
+  // Archived; while the disk keeps its room it stays here too: it's the project's newest.
+  if (room(output) > KEEP_NEWEST_FREE) return true;
   // A copy being read stays until the reading's done.
   if (reading.has(output)) {
     archivedMeanwhile.add(output);
@@ -272,13 +282,13 @@ export async function archiveExportFile(
  */
 export async function archiveFinished(home: string, id: string, output: string, key: string, record: ExportRecord): Promise<void> {
   if (!fs.existsSync(output)) throw new Error(`${output} is gone`);
+  // Short of room: the older copies kept while there was some go first, so this one may stay.
+  dropKept(home, output);
   if (await archiveExportFile(output, key)) {
     try {
       remember(home, id, record);
     } catch { /* the list keeps the local-only record */ }
-    diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy kept: being read, or room to spare)" : " and deleted the local copy"}`);
-    // Short of room: the copies kept while there was some go too.
-    if (freeBytes(output) <= KEEP_WHEN_FREE) dropKept(home, output);
+    diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy kept: being read, or the newest with room for it)" : " and deleted the local copy"}`);
   } else {
     diag.warn("export", `${id}: cloud archive of ${output} unverified; local copy kept`);
   }
@@ -345,20 +355,39 @@ export function lastChunks(cache: string, project: string): { output: string; si
 }
 
 /**
- * Deletes the local copies of exports archived in the cloud (verified by
- * size), but `except` and any being read: kept while the disk had room,
- * they go when it hasn't (four of them filled this Mac on Oct 29).
+ * Deletes local copies of exports archived in the cloud (verified by size),
+ * never `except` or one being read, as the disk `except` is on runs short
+ * (four of them filled this Mac on Oct 29): with `KEEP_WHEN_FREE` or less
+ * free, every one but each project's newest; with under `KEEP_NEWEST_FREE`
+ * still, the newest of other projects on that disk too, the oldest first,
+ * until there's room again. Bytes freed.
  */
-export function dropKept(home: string, except: string): number {
+export function dropKept(home: string, except: string, free: (path: string) => number = freeBytes): number {
+  if (free(except) > KEEP_WHEN_FREE) return 0;
+  const records = Object.values(readRecords(home));
+  const newest = new Set(records.map((own) => own.reduce<ExportRecord | null>((best, one) => (best === null || one.finished_ms >= best.finished_ms ? one : best), null)?.path).filter((path) => path !== undefined));
+  const droppable = (record: ExportRecord): number | null => {
+    if (record.cloudKey === undefined || record.path === except || reading.has(record.path) || !fs.existsSync(record.path)) return null;
+    const size = fs.statSync(record.path).size;
+    return record.bytes !== null && size !== record.bytes ? null : size;
+  };
   let freed = 0;
-  for (const own of Object.values(readRecords(home))) {
-    for (const record of own) {
-      if (record.cloudKey === undefined || record.path === except || reading.has(record.path) || !fs.existsSync(record.path)) continue;
-      const size = fs.statSync(record.path).size;
-      if (record.bytes !== null && size !== record.bytes) continue;
-      fs.rmSync(record.path, { force: true });
-      freed += size;
-    }
+  for (const record of records.flat()) {
+    if (newest.has(record.path)) continue;
+    const size = droppable(record);
+    if (size === null) continue;
+    fs.rmSync(record.path, { force: true });
+    freed += size;
+  }
+  const disk = (path: string): number => { try { return fs.statSync(path).dev; } catch { return -1; } };
+  const here = disk(parent(except) ?? ".");
+  const others = records.flat().filter((record) => newest.has(record.path) && disk(record.path) === here).sort((a, b) => a.finished_ms - b.finished_ms);
+  for (const record of others) {
+    if (free(except) >= KEEP_NEWEST_FREE) break;
+    const size = droppable(record);
+    if (size === null) continue;
+    fs.rmSync(record.path, { force: true });
+    freed += size;
   }
   if (freed > 0) diag.info("export", `freed ${(freed / 1e9).toFixed(1)} GB: exports already in the cloud, kept here while there was room`);
   return freed;
@@ -494,7 +523,11 @@ export class ExportRegistry implements seams.Exports {
   private jobs = new Map<string, Running>();
   /** Exports rendering on this Mac now: as many at once as it has room for (export_capacity.ts). */
   private localActive = 0;
-  private localQueue: { running: Running; start: () => void }[] = [];
+  /** Of those, the places smooth playback's render holds (`takeTurn`): not exports, so nothing waits on them as on one. */
+  private lent = 0;
+  /** Smooth playback's renders waiting for a place: served before the exports in line (Sphe, Nov 3: "cut the line"). */
+  private ahead: ((release: () => void) => void)[] = [];
+  private localQueue: { running: Running; start: () => void; notify: () => void }[] = [];
   /** A look again at the line when an export waits for room (memory, the CPU) rather than for one to end. */
   private recheck: ReturnType<typeof setTimeout> | null = null;
   private recent = new Map<string, ExportActivity>();
@@ -519,8 +552,37 @@ export class ExportRegistry implements seams.Exports {
     return running === undefined || running.cancelled ? null : { output: running.output, timeline: running.timeline, options: running.options };
   }
 
+  /** Whether an export is rendering here (smooth playback's render isn't one). */
   localRunning(): boolean {
-    return this.localActive > 0;
+    return this.localActive - this.lent > 0;
+  }
+
+  /**
+   * A place for smooth playback's render, as an export has: now when the Mac
+   * has room (`release` given back at once), else `ready` is called with it
+   * once there is, before the exports waiting in line. With three exports
+   * queued, the edit open on this Mac got no smooth playback for hours; now it
+   * waits only for the export rendering, and on a Max or an Ultra it renders
+   * beside them. `cancel` drops a wait.
+   */
+  takeTurn(ready: (release: () => void) => void): { release: (() => void) | null; cancel: () => void } {
+    if (this.ahead.length === 0 && capacity.noRoom(this.localActive) === null) return { release: this.lend(), cancel: () => {} };
+    this.ahead.push(ready);
+    this.drain();
+    return { release: null, cancel: () => { this.ahead = this.ahead.filter((one) => one !== ready); } };
+  }
+
+  /** Takes a place for smooth playback; its release gives it back (once). */
+  private lend(): () => void {
+    this.localActive++;
+    this.lent++;
+    let held = true;
+    return () => {
+      if (!held) return;
+      held = false;
+      this.lent = Math.max(0, this.lent - 1);
+      this.releaseOne();
+    };
   }
 
   activity(): ExportActivity[] {
@@ -538,10 +600,17 @@ export class ExportRegistry implements seams.Exports {
   /** Starts what waits in line while this Mac has room for another (export_capacity.ts). */
   private drain(): void {
     this.localQueue = this.localQueue.filter((one) => !one.running.cancelled);
-    while (this.localQueue.length > 0) {
-      const why = capacity.noRoom(this.localActive);
-      if (why !== null) {
-        for (const one of this.localQueue) one.running.waiting = why;
+    while (this.ahead.length > 0 || this.localQueue.length > 0) {
+      const room = capacity.noRoom(this.localActive);
+      if (room !== null) {
+        // Only smooth playback's render holds the Mac: it's that they wait for.
+        const why = this.lent > 0 && this.localActive === this.lent ? "waiting for smooth playback's render to finish" : room;
+        // Said again as it changes (memory freed, the CPU less busy), not only when it was queued.
+        for (const one of this.localQueue) {
+          if (one.running.waiting === why) continue;
+          one.running.waiting = why;
+          one.notify();
+        }
         // Waiting on room rather than on an export to end: looked at again in a while.
         if (this.localActive < capacity.mostAtOnce() && this.recheck === null) {
           this.recheck = setTimeout(() => {
@@ -551,6 +620,11 @@ export class ExportRegistry implements seams.Exports {
           this.recheck.unref?.();
         }
         return;
+      }
+      const turn = this.ahead.shift();
+      if (turn !== undefined) {
+        turn(this.lend());
+        continue;
       }
       const next = this.localQueue.shift()!;
       if (this.localActive > 0) diag.info("export", `starting another export beside ${this.localActive} running (${capacity.standing()})`);
@@ -632,14 +706,23 @@ export class ExportRegistry implements seams.Exports {
       snapshot = snapshotFile(this.home, project.id);
       try {
         fs.mkdirSync(join(this.home, "jobs"), { recursive: true });
-        writeAtomic(snapshot, jsonForSerde(project));
+        // The edit, not the watermark over it: a restart puts that on again
+        // (`watermark` below), so the export carried on is of the same edit,
+        // with the same keys, and the share that asked for it follows it.
+        writeAtomic(snapshot, jsonForSerde(edit));
       } catch (error) {
         throw new Error(`couldn't keep this export's timeline for a restart: ${ioMessage(error)}`);
       }
     }
+    // Everything it was started with, so a restart carries it on as it was:
+    // a share's export once came back without its share, and its next Share
+    // exported the edit again (the audit, Nov 3).
     const args = {
       options, output: path,
       ...(extra.drive === undefined ? {} : { drive: extra.drive }), ...(snapshot === null ? {} : { snapshot }),
+      ...(extra.keepLocal === true ? { keepLocal: true } : {}), ...(extra.share === true ? { share: true } : {}),
+      ...(extra.note === undefined ? {} : { note: extra.note }), ...(extra.watermark === undefined ? {} : { watermark: extra.watermark }),
+      ...(extra.replace === true ? { replace: true } : {}),
     };
     const key = jobs.begin(this.home, "export", project.id, args);
     // Own the snapshot in memory too: a caller changing its draft or options
@@ -668,6 +751,8 @@ export class ExportRegistry implements seams.Exports {
     };
     this.localQueue.push({ running, start: () => {
       void this.run(store, library, project, options, plan, path, running, upload, () => this.releaseOne());
+    }, notify: () => {
+      if (running.queued && !running.cancelled) this.publish(store, project, running, "queued", 0);
     } });
     this.drain();
     if (running.queued) this.publish(store, project, running, "queued", 0);

@@ -11,9 +11,14 @@
 // in a folder of its own (the project's id with ".playback"), so a real
 // export's chunks are never touched, and a re-render after an edit copies the
 // chunks that didn't change and renders only the rest, seconds for a fix.
-// One render at a time, never alongside an export (the export goes first: a
-// render running when one starts is stopped and carries on after), and the
-// page asks for it (`POST /api/projects/{id}/playback`) once its edits settle,
+// One render at a time, in a place among the exports (exports.ts `takeTurn`):
+// it waits only for an export rendering, never for the ones in line behind
+// it (Sphe, Nov 3: with three queued, the edit open here got no smooth
+// playback for hours), beside them on a Mac with room for two; an export
+// asked for while it renders waits for it, seconds for a re-render. It
+// doesn't take the Mac's foreground (`background`): imports and background
+// work run on beside it, where every render after an agent turn used to stop
+// the Mac's imports for minutes. The page asks for it (`POST /api/projects/{id}/playback`) once its edits settle,
 // so the agent's dozens of changes in a turn don't each start one.
 //
 // A render is made on this Mac. Before rendering, a Mac looks in R2 under the
@@ -48,8 +53,6 @@ import { playbackKey } from "./cloud_playback.ts";
 import * as seams from "./seams.ts";
 import { createHash } from "node:crypto";
 
-/** How often a render waiting on an export looks again (ms). */
-const WAIT_MS = 10_000;
 /** Renders kept on disk: the projects rendered last (each about 900 MB for a 40-minute edit). */
 const KEEP = 3;
 
@@ -88,6 +91,8 @@ interface Running {
   started: number;
   /** Whether it has sound. */
   heard?: boolean;
+  /** Waiting for its place among the exports: what drops that wait. */
+  waiting?: () => void;
 }
 
 const made = new Map<string, Made>();
@@ -97,7 +102,6 @@ let running: Running | null = null;
 const asked = new Map<string, number>();
 /** Where the viewer's playhead was when it asked: that chunk is rendered first. */
 const focus = new Map<string, number>();
-let waitTimer: ReturnType<typeof setTimeout> | undefined;
 
 /** What's seen and heard: the project but its script (notes and words that change nothing on screen). */
 export function pictureHash(project: Project): string {
@@ -151,9 +155,59 @@ function localCopy(app: App, id: string, key: string): string | null {
   return isFile(local) ? local : null;
 }
 
-/** The export takes the Mac: a smooth playback render waits for local exports only. */
+/** Whether an export renders here (a registry without turns: the render waits for it). */
 function exporting(app: App): boolean {
   return app.exports.localRunning?.() ?? app.exports.running();
+}
+
+/**
+ * The render's place among the exports (`takeTurn`): its release, once it has
+ * one, or null when it was cancelled first. Meanwhile it's "waiting".
+ */
+async function turn(app: App, current: Running): Promise<(() => void) | null> {
+  let given: ((release: () => void) => void) | undefined;
+  const ready = new Promise<() => void>((resolve) => { given = resolve; });
+  let taken: ReturnType<NonNullable<typeof app.exports.takeTurn>> | undefined;
+  try {
+    taken = app.exports.takeTurn?.((one) => given!(one));
+  } catch (error) {
+    // A registry without turns (a stub's).
+    if (!seams.isUnavailable(error)) throw error;
+  }
+  if (taken === undefined) {
+    while (exporting(app) && !current.cancelled) {
+      const first = current.waiting === undefined;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, hooks.waitMs);
+        current.waiting = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        if (first) publish(app, current.project);
+      });
+    }
+    current.waiting = undefined;
+    return current.cancelled ? null : () => {};
+  }
+  const { release, cancel } = taken;
+  if (release !== null) return release;
+  const dropped = new Promise<null>((resolve) => {
+    current.waiting = () => {
+      cancel();
+      resolve(null);
+    };
+  });
+  diag.info("playback", `${current.project}: smooth playback waits for the export rendering`);
+  publish(app, current.project);
+  const got = await Promise.race([ready, dropped]);
+  current.waiting = undefined;
+  // Given just as it was cancelled: handed straight back.
+  if (got !== null && current.cancelled) {
+    got();
+    return null;
+  }
+  if (got !== null) publish(app, current.project);
+  return got;
 }
 
 export function status(app: App, id: string): Status {
@@ -167,6 +221,7 @@ export function status(app: App, id: string): Status {
   // picture: no url, so nothing plays it as this one (JJ, Nov 2: "I've made
   // changes to the window screen rather than the paper, but on the screen, it
   // still shows the paper thing": the status gave the new rev with the old file).
+  if (running?.project === id && running.waiting !== undefined) return { state: "waiting", rev: running.rev, progress: 0, url: running.rev === ready?.rev ? url : null, error: null, stream: false };
   if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null, stream: true };
   if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url: asked.get(id) === ready?.rev ? url : null, error: null, stream: false };
   if (ready !== undefined) return { state: "ready", rev: ready.rev, progress: 1, url, error: null, stream: ready.key === undefined };
@@ -201,12 +256,17 @@ export function request(app: App, id: string, frame?: number): Status {
     // The viewer plays live from here until the render's chunk lands: its proxies read ahead from the playhead.
     void prefetchProject(app, id, Math.floor(frame)).catch(() => {});
   }
-  if (running !== null) {
-    running.cancelled = true;
-    running.job?.cancel();
-  } else void next(app);
+  if (running !== null) stop(running);
+  else void next(app);
   publish(app, id);
   return status(app, id);
+}
+
+/** Stops a render, or its wait for a place. */
+function stop(current: Running): void {
+  current.cancelled = true;
+  current.job?.cancel();
+  current.waiting?.();
 }
 
 /** Asked in the background (an agent's turn over): queued behind what's asked, never stopping a render or dropping an ask. */
@@ -221,16 +281,6 @@ function requestQuietly(app: App, id: string): void {
   if (running === null) void next(app);
 }
 
-/** Stops a render for an export (it carries on once the export is done). */
-export function yieldToExport(app: App): void {
-  if (running === null) return;
-  asked.set(running.project, running.rev);
-  running.cancelled = true;
-  running.job?.cancel();
-  diag.info("playback", `${running.project}: smooth playback waits for the export`);
-  publish(app, running.project);
-}
-
 async function next(app: App): Promise<void> {
   if (running !== null) return;
   const first = asked.entries().next();
@@ -242,12 +292,6 @@ async function next(app: App): Promise<void> {
     return void next(app);
   }
   const project = live.project;
-  // A local export goes first; this looks again shortly.
-  if (exporting(app)) {
-    clearTimeout(waitTimer);
-    waitTimer = setTimeout(() => void next(app), WAIT_MS);
-    return;
-  }
   asked.delete(id);
   const current: Running = { project: id, rev: live.rev, hash: pictureHash(project), progress: 0, job: null, cancelled: false, started: Date.now() };
   running = current;
@@ -263,7 +307,17 @@ async function next(app: App): Promise<void> {
     if (await hooks.inCloud(key)) {
       current.key = key;
       found = true;
-    } else await render(app, project, current);
+    } else {
+      // Its place among the exports, then the render; given back however it ends.
+      const release = await turn(app, current);
+      if (release !== null) {
+        try {
+          await render(app, project, current);
+        } finally {
+          release();
+        }
+      }
+    }
     if (!current.cancelled) {
       const stamp = `${current.hash}-${Date.now().toString(36)}`;
       const before = made.get(id);
@@ -348,7 +402,7 @@ async function render(app: App, project: Project, current: Running): Promise<voi
   focus.delete(project.id);
   let job: ExportJob;
   try {
-    job = native().ExportJob.start({ project: input, options, plan: at === undefined ? plan : { ...plan, focus: at }, output, cacheDir: app.store.cacheDir(), excerpts }, (progress) => {
+    job = native().ExportJob.start({ project: input, options, plan: at === undefined ? plan : { ...plan, focus: at }, output, cacheDir: app.store.cacheDir(), excerpts, background: true }, (progress) => {
       current.progress = progress;
       publishSoon(app, project.id);
     });
@@ -398,16 +452,19 @@ function publishSoon(app: App, id: string): void {
 
 /**
  * How long an agent's turn has been over before its edit is made smooth (a
- * follow-up turn may start meanwhile) and whether R2 has a render at a key. Tests change them.
+ * follow-up turn may start meanwhile), whether R2 has a render at a key, and
+ * how often a wait for an export looks again. Tests change them.
  */
 export const hooks = {
   afterTurnMs: 45_000,
+  /** How often a render waiting on an export looks again, with a registry that has no turns (ms). */
+  waitMs: 10_000,
   inCloud: async (key: string): Promise<boolean> => cloud.enabled() && (await cloud.head(key).catch(() => null)) !== null,
 };
 
 /**
- * Follows exports: a local one stops a render, which carries on once it's done.
- * And the agent: when its turn is over (and no follow-up has started), the
+ * Follows exports (a registry without turns: a render waiting for one looks
+ * again when it ends). And the agent: when its turn is over (and no follow-up has started), the
  * edit is made smooth by itself, so it plays smoothly when someone opens it
  * (the user, Oct 31: "too many loading frame issues… the biggest issue"; a
  * 40-minute edit was only rendered once someone sat watching it): here, behind
@@ -429,15 +486,14 @@ export function start(app: App): void {
       return;
     }
     if (event.type !== "export") return;
-    if (event.state === "running" && exporting(app)) yieldToExport(app);
-    else if (event.state !== "running" && event.state !== "queued") void next(app);
+    if (event.state !== "running" && event.state !== "queued") void next(app);
   });
 }
 
 /** What playback_stream.ts serves for revision `rev` of `id`: the render under way, or the one made, when it's that revision's and made here. */
 const lookup: playbackStream.Lookup = (app, id, rev) => {
   const fps = app.store.get(id)?.project.settings.fps ?? 30;
-  if (running?.project === id) return running.rev === rev ? { output: file(app, id), heard: running.heard ?? true, fps, since: running.started } : null;
+  if (running?.project === id && running.waiting === undefined) return running.rev === rev ? { output: file(app, id), heard: running.heard ?? true, fps, since: running.started } : null;
   const done = record(app, id);
   if (!present(app, id, done) || done.key !== undefined) return null;
   // A save that changed nothing seen keeps the render (status's rule).

@@ -154,6 +154,11 @@ export interface ExportStart {
   sounds?: Record<string, string>
   /** Stretches of cloud originals cut to this Mac, read instead of their URLs (`edit_engine::excerpts`). */
   excerpts?: Array<ExportExcerpt>
+  /**
+   * Smooth playback's render: it doesn't take the foreground, so imports
+   * and background work run on beside it (`media::as_background`).
+   */
+  background?: boolean
 }
 
 /** Frames looked at per second of source when finding faces. */

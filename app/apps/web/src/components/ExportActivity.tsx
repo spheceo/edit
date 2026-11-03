@@ -73,7 +73,7 @@ export function ExportActivity({ inline = false }: { inline?: boolean } = {}) {
       {open && <section id="export-activity" aria-label="Export activity" className={inline ? "absolute top-full right-0 z-50 mt-2 w-[360px] max-w-[calc(100vw-24px)] overflow-hidden rounded-xl border border-line bg-panel shadow-2xl" : "mt-2 w-[360px] max-w-full overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"}>
         <div className="border-b border-line px-3 py-2.5">
           <h2 className="text-[13px] font-semibold">Exports</h2>
-          <p className="mt-0.5 text-[11px] text-muted">Keep editing or open another project. Local exports render one at a time.</p>
+          <p className="mt-0.5 text-[11px] text-muted">Keep editing or open another project. Exports run side by side while this Mac has room (one per video encoder); the rest wait in line.</p>
         </div>
         <div className="max-h-[55vh] overflow-y-auto">
           {visible.map(job => <div key={job.id} className="border-b border-line px-3 py-3 last:border-b-0">

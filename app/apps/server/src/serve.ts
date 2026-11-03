@@ -349,11 +349,18 @@ function resumeJobs(app: App): void {
     },
     export: async (job) => {
       // Jobs from before Nov 3 may name a Modal or Relay-worker backend: every export renders here now.
-      const { options, output, drive } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
+      const { options, output, drive, keepLocal, share, note, watermark, replace } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
       // The timeline it was started with, not edits made since.
       const current = project(job.project);
       const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
-      await app.exports.start(app.store, app.library, asked, options, output, { drive });
+      // A share's export carries on as the share it was: watermarked again, then shared.
+      if (share === true) {
+        void reviews
+          .resumeShare(app, job.project, asked, options, { ...(replace === true ? { replace } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) })
+          .catch((error: unknown) => diag.warn("review", `sharing ${job.project} after the restart: ${diag.messageOf(error)}`));
+        return;
+      }
+      await app.exports.start(app.store, app.library, asked, options, output, { drive, ...(keepLocal === true ? { keepLocal } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) });
     },
     archive: async (job) => {
       // The export finished before the restart: only its upload is done again.

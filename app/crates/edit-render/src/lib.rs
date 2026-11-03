@@ -202,6 +202,9 @@ pub struct Renderer {
     accum: [Target; 2],
     /// The picture beneath a blurring adjustment, blurred across (made on first use).
     blur_scratch: Option<Target>,
+    /// Whether a region's blur draws only its box (off: the whole frame, as
+    /// before Nov 3; for comparing the two).
+    blur_bounds: bool,
     output: Target,
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<wgpu::Buffer>,
@@ -490,6 +493,7 @@ impl Renderer {
             height: height.max(1),
             accum,
             blur_scratch: None,
+            blur_bounds: true,
             output,
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
@@ -1510,6 +1514,13 @@ impl Renderer {
         self.queue.submit([encoder.finish()])
     }
 
+    /// Whether a region's blur draws only its box (the default) or the
+    /// whole frame as before (for comparing the two in tests).
+    #[doc(hidden)]
+    pub fn set_blur_bounds(&mut self, on: bool) {
+        self.blur_bounds = on;
+    }
+
     /// Native path: copy the last rendered frame out as tightly packed RGBA8.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn read_output(&mut self) -> Result<Vec<u8>, String> {
@@ -2047,7 +2058,30 @@ impl Renderer {
         };
         let offset = slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&across));
         let group = self.bind(&self.accum(current).view);
-        draw(
+        // The first pass only where the second reads it: the region's box
+        // grown by where its feather still covers and the second pass's
+        // reach (3σ, a texel for the filtering). The second pass leaves
+        // everything outside its feather sharp without a tap. Kroger's blurs
+        // are bands a fifth of the frame high; both passes ran over all of
+        // it, half of its render (Nov 3).
+        let bounds = (self.blur_bounds && !blur.is_whole_frame()).then(|| {
+            let grow = 2.0 * blur.feather.max(1.0) + 3.0 * sigma + 4.0;
+            let (cx, cy) = (width / 2.0 + blur.x, height / 2.0 + blur.y);
+            let (hw, hh) = (blur.width / 2.0 + grow, blur.height / 2.0 + grow);
+            let x0 = (cx - hw).floor().clamp(0.0, width);
+            let y0 = (cy - hh).floor().clamp(0.0, height);
+            let x1 = (cx + hw).ceil().clamp(0.0, width);
+            let y1 = (cy + hh).ceil().clamp(0.0, height);
+            let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
+            // Off the frame: one pixel drawn (a scissor can't be empty), the
+            // second pass still copies the picture across.
+            if w == 0 || h == 0 {
+                [0, 0, 1, 1]
+            } else {
+                [x0 as u32, y0 as u32, w, h]
+            }
+        });
+        draw_within(
             encoder,
             &self.blur_accum_pipeline,
             &scratch.view,
@@ -2055,6 +2089,7 @@ impl Renderer {
             offset,
             3,
             Some(wgpu::Color::TRANSPARENT),
+            bounds,
         );
         let down = RegionBlurUniforms {
             dir: [0.0, 1.0],
@@ -2290,6 +2325,23 @@ fn draw(
     vertices: u32,
     clear: Option<wgpu::Color>,
 ) {
+    draw_within(
+        encoder, pipeline, target, group, offset, vertices, clear, None,
+    );
+}
+
+/// `draw`, only inside `bounds` (x, y, width, height in target px) when given.
+#[allow(clippy::too_many_arguments)]
+fn draw_within(
+    encoder: &mut wgpu::CommandEncoder,
+    pipeline: &wgpu::RenderPipeline,
+    target: &wgpu::TextureView,
+    group: &wgpu::BindGroup,
+    offset: u32,
+    vertices: u32,
+    clear: Option<wgpu::Color>,
+    bounds: Option<[u32; 4]>,
+) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: None,
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2308,6 +2360,9 @@ fn draw(
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, group, &[offset]);
+    if let Some([x, y, width, height]) = bounds {
+        pass.set_scissor_rect(x, y, width, height);
+    }
     pass.draw(0..vertices, 0..1);
 }
 

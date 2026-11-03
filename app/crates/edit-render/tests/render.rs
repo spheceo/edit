@@ -853,3 +853,109 @@ fn a_light_leak_warms_from_its_side_and_burns_toward_white() {
     // Strong, its source burns out nearly white.
     assert!(r > 245 && g > 220 && b > 170, "{r} {g} {b}");
 }
+
+/// A region's blur drawn only over its box (Nov 3: both passes ran over the
+/// whole frame, half of Kroger's render) is the frame the whole-frame blur
+/// made: a face's ellipse, a name's box, Kroger's top and bottom bands, and a
+/// region half off the frame, over busy detail, within a level or two.
+#[test]
+#[allow(clippy::unwrap_used)]
+fn a_bounded_blur_matches_the_whole_frame_blur() {
+    let (w, h) = (1920_u32, 1080_u32);
+    let Some(mut renderer) = renderer(w, h) else {
+        eprintln!("no GPU adapter; skipping");
+        return;
+    };
+    let mut frame = vec![0_u8; (w * h * 4) as usize];
+    for (i, px) in frame.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        let on = ((x / 7) + (y / 5)) % 2 == 0;
+        let lift = if on { 140 } else { 0 };
+        *px = [
+            (30 + lift + x * 80 / w) as u8,
+            (20 + lift + y * 80 / h) as u8,
+            (60 + lift) as u8,
+            255,
+        ];
+    }
+    renderer.upload_video_rgba("m1", w, h, &frame);
+    let footage = Layer::Video {
+        clip: "c1".into(),
+        media: "m1".into(),
+        source_time: 0.0,
+        transform: Transform::default(),
+        opacity: 1.0,
+        crop: Default::default(),
+        frame: None,
+        blend: Default::default(),
+    };
+    let adjustment = |blur: Blur, opacity: f32| Layer::Adjustment {
+        grade: Grade::default(),
+        shake: Default::default(),
+        glitch: Default::default(),
+        blur,
+        opacity,
+    };
+    let region =
+        |radius: f32, x: f32, y: f32, width: f32, height: f32, feather: f32, shape: BlurShape| {
+            Blur {
+                radius,
+                x,
+                y,
+                width,
+                height,
+                feather,
+                shape,
+            }
+        };
+    let scene = Scene {
+        width: w,
+        height: h,
+        layers: vec![
+            footage,
+            adjustment(
+                region(35.0, -400.0, -100.0, 360.0, 440.0, 24.0, BlurShape::Ellipse),
+                1.0,
+            ),
+            adjustment(
+                region(30.0, 450.0, 250.0, 640.0, 160.0, 12.0, BlurShape::Rect),
+                1.0,
+            ),
+            // Kroger's bands.
+            adjustment(
+                region(9.0, 0.0, -475.2, 1920.0, 151.2, 129.6, BlurShape::Rect),
+                1.0,
+            ),
+            adjustment(
+                region(9.0, 0.0, 475.2, 1920.0, 151.2, 129.6, BlurShape::Rect),
+                0.7,
+            ),
+            // Half off the right edge.
+            adjustment(
+                region(20.0, 900.0, 0.0, 300.0, 300.0, 40.0, BlurShape::Ellipse),
+                1.0,
+            ),
+        ],
+    };
+    renderer.set_blur_bounds(false);
+    renderer.render(&scene);
+    let whole = renderer.read_output().unwrap();
+    renderer.set_blur_bounds(true);
+    renderer.render(&scene);
+    let bounded = renderer.read_output().unwrap();
+    save("blur-bounded.png", w, h, &bounded);
+    let mut worst = 0_u8;
+    let mut differing = 0_usize;
+    for (a, b) in whole.iter().zip(&bounded) {
+        let gap = a.abs_diff(*b);
+        worst = worst.max(gap);
+        if gap > 0 {
+            differing += 1;
+        }
+    }
+    eprintln!("bounded against whole-frame blur: worst {worst} levels, {differing} values differ");
+    assert!(
+        worst <= 2,
+        "a pixel moved by {worst} levels ({differing} values differ)"
+    );
+}

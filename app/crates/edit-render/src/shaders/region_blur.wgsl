@@ -46,6 +46,11 @@ fn fs(in: VsOut) -> @location(0) vec4f {
         let d = edge_distance(in.uv * r.size - r.center);
         cover = cover * (1.0 - smoothstep(0.0, max(r.feather, 1.0), d));
     }
+    // Outside the region and its feather: the sharp picture, no taps (and the
+    // first pass drew only the region's box, so there's nothing to read).
+    if (cover <= 0.0) {
+        return base;
+    }
     let n = i32(r.taps);
     let step = 3.0 * r.sigma / max(r.taps, 1.0);
     var sum = textureSampleLevel(src, samp, in.uv, 0.0);

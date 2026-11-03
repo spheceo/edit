@@ -102,10 +102,10 @@ export type Method = "GET" | "PUT" | "HEAD";
  * excerpts, sounds), which FFmpeg reads through one URL for a whole excerpt
  * or export.
  */
-export async function presign(key: string, method: Method, expires: number | null = null): Promise<string> {
+export async function presign(key: string, method: Method, expires: number | null = null, edge = false): Promise<string> {
   // Writer's script files are read for the handoff (the relay allows that too), never written.
   if (!(method !== "PUT" && key.startsWith("writer/scripts/") && validKey(`edit/${key.slice("writer/".length)}`))) checkKey(key);
-  const body: Record<string, unknown> = { key, method };
+  const body: Record<string, unknown> = { key, method, ...(edge ? { edge: true } : {}) };
   if (expires !== null) body.expires = Math.max(Math.floor(expires), 1);
   const answer = await relayJson("r2/url", body);
   if (typeof answer.url !== "string") throw lacking("the relay gave no URL");

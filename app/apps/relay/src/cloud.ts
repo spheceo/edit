@@ -29,8 +29,9 @@ import { EDIT_CALLS, grantedTo, ideaRefused, isAdmin, LISTABLE, maxExpires, mayW
 import { cancelJob, driveJob, googleSignIn, jobStatus, proxyJob, type JobsEnv } from "./jobs";
 import { exportRoute, v3Route, type ModalEnv } from "./exports";
 import { writerCloud } from "./writer_cloud";
+import { mediaUrl, type MediaEnv } from "./media";
 
-export interface CloudEnv extends JobsEnv, ModalEnv {
+export interface CloudEnv extends JobsEnv, ModalEnv, MediaEnv {
   /** Edit's bearer token for /v1/cloud/* (EDIT_RELAY_TOKEN on the app side). */
   CLOUD_TOKEN?: string;
   R2_ACCOUNT_ID?: string;
@@ -257,7 +258,9 @@ const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2, access: 
       expires = body.expires;
     }
     expires = Math.min(expires, maxExpires(method, key));
-    return json(200, { url: await objectUrl(r2, method, key, {}, expires), expires });
+    // A proxy through the relay's edge cache when it's set up and asked for (media.ts), else straight to R2.
+    const edge = method === "GET" && body.edge === true ? await mediaUrl(access.env, key, expires) : null;
+    return json(200, { url: edge ?? (await objectUrl(r2, method, key, {}, expires)), expires, ...(edge === null ? {} : { edge: true }) });
   },
 
   async "multipart/create"(body, r2, access) {

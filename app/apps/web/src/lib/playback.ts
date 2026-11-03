@@ -54,6 +54,8 @@ const STUCK_MS = 10_000;
 /** After a decoding failure, the preview tries again this soon. */
 const DECODE_RETRY_MS = 4_000;
 const LOOK_AHEAD = 1;
+/** How far (s) a scrub-tier frame already decoded stands in for the dragged playhead's. */
+const SCRUB_STAND_IN = 0.25;
 const AUDIO_AHEAD = 0.8;
 const START_LEAD = 0.05;
 /** After the playhead rests this long, its sound is decoded so Play starts at once. */
@@ -130,6 +132,14 @@ class Preview {
    * rest drawn live; its sound plays from `streamSound`.
    */
   private stream: SmoothStream | null = null;
+  /**
+   * The scrub tier (apps/server/src/scrub.ts): per media, which pieces of
+   * `seconds` of its source are made, 960×540 with every frame a keyframe.
+   * Read only while the playhead is dragged.
+   */
+  private scrub: { project: string; seconds: number; ready: Map<string, Set<number>> } | null = null;
+  private scrubAskedAt = 0;
+  private scrubLookedAt = 0;
   private streamSound: HTMLAudioElement | null = null;
   /** The rendered video is what the viewer shows (playing, or paused on its frame). */
   smoothShown = false;
@@ -560,6 +570,7 @@ class Preview {
     // Seeks in quick succession are a drag (or a held key): rough pictures until it rests.
     const now = performance.now();
     this.dragging = now - this.lastSeekAt < DRAG_GAP_MS;
+    if (this.dragging) this.keepScrubbing(frame);
     this.lastSeekAt = now;
     this.direction = frame < playhead.frame ? -1 : 1;
     this.seekSerial++;
@@ -763,6 +774,12 @@ class Preview {
     const media = this.media.get(source.media);
     const url = this.sources.get(source.media);
     if (!media || !url) return;
+    const scrubbed = this.scrubbed(source);
+    if (scrubbed !== null) {
+      const time = videoTime(scrubbed.time, media.fps, scrubbed.seconds);
+      const found = this.decoder.picture(scrubbed.key, time);
+      if (found) return found;
+    }
     const time = media.kind === "image" ? 0 : videoTime(source.time, media.fps, media.duration);
     return this.decoder.picture(url, time);
   }
@@ -780,6 +797,13 @@ class Preview {
       let picture = this.picture(source);
       const media = this.media.get(source.media);
       const clip = this.clipsById.get(source.clip);
+      // Dragged through the scrub tier: its nearest frame decoded (a few frames behind at most) before the
+      // proxy's keyframe (else the proxy's stand-in showed at every position, the tier's frames landing after).
+      const scrubbed = picture ? null : this.scrubbed(source);
+      if (scrubbed !== null && media) {
+        const time = videoTime(scrubbed.time, media.fps, scrubbed.seconds);
+        picture = this.decoder.nearbyPicture(scrubbed.key, time, SCRUB_STAND_IN, Math.max(0, time - SCRUB_STAND_IN), time + SCRUB_STAND_IN);
+      }
       if (!picture && media && clip?.type === "video") {
         const time = videoTime(source.time, media.fps, media.duration);
         picture = this.decoder.nearbyPicture(this.sources.get(source.media)!, time, STAND_IN_REACH * Math.max(1, clip.speed),
@@ -791,6 +815,44 @@ class Preview {
     return pictures;
   }
 
+  /** Where a dragged playhead's picture of `source` comes from in the scrub tier, when its piece is made. */
+  private scrubbed(source: PictureSource): { key: string; url: string; time: number; seconds: number } | null {
+    const scrub = this.scrub;
+    const media = this.media.get(source.media);
+    if (scrub === null || !media || media.kind !== "video" || playhead.playing || !this.dragging || this.settled) return null;
+    const time = videoTime(source.time, media.fps, media.duration);
+    const piece = Math.floor(time / scrub.seconds);
+    if (!scrub.ready.get(source.media)?.has(piece)) return null;
+    return {
+      key: `scrub|${source.media}|${piece}`,
+      url: `/api/projects/${encodeURIComponent(scrub.project)}/scrub/${encodeURIComponent(source.media)}/${piece}`,
+      time: time - piece * scrub.seconds,
+      seconds: Math.min(scrub.seconds, Math.max(media.duration - piece * scrub.seconds, 0)),
+    };
+  }
+
+  /** As a drag goes: the pieces around the playhead asked for, and what's made looked at again (every few seconds at most). */
+  private keepScrubbing(frame: number) {
+    const project = this.project;
+    if (!project) return;
+    const now = performance.now();
+    const fps = rate(project.settings);
+    if (now - this.scrubAskedAt > 5000) {
+      this.scrubAskedAt = now;
+      void fetch(`/api/projects/${encodeURIComponent(project.id)}/scrub`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from: Math.max(0, Math.floor(frame - 60 * fps)), to: Math.floor(frame + 120 * fps) }),
+      }).catch(() => {});
+    }
+    if (now - this.scrubLookedAt > 2000) {
+      this.scrubLookedAt = now;
+      void fetch(`/api/projects/${encodeURIComponent(project.id)}/scrub`).then((answer) => (answer.ok ? answer.json() : null)).then((given: { seconds: number; ready: Record<string, number[]> } | null) => {
+        if (given === null || this.project?.id !== project.id) return;
+        this.scrub = { project: project.id, seconds: given.seconds, ready: new Map(Object.entries(given.ready).map(([media, pieces]) => [media, new Set(pieces)])) };
+      }).catch(() => {});
+    }
+  }
+
   private requestPicture(source: PictureSource, lanes: Set<string>) {
     const media = this.media.get(source.media);
     const url = this.sources.get(source.media);
@@ -799,7 +861,10 @@ class Preview {
     lanes.add(lane);
     const clip = this.clipsById.get(source.clip);
     const speed = clip?.type === "video" ? clip.speed : 1;
+    const scrubbed = this.scrubbed(source);
     if (media.kind === "image") this.decoder.requestImage(url, url);
+    // Dragged: the scrub tier's frame itself (every one a keyframe), where its piece is made.
+    else if (scrubbed !== null) this.decoder.requestRough(scrubbed.key, scrubbed.url, lane, scrubbed.time, media.fps || 30, scrubbed.seconds, 0.5 / (media.fps || 30));
     else if (!playhead.playing && this.dragging && !this.settled) this.decoder.requestRough(url, url, lane, source.time, media.fps || 30, media.duration);
     else this.decoder.requestVideo(url, url, lane, source.time, media.fps || 30, media.duration,
       playhead.playing ? 1 : this.direction, playhead.playing, speed / rate(this.project!.settings));

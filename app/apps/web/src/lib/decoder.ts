@@ -33,6 +33,8 @@ export class Decoder {
   private audio: Worker | null = null;
   private files = new Set<string>();
   private flights = new Map<string, Flight>();
+  /** The newest scrub-tier position asked for on a lane while one is decoding: sent when it's done (`requestRough`). */
+  private nextRough = new Map<string, [string, string, string, number, number, number, number]>();
   private serial = 0;
   private generation = 0;
   private images = new Map<string, Promise<void>>();
@@ -124,6 +126,11 @@ export class Decoder {
       this.changed();
     } else if (data.type === "done") {
       if (this.flights.get(data.lane)?.id === data.id) this.flights.delete(data.lane);
+      const next = this.nextRough.get(data.lane);
+      if (next !== undefined && !this.flights.has(data.lane)) {
+        this.nextRough.delete(data.lane);
+        this.requestRough(...next);
+      }
       this.changed();
     } else if (this.files.has(data.key)) {
       this.failed(data.error, data.key);
@@ -175,12 +182,25 @@ export class Decoder {
    * bytes over a remote link. Nothing is asked when a picture from the same
    * keyframe interval (a preview's is half a second) is already decoded.
    */
-  requestRough(key: string, url: string, lane: string, time: number, fps: number, duration: number) {
+  /**
+   * A dragged playhead's picture: the keyframe at or before `time`. `reach`:
+   * how far a picture already here or asked for stands in for it (a keyframe
+   * half a second off, for a proxy; half a frame for the scrub tier, every
+   * frame of which is a keyframe, so each position gets its own).
+   */
+  requestRough(key: string, url: string, lane: string, time: number, fps: number, duration: number, reach = ROUGH_REACH) {
     this.checkHung("video");
     const at = videoTime(time, fps, duration);
-    if (this.pictures.has(frameKey(key, at)) || this.nearbyPicture(key, at, ROUGH_REACH, at - ROUGH_REACH, at + 1 / fps)) return;
+    if (this.pictures.has(frameKey(key, at)) || this.nearbyPicture(key, at, reach, at - reach, at + 1 / fps)) return;
     const active = this.flights.get(lane);
-    if (active?.key === key && active.rough !== undefined && Math.abs(active.rough - at) <= ROUGH_REACH) return;
+    if (active?.key === key && active.rough !== undefined && Math.abs(active.rough - at) <= reach) return;
+    // The scrub tier (a reach under the proxy's): one decode at a time a lane, the newest position waiting its
+    // turn, never each one stopping the last (a position every 33 ms stopped every decode before it landed).
+    if (reach < ROUGH_REACH && active?.rough !== undefined) {
+      this.nextRough.set(lane, [key, url, lane, time, fps, duration, reach]);
+      return;
+    }
+    this.nextRough.delete(lane);
     const id = ++this.serial;
     this.files.add(key);
     this.flights.set(lane, { id, kind: "video", key, values: new Set(), rough: at, sent: performance.now() });

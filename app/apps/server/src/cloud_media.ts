@@ -1336,7 +1336,8 @@ const signedStreams = new Map<string, { url: string; until: number }>();
 async function streamingUrl(key: string): Promise<string> {
   const known = signedStreams.get(key);
   if (known !== undefined && Date.now() < known.until) return known.url;
-  const url = await getUrl(key, 6 * HOUR);
+  // EDIT_EDGE_MEDIA=1: a proxy through the relay's edge cache when the relay has one (its media.ts), else R2's own URL.
+  const url = process.env.EDIT_EDGE_MEDIA === "1" ? await cloud.presign(key, "GET", 6 * HOUR, true) : await getUrl(key, 6 * HOUR);
   signedStreams.set(key, { url, until: Date.now() + 5 * HOUR * 1000 });
   return url;
 }
@@ -1377,6 +1378,63 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
     }
     return new Response(answer.body, { status: answer.status, headers });
   }
+}
+
+/** How much of the timeline a prefetch reads ahead (seconds of it), and at most how many bytes. */
+export const PREFETCH = { seconds: 600, bytes: 600_000_000 };
+/** The newest prefetch per project: an older one stops. */
+const prefetches = new Map<string, number>();
+
+/**
+ * Reads the proxies' stretches project `id`'s timeline plays, in timeline
+ * order from frame `from`, into the block cache before the viewer asks
+ * (off Modal, step 5: a Mac with nothing cached waited on R2's ~0.25 s per
+ * block as it played). Behind every read the viewer makes (cloud_blocks.ts
+ * `prefetch`), `PREFETCH.seconds` of the timeline or `PREFETCH.bytes` at
+ * most; the cache's budget evicts it like any block. A proxy's bytes are
+ * taken as even through it (they're about: one rate, a keyframe each half
+ * second), a block either side kept for the slack.
+ */
+export async function prefetchProject(app: App, id: string, from = 0): Promise<number> {
+  if (playbackBlocks === null || !cloud.enabled()) return 0;
+  const root = playbackBlocks;
+  const live = app.store.get(id);
+  if (live === null) return 0;
+  const generation = (prefetches.get(id) ?? 0) + 1;
+  prefetches.set(id, generation);
+  const stop = () => prefetches.get(id) !== generation;
+  const project = live.project;
+  const fps = project.settings.fps > 0 ? project.settings.fps : 30;
+  const until = from + PREFETCH.seconds * fps;
+  const clips = project.clips
+    .filter((clip): clip is Extract<Clip, { type: "video" | "audio" }> => (clip.type === "video" || clip.type === "audio") && clip.start + clip.duration > from && clip.start < until)
+    .sort((a, b) => a.start - b.start);
+  const sizes = new Map<string, number | null>();
+  let bytes = 0;
+  for (const clip of clips) {
+    if (stop() || bytes >= PREFETCH.bytes) break;
+    const media = mediaOf(project, clip.media);
+    const key = media === undefined ? null : streamKey(media.cloud, "proxy");
+    if (media === undefined || key === null || !(media.duration > 0)) continue;
+    let size = sizes.get(key);
+    if (size === undefined) {
+      size = cloudBlocks.sizeOf(root, key) ?? (await cloud.head(key).catch(() => null))?.size ?? null;
+      sizes.set(key, size);
+    }
+    if (size === null || size <= 0) continue;
+    const speed = clip.speed ?? 1;
+    const first = Math.max(clip.start, from);
+    const last = Math.min(clip.start + clip.duration, until);
+    const at = (frame: number) => (clip.source_in ?? 0) + ((frame - clip.start) / fps) * speed;
+    const [a, b] = [at(first), at(last)].sort((x, y) => x - y) as [number, number];
+    const block = cloudBlocks.BLOCK;
+    const firstBlock = Math.max(Math.floor((size * a) / media.duration / block) - 1, 0);
+    const lastBlock = Math.min(Math.ceil((size * b) / media.duration / block) + 1, Math.ceil(size / block) - 1);
+    const indexes = Array.from({ length: Math.max(lastBlock - firstBlock + 1, 0) }, (_, n) => firstBlock + n);
+    bytes += await cloudBlocks.prefetch(root, key, indexes, () => streamingUrl(key), stop);
+  }
+  if (bytes > 0) diag.info("cloud", `${id}: ${Math.round(bytes / 1e6)} MB of its proxies read ahead from frame ${from}`);
+  return bytes;
 }
 
 /**

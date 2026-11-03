@@ -90,6 +90,43 @@ function block(root: string, key: string, index: number, url: () => Promise<stri
   return read;
 }
 
+/** Prefetch reads at once, and only while the page's own reads leave this many of `AT_ONCE` free. */
+const PREFETCH_AT_ONCE = 2;
+const PREFETCH_ROOM = 2;
+let prefetching = 0;
+
+/** The object's size, once a block of it has been read (its meta), else null. */
+export function sizeOf(root: string, key: string): number | null {
+  return metaOf(folderOf(root, key))?.size ?? null;
+}
+
+/**
+ * Reads blocks `indexes` of `key` (in that order) ahead of the page asking
+ * for them, behind every read the page makes: at most `PREFETCH_AT_ONCE`, and
+ * only while the page's own reads leave `PREFETCH_ROOM` of `AT_ONCE` free. A
+ * block already here costs nothing. Stops when `stop()` says so; the bytes
+ * it read.
+ */
+export async function prefetch(root: string, key: string, indexes: number[], url: () => Promise<string>, stop: () => boolean = () => false): Promise<number> {
+  let bytes = 0;
+  for (const index of indexes) {
+    if (stop()) break;
+    if (fs.existsSync(join(folderOf(root, key), `${index}`))) continue;
+    while ((inFlight > AT_ONCE - PREFETCH_ROOM || prefetching >= PREFETCH_AT_ONCE) && !stop()) await new Promise((resolve) => setTimeout(resolve, 50));
+    if (stop()) break;
+    prefetching++;
+    try {
+      bytes += (await block(root, key, index, url)).length;
+    } catch (error) {
+      diag.warn("cloud", `reading ahead in ${key}: ${diag.messageOf(error)}`);
+      break;
+    } finally {
+      prefetching--;
+    }
+  }
+  return bytes;
+}
+
 /** A bounded range (`bytes=a-b`) of a cloud object, from its blocks; null for any other kind of ask, which goes straight to R2. */
 export async function serve(root: string, key: string, range: string | null, url: () => Promise<string>): Promise<Response | null> {
   const asked = /^bytes=(\d+)-(\d+)$/.exec(range ?? "");

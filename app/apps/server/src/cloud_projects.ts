@@ -1514,6 +1514,8 @@ export async function open(app: App, id: string, client: string): Promise<Record
   const why = app.store.unavailable(id);
   if (why !== null) throw new ApiError(403, why);
   cloudProjects.viewing(id, client);
+  // Its proxies read ahead from the start, behind the viewer's own reads (step 5); the page's playhead moves it on.
+  void cloudMedia.prefetchProject(app, id, 0).catch((error: unknown) => diag.warn("cloud", `reading ${id}'s proxies ahead: ${diag.messageOf(error)}`));
   const step = cloudProjects.with(id, (entry) => {
     // A new look: what was said last time has been seen.
     entry.note = null;

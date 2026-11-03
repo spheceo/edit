@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 
-import { BLOCK, serve } from "../src/cloud_blocks.ts";
+import { BLOCK, prefetch, serve, sizeOf } from "../src/cloud_blocks.ts";
 
 // R2 stood in for: a 5½-block object, every range read counted.
 const size = BLOCK * 5 + BLOCK / 2;
@@ -44,4 +44,20 @@ test("an open-ended or odd ask isn't served from blocks; one past the end is ref
   expect(await serve(root, "edit/proxies/a.mp4", "bytes=100-", url)).toBeNull();
   expect(await serve(root, "edit/proxies/a.mp4", null, url)).toBeNull();
   expect((await serve(root, "edit/proxies/a.mp4", `bytes=${size + 10}-${size + 20}`, url))?.status).toBe(416);
+});
+
+test("read ahead: blocks asked for in order come from R2 once, those here cost nothing, and a stop stops it", async () => {
+  const key = "edit/proxies/prefetched.mp4";
+  reads.length = 0;
+  const got = await prefetch(root, key, [3, 4, 5], url);
+  expect(got).toBe(BLOCK * 2 + BLOCK / 2);
+  expect(reads).toEqual([`${3 * BLOCK}-${4 * BLOCK - 1}`, `${4 * BLOCK}-${5 * BLOCK - 1}`, `${5 * BLOCK}-${6 * BLOCK - 1}`]);
+  expect(sizeOf(root, key)).toBe(size);
+  // Here already: nothing read; the page's read of them comes from disk.
+  reads.length = 0;
+  expect(await prefetch(root, key, [3, 4], url)).toBe(0);
+  expect(reads).toEqual([]);
+  // Stopped: nothing more.
+  expect(await prefetch(root, key, [0, 1], url, () => true)).toBe(0);
+  expect(reads).toEqual([]);
 });

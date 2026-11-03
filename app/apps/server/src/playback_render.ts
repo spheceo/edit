@@ -35,7 +35,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
-import { streamFromCloud } from "./cloud_media.ts";
+import { prefetchProject, streamFromCloud } from "./cloud_media.ts";
 import * as diag from "./diag.ts";
 import { ApiError, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -202,7 +202,11 @@ export function request(app: App, id: string, frame?: number): Status {
   if (running !== null && running.project === id && running.hash === hash) return status(app, id);
   asked.clear();
   asked.set(id, live.rev);
-  if (frame !== undefined && Number.isFinite(frame) && frame >= 0) focus.set(id, Math.floor(frame));
+  if (frame !== undefined && Number.isFinite(frame) && frame >= 0) {
+    focus.set(id, Math.floor(frame));
+    // The viewer plays live from here until the render's chunk lands: its proxies read ahead from the playhead.
+    void prefetchProject(app, id, Math.floor(frame)).catch(() => {});
+  }
   if (running !== null) {
     running.cancelled = true;
     running.job?.cancel();

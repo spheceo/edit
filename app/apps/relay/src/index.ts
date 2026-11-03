@@ -2,7 +2,8 @@ import { allow, budgetKey, burstKey, caller, mayVoice, type AuthEnv, type Caller
 import { exportDoc, listDocs } from "./docs";
 import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
-import { cloud, type CloudEnv } from "./cloud";
+import { cloud, r2Config, type CloudEnv } from "./cloud";
+import { media, type EdgeCache } from "./media";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
 import { fromOtherRelay, openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
 import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
@@ -90,6 +91,8 @@ export default {
     }
     if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY), openart: openartReady(env) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
+    // Proxies by signed URL, cached at the edge (media.ts): no sign-in on each read, the URL is the grant.
+    if (url.pathname.startsWith("/v1/media/")) return media(request, url, env, r2Config(env), typeof caches === "undefined" ? null : (caches as unknown as { default: EdgeCache }).default);
     if (url.pathname === "/v1/voices") return voices(request, env);
     if (url.pathname === "/v1/speech") return speech(request, env);
     if (url.pathname.startsWith("/v1/3dtiles/")) return withCors(await tiles(request, url, env));

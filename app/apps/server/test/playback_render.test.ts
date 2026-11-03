@@ -79,6 +79,30 @@ test("while a changed edit renders, the old render is never offered as it", asyn
   }
 });
 
+test("no render starts until the preview rests: it waits, saying so, and a rest that never comes starts nothing", async () => {
+  const { fixtureHome } = await import("./helpers/home.ts");
+  const playback = await import("../src/playback_render.ts");
+  const { app, store, cleanup } = fixtureHome("playback-rest");
+  const { waitForRest, inCloud } = playback.hooks;
+  try {
+    Object.assign(app.exports, { localRunning: () => false, running: () => false });
+    const id = store.create("resting", { width: 1920, height: 1080, fps: 30 }).project.id;
+    playback.hooks.inCloud = async () => false;
+    let release: ((rested: boolean) => void) | undefined;
+    playback.hooks.waitForRest = () => new Promise<boolean>((resolve) => { release = resolve; });
+    playback.request(app, id);
+    for (let tries = 0; playback.status(app, id).note !== "preview" && tries < 200; tries++) await Bun.sleep(5);
+    expect(playback.status(app, id)).toMatchObject({ state: "waiting", note: "preview" });
+    release!(false);
+    for (let tries = 0; playback.status(app, id).state !== "none" && tries < 200; tries++) await Bun.sleep(5);
+    expect(playback.status(app, id).state).toBe("none");
+  } finally {
+    playback.hooks.waitForRest = waitForRest;
+    playback.hooks.inCloud = inCloud;
+    cleanup();
+  }
+});
+
 test("a render of the same picture any Mac put in R2 is played at once; one not there is made here", async () => {
   // Sphe, Nov 2: "open up the project on a new Mac … instantly start playing it".
   const { fixtureHome } = await import("./helpers/home.ts");

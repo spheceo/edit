@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
+import * as cloudBlocks from "../src/cloud_blocks.ts";
 import { CELL, cellKey, cellSpan, cellsOf, objectOf, pin, pinned, prepare, TO_THE_END } from "../src/export_excerpts.ts";
 import type { Project } from "../src/model.ts";
 import * as tools from "../src/tools.ts";
@@ -72,6 +73,28 @@ test("cells are cut from the original, picture copied, kept in the cache, and fo
     expect(fs.statSync(first[1]!.path).size).toBeGreaterThan(0);
     expect(fs.statSync(first[1]!.path).mtimeMs).toBeGreaterThanOrEqual(stamp);
   } finally {
+    cleanup();
+  }
+});
+
+test("a background render's cells wait for the viewer once, briefly — never per cell, so it cannot sit at 0% while watched", async () => {
+  const { dir, cleanup } = scratch("excerpts-behind-viewer");
+  try {
+    const source = `${dir}/source.mp4`;
+    await tools.run([tools.ffmpeg(), "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30", "-t", "35", "-c:v", "libx264", "-g", "48", source]);
+    const edit = {
+      settings: { width: 160, height: 90, fps: 30 },
+      media: [{ id: "m", name: "source.mp4", path: source, kind: "video", duration: 35, width: 160, height: 90, fps: 30, has_audio: false }],
+      clips: [{ id: "c", track: "v1", type: "video", media: "m", source_in: 5, start: 0, duration: 300 }],
+    } as unknown as Project;
+    // The viewer stays busy the whole time: the one bounded wait (50 ms here) is all the delay there is.
+    cloudBlocks.noteViewerMiss();
+    const began = Date.now();
+    const made = await prepare(edit, 0, 300, `${dir}/cache`, new Map([["m", source]]), new Map([["m", "edit/originals/sha256/abc/source.mp4"]]), () => false, { atOnce: 2, behindViewer: true, restMaxMs: 50 });
+    expect(made.length).toBeGreaterThan(0);
+    expect(Date.now() - began).toBeLessThan(20_000);
+  } finally {
+    cloudBlocks.noteViewerMiss(0);
     cleanup();
   }
 });

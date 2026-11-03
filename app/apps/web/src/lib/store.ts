@@ -64,6 +64,8 @@ export interface PlaybackStatus {
   error: string | null;
   /** Rendered here in chunks, played a chunk at a time as each lands (`rev`'s, smoothStream.ts). */
   stream?: boolean;
+  /** Why it waits, when it waits: for an export, or for the preview to rest; "preparing" while its excerpts are cut (progress still 0). */
+  note?: "export" | "preview" | "preparing" | null;
 }
 
 export type Tool = "select" | "razor";

@@ -429,8 +429,31 @@ export interface MediaDrive {
   volumes: { name: string; path: string }[];
 }
 
+/**
+ * Media bytes are read from the other loopback name of Edit's server, so
+ * they get their own six connections and slow media can never queue the
+ * API (and Report a problem) behind them (nightly-50; the server allows
+ * these sibling reads, http/host.ts `mediaPath`). Pure, for tests: the
+ * page's hostname and port in, the address to read from out. Off this Mac
+ * (a Tailscale name: no second name answers there) and on the Vite dev UI
+ * (port 5173, proxied without cross-origin answers) the page's own host
+ * serves them, as before.
+ */
+export function mediaHostFor(path: string, hostname: string, port: string): string {
+  if (port === "5173") return path;
+  const sibling = hostname === "127.0.0.1" ? "localhost" : hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "::1" || hostname === "[::1]" ? "127.0.0.1" : null;
+  if (sibling === null) return path;
+  return `http://${sibling}${port === "" ? "" : `:${port}`}${path}`;
+}
+
+/** `path` on the media host (above), when this page has one. */
+export function mediaHost(path: string): string {
+  if (typeof location === "undefined") return path;
+  return mediaHostFor(path, location.hostname, location.port);
+}
+
 export const mediaUrl = (project: string, media: string, kind: "proxy" | "light" | "audio" | "thumbs" | "peaks") =>
-  `/api/projects/${project}/media/${media}/${kind}`;
+  mediaHost(`/api/projects/${project}/media/${media}/${kind}`);
 
 let machine: Promise<string> | null = null;
 

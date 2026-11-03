@@ -28,6 +28,7 @@
 
 import * as fs from "node:fs";
 
+import * as cloudBlocks from "./cloud_blocks.ts";
 import { localPath, scratchDir } from "./cloud_media.ts";
 import * as diag from "./diag.ts";
 import { Semaphore } from "./media.ts";
@@ -263,11 +264,12 @@ export async function prepare(
   urls: Map<string, string>,
   originals: Map<string, string>,
   cancelled: () => boolean = () => false,
+  options: { atOnce?: number; behindViewer?: boolean; restMaxMs?: number } = {},
 ): Promise<ExportExcerpt[]> {
   const cells = cellsOf(project, start, end, new Set(urls.keys()));
   if (cells.length === 0) return [];
   const began = performance.now();
-  const slots = new Semaphore(AT_ONCE);
+  const slots = new Semaphore(Math.max(1, Math.min(options.atOnce ?? AT_ONCE, AT_ONCE)));
   const counts = { here: 0, cut: 0, failed: 0 };
   // A cancel ends the cuts under way, not just the ones not started.
   const stop = new AbortController();
@@ -275,6 +277,21 @@ export async function prepare(
     if (cancelled()) stop.abort();
   }, CANCEL_LOOK_MS);
   const media = new Map<string, Media>(project.media.map((item) => [item.id, item]));
+  // A background render's cuts pull the same link the page does: they wait
+  // for the viewer once, briefly, before the first uncached cell — never
+  // per cell (a render that waited per cell sat at 0% for as long as the
+  // viewer kept watching, the very lag it exists to cure). Two at a time
+  // (the caller's `atOnce`) bounds what they take after that.
+  if (options.behindViewer === true) {
+    const needsCut = cells.some((cell) => {
+      const original = originals.get(cell.media);
+      const item = media.get(cell.media);
+      if (original === undefined || item === undefined) return false;
+      const key = cellKey(original, item.fps, cell.index);
+      return key !== null && !isFile(localPath(cache, key));
+    });
+    if (needsCut) await cloudBlocks.waitForViewerRest(() => cancelled() || stop.signal.aborted, options.restMaxMs ?? 60_000);
+  }
   let made: (ExportExcerpt | null)[];
   try {
     made = await Promise.all(

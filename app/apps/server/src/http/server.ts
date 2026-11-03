@@ -16,7 +16,7 @@ import * as relay from "../relay.ts";
 import { staticAsset } from "./assets.ts";
 import { compressed } from "./compress.ts";
 import { ApiError, notFound, text } from "./errors.ts";
-import { checkHost, secure } from "./host.ts";
+import { checkHost, loopbackSibling, mediaPath, secure } from "./host.ts";
 import { Router, withPosition, type RouteContext } from "./router.ts";
 
 interface Socket {
@@ -72,6 +72,44 @@ function font(context: RouteContext<App>): Response {
   });
 }
 
+/**
+ * Media read from the sibling loopback host is cross-origin to the page:
+ * say it may be read (its ranges too), or the viewer's fetches are refused
+ * even though the bytes arrived. Only Edit's own page on the other loopback
+ * name (loopbackSibling), only media bytes and map tiles.
+ */
+function withSiblingCors(request: Request, response: Response): void {
+  const origin = request.headers.get("origin");
+  if (origin === null || !loopbackSibling(origin, request.headers.get("host") ?? "")) return;
+  const pathname = new URL(request.url).pathname;
+  if (!mediaPath(pathname) && !pathname.startsWith("/v1/3dtiles/")) return;
+  try {
+    response.headers.set("access-control-allow-origin", origin);
+    response.headers.set("access-control-expose-headers", "content-range, content-length, accept-ranges, etag");
+    response.headers.set("vary", "Origin");
+  } catch {
+    // Immutable headers (a passed-on response): left without them.
+  }
+}
+
+/** A sibling media read's preflight (a ranged fetch asks first): what it may send. */
+function siblingPreflight(request: Request): Response | null {
+  if (request.method !== "OPTIONS") return null;
+  const origin = request.headers.get("origin");
+  if (origin === null || request.headers.get("access-control-request-method") === null) return null;
+  if (!loopbackSibling(origin, request.headers.get("host") ?? "") || !mediaPath(new URL(request.url).pathname)) return null;
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-origin": origin,
+      "access-control-allow-methods": "GET, HEAD, OPTIONS",
+      "access-control-allow-headers": request.headers.get("access-control-request-headers") ?? "range",
+      "access-control-max-age": "86400",
+      vary: "Origin",
+    },
+  });
+}
+
 /** Answers one request (exported for tests: `fetch` without a socket). */
 export async function respond(
   app: App,
@@ -87,8 +125,11 @@ export async function respond(
   let response: Response | undefined;
   try {
     const refused = checkHost(request, app.allowedHosts);
+    const preflight = refused === null ? siblingPreflight(request) : null;
     if (refused !== null) {
       response = refused;
+    } else if (preflight !== null) {
+      response = preflight;
     } else {
       if (match.kind === "route") {
         const answer = await match.route.handler({
@@ -130,6 +171,7 @@ export async function respond(
     diag.record("http", `${method} ${route}`, performance.now() - started, null);
     return undefined;
   }
+  withSiblingCors(request, response);
   return logged(method, route, url.pathname, performance.now() - started, response);
 }
 

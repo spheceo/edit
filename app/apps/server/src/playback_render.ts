@@ -36,6 +36,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
+import * as cloudBlocks from "./cloud_blocks.ts";
 import { prefetchProject, streamFromCloud } from "./cloud_media.ts";
 import * as diag from "./diag.ts";
 import { ApiError, json, notFound } from "./http/errors.ts";
@@ -44,7 +45,7 @@ import type { Router } from "./http/router.ts";
 import type { ExportOptions, Project } from "./model.ts";
 import { native, type ExportJob } from "./native/index.ts";
 import { isFile, join } from "./paths.ts";
-import { duration } from "./project.ts";
+import { duration, fps } from "./project.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { jsonForSerde } from "./rust.ts";
 import * as exportExcerpts from "./export_excerpts.ts";
@@ -55,6 +56,10 @@ import { createHash } from "node:crypto";
 
 /** Renders kept on disk: the projects rendered last (each about 900 MB for a 40-minute edit). */
 const KEEP = 3;
+/** An edit longer than this (seconds) is not auto-rendered after an agent turn; the viewer's own ask still renders it. */
+export const AUTO_RENDER_MAX_SECONDS = 600;
+/** A background render's proxy cells cut at a time (was six through `prepare`'s default: six FFmpeg streams pulling R2 at once). */
+const PLAYBACK_CELLS_AT_ONCE = 2;
 
 export interface Status {
   state: "none" | "waiting" | "rendering" | "ready" | "failed";
@@ -67,6 +72,8 @@ export interface Status {
   error: string | null;
   /** Rendered here in chunks: the viewer plays it a chunk at a time as each lands (playback_stream.ts), while it renders too. */
   stream: boolean;
+  /** Why it waits, when it waits: for an export's place, or for the preview to rest (the viewer comes first on the link); "preparing" while its excerpts are cut before encoding starts (progress still 0). */
+  note: "export" | "preview" | "preparing" | null;
 }
 
 interface Made {
@@ -93,6 +100,10 @@ interface Running {
   heard?: boolean;
   /** Waiting for its place among the exports: what drops that wait. */
   waiting?: () => void;
+  /** Waiting for the preview to rest before starting (the viewer comes first on the link). */
+  resting?: boolean;
+  /** Cutting its proxy excerpts before encoding starts (progress still 0 meanwhile). */
+  preparing?: boolean;
 }
 
 const made = new Map<string, Made>();
@@ -140,6 +151,11 @@ export function cloudKey(id: string, hash: string): string {
  */
 async function fetchLocal(app: App, id: string, key: string): Promise<void> {
   const local = file(app, id).replace(/\.mp4$/u, `.${key.split("/").pop() ?? "cloud.mp4"}`);
+  // The whole render (hundreds of MB) waits for the viewer to rest: the video
+  // element already streams it by ranges, so fetching it at open buys little
+  // and saturated the link on nightly-50. Superseded while waiting: no download.
+  await cloudBlocks.waitForViewerRest();
+  if (made.get(id)?.key !== key) return;
   try {
     await cloud.download(key, local);
   } catch (error) {
@@ -221,13 +237,14 @@ export function status(app: App, id: string): Status {
   // picture: no url, so nothing plays it as this one (JJ, Nov 2: "I've made
   // changes to the window screen rather than the paper, but on the screen, it
   // still shows the paper thing": the status gave the new rev with the old file).
-  if (running?.project === id && running.waiting !== undefined) return { state: "waiting", rev: running.rev, progress: 0, url: running.rev === ready?.rev ? url : null, error: null, stream: false };
-  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null, stream: true };
-  if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url: asked.get(id) === ready?.rev ? url : null, error: null, stream: false };
-  if (ready !== undefined) return { state: "ready", rev: ready.rev, progress: 1, url, error: null, stream: ready.key === undefined };
+  if (running?.project === id && running.resting === true) return { state: "waiting", rev: running.rev, progress: 0, url: running.rev === ready?.rev ? url : null, error: null, stream: false, note: "preview" };
+  if (running?.project === id && running.waiting !== undefined) return { state: "waiting", rev: running.rev, progress: 0, url: running.rev === ready?.rev ? url : null, error: null, stream: false, note: "export" };
+  if (running?.project === id) return { state: "rendering", rev: running.rev, progress: running.progress, url: running.rev === ready?.rev ? url : null, error: null, stream: true, note: running.preparing === true ? "preparing" : null };
+  if (asked.has(id)) return { state: "waiting", rev: asked.get(id)!, progress: 0, url: asked.get(id) === ready?.rev ? url : null, error: null, stream: false, note: null };
+  if (ready !== undefined) return { state: "ready", rev: ready.rev, progress: 1, url, error: null, stream: ready.key === undefined, note: null };
   const lost = failed.get(id);
-  if (lost !== undefined) return { state: "failed", rev: lost.rev, progress: 0, url: null, error: lost.error, stream: false };
-  return { state: "none", rev: null, progress: 0, url: null, error: null, stream: false };
+  if (lost !== undefined) return { state: "failed", rev: lost.rev, progress: 0, url: null, error: lost.error, stream: false, note: null };
+  return { state: "none", rev: null, progress: 0, url: null, error: null, stream: false, note: null };
 }
 
 function publish(app: App, id: string): void {
@@ -273,6 +290,14 @@ function stop(current: Running): void {
 function requestQuietly(app: App, id: string): void {
   const live = app.store.get(id);
   if (live === null) return;
+  // A long edit is not auto-rendered on the team's Macs after every turn (a
+  // 29-minute 1080p render encoding in the background on 16 GB made the Mac
+  // laggy, nightly-50); the viewer's own ask still renders it when watched.
+  const seconds = duration(live.project) / fps(live.project);
+  if (seconds > AUTO_RENDER_MAX_SECONDS) {
+    diag.info("playback", `${live.project.name}: not auto-rendering ${Math.round(seconds / 60)} minutes of smooth playback after a turn; it renders when watched`);
+    return;
+  }
   const hash = pictureHash(live.project);
   const done = record(app, id);
   if (present(app, id, done) && done.hash === hash) return;
@@ -308,6 +333,14 @@ async function next(app: App): Promise<void> {
       current.key = key;
       found = true;
     } else {
+      // No render until the preview has rested: its cell cuts and encoding
+      // otherwise pull the same link (and CPU) the viewer is waiting on.
+      current.resting = true;
+      publish(app, id);
+      const rested = await hooks.waitForRest(() => current.cancelled);
+      current.resting = false;
+      if (!rested || current.cancelled) return;
+      publish(app, id);
       // Its place among the exports, then the render; given back however it ends.
       const release = await turn(app, current);
       if (release !== null) {
@@ -391,10 +424,13 @@ async function render(app: App, project: Project, current: Running): Promise<voi
       keys.set(media.id, key);
     }
   }
-  const excerpts = urls.size === 0 ? [] : await exportExcerpts.prepare(own, plan.start, plan.end, app.store.cacheDir(), urls, keys, () => current.cancelled).catch((error: unknown) => {
+  current.preparing = urls.size > 0;
+  publish(app, project.id);
+  const excerpts = urls.size === 0 ? [] : await exportExcerpts.prepare(own, plan.start, plan.end, app.store.cacheDir(), urls, keys, () => current.cancelled, { atOnce: PLAYBACK_CELLS_AT_ONCE, behindViewer: true, restMaxMs: 60_000 }).catch((error: unknown) => {
     diag.warn("playback", `${project.name}: its proxies are read over the preview URL (${diag.messageOf(error)})`);
     return [];
   });
+  current.preparing = false;
   if (current.cancelled) return;
   const unpin = exportExcerpts.pin(excerpts.map((one) => one.path));
   // The viewer's playhead's chunk first, then on from there (the viewer plays each as it lands).
@@ -460,6 +496,8 @@ export const hooks = {
   /** How often a render waiting on an export looks again, with a registry that has no turns (ms). */
   waitMs: 10_000,
   inCloud: async (key: string): Promise<boolean> => cloud.enabled() && (await cloud.head(key).catch(() => null)) !== null,
+  /** Until the preview rests (no viewer miss on R2 for `cloud_blocks.viewerHooks.restMs`); false when stopped. Tests replace it. */
+  waitForRest: (stop: () => boolean): Promise<boolean> => cloudBlocks.waitForViewerRest(stop),
 };
 
 /**

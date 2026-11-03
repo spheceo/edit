@@ -2,7 +2,7 @@ import { Maximize, MessageSquarePlus, Minimize, Pause, Play, SkipBack, SkipForwa
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { useAgent } from "../lib/agent";
-import { api } from "../lib/api";
+import { api, mediaHost } from "../lib/api";
 import { openReport } from "../lib/diagnostics";
 import { paramAt, projectDuration, setParam } from "../lib/edit";
 import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
@@ -100,7 +100,7 @@ export function Viewer() {
   const projectId = project?.id ?? null;
   // Rendered here, it plays a chunk at a time as each lands, while it renders too.
   const streamed = playback?.stream === true && (playback.state === "ready" || playback.state === "rendering") && playback.rev === rev && !dirty;
-  const smooth = streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? playback.url : null;
+  const smooth = streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? mediaHost(playback.url) : null;
   useEffect(() => { preview.setSmooth(smooth); }, [smooth]);
   useEffect(() => {
     if (projectId === null) return;
@@ -176,11 +176,6 @@ export function Viewer() {
         {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
         {!fullscreen && <NoteBoxLayer wrap={wrap} />}
         {!fullscreen && <NoteDraft />}
-        {!error && project && playback !== null && (playback.state === "rendering" || playback.state === "waiting") && !smoothShown && (
-          <div className="pointer-events-none absolute left-3 top-3 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted tabular">
-            {playback.state === "waiting" ? "Smooth playback after the export" : `Smooth playback ${Math.round(playback.progress * 100)}%`}
-          </div>
-        )}
         {error && (
           <div className="absolute inset-0 flex items-center justify-center p-8">
             <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />

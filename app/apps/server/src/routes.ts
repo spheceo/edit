@@ -516,7 +516,11 @@ function getProject({ app, params }: Context): Response {
   const live = liveOr404(app, id);
   app.store.setActive(id);
   for (const media of live.project.media) {
-    if (!isFile(media.path)) continue;
+    // Cloud media are streamed inputs (a loopback URL, never a file here):
+    // they still need their thumbnails and waveforms made from that stream
+    // (media.ts `process`: no local preview is made for them), or the
+    // timeline shows plain blocks for every cloud clip, for good.
+    if (!isFile(media.path) && media.cloud == null) continue;
     app.media.ensure(media.path, {
       kind: media.kind,
       duration: media.duration,

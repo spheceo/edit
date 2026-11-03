@@ -9,7 +9,7 @@
 // lets a page buffer. Where nothing is appended, `covers` says so and the
 // viewer draws live, as it did without a render.
 
-import { request } from "./api";
+import { mediaHost, request } from "./api";
 
 export interface StreamSegment { start: number; end: number; key: string; ready: boolean }
 export interface StreamInfo { segments: StreamSegment[]; codec: string | null; sound: "ready" | "pending" | "none"; soundUrl: string | null }
@@ -69,7 +69,7 @@ export class SmoothStream {
     if (url !== this.soundSource) {
       this.soundSource = url;
       if (url === null) this.sound.removeAttribute("src");
-      else this.sound.src = url;
+      else this.sound.src = mediaHost(url);
     }
     if (url === null) return;
     if (Math.abs(this.sound.currentTime - time) > DRIFT) this.sound.currentTime = time;
@@ -106,7 +106,7 @@ export class SmoothStream {
       if (buffer !== null) {
         // The chunk at the playhead first; what's far from it is let go after (letting go first held a seek up by seconds).
         for (let next = this.next(); next !== null && !this.closed; next = this.next()) {
-          const answer = await fetch(`/api/projects/${encodeURIComponent(this.project)}/playback/segment/${next.key}`);
+          const answer = await fetch(mediaHost(`/api/projects/${encodeURIComponent(this.project)}/playback/segment/${next.key}`));
           if (!answer.ok) break;
           const bytes = await answer.arrayBuffer();
           if (this.closed) return;

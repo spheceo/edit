@@ -39,26 +39,49 @@ export function checkHost(request: Request, allowed: string[]): Response | null 
   // one-use code that's useless without the PKCE verifier kept here.
   if (request.method === "GET" && new URL(request.url).pathname === "/callback") return null;
   const origin = request.headers.get("origin");
-  if (request.method === "GET" && origin !== null && new URL(request.url).pathname.startsWith("/v1/3dtiles/") && mapSibling(origin, host)) return null;
+  // Media bytes and map tiles come from a sibling loopback host (below), so
+  // they get their own connection pool and can't queue the API behind them.
+  const pathname = new URL(request.url).pathname;
+  if ((request.method === "GET" || request.method === "OPTIONS") && origin !== null && (pathname.startsWith("/v1/3dtiles/") || mediaPath(pathname)) && loopbackSibling(origin, host)) return null;
   if (origin !== null && !sameOrigin(origin, host)) return text("cross-origin requests are not allowed", 403);
   if (request.headers.get("sec-fetch-site") === "cross-site") return text("cross-site requests are not allowed", 403);
   return null;
 }
 
 /**
- * Whether a map tile's request comes from Edit's own map page: the page is on
- * this server's loopback address and fetches its tiles from `t0…t7.localhost`
- * on the same port, which Chrome reaches over more connections at once (six a
- * host over HTTP/1.1: a map's hundreds of tiles took minutes and every map
- * timed out, Oct 28).
+ * Whether a path serves media bytes the viewer reads (as opposed to a control
+ * call): a project's media files, smooth playback's file, chunks and sound,
+ * and the scrub tier's pieces. These go on the sibling host; the small JSON
+ * around them (`playback/stream`, `playback`, the scrub asks) stays on the
+ * page's host with the rest of the API.
  */
-export function mapSibling(origin: string, host: string): boolean {
+export function mediaPath(pathname: string): boolean {
+  return (
+    /^\/api\/projects\/[^/]+\/media\//.test(pathname) ||
+    /^\/api\/projects\/[^/]+\/playback\.mp4$/.test(pathname) ||
+    /^\/api\/projects\/[^/]+\/playback\/(segment\/|sound$)/.test(pathname) ||
+    /^\/api\/projects\/[^/]+\/scrub\/[^/]+\/[^/]+$/.test(pathname)
+  );
+}
+
+/**
+ * Whether a request comes from Edit's own page on another loopback name of
+ * this same server: the page is on one loopback address and reads media (and
+ * the map page its tiles, from `t0…t7.localhost`) from a sibling on the same
+ * port, which browsers reach over more connections at once (six a host over
+ * HTTP/1.1: a map's hundreds of tiles took minutes, Oct 28; on nightly-50 a
+ * handful of slow media reads queued every API call behind them).
+ */
+export function loopbackSibling(origin: string, host: string): boolean {
   const match = /^http:\/\/([^/?#]+)$/.exec(origin);
   const from = match === null ? null : authority(match[1]!);
   const to = authority(host);
   const loopback = (name: string) => name === "127.0.0.1" || name === "localhost" || name.endsWith(".localhost");
   return from !== null && to !== null && loopback(from.host.toLowerCase()) && loopback(to.host.toLowerCase()) && from.port !== null && from.port === to.port;
 }
+
+/** The map page's name for `loopbackSibling` (its tiles were the first sibling reads). */
+export const mapSibling = loopbackSibling;
 
 /** The headers every answer that passed the check carries. */
 export function secure(response: Response): Response {

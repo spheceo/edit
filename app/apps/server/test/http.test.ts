@@ -5,7 +5,7 @@ import type { App } from "../src/app.ts";
 import { timings } from "../src/diag.ts";
 import { mapAssets, staticAsset, useAssets } from "../src/http/assets.ts";
 import { ApiError, bad, json } from "../src/http/errors.ts";
-import { checkHost, mapSibling, sameOrigin } from "../src/http/host.ts";
+import { checkHost, mapSibling, mediaPath, sameOrigin } from "../src/http/host.ts";
 import { badShape, readJson, Router, valueEnd } from "../src/http/router.ts";
 import { baseRouter, listen, respond } from "../src/http/server.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -37,6 +37,44 @@ test("the_map_page_fetches_its_tiles_from_its_localhost_siblings", () => {
   expect(tile("/api/projects", "http://127.0.0.1:7700")?.status).toBe(403);
   expect(tile("/v1/3dtiles/datasets/x.glb", "http://127.0.0.1:7700", "POST")?.status).toBe(403);
   expect(tile("/v1/3dtiles/datasets/x.glb", "https://evil.example")?.status).toBe(403);
+});
+
+test("the viewer reads media from a sibling loopback host, so slow media cannot queue the API behind it", async () => {
+  // WebKit allows six connections a host: on one host, a handful of media
+  // reads each waiting on R2 held every API call behind them (nightly-50).
+  expect(mediaPath("/api/projects/p1/media/m1/proxy")).toBe(true);
+  expect(mediaPath("/api/projects/p1/playback.mp4")).toBe(true);
+  expect(mediaPath("/api/projects/p1/playback/segment/abc")).toBe(true);
+  expect(mediaPath("/api/projects/p1/playback/sound")).toBe(true);
+  expect(mediaPath("/api/projects/p1/scrub/m1/3")).toBe(true);
+  // Control calls stay on the page's own host.
+  expect(mediaPath("/api/projects/p1/playback/stream")).toBe(false);
+  expect(mediaPath("/api/projects/p1/playback")).toBe(false);
+  expect(mediaPath("/api/projects/p1")).toBe(false);
+  expect(mediaPath("/api/projects")).toBe(false);
+
+  const { app, cleanup } = fixtureHome("http-media-host");
+  try {
+    const routes = router();
+    const sibling = (path: string, init: RequestInit = {}) =>
+      respond(app, routes, new Request(`http://localhost:7700${path}`, { ...init, headers: { host: "localhost:7700", origin: "http://127.0.0.1:7700", ...(init.headers as Record<string, string> | undefined) } }), null);
+    // A media read from Edit's own page on the other loopback name: through, readable cross-origin.
+    const media = (await sibling("/api/projects/p1/media/m1/proxy"))!;
+    expect(media.status).toBe(200);
+    expect(media.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:7700");
+    // Its preflight (a ranged fetch asks first) is answered too.
+    const preflight = (await sibling("/api/projects/p1/media/m1/proxy", { method: "OPTIONS", headers: { "access-control-request-method": "GET", "access-control-request-headers": "range" } }))!;
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("http://127.0.0.1:7700");
+    expect(preflight.headers.get("access-control-allow-headers")).toContain("range");
+    // Only media bytes, only reads, only from Edit's own loopback page.
+    expect((await sibling("/api/projects/p1"))!.status).toBe(403);
+    expect((await sibling("/api/projects/p1/media/m1/proxy", { method: "POST" }))!.status).toBe(403);
+    const evil = (await respond(app, routes, new Request("http://localhost:7700/api/projects/p1/media/m1/proxy", { headers: { host: "localhost:7700", origin: "https://evil.example" } }), null))!;
+    expect(evil.status).toBe(403);
+  } finally {
+    cleanup();
+  }
 });
 
 function request(path: string, init: RequestInit & { host?: string } = {}): Request {

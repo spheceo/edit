@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchRetrying } from "./api";
+import { fetchRetrying, mediaHostFor, mediaUrl } from "./api";
+
+describe("media host", () => {
+  it("reads media from the other loopback name, so media and API get separate connection pools", () => {
+    expect(mediaHostFor("/api/projects/p/media/m/proxy", "127.0.0.1", "7700")).toBe("http://localhost:7700/api/projects/p/media/m/proxy");
+    expect(mediaHostFor("/api/projects/p/media/m/proxy", "localhost", "7700")).toBe("http://127.0.0.1:7700/api/projects/p/media/m/proxy");
+    expect(mediaHostFor("/api/projects/p/media/m/proxy", "::1", "7700")).toBe("http://127.0.0.1:7700/api/projects/p/media/m/proxy");
+    // Off this Mac (Tailscale), or the Vite dev UI (proxied, no cross-origin answers): same host as the page.
+    expect(mediaHostFor("/api/projects/p/media/m/proxy", "kenobi.tailnet.ts.net", "7700")).toBe("/api/projects/p/media/m/proxy");
+    expect(mediaHostFor("/api/projects/p/media/m/proxy", "127.0.0.1", "5173")).toBe("/api/projects/p/media/m/proxy");
+    // No page (tests, workers without a location): untouched, and mediaUrl with it.
+    expect(mediaUrl("p", "m", "proxy")).toBe("/api/projects/p/media/m/proxy");
+  });
+});
 
 describe("request retries", () => {
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });

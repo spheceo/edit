@@ -31,6 +31,42 @@ interface Meta {
   key?: string;
 }
 
+/**
+ * The viewer comes first on this Mac's link (nightly-50: a smooth-playback
+ * render's cell cuts, the proxy prefetch and a whole cloud render's download
+ * together saturated it, so every page read queued behind media reads and
+ * the preview sat stuck while every server handler was fast). One signal:
+ * a page read that had to go to R2 marks the viewer busy; background R2
+ * work (prefetch, a playback render's cell cuts, the cloud render's
+ * download) pauses while it is set and resumes once the viewer has rested
+ * `restMs` with no miss. Cache hits never mark it, so playing from cache
+ * never blocks background work.
+ */
+export const viewerHooks = { restMs: 5_000, pollMs: 50 };
+let lastViewerMiss = 0;
+
+/** Notes that a viewer read just had to wait on R2 (`at`: ms since 1970, for tests). */
+export function noteViewerMiss(at: number = Date.now()): void {
+  lastViewerMiss = at;
+}
+
+/** Whether a viewer read missed on R2 within the rest window. */
+export function viewerBusy(now: number = Date.now()): boolean {
+  return lastViewerMiss > 0 && now - lastViewerMiss < viewerHooks.restMs;
+}
+
+/**
+ * Waits until no viewer read has missed for the rest window; false when
+ * `stop()` gave up first. With `maxMs`, it gives up waiting then and
+ * proceeds anyway (true): for small background reads a person may be
+ * blocked on, which must not stall for a whole viewing session.
+ */
+export async function waitForViewerRest(stop: () => boolean = () => false, maxMs?: number): Promise<boolean> {
+  const began = Date.now();
+  while (viewerBusy() && !stop() && (maxMs === undefined || Date.now() - began < maxMs)) await new Promise((resolve) => setTimeout(resolve, viewerHooks.pollMs));
+  return !stop();
+}
+
 const reading = new Map<string, Promise<Uint8Array>>();
 let inFlight = 0;
 const queue: (() => void)[] = [];
@@ -56,8 +92,8 @@ function metaOf(folder: string): Meta | null {
   }
 }
 
-/** One block of the object, from disk or R2 (once, however many ask). */
-function block(root: string, key: string, index: number, url: () => Promise<string>): Promise<Uint8Array> {
+/** One block of the object, from disk or R2 (once, however many ask). A `viewer` read that misses marks the viewer busy; a hit never does. */
+function block(root: string, key: string, index: number, url: () => Promise<string>, viewer = false): Promise<Uint8Array> {
   const folder = folderOf(root, key);
   const path = join(folder, `${index}`);
   try {
@@ -69,6 +105,7 @@ function block(root: string, key: string, index: number, url: () => Promise<stri
   } catch {
     // Not here yet.
   }
+  if (viewer) noteViewerMiss();
   const id = `${key}#${index}`;
   const known = reading.get(id);
   if (known !== undefined) return known;
@@ -112,6 +149,8 @@ export async function prefetch(root: string, key: string, indexes: number[], url
   for (const index of indexes) {
     if (stop()) break;
     if (fs.existsSync(join(folderOf(root, key), `${index}`))) continue;
+    // The viewer comes first: no read-ahead while a page read just missed on R2.
+    if (!(await waitForViewerRest(stop))) break;
     while ((inFlight > AT_ONCE - PREFETCH_ROOM || prefetching >= PREFETCH_AT_ONCE) && !stop()) await new Promise((resolve) => setTimeout(resolve, 50));
     if (stop()) break;
     prefetching++;
@@ -135,13 +174,13 @@ export async function serve(root: string, key: string, range: string | null, url
   if (!(to >= from)) return null;
   const first = Math.floor(from / BLOCK);
   // The first block says how big the object is.
-  const opening = await block(root, key, first, url);
+  const opening = await block(root, key, first, url, true);
   const meta = metaOf(folderOf(root, key));
   if (meta === null) return null;
   if (from >= meta.size) return new Response(null, { status: 416, headers: { "content-range": `bytes */${meta.size}` } });
   to = Math.min(to, meta.size - 1);
   const last = Math.floor(to / BLOCK);
-  const blocks = [opening, ...(await Promise.all(Array.from({ length: last - first }, (_, n) => block(root, key, first + 1 + n, url))))];
+  const blocks = [opening, ...(await Promise.all(Array.from({ length: last - first }, (_, n) => block(root, key, first + 1 + n, url, true))))];
   const out = new Uint8Array(to - from + 1);
   let written = 0;
   blocks.forEach((bytes, n) => {

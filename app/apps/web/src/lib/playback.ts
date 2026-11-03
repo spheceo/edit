@@ -1,7 +1,7 @@
 // Workers decode source frames and PCM. Web Audio owns the timeline clock;
 // the shared WASM compositor still evaluates and renders each complete scene.
 import init, { createEngine, type Engine } from "../engine/pkg/edit_wasm";
-import { fetchRetrying, mediaUrl } from "./api";
+import { fetchRetrying, mediaHost, mediaUrl } from "./api";
 import { Decoder, videoTime } from "./decoder";
 import { addContext, note, recordTiming } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
@@ -825,7 +825,7 @@ class Preview {
     if (!scrub.ready.get(source.media)?.has(piece)) return null;
     return {
       key: `scrub|${source.media}|${piece}`,
-      url: `/api/projects/${encodeURIComponent(scrub.project)}/scrub/${encodeURIComponent(source.media)}/${piece}`,
+      url: mediaHost(`/api/projects/${encodeURIComponent(scrub.project)}/scrub/${encodeURIComponent(source.media)}/${piece}`),
       time: time - piece * scrub.seconds,
       seconds: Math.min(scrub.seconds, Math.max(media.duration - piece * scrub.seconds, 0)),
     };

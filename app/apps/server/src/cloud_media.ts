@@ -106,6 +106,8 @@ const HOUR = 3600;
 const PARALLEL = 3;
 /** Analysis files fetched at once per source (each a few KB). */
 const ANALYSIS_AT_ONCE = 8;
+/** How long the shared-analysis fetch waits for the viewer to rest before going anyway (ms). */
+const ANALYSIS_REST_MAX_MS = 60_000;
 const playbackPorts = new Map<string, number>();
 const previewPath = (cache: string, key: string) => playbackPath(key, playbackPorts.get(cache) ?? 7700);
 
@@ -1450,6 +1452,8 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
     });
     if (served !== null) return served;
   }
+  // Straight to R2 (no block to serve it): the page waited on the link, so it counts as a viewer miss too.
+  cloudBlocks.noteViewerMiss();
   for (let attempt = 0; ; attempt++) {
     const answer = await fetch(await streamingUrl(key), { headers: range === null ? {} : { range }, signal: request.signal });
     // A signature that lapsed early (a clock off): signed again, once.
@@ -1508,7 +1512,13 @@ export async function prefetchProject(app: App, id: string, from = 0): Promise<n
       wants.push({ base, seconds: (clip.source_in ?? 0) + ((frame - clip.start) / fps) * speed });
     }
   }
-  if (wants.length > 0) void pieces.fill(piecesContext(app.store.cacheDir()), wants, stop).catch((error: unknown) => diag.warn("pieces", `${id}: ${diag.messageOf(error)}`));
+  if (wants.length > 0) {
+    // Behind the viewer like the block prefetch: making pieces reads R2 too, so it starts only once the viewer rests.
+    void (async () => {
+      if (!(await cloudBlocks.waitForViewerRest(stop))) return;
+      await pieces.fill(piecesContext(app.store.cacheDir()), wants, stop);
+    })().catch((error: unknown) => diag.warn("pieces", `${id}: ${diag.messageOf(error)}`));
+  }
   const sizes = new Map<string, number | null>();
   let bytes = 0;
   for (const clip of clips) {
@@ -2440,6 +2450,10 @@ async function fetchAnalysis(app: App, id: string): Promise<void> {
     return due;
   });
   if (dirs.length === 0) return;
+  // Small files, but dozens at open on the same link: behind the viewer like
+  // the rest of the background reads — for a minute at most, since a person
+  // may be waiting on a transcript and these cost the link almost nothing.
+  await cloudBlocks.waitForViewerRest(() => false, ANALYSIS_REST_MAX_MS);
   let fetched = 0;
   for (let index = 0; index < dirs.length; index += PARALLEL) {
     const counts = await Promise.all(dirs.slice(index, index + PARALLEL).map(([source, dir]) => fetchAnalysisOf(source, dir).catch(() => 0)));

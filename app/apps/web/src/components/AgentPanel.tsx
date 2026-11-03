@@ -164,7 +164,6 @@ function MainAgentPanel() {
 
   return (
     <section className="flex h-full flex-col overflow-hidden rounded-xl border border-line bg-panel">
-      {loaded && <EditTime turns={turns} live={running} />}
       <div
         ref={list}
         onScroll={(event) => {
@@ -185,6 +184,7 @@ function MainAgentPanel() {
       </div>
 
       {projectId && <ResetCard projectId={projectId} />}
+      {loaded && <EditTime turns={turns} live={running} />}
       {!(status && !status.ready) && <Composer disabled={!status?.ready} />}
     </section>
   );
@@ -196,7 +196,7 @@ function EditTime({ turns, live }: { turns: Turn[]; live: boolean }) {
   const { ms, turns: count } = editWorked(turns, now);
   if (count === 0) return null;
   return (
-    <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-line px-3 text-[11px] text-muted" title="The agent's working time on this edit, all its turns added up (not the time between them)">
+    <div className="flex h-7 shrink-0 items-center gap-1.5 border-t border-line px-3 text-[11px] text-muted" title="The agent's working time on this edit, all its turns added up (not the time between them)">
       <Timer size={12} className="shrink-0" />
       <span className="truncate">
         Agent time on this edit: <span className="text-fg tabular-nums">{formatSpan(ms)}</span> · {count} {count === 1 ? "turn" : "turns"}

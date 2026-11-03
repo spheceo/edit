@@ -276,7 +276,9 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
   const points = useInOut();
   const span = inOutSpan(duration, points);
   return (
-    <div className="flex h-11 shrink-0 items-center border-t border-line px-3">
+    <div className="flex flex-col">
+      {fullscreen && <ScrubBar frame={frame} duration={duration} />}
+      <div className={cx("flex h-11 shrink-0 items-center px-3", !fullscreen && "border-t border-line")}>
       <div className="w-[180px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
       <div className="flex flex-1 items-center justify-center gap-0.5">
         <IconButton label="Go to start (Home)" onClick={goToStart}>
@@ -323,6 +325,52 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
         <IconButton label={fullscreen ? "Exit full screen (F)" : "Full screen (F)"} onClick={toggleFullscreen}>
           {fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
         </IconButton>
+      </div>
+    </div>
+    </div>
+  );
+}
+
+/**
+ * Fullscreen's scrub bar (no border above the controls there, Nov 3): a
+ * tall hit area over a playhead-pink track; click or drag to move through
+ * the edit while watching.
+ */
+function ScrubBar({ frame, duration }: { frame: number; duration: number }) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const fraction = duration > 0 ? Math.min(1, Math.max(0, frame / duration)) : 0;
+  const seekFrom = (clientX: number) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || duration <= 0) return;
+    preview.seek(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) * duration);
+  };
+  return (
+    <div
+      ref={trackRef}
+      role="slider"
+      aria-label="Scrub"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(duration)}
+      aria-valuenow={Math.round(frame)}
+      title="Click or drag to scrub"
+      className="group flex h-6 cursor-pointer touch-none items-center px-3"
+      onPointerDown={(event) => {
+        (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+        seekFrom(event.clientX);
+        const move = (moveEvent: PointerEvent) => seekFrom(moveEvent.clientX);
+        const up = () => {
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+        };
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+      }}
+    >
+      <div className="relative h-1.5 w-full rounded-full bg-white/20 transition-[height] group-hover:h-2">
+        <div className="absolute inset-y-0 left-0 rounded-full bg-playhead" style={{ width: `${fraction * 100}%` }} />
+        <div className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100" style={{ left: `${fraction * 100}%` }} />
       </div>
     </div>
   );

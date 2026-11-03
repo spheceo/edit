@@ -46,7 +46,8 @@ function agentWork(changes: ScriptChanges): string | null {
 
 const signature = (changes: ScriptChanges) => JSON.stringify([changes.ranges, changes.narration, changes.added, changes.removed]);
 
-export function DocChangesBar() {
+/** A normal button beside Share (was a full-width banner under the top bar, Nov 3: it took a whole row to say one thing). */
+export function DocChangesButton() {
   const id = useEditor((state) => state.project?.id ?? "");
   const fromDoc = useEditor((state) => Boolean(state.project?.script?.source?.includes("docs.google.com")));
   const cloud = useEditor((state) => state.cloud);
@@ -99,30 +100,19 @@ export function DocChangesBar() {
     }
   };
 
+  const detail = `The script Doc changed: ${said}${beyond.length > 0 ? `; ${count(beyond.length, "range")} ${beyond.length === 1 ? "runs" : "run"} past the footage downloaded` : ""}. Pull it to cut the changed ranges again.`;
   return (
-    <div
-      className="mx-2 mb-2 flex h-9 shrink-0 items-center gap-2 rounded-lg border border-line-strong bg-raised px-3 text-[12px]"
-      title={beyond.join("\n") || undefined}
+    <Button
+      variant="light"
+      disabled={busy || locked}
+      title={locked ? "Someone else is editing this: it can be pulled once it opens for editing here." : detail}
+      onClick={() => void pull()}
     >
-      <FileText size={13} className="shrink-0 text-secondary" />
-      <span className="shrink-0 text-fg">The script Doc changed</span>
-      <span className="truncate text-muted">
-        {said}
-        {beyond.length > 0 && `; ${count(beyond.length, "range")} ${beyond.length === 1 ? "runs" : "run"} past the footage downloaded`}.
-      </span>
-      <Button size="sm" variant="ghost" className="ml-auto shrink-0" onClick={() => setHandled(signature(changes))}>
-        Not now
-      </Button>
-      <Button
-        size="sm"
-        variant="light"
-        className="shrink-0"
-        disabled={busy || locked}
-        title={locked ? "Someone else is editing this: it can be pulled once it opens for editing here." : undefined}
-        onClick={() => void pull()}
-      >
-        {busy ? "Pulling…" : "Pull changes"}
-      </Button>
-    </div>
+      <FileText size={14} />
+      {busy ? "Pulling…" : "Pull Doc changes"}
+    </Button>
   );
 }
+
+/** The old banner's name, kept for anything still importing it. */
+export const DocChangesBar = DocChangesButton;

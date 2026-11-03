@@ -15,7 +15,6 @@ import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
 import { AgentPanel } from "./AgentPanel";
 import { CloudBanner } from "./CloudBanner";
-import { DocChangesBar } from "./DocChangesBar";
 import { MissingBanner } from "./MissingBanner";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
@@ -107,7 +106,6 @@ export function Editor({ id }: { id: string }) {
       <TopBar onShare={() => setSharing(true)} />
       <CloudBanner />
       <MissingBanner />
-      <DocChangesBar />
       {/* No padding on the right: the chat's edge sits there, at the window's very edge while the chat is closed. */}
       <div className="flex min-h-0 flex-1 pb-2 pl-2">
         <div className="flex min-w-0 flex-1 flex-col">

@@ -8,6 +8,7 @@ import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { AppMenu } from "./AppMenu";
+import { DocChangesButton } from "./DocChangesBar";
 import { toggleMenu } from "./ContextMenu";
 import { Tile } from "./Logo";
 import { StartedBy } from "./StartedBy";
@@ -56,6 +57,7 @@ export function TopBar({ onShare }: { onShare: () => void }) {
           </Button>
         )}
         <DriveButton />
+        <DocChangesButton />
         <Button variant="primary" className="ml-1.5" onClick={onShare}>
           {exportState?.state === "running" ? (
             <span className="tabular">{Math.round(exportState.progress * 100)}%</span>

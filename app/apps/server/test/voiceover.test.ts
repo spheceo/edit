@@ -276,7 +276,18 @@ test("a cut-in the narrator said his own way gets the recording between its neig
   const [, , gap] = matches.get(2)!;
   expect(words[gap.first]!.text).toBe("pacman");
   expect(words[gap.last]!.text).toBe("posts");
-  // Two unread in a row can't be told apart.
-  const twice = [blocks[0]!, { ...blocks[2]!, clip: "b1" }, { ...blocks[2]!, clip: "b2", text: "Another draft line nobody read out loud at all." }, blocks[3]!];
-  expect([...readings(twice, [["vo", words]])[1]]).toEqual([]);
+  // Two unread in a row share the stretch by their length, cut at the longest pause near it.
+  // A breath after "back" (word 29), near where the lengths put the cut.
+  const paused = words.map((word, n) => (n >= 30 ? { ...word, start: word.start + 1, end: word.end + 1 } : word));
+  const twice = [blocks[0]!, { ...blocks[2]!, clip: "b1", text: "Case three is a strange stillness piece, eerie and quiet." }, { ...blocks[2]!, clip: "b2", text: "Which also helps other artists get heard, oddly." }, blocks[3]!];
+  const [split, ordered] = readings(twice, [["vo", paused]]);
+  expect([...ordered]).toEqual([1, 2]);
+  expect(paused[split.get(1)![2].last]!.text).toBe("back");
+  expect(paused[split.get(2)![2].first]!.text).toBe("and");
+  expect(paused[split.get(2)![2].last]!.text).toBe("posts");
+  // What the narrator says after the script's last line is the last cut-in's.
+  const extra = [...words, ...["and", "one", "more", "case", "to", "end"].map((text, n) => ({ text, start: 100 + n, end: 100.5 + n }))];
+  const [ended, endedBy] = readings(blocks, [["vo", extra]]);
+  expect(endedBy.has(3)).toBe(true);
+  expect(ended.get(3)![2].last).toBe(extra.length - 1);
 });

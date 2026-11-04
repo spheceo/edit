@@ -604,29 +604,62 @@ export function readings(blocks: readonly ScriptBlock[], heard: readonly [string
     }
     if (best !== null && best[2].matched >= wanted.length * LEAST_MATCH) matches.set(index, best);
   });
-  // Then by order: a recording reads the script in order, so a cut-in whose
-  // words weren't found (the narrator said it his own way, or read a pasted
-  // article in his words) is what's said between the readings either side
-  // of it, or after the last one when it's the last. The first horror edit
-  // (Nov 4): three of its cut-ins went to the stand-in voice while 4 minutes
-  // of the narrator's recording between them went unused. Two such cut-ins
-  // in a row can't be told apart: they stay unread.
+  // Then by order: a recording reads the script in order, so cut-ins whose
+  // words weren't found (the narrator said them his own way, or read a
+  // pasted article in his own words) are what's said between the readings
+  // either side of them, or after the last one. Several in a row share that
+  // stretch by their length in words, each cut moved to the longest pause
+  // near it so no sentence is split. The last cut-in runs to the end of the
+  // recording: what the narrator said after the script's last line is his.
+  // The first horror edit (Nov 4): three cut-ins went to the stand-in voice
+  // while 4 minutes of the narrator's recording went unused, among them a
+  // whole last case the script didn't have.
   const narrated = blocks.flatMap((block, index) => (block.kind === "narration" && block.clip ? [index] : []));
-  narrated.forEach((index, at) => {
-    if (matches.has(index)) return;
-    const before = narrated[at - 1];
-    const after = narrated[at + 1];
-    const prev = before === undefined ? undefined : matches.get(before);
-    const next = after === undefined ? undefined : matches.get(after);
-    if (prev === undefined || (after !== undefined && next === undefined)) return;
-    if (next !== undefined && next[0] !== prev[0]) return;
+  for (let at = 0; at < narrated.length; ) {
+    if (matches.has(narrated[at]!)) { at++; continue; }
+    let to = at;
+    while (to + 1 < narrated.length && !matches.has(narrated[to + 1]!)) to++;
+    const run = narrated.slice(at, to + 1);
+    const prev = at > 0 ? matches.get(narrated[at - 1]!) : undefined;
+    const next = to + 1 < narrated.length ? matches.get(narrated[to + 1]!) : undefined;
+    at = to + 1;
+    if (prev === undefined || (next !== undefined && next[0] !== prev[0])) continue;
     const words = prev[1];
     const first = prev[2].last + 1;
     const last = next === undefined ? words.length - 1 : next[2].first - 1;
-    if (last - first + 1 < 3) return;
-    matches.set(index, [prev[0], words, { first, last, matched: last - first + 1 }]);
-    byOrder.add(index);
-  });
+    if (last - first + 1 < 3 * run.length) continue;
+    const sizes = run.map((index) => Math.max(wordsOf((blocks[index] as { text: string }).text).length, 1));
+    const total = sizes.reduce((sum, size) => sum + size, 0);
+    let from = first;
+    let seen = 0;
+    run.forEach((index, n) => {
+      seen += sizes[n]!;
+      let until = last;
+      if (n < run.length - 1) {
+        const aim = first + Math.round(((last - first + 1) * seen) / total) - 1;
+        const reach = Math.max(2, Math.round((last - first + 1) * 0.15));
+        let best = aim;
+        for (let k = Math.max(from + 2, aim - reach); k <= Math.min(last - 3, aim + reach); k++) {
+          const gap = (words[k + 1]?.start ?? 0) - (words[k]?.end ?? 0);
+          const bestGap = (words[best + 1]?.start ?? 0) - (words[best]?.end ?? 0);
+          if (gap > bestGap) best = k;
+        }
+        until = Math.min(Math.max(best, from + 2), last - 3);
+      }
+      matches.set(index, [prev[0], words, { first: from, last: until, matched: until - from + 1 }]);
+      byOrder.add(index);
+      from = until + 1;
+    });
+  }
+  // The last cut-in read by its words runs on to the end of its recording, when
+  // that's a reading of the whole script (two cut-ins or more), not one line's take.
+  const lastIndex = narrated.at(-1);
+  const final = lastIndex === undefined ? undefined : matches.get(lastIndex);
+  const whole = final !== undefined && [...matches.values()].filter((match) => match[0] === final[0]).length >= 2;
+  if (lastIndex !== undefined && final !== undefined && whole && !byOrder.has(lastIndex) && final[1].length - 1 - final[2].last >= 3) {
+    matches.set(lastIndex, [final[0], final[1], { ...final[2], last: final[1].length - 1 }]);
+    byOrder.add(lastIndex);
+  }
   return [matches, byOrder];
 }
 

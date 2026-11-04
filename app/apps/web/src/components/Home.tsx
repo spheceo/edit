@@ -12,7 +12,7 @@ import { asleep, laterKey, useLater, type LaterKey } from "../lib/later";
 import { navigate } from "../lib/route";
 import { clientId, connectEvents, useEditor } from "../lib/store";
 import { ago, shortDuration } from "../lib/time";
-import { STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
+import { NARRATION, STYLES, type Creator, type ProjectSummary, type Style } from "../lib/types";
 import { CardTableRow, IdeaTableRow, ideaStage, NewIdea, NoIdeas, useIdeasHome } from "../ideas/home";
 import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
@@ -2076,7 +2076,9 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
                 ? commentary
                   ? "Paste the sources: videos, articles, posts. The first is the brief."
                   : "Paste the footage: YouTube or Drive videos, or a Trello card. A case the channel already covered goes in as a reuse."
-                : "Paste the script’s Google Doc, or all its text (copied from the Doc, links and all). A finished video added under it goes in whole, as a reuse."
+                : NARRATION[kind] === "recording"
+                  ? "Paste the script’s Google Doc, or all its text (copied from the Doc, links and all), and “Voice-over:” with the recording’s Drive link."
+                  : "Paste the script’s Google Doc, or all its text (copied from the Doc, links and all). A finished video added under it goes in whole, as a reuse."
             }
             onChange={(event) => setText(event.target.value)}
             onPaste={(event) => {

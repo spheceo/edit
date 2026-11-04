@@ -30,7 +30,7 @@ test("Storage lists Edit's exports on this Mac, deletes only those, and keeps a 
     expect(fs.existsSync(`${home}/exports.json`)).toBe(true);
     // The archived one keeps its entry (its cloud copy is the export now); the other goes from the list with its file.
     const left = JSON.parse(fs.readFileSync(`${home}/exports.json`, "utf8")) as { p: { path: string }[] };
-    expect(left.p.map((one) => one.path)).toEqual([archived, newest]);
+    expect(left.p.map((one) => one.path)).toEqual([archived!, newest!]);
   } finally {
     cleanup();
   }

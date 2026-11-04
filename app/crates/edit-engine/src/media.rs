@@ -903,9 +903,7 @@ fn hardware_video(
     partial: &Path,
     pause: Pause,
 ) -> bool {
-    if std::env::var_os("EDIT_FFMPEG_VIDEO").is_some()
-        || std::env::var_os("EDIT_NO_HARDWARE_PROXY").is_some()
-    {
+    if std::env::var_os("EDIT_FFMPEG_VIDEO").is_some() {
         return false;
     }
     let fit = (f64::from(max_w) / f64::from(probe.width.max(2)))

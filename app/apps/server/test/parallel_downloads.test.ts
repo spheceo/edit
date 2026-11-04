@@ -8,8 +8,6 @@ import { importStatus } from "../src/edit_tools.ts";
 test("script downloads overlap in three slots and a failed file does not strand the others", async () => {
   const scripts = new Jobs();
   const { app, store, cleanup } = fixtureHome("parallel-downloads", { services: { scripts } });
-  const before = process.env.EDIT_PARALLEL_DOWNLOADS;
-  process.env.EDIT_PARALLEL_DOWNLOADS = "1";
   const cloud = spyOn(relay, "cloudEnabled").mockReturnValue(true);
   // Tried again at once (the pauses are minutes in use): every try fails here.
   const waits = timing.retryWaits;
@@ -49,7 +47,6 @@ test("script downloads overlap in three slots and a failed file does not strand 
     release(); await work;
     timing.retryWaits = waits;
     download.mockRestore(); cloud.mockRestore(); researched.mockRestore();
-    if (before === undefined) delete process.env.EDIT_PARALLEL_DOWNLOADS; else process.env.EDIT_PARALLEL_DOWNLOADS = before;
     cleanup();
   }
 });

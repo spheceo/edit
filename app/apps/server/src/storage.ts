@@ -22,15 +22,12 @@ const SHARE = 0.25;
 const MOST = 50_000_000_000;
 
 /**
- * The local-data budget: `EDIT_CACHE_BUDGET_MB` (decimal MB) when set; else,
- * with the disk known, a quarter of the room it has (its free space and what
+ * The local-data budget: with the disk known, a quarter of the room it has (its free space and what
  * the cache already holds, so the budget doesn't shrink as the cache fills),
  * between 400 MB and 50 GB and always leaving FREE_FLOOR_BYTES free: an M1
  * with 15 GB free and a 6.7 GB cache, 5.4 GB. Unknown, the old 400 MB.
  */
 export function localBudgetBytes(disk?: { freeBytes: number; cacheBytes: number }): number {
-  const mb = Number(process.env.EDIT_CACHE_BUDGET_MB ?? "");
-  if (Number.isFinite(mb) && mb > 0) return Math.floor(mb * 1_000_000);
   if (disk === undefined || !Number.isFinite(disk.freeBytes)) return DEFAULT_LOCAL_BUDGET_BYTES;
   const room = Math.max(disk.freeBytes, 0) + Math.max(disk.cacheBytes, 0);
   return Math.floor(Math.max(DEFAULT_LOCAL_BUDGET_BYTES, Math.min(room * SHARE, room - FREE_FLOOR_BYTES, MOST)));

@@ -971,10 +971,8 @@ export const jobTiming = { poll: 2000, stall: 10 * 60_000, sleep: (ms: number) =
  * 7.1: apps/relay/src/jobs.ts), following its progress; the bytes stored, or
  * null when the relay can't (an older relay, no Google sign-in there, the
  * job failed or stood still), so this Mac streams it instead.
- * `EDIT_CLOUD_JOBS=0` never asks.
  */
 async function driveInTheCloud(file: string, key: string, progress: (sent: number) => void): Promise<number | null> {
-  if (process.env.EDIT_CLOUD_JOBS === "0") return null;
   let id: string;
   try {
     const started = await cloud.relayJson("jobs/drive", { file, key });
@@ -1378,11 +1376,9 @@ const signedStreams = new Map<string, { url: string; until: number }>();
  * Blocks go through the relay's edge cache when the relay has one (its media.ts, on media.spheceo.com since
  * Nov 3; R2's own URL otherwise): measured from South Africa on a 2.6 GB proxy, a block took 1.2–1.4 s from R2,
  * 0.55–0.9 s the first time through the edge and 55–92 ms after, also for another Mac's signature.
- * EDIT_EDGE_MEDIA=0 turns it off. The edge answers bounded ranges of up to 8 MiB only, so FFmpeg's and
- * any open-ended reads keep R2's URL.
+ * The edge answers bounded ranges of up to 8 MiB only, so FFmpeg's and any open-ended reads keep R2's URL.
  */
-async function streamingUrl(key: string, edge = false): Promise<string> {
-  const viaEdge = edge && process.env.EDIT_EDGE_MEDIA !== "0";
+async function streamingUrl(key: string, viaEdge = false): Promise<string> {
   const kept = `${viaEdge ? "edge" : "r2"} ${key}`;
   const known = signedStreams.get(kept);
   if (known !== undefined && Date.now() < known.until) return known.url;
@@ -1877,7 +1873,6 @@ export async function forExport(
   }
   // The picture is read from excerpts cut to this machine (export_excerpts.ts),
   // made while the sound copies come. Both report in, and the card names whichever has more left.
-  // EDIT_EXPORT_EXCERPTS=0 reads the originals over HTTPS as before (to compare the two).
   const heard = needed.filter(([mediaId]) => mediaOf(project, mediaId)?.has_audio === true);
   let cut = { done: 0, total: 0 };
   let soundsDone = 0;
@@ -1893,12 +1888,12 @@ export async function forExport(
     lastSaid = key;
     onPrep(line.phase, line.ratio);
   };
-  const excerpts = (process.env.EDIT_EXPORT_EXCERPTS === "0" ? Promise.resolve([]) : exportExcerpts.prepare(project, start, end, cache, urls, new Map(needed), cancelled, {
+  const excerpts = exportExcerpts.prepare(project, start, end, cache, urls, new Map(needed), cancelled, {
     onStep: (done, total) => {
       cut = { done, total };
       say();
     },
-  })).catch((error: unknown) => {
+  }).catch((error: unknown) => {
     diag.warn("export", `${project.id}: excerpts: ${diag.messageOf(error)}; the originals are read from the cloud`);
     return [];
   });

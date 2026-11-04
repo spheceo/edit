@@ -23,9 +23,9 @@ import type { Recording } from "./drive.ts";
 import { keepShared, originalKey, segment } from "./handoff.ts";
 import { readable } from "./media.ts";
 
-/** Whether imports stream their footage to the cloud (`EDIT_STREAM_IMPORTS=0`: downloaded here, as before). */
+/** Whether imports stream their footage to the cloud: always, once Edit's cloud is on. */
 export function on(): boolean {
-  return process.env.EDIT_STREAM_IMPORTS !== "0" && cloud.enabled();
+  return cloud.enabled();
 }
 
 /** How long a cloud original's address works for the FFmpeg that reads it (a long recording's piece takes a while). */

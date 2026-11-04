@@ -1949,13 +1949,8 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
         });
       }
     };
-    // A few at once (ten files took the sum of their times, the bar sitting
-    // on the first): EDIT_PARALLEL_DOWNLOADS=0 goes back to one at a time.
-    if (process.env.EDIT_PARALLEL_DOWNLOADS !== "0") {
-      await Promise.all(files.map((file, index) => cloudDownloads.with(() => fetchOne(index, file))));
-    } else {
-      for (const [index, file] of files.entries()) await fetchOne(index, file);
-    }
+    // A few at once (ten files took the sum of their times, the bar sitting on the first).
+    await Promise.all(files.map((file, index) => cloudDownloads.with(() => fetchOne(index, file))));
     // Edit tries again by itself, a little later, whatever might pass (a
     // dropped connection, a busy Google, YouTube's bot check): the person is
     // asked only about what retrying can't fix, never to press Retry.

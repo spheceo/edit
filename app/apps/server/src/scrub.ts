@@ -10,15 +10,13 @@
 // playhead as a drag starts): kept at `edit/scrub/<proxy without edit/>/<n>.mp4`
 // in the cache (evicted like any copy of an R2 object). Kept on this Mac only
 // (Nov 3): a Mac makes a five-minute piece in ~13 s, and fetching its 225 MB
-// from South Africa takes longer and competes with footage uploads. Behind
-// EDIT_EDGE_MEDIA=1 (`shared`) a piece is put in R2 too and fetched from there
-// by another Mac. Until a piece is made, the proxy is the only tier there.
+// from South Africa takes longer and competes with footage uploads. Until a
+// piece is made, the proxy is the only tier there.
 
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
-import * as cloud from "./cloud.ts";
-import { fetchKey, localPath, scratchDir, streamKey } from "./cloud_media.ts";
+import { localPath, scratchDir, streamKey } from "./cloud_media.ts";
 import { playbackPath } from "./cloud_playback.ts";
 import * as diag from "./diag.ts";
 import { ApiError, json, notFound } from "./http/errors.ts";
@@ -38,11 +36,6 @@ const BITRATE = 6_000_000;
 /** Pieces made at once (VideoToolbox's encoder is shared with exports and renders). */
 const making = new Semaphore(1);
 const inFlight = new Map<string, Promise<string | null>>();
-
-/** Whether pieces go to R2 and come from it (EDIT_EDGE_MEDIA=1 set by hand: proxies' blocks use the edge by default, pieces stay here); else this Mac's only. */
-export function shared(): boolean {
-  return process.env.EDIT_EDGE_MEDIA === "1" && cloud.enabled();
-}
 
 /** A piece's R2 key: by the proxy it's made from and its place in it. */
 export function pieceKey(proxy: string, index: number): string {
@@ -83,8 +76,7 @@ export function pieceFile(app: App, media: Media, index: number): string | null 
 
 /**
  * Piece `index` of `media` on this Mac: here, or made now from its proxy
- * (one at a time); when `shared`, R2's before it's made and put there
- * after. Null when it can't be had.
+ * (one at a time). Null when it can't be had.
  */
 export function makePiece(app: App, media: Media, index: number): Promise<string | null> {
   const source = sourceOf(app, media);
@@ -95,14 +87,6 @@ export function makePiece(app: App, media: Media, index: number): Promise<string
   const running = inFlight.get(key);
   if (running !== undefined) return running;
   const work = (async (): Promise<string | null> => {
-    try {
-      if (shared() && (await cloud.head(key).catch(() => null)) !== null) {
-        await fetchKey(key, local);
-        if (isFile(local)) return local;
-      }
-    } catch (error) {
-      diag.warn("scrub", `fetching ${key}: ${diag.messageOf(error)}`);
-    }
     const release = await making.acquire();
     // Never beside a local export: it has the encoder (export_capacity.ts).
     for (let waited = 0; waited < 3600 && (app.exports.localRunning?.() ?? false); waited += 5) await Bun.sleep(5000);
@@ -121,7 +105,6 @@ export function makePiece(app: App, media: Media, index: number): Promise<string
       fs.mkdirSync(local.slice(0, local.lastIndexOf("/")), { recursive: true });
       fs.renameSync(scratch, local);
       diag.info("scrub", `${media.name}: piece ${index} (${Math.round(seconds)} s) made in ${diag.human(performance.now() - began)}`);
-      if (shared()) void cloud.uploadFile(local, key).catch((error: unknown) => diag.warn("scrub", `sharing ${key}: ${diag.messageOf(error)}`));
       return local;
     } catch (error) {
       diag.warn("scrub", `${media.name}: piece ${index}: ${diag.messageOf(error)}`);

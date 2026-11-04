@@ -698,9 +698,7 @@ async function uploadMedia(context: Context): Promise<Response> {
   } catch (error) {
     throw bad(ioMessage(error));
   }
-  const configured = Number.parseInt(process.env.EDIT_MAX_UPLOAD_BYTES ?? "", 10);
-  const limit =
-    Number.isFinite(configured) && /^\d+$/.test(process.env.EDIT_MAX_UPLOAD_BYTES ?? "") ? configured : 100 * 1024 ** 3;
+  const limit = 100 * 1024 ** 3;
   if (size !== null && (size === 0 || size > limit)) {
     throw new ApiError(413, `upload must be between 1 and ${limit} bytes`);
   }

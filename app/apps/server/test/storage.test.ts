@@ -59,20 +59,11 @@ test("migrateMediaFiles deletes only size-verified copies with a known cloud ori
   } finally { cleanup(); }
 });
 
-test("the cache's budget is a quarter of the disk's room, 400 MB to 50 GB, leaving 1 GB free; EDIT_CACHE_BUDGET_MB overrides", () => {
-  const was = process.env.EDIT_CACHE_BUDGET_MB;
-  delete process.env.EDIT_CACHE_BUDGET_MB;
-  try {
-    const GB = 1e9;
-    // This M1 on Nov 2: 15 GB free, a 6.7 GB cache.
-    expect(localBudgetBytes({ freeBytes: 15 * GB, cacheBytes: 6.7 * GB })).toBe(Math.floor(21.7 * GB * 0.25));
-    expect(localBudgetBytes({ freeBytes: 0.2 * GB, cacheBytes: 0 })).toBe(400_000_000);
-    expect(localBudgetBytes({ freeBytes: 1000 * GB, cacheBytes: 0 })).toBe(50 * GB);
-    expect(localBudgetBytes()).toBe(400_000_000);
-    process.env.EDIT_CACHE_BUDGET_MB = "1234";
-    expect(localBudgetBytes({ freeBytes: 15 * GB, cacheBytes: 0 })).toBe(1_234_000_000);
-  } finally {
-    if (was === undefined) delete process.env.EDIT_CACHE_BUDGET_MB;
-    else process.env.EDIT_CACHE_BUDGET_MB = was;
-  }
+test("the cache's budget is a quarter of the disk's room, 400 MB to 50 GB, leaving 1 GB free", () => {
+  const GB = 1e9;
+  // This M1 on Nov 2: 15 GB free, a 6.7 GB cache.
+  expect(localBudgetBytes({ freeBytes: 15 * GB, cacheBytes: 6.7 * GB })).toBe(Math.floor(21.7 * GB * 0.25));
+  expect(localBudgetBytes({ freeBytes: 0.2 * GB, cacheBytes: 0 })).toBe(400_000_000);
+  expect(localBudgetBytes({ freeBytes: 1000 * GB, cacheBytes: 0 })).toBe(50 * GB);
+  expect(localBudgetBytes()).toBe(400_000_000);
 });

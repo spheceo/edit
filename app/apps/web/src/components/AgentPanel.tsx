@@ -4,7 +4,6 @@ import {
   AudioLines,
   Check,
   ChevronRight,
-  Copy,
   CircleSlash,
   Eye,
   FileInput,
@@ -16,7 +15,6 @@ import {
   MousePointerClick,
   Music,
   RotateCcw,
-  RotateCw,
   ScrollText,
   Scissors,
   Share,
@@ -51,7 +49,7 @@ import {
 } from "../lib/agent";
 import { buildTurns, callTitle, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
-import { api, mediaUrl, useMachine } from "../lib/api";
+import { api, mediaUrl } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
 import { projectUploader } from "../lib/upload";
@@ -64,16 +62,6 @@ import { ClaudeSetupCard } from "./ClaudeSetupCard";
 import { ClaudeMark } from "./ClaudeMark";
 
 export { ClaudeMark };
-
-/** OpenAI’s mark (same path phi uses). */
-
-export function OpenAIMark({ size = 16 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-label="OpenAI">
-      <path d="M22.28 9.82a6 6 0 0 0-.52-4.91 6.05 6.05 0 0 0-6.51-2.9A6.07 6.07 0 0 0 4.98 4.18a5.98 5.98 0 0 0-4 2.9 6.05 6.05 0 0 0 .75 7.1 5.98 5.98 0 0 0 .51 4.91 6.05 6.05 0 0 0 6.51 2.9A5.98 5.98 0 0 0 13.26 24a6.06 6.06 0 0 0 5.77-4.21 5.99 5.99 0 0 0 4-2.9 6.06 6.06 0 0 0-.75-7.07Zm-9.02 12.61a4.48 4.48 0 0 1-2.88-1.04l.14-.08 4.78-2.76a.79.79 0 0 0 .39-.68v-6.74l2.02 1.17a.07.07 0 0 1 .04.05v5.59a4.5 4.5 0 0 1-4.49 4.49ZM3.6 18.3a4.47 4.47 0 0 1-.54-3.01l.15.09 4.78 2.75a.77.77 0 0 0 .78 0l5.84-3.37v2.34a.08.08 0 0 1-.03.06L9.74 19.95a4.5 4.5 0 0 1-6.14-1.65ZM2.34 7.9a4.49 4.49 0 0 1 2.37-1.98v5.68a.77.77 0 0 0 .39.68l5.81 3.35-2.02 1.17a.08.08 0 0 1-.07 0l-4.83-2.79A4.5 4.5 0 0 1 2.34 7.87Zm16.6 3.86-5.84-3.4L15.12 7.2a.08.08 0 0 1 .07 0l4.83 2.79a4.49 4.49 0 0 1-.68 8.11v-5.68a.79.79 0 0 0-.4-.67Zm2.01-3.02-.14-.09-4.78-2.78a.78.78 0 0 0-.78 0L9.41 9.23V6.9a.07.07 0 0 1 .03-.07l4.83-2.78a4.5 4.5 0 0 1 6.68 4.66ZM8.31 12.86l-2.02-1.16a.08.08 0 0 1-.04-.06V6.07a4.5 4.5 0 0 1 7.38-3.45l-.14.08-4.78 2.76a.79.79 0 0 0-.4.68Zm1.1-2.36 2.6-1.5 2.6 1.5v3l-2.6 1.5-2.6-1.5Z" />
-    </svg>
-  );
-}
 
 export function AgentPanel() {
   const sub = useAgent((state) => state.sub);
@@ -234,7 +222,7 @@ function MainAgentPanel() {
       }
     >
       {!entries.length && status && !status.ready ? (
-        status.provider === "codex" ? <SetupCodex /> : <SetupClaude />
+        <SetupClaude />
       ) : !entries.length ? (
         <Empty title="Ask for an edit" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
       ) : (
@@ -248,7 +236,6 @@ function MainAgentPanel() {
 function NotReadyNote() {
   const status = useAgent((state) => state.status);
   const phase = useClaudeSupport((state) => state.status?.phase);
-  if (status?.provider === "codex") return <p className="px-3 pt-2 text-[12px] leading-relaxed text-muted">Codex isn't ready on this Mac, so this chat can't take a message yet.</p>;
   if (status?.state === "missing" || phase === "needs_login" || phase === "error" || phase === "signing_in") return <ClaudeSetupCard />;
   return <p className="px-3 pt-2 text-[12px] leading-relaxed text-muted">Getting Claude ready. You can type again in a moment.</p>;
 }
@@ -563,67 +550,6 @@ function SetupClaude() {
     );
   }
   return <Empty title="Getting Claude ready" detail="Edit is checking Claude Code on this Mac. This takes a moment." />;
-}
-
-/** Codex missing or signed out: the steps to fix it on the machine running Edit, and a re-check. */
-function SetupCodex() {
-  const status = useAgent((state) => state.status);
-  const project = useAgent((state) => state.project);
-  const machine = useMachine();
-  const [checking, setChecking] = useState(false);
-  const missing = status?.state !== "logged_out";
-  const steps = missing ? ["npm install -g @openai/codex", "codex login"] : ["codex login"];
-  return (
-    <div className="flex min-h-full flex-col justify-center px-1">
-      <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-raised text-fg ring-1 ring-line">
-        <OpenAIMark size={20} />
-      </span>
-      <div className="mt-3 text-center font-medium">{missing ? "Install Codex to use the agent" : "Sign in to Codex"}</div>
-      <p className="mx-auto mt-1 max-w-[260px] text-center text-[12px] leading-relaxed text-muted">
-        {missing ? "Edit drives the Codex CLI" : "Codex is installed but signed out"} on <span className="text-fg">{machine}</span>. Run this there:
-      </p>
-      <div className="mt-4 flex flex-col gap-1.5">
-        {steps.map((step, index) => (
-          <CopyLine key={step} index={steps.length > 1 ? index + 1 : undefined} text={step} />
-        ))}
-      </div>
-      <button
-        type="button"
-        disabled={checking || !project}
-        onClick={() => {
-          if (!project) return;
-          setChecking(true);
-          void openAgent(project).finally(() => setChecking(false));
-        }}
-        className="mx-auto mt-4 flex h-8 items-center gap-1.5 rounded-lg px-3 text-[12px] font-medium text-muted ring-1 ring-line transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
-      >
-        <RotateCw size={12} className={checking ? "animate-spin" : undefined} />
-        {checking ? "Checking…" : "Check again"}
-      </button>
-    </div>
-  );
-}
-
-function CopyLine({ text, index }: { text: string; index?: number }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="flex h-9 items-center gap-2 rounded-lg bg-black pr-1 pl-3 ring-1 ring-line">
-      {index !== undefined && <span className="text-[11px] text-faint tabular">{index}</span>}
-      <code className="min-w-0 flex-1 truncate font-mono text-[12px] text-fg">{text}</code>
-      <button
-        type="button"
-        title="Copy"
-        onClick={() => {
-          void navigator.clipboard?.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
-        }}
-        className="flex size-7 items-center justify-center rounded-md text-faint transition-colors hover:bg-hover hover:text-fg"
-      >
-        {copied ? <Check size={13} /> : <Copy size={13} />}
-      </button>
-    </div>
-  );
 }
 
 export function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {

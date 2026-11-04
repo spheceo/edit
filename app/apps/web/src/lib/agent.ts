@@ -23,11 +23,11 @@ export interface AgentEntry {
   attachments?: { name: string; kind: FileKind; media?: string; file?: string; url?: string | null }[];
 }
 
-export type AgentProvider = "claude" | "codex";
+export type AgentProvider = "claude";
 
 export interface AgentStatus {
   ready: boolean;
-  /** Where the agent runs: the user's Claude Code, or Codex. */
+  /** Where the agent runs: the user's Claude Code. */
   provider?: AgentProvider;
   /** The Claude account signed in, and its plan ("Claude Max", "API key"). */
   email?: string;
@@ -64,7 +64,7 @@ export function refreshClaudeSupport(): Promise<void> {
     const status = await json<ClaudeSupport>(await fetchRetrying("/api/agent/claude"));
     useClaudeSupport.setState({ status, error: null });
     const agent = await json<AgentStatus>(await fetchRetrying("/api/agent"));
-    if (useAgent.getState().status?.provider !== "codex") useAgent.setState({ status: agent });
+    useAgent.setState({ status: agent });
     if (before !== status.phase || !wasReady) {
       if (status.phase === "ready") {
         const project = useAgent.getState().project;

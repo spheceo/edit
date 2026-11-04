@@ -7,7 +7,7 @@
 // (`followRegion`).
 //
 // Who says what comes from Scribe's voice numbers (which voice is which
-// person) and a vision model, Luna through Codex, which matches each voice to
+// person) and Claude looking at the stills, which matches each voice to
 // someone in a still of each line. Where their face is, and whether it's
 // clearly visible, the face detector says.
 //
@@ -24,7 +24,6 @@ import * as diag from "./diag.ts";
 import { fixTurns } from "./turns.ts";
 import { post as claudeAsk, spills as post } from "./ai_claude.ts";
 import * as claudeModels from "./writer/claude.ts";
-import { codexEnabled } from "./agent.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import type {
@@ -66,8 +65,6 @@ import * as tools from "./tools.ts";
 export { captionSize, hex, subtitleName, transcriptOf } from "./captions_core.ts";
 export { routes } from "./captions_tools.ts";
 
-/** The model that watches: Luna, by way of the user's Codex. */
-export const WATCH_MODEL = "gpt-6-luna";
 /** Names caption clips so a second run replaces the first. */
 const NAME = "Caption";
 /** Where a callout's line ends below a face: this share of the face's height under its chin (the neck). */
@@ -1243,21 +1240,8 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
   }
   const voices = [...new Set(lines.map(voiceLabel))].sort(compareKeys);
   const prompt = `Who's who: ${voices.join("; ")}.\n\nLines of the transcript, in order (n [time on the timeline, who says it] text). Still n, attached in order, is a frame from while line n is said.\n\n${listing.join("\n")}`;
-  const input: unknown[] = [{ type: "text", text: prompt, text_elements: [] }, ...images];
-  // Who's who in a still is seen, not reasoned out: medium answers in a fraction of high's time.
-  let answer: string;
-  try {
-    // Claude looks at the stills unless Codex is on (it's off by default, agent.ts codexEnabled).
-    answer = codexEnabled() ? await app.agents.ask(WATCH_MODEL, "medium", INSTRUCTIONS, input, schema(), 600_000) : await askClaudeInstead(prompt, images, dir);
-  } catch (error) {
-    if (!codexEnabled()) throw error;
-    // Codex out of credit or not signed in on this Mac: Claude looks at the
-    // same stills (loop 7, Nov 2 on the trial server: "You've hit your usage
-    // limit… try again at Nov 4th", and the intro's speaker captions failed).
-    if (!/usage limit|hit your|credits|sign in|signed in|log ?in|not installed|isn't installed|ENOENT/iu.test(diag.messageOf(error))) throw error;
-    diag.warn("captions", `${WATCH_MODEL} couldn't answer (${diag.messageOf(error)}); Claude looks at the stills instead`);
-    answer = await askClaudeInstead(prompt, images, dir);
-  }
+  // Claude looks at the stills.
+  const answer = await askClaudeInstead(prompt, images, dir);
   // Kept beside the stills, to see why a caption landed where it did.
   try {
     fs.writeFileSync(join(dir, "answer.json"), answer);
@@ -1268,7 +1252,7 @@ export async function captionSpeakers(app: App, projectId: string, from: number,
   try {
     watched = readWatched(trim(answer));
   } catch (error) {
-    throw new Error(`${WATCH_MODEL} answered in an unexpected shape: ${diag.messageOf(error)}`);
+    throw new Error(`Claude answered in an unexpected shape: ${diag.messageOf(error)}`);
   }
 
   // The model only says who the speaker is; where their face is, and whether

@@ -129,7 +129,7 @@ export function fail(message: string): never {
 /**
  * Ends the work a restart left running under this process: a reload (bun
  * --watch) and an update's exec keep the process id, so the agent's
- * `claude` and `codex` and FFmpeg the last run started are still its
+ * `claude` and FFmpeg the last run started are still its
  * children, working for nobody. Their turns and jobs are resumed afresh, so
  * the old ones went on in parallel (Oct 30: a review fix's agent ran twice
  * on one project, both editing it). Nothing of this run has started yet.
@@ -140,7 +140,7 @@ export function endLeftovers(pid = process.pid): string[] {
   for (const line of new TextDecoder().decode(listed.stdout).split("\n")) {
     const found = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     if (found === null || Number(found[2]) !== pid) continue;
-    const program = /(?:^|\/)(claude|codex|ffmpeg|edit-ffmpeg|ffprobe|edit-ffprobe)(?:\s|$)/.exec(found[3]!)?.[1] ?? null;
+    const program = /(?:^|\/)(claude|ffmpeg|edit-ffmpeg|ffprobe|edit-ffprobe)(?:\s|$)/.exec(found[3]!)?.[1] ?? null;
     if (program === null) continue;
     try {
       process.kill(Number(found[1]), "SIGTERM");

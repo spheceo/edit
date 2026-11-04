@@ -32,7 +32,7 @@ export function sdk(): Promise<typeof Sdk> {
 /** The model the agent starts on: Claude Code's `opus` (the newest Opus, 5.5 now). */
 export const DEFAULT_MODEL = "opus";
 
-/** Edit's own default thinking level, as for Codex (agent.ts `DEFAULT_EFFORT`). */
+/** Edit's own default thinking level: its edits are mostly the house style applied again and again, which medium does as well as high in far less time. */
 const DEFAULT_EFFORT = "medium";
 
 /** How long a CLI's `--version` or sign-in check may take before it's taken as not working. */
@@ -155,7 +155,7 @@ export function baseOptions(binary: string, workspace: string): Options {
       // caption_speakers and watch_footage watch footage with a model: minutes, not seconds.
       MCP_TOOL_TIMEOUT: "900000",
       CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT: "900000",
-      // As for Codex (agent.ts): a model answers several times slower with
+      // A model answers several times slower with
       // 300k tokens to read than 100k, so compact near 150k (the window less
       // the summary's room), not near the 1M a model may allow.
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: "180000",

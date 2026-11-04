@@ -1,7 +1,7 @@
 // captions.ts's tests, and the package's tools and routes end to
 // end on the stub (Luna through a stand-in Agents).
 
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 import type { App } from "../src/app.ts";
 import {
@@ -310,12 +310,6 @@ test("a_rerun_keeps_subtitles_moved_by_hand", () => {
 // ---------------------------------------------------------------------------
 // End to end on the stub
 
-const realAgents = new Map<App, App["agents"]>();
-afterEach(() => {
-  for (const [app, agents] of realAgents) app.agents = agents;
-  realAgents.clear();
-});
-
 function bodycam(dir: string): Media {
   return { id: "m", name: "bodycam", path: `${dir}/bodycam.mp4`, kind: "video", duration: 60, width: 1920, height: 1080, fps: 30, has_audio: true };
 }
@@ -373,19 +367,17 @@ async function call(app: App, name: string, args: Record<string, unknown>): Prom
   return { text: reply.result.content[0]!.text, isError: reply.result.isError };
 }
 
-test("caption_speakers asks Luna who speaks and lays the intro's captions out (no faces found: bottom middle)", async () => {
+test("caption_speakers asks Claude who speaks and lays the intro's captions out (no faces found: bottom middle)", async () => {
   const { app, dir, store, cleanup } = fixtureHome("captions");
-  process.env.EDIT_CODEX = "1";
+  const { standIn } = await import("../src/ai_claude.ts");
+  const was = standIn.post;
   try {
     const id = await footage(app, dir);
-    const asked: unknown[][] = [];
-    realAgents.set(app, app.agents);
-    app.agents = {
-      status: async () => ({}),
-      ask: async (model, effort, _instructions, input, schema, timeout) => {
-        asked.push([model, effort, input, schema !== null, timeout]);
-        return JSON.stringify({ lines: [{ n: 0, above: true, people: [{ who: "Officer", face: [100, 400, 300, 600] }], overlays: [] }, { n: 1, above: true, people: [], overlays: [] }] });
-      },
+    // What Claude is sent (the request's file), and its answer.
+    const asked: { messages: { content: unknown }[]; response_format?: unknown }[] = [];
+    standIn.post = async (bodyFile) => {
+      asked.push(JSON.parse((await import("node:fs")).readFileSync(bodyFile, "utf8")) as (typeof asked)[number]);
+      return { choices: [{ message: { content: JSON.stringify({ lines: [{ n: 0, above: true, people: [{ who: "Officer", face: [100, 400, 300, 600] }], overlays: [] }, { n: 1, above: true, people: [], overlays: [] }] }) } }] };
     };
     // The stills are FFmpeg's; there's no footage here, so it says so.
     // The footage on screen with its sound gone (B-roll under a narration): nothing heard, nothing captioned.
@@ -414,7 +406,6 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
     try {
       reply = await call(app, "caption_speakers", { project_id: id, start: 0, end: 10 });
     } finally {
-    delete process.env.EDIT_CODEX;
       if (before === undefined) delete process.env.EDIT_FFMPEG;
       else process.env.EDIT_FFMPEG = before;
       (await import("../src/tools.ts")).forget();
@@ -425,9 +416,9 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
     expect(summary).toMatchObject({ lines: 2, placed: 2, under_the_speakers_face: 0, bottom_middle: 2, speakers: ["Officer", "Jane (Mother)"], subtitles_removed: 1 });
     // The line captioned isn't shown twice; the other subtitle stays.
     expect(store.get(id)!.project.clips.filter((clip) => clip.id === "s1" || clip.id === "s2").map((clip) => clip.id)).toEqual(["s2"]);
-    const [model, effort, input, schema, timeout] = asked[0]!;
-    expect([model, effort, schema, timeout]).toEqual(["gpt-6-luna", "medium", true, 600_000]);
-    const prompt = (input as { text?: string }[])[0]!.text!;
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.response_format).toBeDefined();
+    const prompt = (asked[0]!.messages[1]!.content as { text?: string }[])[0]!.text!;
     expect(prompt).toContain("Who's who: speaker_0 (Officer); speaker_1 (Jane (Mother)).");
     expect(prompt).toContain("0 [1.0s, speaker_0 (Officer)] Stop moving now. (still 0 is at 1.5s)\n1 [3.0s, speaker_1 (Jane (Mother))] Okay. (still 1 is at 3.1s)");
     const captions = store.get(id)!.project.clips.filter((clip): clip is TextClip => clip.type === "text" && (clip.name ?? "").startsWith("Caption"));
@@ -444,6 +435,7 @@ test("caption_speakers asks Luna who speaks and lays the intro's captions out (n
     expect((await call(app, "place_captions", { project_id: id, under: { x: [1] } })).text).toBe("under.x: a point is [x, y]");
     expect((await call(app, "place_captions", { project_id: id, under: { x: 3 } })).text).toBe('under.x: "bottom", "auto" or [x, y]');
   } finally {
+    standIn.post = was;
     cleanup();
   }
 });
@@ -524,61 +516,3 @@ test("subtitles spell the case's names as the case does", () => {
   expect(spelledAsTheCase("Officer Sinclair", [])).toBe("Officer Sinclair");
 });
 
-test("caption_speakers asks Claude to look when Codex is out of credit, and by default", async () => {
-  // Loop 7, Nov 2: "You've hit your usage limit… try again at Nov 4th", and the intro's captions failed.
-  const { app, dir, cleanup } = fixtureHome("captions-claude");
-  process.env.EDIT_CODEX = "1";
-  const { standIn } = await import("../src/ai_claude.ts");
-  const was = standIn.post;
-  try {
-    const id = await footage(app, dir);
-    realAgents.set(app, app.agents);
-    app.agents = {
-      status: async () => ({}),
-      ask: async () => {
-        throw new Error("You've hit your usage limit. Upgrade to Pro or try again at Nov 4th, 2026 11:39 AM.");
-      },
-    };
-    let claudeAsked = 0;
-    standIn.post = async () => {
-      claudeAsked++;
-      return { choices: [{ message: { content: JSON.stringify({ lines: [{ n: 0, above: true, people: [], overlays: [] }, { n: 1, above: true, people: [], overlays: [] }] }) } }] };
-    };
-    const bin = `${dir}/bin`;
-    write(`${bin}/ffmpeg`, "#!/bin/sh\nexit 0\n");
-    (await import("node:fs")).chmodSync(`${bin}/ffmpeg`, 0o755);
-    const before = process.env.EDIT_FFMPEG;
-    process.env.EDIT_FFMPEG = `${bin}/ffmpeg`;
-    (await import("../src/tools.ts")).forget();
-    let reply: { text: string; isError: boolean };
-    try {
-      reply = await call(app, "caption_speakers", { project_id: id, start: 0, end: 10 });
-    } finally {
-      if (before === undefined) delete process.env.EDIT_FFMPEG;
-      else process.env.EDIT_FFMPEG = before;
-      (await import("../src/tools.ts")).forget();
-    }
-    expect(reply.isError).toBe(false);
-    expect(reply.text.startsWith("captioned 0–10s")).toBe(true);
-    expect(claudeAsked).toBe(1);
-    // Codex off (the default, Sphe Nov 2): Claude is asked straight away, Codex never.
-    delete process.env.EDIT_CODEX;
-    let codexAsked = 0;
-    app.agents = { status: async () => ({}), ask: async () => { codexAsked++; return ""; } };
-    process.env.EDIT_FFMPEG = `${bin}/ffmpeg`;
-    (await import("../src/tools.ts")).forget();
-    try {
-      reply = await call(app, "caption_speakers", { project_id: id, start: 0, end: 10 });
-    } finally {
-      if (before === undefined) delete process.env.EDIT_FFMPEG;
-      else process.env.EDIT_FFMPEG = before;
-      (await import("../src/tools.ts")).forget();
-    }
-    expect(reply.isError).toBe(false);
-    expect([codexAsked, claudeAsked]).toEqual([0, 2]);
-  } finally {
-    delete process.env.EDIT_CODEX;
-    standIn.post = was;
-    cleanup();
-  }
-});

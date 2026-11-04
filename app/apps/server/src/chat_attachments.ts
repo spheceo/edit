@@ -82,7 +82,7 @@ export function attachedText(list: Attached[], shown: Set<string>): string {
 /** A picture the model is given with the message. */
 export interface Picture {
   media: string;
-  /** A JPEG this side of the model's size limit, kept for Codex (`localImage`). */
+  /** A JPEG this side of the model's size limit, on disk beside the message. */
   path: string;
   data: string;
   mime: string;

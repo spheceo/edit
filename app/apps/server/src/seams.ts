@@ -823,15 +823,14 @@ export const editing: EditingSeam = {
 // ---------------------------------------------------------------------------
 // Media sources, sound, agent
 
-/** The Codex bridge behind the agent panel. */
+/** The agent behind the panel: the user's Claude Code (agent.ts). */
 export interface Agents {
   status(): Promise<Json>;
   /**
-   * One question to a model through the user's Codex: an
-   * ephemeral read-only thread with `instructions` as its developer
-   * instructions, `input` its user turn (Codex input items), the answer held
-   * to `schema` when given; the answer's text, or a thrown Error after
-   * `timeoutMs`. speakers.ts names voices with it.
+   * One question to a Claude model through the user's Claude Code, outside
+   * any chat: `instructions` its system prompt, `input` its text and images,
+   * the answer held to `schema` when given; the answer's text, or a thrown
+   * Error after `timeoutMs`. speakers.ts names voices with it.
    */
   ask(model: string, effort: string, instructions: string, input: Json[], schema: Json | null, timeoutMs: number): Promise<string>;
   /** Edit is quitting: running turns end and say so (and are noted to carry on), and the agents' processes are stopped. */
@@ -855,7 +854,7 @@ export interface AgentPanel extends Agents {
   /** Resumes an older authentication failure in the open conversation once verified. */
   retryClaude?(project: string, userId: string): Promise<boolean>;
   claudeSupport?: { afterNightly(build: string): void; settled(): Promise<void> };
-  /** The models the user's Codex offers (cached a day; `refresh` asks now). */
+  /** The models the user's Claude Code offers (cached a day; `refresh` asks now). */
   models(refresh: boolean): Promise<Json>;
   /** A project's chat: its entries, whether a turn is running, its model and effort. */
   chat(project: string): Json;
@@ -863,14 +862,10 @@ export interface AgentPanel extends Agents {
   send(project: string, text: string, model: string | null, effort: string | null, context?: string, attached?: Attached[]): Promise<void>;
   /** Stops a project's running turn. */
   stop(project: string): Promise<void>;
-  /** Forgets a project's chat (and its Codex thread). */
+  /** Forgets a project's chat (and its conversation). */
   reset(project: string): void;
   /** Forgets it once the turn now running ends (the agent's `new_chat`), so its last words are seen. */
   resetAfterTurn?(project: string): void;
-  /** Where new turns run: "claude" (the user's Claude Code) or "codex". */
-  setProvider(provider: "claude" | "codex"): void;
-  /** Settings: each CLI's status (`claude`, `codex`) and the `provider` chosen. */
-  clis?(): Promise<Json>;
 }
 
 /** The app's agents as the panel (and the script's research turn) use them. */

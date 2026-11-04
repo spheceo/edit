@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { Agents, editToolsFailed, EXITED, STALL_MS, timing } from "../src/agent.ts";
+import { Agents, editToolsFailed, readChat, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
 import * as toolChanges from "../src/tool_changes.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -101,7 +101,6 @@ test("claude is the default provider and a turn streams text and edit tools onto
   try {
     const project = home.store.create("Claude test", { width: 1920, height: 1080, fps: 30 }).project.id;
     const { agents, asked, queries } = agentsWith(home);
-    expect(agents.provider()).toBe("claude");
 
     await agents.send(project, "Tighten the intro", null, null);
     const { prompt, options } = asked[0]!;
@@ -165,15 +164,15 @@ test("claude is the default provider and a turn streams text and edit tools onto
   }
 });
 
-test("a codex chat starts a new claude conversation, and stopping interrupts the query", async () => {
+test("a chat saved from the Codex days starts a new Claude conversation, and stopping interrupts the query", async () => {
   const home = fixtureHome("claude-stop");
   try {
     const project = home.store.create("Claude stop", { width: 1920, height: 1080, fps: 30 }).project.id;
     const { agents, asked, queries } = agentsWith(home);
-    const before = agents.withChat(project);
-    before.provider = "codex";
-    before.thread = "codex-thread";
-    before.model = "gpt-6";
+    // Read back as a saved Codex chat is: no provider Claude Code can resume.
+    const saved = readChat(JSON.stringify({ provider: "codex", thread: "codex-thread", model: "gpt-6", entries: [] }));
+    expect([saved.provider, saved.thread]).toEqual([null, "codex-thread"]);
+    Object.assign(agents.withChat(project), saved);
 
     await agents.send(project, "Go", null, null);
     expect(asked[0]!.options.resume).toBeUndefined();
@@ -216,18 +215,6 @@ test("a stop claude code never answers ends the turn after the grace, closing it
     expect(chat.entries.at(-1)?.text).toBe("Stopped.");
   } finally {
     Object.assign(timing, saved);
-    home.cleanup();
-  }
-});
-
-test("codex going away leaves a claude turn running", async () => {
-  const { home, project, agents, queries } = claudeProject("claude-codex-exit");
-  try {
-    await agents.send(project, "Go", null, null);
-    agents.onMessage({ method: EXITED });
-    expect(agents.withChat(project).running).toBe(true);
-    expect(queries[0]!.closed()).toBe(false);
-  } finally {
     home.cleanup();
   }
 });
@@ -678,6 +665,44 @@ test("files attached to a message: pictures go to Claude as pictures, the rest n
     const saved = JSON.parse(JSON.stringify(agents.chat(project))) as { entries: { attachments?: unknown }[] };
     expect(saved.entries[0]!.attachments).toEqual(user.attachments);
   } finally {
+    home.cleanup();
+  }
+});
+
+test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in the main chat that opens its own chat", async () => {
+  // The user, Nov 1: "launch it as a sub agent, that just has this message… click into the sub agent to view it and go back".
+  const home = fixtureHome("claude-fresh-eyes");
+  const sleep = timing.sleep;
+  timing.sleep = async () => {};
+  try {
+    const project = home.store.create("Fresh eyes", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const { agents, asked, queries } = agentsWith(home);
+    await agents.send(project, "Start the edit", null, null);
+    const q = queries[0]!;
+    q.push({ type: "system", subtype: "init", session_id: "session-main" });
+    q.push({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "tool_use", id: "toolu_skill", name: "mcp__edit__skill", input: { name: "edit-workflow" } }] } });
+    q.push({ type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "toolu_skill", content: [{ type: "text", text: "ok" }] }] } });
+    q.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    q.end();
+    for (let tries = 0; queries.length < 2 && tries < 100; tries++) await settle();
+    const main = agents.chat(project) as { entries: { kind: string; text: string; status?: string; detail?: string }[] };
+    const card = main.entries.find((item) => item.kind === "subagent")!;
+    expect(card).toMatchObject({ text: "Fresh-eyes final pass", status: "running", detail: `${project}~review` });
+    // Its own turn, with just the message, in its own chat and conversation.
+    expect(String(asked[1]!.prompt)).toContain("with fresh eyes");
+    expect(asked[1]!.options.resume).toBeUndefined();
+    const sub = agents.chat(`${project}~review`) as { entries: { kind: string }[]; running: boolean };
+    expect(sub.entries.map((item) => item.kind)).toEqual(["user"]);
+    expect(sub.running).toBe(true);
+    const review = queries[1]!;
+    review.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    review.end();
+    await settle();
+    const after = agents.chat(project) as { entries: { kind: string; status?: string }[] };
+    expect(after.entries.find((item) => item.kind === "subagent")!.status).toBe("done");
+    expect(agents.runningProjects()).toEqual([]);
+  } finally {
+    timing.sleep = sleep;
     home.cleanup();
   }
 });

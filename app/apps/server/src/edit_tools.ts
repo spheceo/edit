@@ -1585,7 +1585,7 @@ export function cachedTranscripts(app: App, project: Project, footageOnly: boole
 // ---------------------------------------------------------------------------
 // get_edit_context
 
-/** Sized for a model's context: Codex cuts a tool's output at ~10k tokens, and every token here is read again on each later request of the turn. */
+/** Sized for a model's context: every token here is read again on each later request of the turn. */
 const BUDGET = 36_000;
 
 /**

@@ -1,7 +1,7 @@
 // Every tool as one line: its call, its arguments (required ones bare,
-// optional ones with ?) and its description's first sentence. In Codex's code
-// mode the tool declarations aren't in the prompt, and an agent that had to
-// look each one up spent a dozen round trips a run doing it.
+// optional ones with ?) and its description's first sentence, in the
+// agent's instructions: an agent that had to look each one up spent a dozen
+// round trips a run doing it (seen when tool declarations weren't in the prompt).
 
 import { compareKeys } from "../stable.ts";
 import { TOOLS, type Tool } from "./registry.ts";

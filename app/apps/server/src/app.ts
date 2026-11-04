@@ -4,7 +4,7 @@
 
 import * as os from "node:os";
 
-import { Agents as CodexAgents } from "./agent.ts";
+import { Agents as ClaudeAgents } from "./agent.ts";
 import * as chatSync from "./chat_sync.ts";
 import { Library as DriveLibrary } from "./library.ts";
 import { useGoogleSignIn } from "./script.ts";
@@ -52,11 +52,11 @@ export interface AppOptions {
 }
 
 export function createApp(options: AppOptions): App {
-  // The Codex bridge and the sound library (whose sign-in drive.ts shares).
+  // The agent (the user's Claude Code) and the sound library (whose sign-in drive.ts shares).
   const port = options.port ?? 7700;
   const services = {
     ...stubServices(options.store.home),
-    agents: options.services?.agents ?? new CodexAgents(options.store, options.store.home, port),
+    agents: options.services?.agents ?? new ClaudeAgents(options.store, options.store.home, port),
     library: options.services?.library ?? new DriveLibrary(),
     ...options.services,
   };

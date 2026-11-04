@@ -150,7 +150,7 @@ function save(target: string, transcript: Transcript): void {
   }
 }
 
-/** Reads the conversation: Sonnet, through the user's Claude Code (every Mac has it; Codex is optional). */
+/** Reads the conversation: Sonnet, through the user's Claude Code (every Mac has it). */
 const MODEL = "claude-sonnet-5-5";
 
 const INSTRUCTIONS =

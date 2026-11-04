@@ -1,16 +1,15 @@
-// Edit's built-in agent, on one of two providers the user picks in
-// Settings: Claude Code (`claude.ts`: the user's own `claude` through
-// Anthropic's Agent SDK, on their own sign-in; the default) or Codex through `codex app-server`
-// (JSON-RPC 2.0 over newline-delimited stdio), using the user's own `codex
-// login`.
+// Edit's built-in agent: the user's own Claude Code (`claude.ts`: their
+// `claude` through Anthropic's Agent SDK, on their own sign-in). Codex was a
+// second provider until Nov 4, off since the Oct 20 A/B Opus won (Sphe:
+// "remove Codex").
 //
-// Edit's MCP server is injected per thread (`/mcp?project=<id>`), so a chat
-// can only touch its own project, with its tools pre-approved. The user's
-// other MCP servers, apps and plugins are switched off and the sandbox is
-// read-only: the agent edits through Edit's tools and nothing else.
+// Edit's MCP server is injected per conversation (`/mcp?project=<id>`), so a
+// chat can only touch its own project, with its tools pre-approved; no other
+// tools, settings or MCP servers of the user's are loaded: the agent edits
+// through Edit's tools and nothing else.
 //
 // `ask` is the one-off question other packages use (speakers.ts names voices
-// with it): an ephemeral thread, no chat.
+// with it): no chat, no tools.
 
 import * as fs from "node:fs";
 
@@ -24,29 +23,17 @@ import { crashed, isBug } from "./guard.ts";
 import { INSTRUCTIONS, toolReference } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
-import { compareStrings, takeChars, trim, charCount } from "./rust.ts";
+import { compareStrings, takeChars, charCount } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
 import type { Project } from "./model.ts";
 import type { Store } from "./store.ts";
 import * as toolChanges from "./tool_changes.ts";
-import { VERSION } from "./version.ts";
 
 type Json = unknown;
 
-/** Where the agent runs: the user's Claude Code (Claude) or Codex. */
-export type Provider = "claude" | "codex";
-
-export const DEFAULT_PROVIDER: Provider = "claude";
-
-/**
- * Codex is kept for later but off by default: every turn and every one-off
- * question goes to Claude (Sphe, Nov 2: "We shouldn't even have codex cli
- * enabled, we can keep the integration for the future but by default only use
- * Claude"; this Mac's ChatGPT plan had run out and stopped caption_speakers).
- * EDIT_CODEX=1 turns it back on.
- */
-export const codexEnabled = (): boolean => process.env.EDIT_CODEX === "1";
+/** Where a chat's conversation runs: the user's Claude Code (a chat saved from the Codex days has none, and starts a new one). */
+export type Provider = "claude";
 
 /** How long a cached model list is trusted before a background refresh. */
 const MODELS_TTL_MS = 24 * 3600 * 1000;
@@ -69,13 +56,12 @@ export interface Entry {
 
 /** A project's chat: what's saved (thread, model, effort, entries) and the running turn's state. */
 export interface Chat {
-  /** The provider the thread belongs to ("codex" or "claude"); another's thread isn't resumed. */
+  /** The provider the conversation (`thread`) belongs to; null for one Claude Code can't resume. */
   provider: Provider | null;
   thread: string | null;
   model: string | null;
   effort: string | null;
   entries: Entry[];
-  turn: string | null;
   running: boolean;
   /** When the running turn started, to time it. */
   started: number | null;
@@ -85,11 +71,9 @@ export interface Chat {
   halted: boolean;
   /** Identifies this work so retries cannot revive an old turn. */
   generation: number;
-  /** The provider the running turn is on (null between turns): only Codex's going away ends a Codex turn. */
-  on: Provider | null;
   /** When the running turn last heard from its agent (`timing.now()`), to end one that stopped answering. */
   heard: number;
-  /** Edit ended the running turn itself (stopped, stalled, quitting): a Codex turn id arriving after is interrupted. */
+  /** Edit ended the running turn itself (stopped, stalled, quitting): what it says after is ignored. */
   dropped: boolean;
   /** A message already resumed or explicitly cancelled: never adopt it again from old history. */
   authRecoveryUser: string | null;
@@ -106,11 +90,6 @@ export interface Model {
   is_default: boolean;
 }
 
-interface ModelCache {
-  fetched_ms: number;
-  models: Model[];
-}
-
 function freshChat(): Chat {
   return {
     provider: null,
@@ -118,13 +97,11 @@ function freshChat(): Chat {
     model: null,
     effort: null,
     entries: [],
-    turn: null,
     running: false,
     started: null,
     retries: 0,
     halted: false,
     generation: 0,
-    on: null,
     heard: 0,
     dropped: false,
     authRecoveryUser: null,
@@ -166,10 +143,9 @@ function sorted<T>(value: T): T {
 }
 
 /**
- * How long a "ready" status is answered from memory. Checking runs Codex
- * twice (Node starting up: 2–8 s a call on this Mac), and the panel and the
- * setup card ask on every project opened. Not-ready is never kept, so a
- * fresh `codex login` shows at once.
+ * How long a "ready" status is answered from memory: checking runs Claude
+ * Code (a Node start-up), and the panel and the setup card ask on every
+ * project opened. Not-ready is never kept, so a fresh sign-in shows at once.
  */
 export const READY_FOR_MS = 300_000;
 
@@ -177,12 +153,6 @@ export const READY_FOR_MS = 300_000;
 export function stillReady(cached: [number, Json] | null, now: number): Json | null {
   if (cached === null) return null;
   return now - cached[0] < READY_FOR_MS ? cached[1] : null;
-}
-
-/** A one-off question's answer as it streams in. */
-interface Ask {
-  text: string;
-  done: ((result: { ok: string } | { error: string }) => void) | null;
 }
 
 /** How time passes and work waits (tests move them). */
@@ -198,8 +168,8 @@ export const STOP_GRACE_MS = 15_000;
 
 /**
  * How long a turn may go without a word from its agent before it's ended.
- * A tool call gives up after 15 minutes (`MCP_TOOL_TIMEOUT`, Codex's
- * `tool_timeout_sec`) and a model streams as it thinks, so a turn silent
+ * A tool call gives up after 15 minutes (`MCP_TOOL_TIMEOUT`) and a model
+ * streams as it thinks, so a turn silent
  * for longer is stuck: without this the panel said "working" for good.
  */
 export const STALL_MS = 25 * 60_000;
@@ -296,26 +266,6 @@ class Lock {
   }
 }
 
-/** Codex's token counts (the app server's TokenUsageBreakdown). */
-interface Tokens {
-  inputTokens: number;
-  cachedInputTokens: number;
-  outputTokens: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-}
-
-/** A running turn's token use: the thread's totals when it started and now, and the last call's. */
-interface TurnUsage {
-  start: Tokens | null;
-  /** The first update's own call, already in `start`. */
-  first: Tokens | null;
-  total: Tokens;
-  last: Tokens | null;
-  calls: number;
-  window: number | null;
-}
-
 export class Agents implements seams.AgentPanel {
   /** Remote updates wait for all agent turns to finish. */
   hasRunningTurns(): boolean {
@@ -341,11 +291,7 @@ export class Agents implements seams.AgentPanel {
   private followedUp = new Map<string, { generation: number; sent: number; count: number }>();
   /** Projects whose chat goes when their turn ends (`new_chat`). */
   private resetAfter = new Set<string>();
-  /** Token use of each project's running turn. */
-  private usage = new Map<string, TurnUsage>();
   private dir: string;
-  private codexProcess: Codex | null = null;
-  private codexLock = new Lock();
   private chats = new Map<string, Chat>();
   /** Each project's message already given a fresh-eyes pass (by generation). */
   private reviewed = new Map<string, number>();
@@ -353,22 +299,12 @@ export class Agents implements seams.AgentPanel {
   private subCards = new Map<string, { parent: string; card: string }>();
   private sending = new Map<string, Lock>();
   private nextGeneration = 1;
-  /** Codex thread id → Edit project id. */
-  readonly threads = new Map<string, string>();
-  private modelCache: ModelCache | null;
-  private refreshing = false;
-  /** One-off questions (see `ask`) by Codex thread id. */
-  private asks = new Map<string, Ask>();
   /** The last "ready" status and when it was found (see `status`). */
   private ready: [number, Json] | null = null;
-  /** The provider new turns go to: Claude unless the API chose Codex since Edit started. */
-  private chosen: Provider = DEFAULT_PROVIDER;
-  /** Claude Code's models, cached a day like Codex's (`<home>/agent/claude-models.json`). */
+  /** Claude Code's models, cached a day (`<home>/agent/claude-models.json`). */
   private claudeCatalog: { fetched_ms: number; models: claude.ModelInfo[] } | null = null;
   /** Each project's running Claude query, to stop it. */
   private claudeQueries = new Map<string, claude.Query>();
-  /** Codex turns Edit ended itself, whose own end is still to come (and is ignored). */
-  private abandoned = new Set<string>();
   /** Looks for stalled turns while any runs. */
   private watchdog: ReturnType<typeof setInterval> | null = null;
   /** Edit is quitting: the turns it ends stay noted as running (`RUNNING`). */
@@ -379,9 +315,6 @@ export class Agents implements seams.AgentPanel {
   findClaude: () => Promise<string | null> = () => claude.findClaude();
   listClaudeModels: (binary: string, workspace: string) => Promise<claude.ModelInfo[]> = (binary, workspace) =>
     claude.listModels(binary, workspace);
-  /** Starts Codex (tests put a stand-in here). */
-  spawnCodex: (onMessage: (message: Record<string, unknown>) => void) => Promise<Codex> = (onMessage) =>
-    Codex.spawn(onMessage);
 
   constructor(
     private store: Store,
@@ -398,22 +331,12 @@ export class Agents implements seams.AgentPanel {
     } catch {
       // Saving says so when it fails.
     }
-    let models: ModelCache | null = null;
-    try {
-      const value = JSON.parse(fs.readFileSync(join(this.dir, "models.json"), "utf8")) as ModelCache;
-      if (typeof value?.fetched_ms === "number" && Array.isArray(value.models)) models = value;
-    } catch {
-      models = null;
-    }
-    this.modelCache = models;
     try {
       const saved: unknown = JSON.parse(fs.readFileSync(join(this.dir, "claude-pending.json"), "utf8"));
       if (Array.isArray(saved)) for (const [project, pending] of saved) {
         if (typeof project === "string" && typeof pending?.text === "string" && typeof pending?.user === "string") this.authPending.set(project, pending);
       }
     } catch { /* No message waiting for sign-in. */ }
-    // Every start is on Claude (Oct 24: Codex is hidden from Settings); a
-    // Codex chosen through the API (an experiment) lasts until Edit restarts.
     try {
       const value = JSON.parse(fs.readFileSync(join(this.dir, "claude-models.json"), "utf8")) as { fetched_ms?: unknown; models?: unknown };
       if (typeof value.fetched_ms === "number" && Array.isArray(value.models)) {
@@ -422,19 +345,6 @@ export class Agents implements seams.AgentPanel {
     } catch {
       this.claudeCatalog = null;
     }
-  }
-
-  /** The provider new turns go to. */
-  provider(): Provider {
-    return this.chosen;
-  }
-
-  /** Switches provider; each chat starts a new conversation on its next turn there. */
-  setProvider(provider: Provider): void {
-    if (provider === "codex" && !codexEnabled()) throw new Error("Codex is off in this Edit: the agent runs on Claude (EDIT_CODEX=1 turns Codex on)");
-    this.chosen = provider;
-    this.ready = null;
-    if (provider !== "claude") { this.cancelClaudeRetries(); }
   }
 
   claudeSetup(action?: SupportAction | "cancel"): SupportStatus {
@@ -467,7 +377,7 @@ export class Agents implements seams.AgentPanel {
     const verified = this.claudeSupport.status();
     const last = chat.entries.at(-1);
     const user = chat.entries.findLast((item) => item.kind === "user");
-    if (this.chosen !== "claude" || chat.provider !== "claude" || chat.running || chat.halted || this.authPending.has(project)) return null;
+    if (chat.provider !== "claude" || chat.running || chat.halted || this.authPending.has(project)) return null;
     if (!last || !user || chat.authRecoveryUser === user.id || !authFailure(last) || last.status === "done") return null;
     if (verified.phase !== "ready" || verified.checkedAt === null || last.updated > verified.checkedAt) return null;
     return user.id;
@@ -511,7 +421,7 @@ export class Agents implements seams.AgentPanel {
     this.claudeCatalog = null;
     for (const [project, pending] of [...this.authPending]) {
       const chat = this.withChat(project);
-      if (this.quitting || this.chosen !== "claude") return;
+      if (this.quitting) return;
       if (chat.running) continue;
       this.authPending.delete(project);
       this.saveAuthPending();
@@ -538,92 +448,29 @@ export class Agents implements seams.AgentPanel {
     }
   }
 
-  /**
-   * Whether Codex is installed and logged in (cheap; no app-server needed).
-   * `state` is "missing", "logged_out" or "ready".
-   */
+  /** Whether Claude Code is installed and signed in: `state` "missing", "logged_out" or "ready", or its setup's phase. */
   async status(): Promise<Json> {
-    if (this.chosen === "claude") {
-      const support = this.claudeSupport.status();
-      if (["updating", "checking", "signing_in", "needs_login", "error"].includes(support.phase)) {
-        return { provider: "claude", ready: false, state: support.phase, error: support.error, support };
-      }
+    const support = this.claudeSupport.status();
+    if (["updating", "checking", "signing_in", "needs_login", "error"].includes(support.phase)) {
+      return { provider: "claude", ready: false, state: support.phase, error: support.error, support };
     }
     const now = timing.now();
     const cached = stillReady(this.ready, now);
     if (cached !== null) return cached;
-    const status = this.chosen === "claude" ? sorted(await claude.checkClaude()) : await checkCodex();
+    const status = sorted(await claude.checkClaude());
     if ((status as { ready?: unknown }).ready === true) this.ready = [now, status];
     return status;
   }
 
-  /** Settings: whether each CLI Edit drives (Claude Code, Codex for `ask`) is installed and signed in, and which runs the agent. */
-  async clis(): Promise<Json> {
-    const [claudeStatus, codexStatus] = await Promise.all([claude.checkClaude(), codexEnabled() ? checkCodex() : Promise.resolve(sorted({ provider: "codex", ready: false, state: "off", error: "Codex is off in this Edit." }))]);
-    const support = this.claudeSupport.status();
-    const blocked = !["idle", "ready"].includes(support.phase);
-    return sorted({ claude: { ...claudeStatus, support, ...(blocked ? { ready: false, state: support.phase, error: support.error ?? support.message } : {}) }, codex: codexStatus, provider: this.chosen });
-  }
-
-  /** The running app-server, started (and initialized) when there's none. */
-  async codex(): Promise<Codex> {
-    const release = await this.codexLock.acquire();
-    try {
-      if (this.codexProcess !== null && this.codexProcess.alive) return this.codexProcess;
-      const codex = await this.spawnCodex((message) => this.onMessage(message));
-      try {
-        await codex.call(
-          "initialize",
-          { clientInfo: { name: "edit", title: "Edit", version: VERSION } },
-          20_000,
-        );
-      } catch (error) {
-        // Never left running unused: the next turn starts another.
-        codex.kill();
-        throw error;
-      }
-      codex.notify("initialized", null);
-      // Threads from a previous process must be resumed before new turns.
-      this.threads.clear();
-      this.codexProcess = codex;
-      return codex;
-    } finally {
-      release();
-    }
-  }
-
-  /** Puts a Codex in place without starting one (tests). */
-  useCodex(codex: Codex | null): void {
-    this.codexProcess = codex;
-  }
-
-  /** Holds the Codex lock (tests: a Codex still starting up). */
-  holdCodex(): Promise<() => void> {
-    return this.codexLock.acquire();
-  }
-
   // --- models --------------------------------------------------------------
 
-  /** Cached models, refreshed in the background once a day (or now with `refresh`). */
+  /** Claude Code's models, refreshed in the background once a day (or now with `refresh`). */
   async models(refresh: boolean): Promise<Json> {
-    if (this.chosen === "claude") {
-      const found = await this.claudeModels(refresh);
-      return { models: claude.catalog(found.models), fetched_ms: found.fetched_ms, provider: "claude" };
-    }
-    const cached = this.modelCache;
-    if (cached !== null && !refresh) {
-      if (nowMs() - cached.fetched_ms > MODELS_TTL_MS) {
-        void this.fetchModels().catch((error: unknown) => {
-          if (isBug(error)) crashed("refreshing models", error);
-        });
-      }
-      return { models: withConfiguredEffort(cached.models), fetched_ms: cached.fetched_ms };
-    }
-    const cache = await this.fetchModels();
-    return { models: withConfiguredEffort(cache.models), fetched_ms: cache.fetched_ms };
+    const found = await this.claudeModels(refresh);
+    return { models: claude.catalog(found.models), fetched_ms: found.fetched_ms, provider: "claude" };
   }
 
-  /** Claude Code's models (what the user's plan offers), cached a day like Codex's. */
+  /** Claude Code's models (what the user's plan offers), cached a day. */
   private async claudeModels(refresh: boolean): Promise<{ fetched_ms: number; models: claude.ModelInfo[] }> {
     const cached = this.claudeCatalog;
     const fetch = async () => {
@@ -647,51 +494,6 @@ export class Agents implements seams.AgentPanel {
       return cached;
     }
     return fetch();
-  }
-
-  private async fetchModels(): Promise<ModelCache> {
-    const was = this.refreshing;
-    this.refreshing = true;
-    // Another refresh is in flight; serve what we have.
-    if (was && this.modelCache !== null) return this.modelCache;
-    try {
-      const codex = await this.codex();
-      const models: Model[] = [];
-      let cursor: string | null = null;
-      for (;;) {
-        const page = (await codex.call("model/list", { cursor }, 30_000)) as Record<string, unknown> | null;
-        const data = Array.isArray(page?.data) ? (page.data as Record<string, unknown>[]) : [];
-        for (const row of data) {
-          if (row?.hidden === true) continue;
-          const str = (value: unknown, fallback = "") => (typeof value === "string" ? value : fallback);
-          const efforts = Array.isArray(row.supportedReasoningEfforts)
-            ? (row.supportedReasoningEfforts as Record<string, unknown>[])
-                .map((effort) => effort?.reasoningEffort)
-                .filter((effort): effort is string => typeof effort === "string")
-            : [];
-          models.push({
-            id: str(row.id),
-            name: str(row.displayName),
-            description: str(row.description),
-            default_effort: str(row.defaultReasoningEffort, "medium"),
-            efforts,
-            is_default: row.isDefault === true,
-          });
-        }
-        cursor = typeof page?.nextCursor === "string" ? page.nextCursor : null;
-        if (cursor === null) break;
-      }
-      const cache: ModelCache = { fetched_ms: nowMs(), models };
-      try {
-        fs.writeFileSync(join(this.dir, "models.json"), JSON.stringify(cache, null, 2));
-      } catch {
-        // Fetched again next time.
-      }
-      this.modelCache = cache;
-      return cache;
-    } finally {
-      this.refreshing = false;
-    }
   }
 
   // --- chats ---------------------------------------------------------------
@@ -774,9 +576,7 @@ export class Agents implements seams.AgentPanel {
       chat.halted = true;
       this.abandon(project, "Stopped.");
     }
-    const thread = chat.thread;
     this.chats.set(project, freshChat());
-    if (thread !== null) this.threads.delete(thread);
     fs.rmSync(this.store.chatPath(project), { force: true });
     this.emit(project, { event: "reset" });
   }
@@ -800,7 +600,7 @@ export class Agents implements seams.AgentPanel {
     this.emit(project, { event: "entry", entry: entryJson(saved) });
   }
 
-  /** Sends a message, starting or resuming the project's Codex thread. */
+  /** Sends a message, starting or resuming the project's conversation. */
   /** `context`: what the agent reads after the message but the chat doesn't show (where the playhead is and what's under it). */
   /** `attached`: files the person attached, already in the project (chat_attachments.ts). */
   send(project: string, text: string, model: string | null, effort: string | null, context = "", attached: Attached[] = []): Promise<void> {
@@ -845,24 +645,19 @@ export class Agents implements seams.AgentPanel {
         chat.model = model;
         chat.effort = effort;
       }
-      // A retried turn stays with the provider it ran on, whatever's chosen since.
-      const kept = generation !== null && chat.provider !== null ? chat.provider : this.chosen;
-      // A chat that ran on Codex carries on with Claude while Codex is off.
-      const provider: Provider = kept === "codex" && !codexEnabled() ? "claude" : kept;
       chat.running = true;
       chat.started = timing.now();
       chat.heard = chat.started;
-      chat.on = provider;
       chat.dropped = false;
       this.noteRunning();
       this.watch();
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
       try {
-        await this.prepareTurn(project, text, model, effort, current, provider, replay, context, attached);
+        await this.prepareTurn(project, text, model, effort, current, replay, context, attached);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);
-        if (provider === "claude" && claude.signInProblem(said) && this.waitForClaudeLogin(project, current, text, false)) return;
+        if (claude.signInProblem(said) && this.waitForClaudeLogin(project, current, text, false)) return;
         const now = this.withChat(project);
         if (now.generation === current && now.running) this.finish(project, said);
         throw new Error(said);
@@ -878,7 +673,6 @@ export class Agents implements seams.AgentPanel {
     model: string | null,
     effort: string | null,
     generation: number,
-    provider: Provider,
     replay = false,
     context = "",
     attached: Attached[] = [],
@@ -888,103 +682,7 @@ export class Agents implements seams.AgentPanel {
     // The attached pictures as pictures, the rest named (the first build sent only the names, and the agent couldn't see them).
     const given = await attachedPictures(attached, live.project.media, join(this.dir, "workspace", "attached"));
     const about = attachedText(attached, new Set(given.map((one) => one.media)));
-    if (provider === "claude") return this.claudeTurn(project, text, model, effort, generation, replay, context + about, attached, given);
-    const codex = await this.codex();
-    const chat = this.withChat(project);
-    if (!stillOn(chat, generation)) throw new Error("Stopped.");
-    chat.model = model ?? chat.model;
-    chat.effort = effort ?? chat.effort;
-    // A Claude conversation can't be resumed in Codex: start a new thread.
-    const previous = chat.provider === "claude" ? null : chat.thread;
-    const known = previous !== null && this.threads.has(previous);
-    const workspace = join(this.dir, "workspace");
-    fs.mkdirSync(workspace, { recursive: true });
-    const config = {
-      // A model answers several times slower with 300k tokens to read than
-      // with 100k (a whole edit's chat reached 340k): compact well before
-      // that, so a long conversation stays quick.
-      model_auto_compact_token_limit: 150_000,
-      mcp_servers: {
-        edit: {
-          url: `http://127.0.0.1:${this.port}/mcp?project=${projectOf(project)}`,
-          default_tools_approval_mode: "approve",
-          startup_timeout_sec: 15,
-          // caption_speakers watches footage with a model: minutes, not seconds.
-          tool_timeout_sec: 900,
-        },
-      },
-    };
-    const instructions = agentInstructions(live.project, "codex");
-    let thread: string;
-    if (previous !== null && known) {
-      thread = previous;
-    } else if (previous !== null) {
-      // Edit restarted: pick the conversation back up.
-      try {
-        await codex.call(
-          "thread/resume",
-          {
-            threadId: previous,
-            cwd: workspace,
-            approvalPolicy: "never",
-            sandbox: "read-only",
-            config,
-            developerInstructions: instructions,
-          },
-          30_000,
-        );
-        thread = previous;
-      } catch (error) {
-        if (isBug(error)) throw error;
-        thread = await this.startThread(codex, config, instructions, workspace);
-      }
-    } else {
-      thread = await this.startThread(codex, config, instructions, workspace);
-    }
-    this.threads.set(thread, project);
-    const now = this.withChat(project);
-    if (!stillOn(now, generation)) throw new Error("Stopped.");
-    if (now.provider !== "codex") {
-      // Codex and Claude name models differently.
-      now.model = model;
-      now.effort = effort;
-    }
-    now.thread = thread;
-    now.provider = "codex";
-    const selection = { model: now.model, effort: now.effort };
-    this.upsert(project, entry({ id: newId("user"), kind: "user", text, ...(attached.length > 0 ? { attachments: attached } : {}) }));
-    this.save(project);
-    this.emit(project, { event: "status", running: true });
-    const params: Record<string, unknown> = {
-      threadId: thread,
-      input: [...given.map((one) => ({ type: "localImage", path: one.path })), { type: "text", text: text + context + about, text_elements: [] }],
-      approvalPolicy: "never",
-    };
-    if (selection.model !== null) params.model = selection.model;
-    if (selection.effort !== null) params.effort = selection.effort;
-    // Dispatched right after the last check (nothing can run in between), so
-    // a stop can't land between the check and writing the request to Codex.
-    const check = this.withChat(project);
-    if (!stillOn(check, generation)) throw new Error("Stopped.");
-    const request = codex.request("turn/start", params);
-    const turn = (await codex.response("turn/start", request, 30_000)) as { turn?: { id?: unknown } } | null;
-    const id = typeof turn?.turn?.id === "string" ? turn.turn.id : null;
-    const after = this.withChat(project);
-    let stopped = false;
-    if (after.generation !== generation || (after.halted && after.running) || after.dropped) stopped = true;
-    else if (after.running) after.turn = id;
-    // Stop can arrive before turn/start returns the turn id.
-    if (stopped) {
-      if (id !== null) {
-        // Its end, when it comes, belongs to no turn of the chat's.
-        this.abandoned.add(id);
-        await codex.call("turn/interrupt", { threadId: thread, turnId: id }, 15_000).catch((error: unknown) => {
-          diag.warn("agent", `interrupting a stopped turn in ${project}: ${diag.messageOf(error)}`);
-        });
-      }
-      throw new Error("Stopped.");
-    }
-    this.save(project);
+    return this.claudeTurn(project, text, model, effort, generation, replay, context + about, attached, given);
   }
 
   /**
@@ -1009,7 +707,7 @@ export class Agents implements seams.AgentPanel {
     const chat = this.withChat(project);
     if (chat.provider !== "claude") {
       // A rejected login may occur before the CLI starts. Its waiting message
-      // still belongs to Claude, including a chat previously run on Codex.
+      // still belongs to Claude, including a chat saved from the Codex days.
       chat.thread = null;
       chat.model = model;
       chat.effort = effort;
@@ -1025,12 +723,6 @@ export class Agents implements seams.AgentPanel {
     if (setup.phase === "needs_login") throw new Error("Claude authentication_error: sign-in required");
     const binary = await this.findClaude();
     if (binary === null) throw new Error("Claude Code isn't installed. Choose Set up Claude.");
-    if (chat.provider !== "claude") {
-      // Codex's thread and model names mean nothing to Claude Code.
-      chat.thread = null;
-      chat.model = null;
-      chat.effort = null;
-    }
     chat.model = model ?? chat.model;
     chat.effort = effort ?? chat.effort;
     const workspace = join(this.dir, "workspace");
@@ -1043,7 +735,7 @@ export class Agents implements seams.AgentPanel {
       allowedTools: ["mcp__edit"],
       permissionMode: "dontAsk",
       mcpServers: { edit: { type: "http", url: `http://127.0.0.1:${this.port}/mcp?project=${projectOf(project)}` } },
-      systemPrompt: agentInstructions(live.project, "claude"),
+      systemPrompt: agentInstructions(live.project),
       includePartialMessages: true,
       // A stop for a runaway turn (a whole edit is a few hundred tool calls); a turn
       // driven by review notes, which nobody's watching, gets a tighter one (the audit, Oct 23).
@@ -1297,57 +989,13 @@ export class Agents implements seams.AgentPanel {
   }
 
   /**
-   * Asks a model one question, outside any chat and with no tools, its final
-   * answer out, held to `schema` (a JSON Schema) when given. A Claude model
-   * ("claude-…") goes through the user's Claude Code, text only; any other
-   * through Codex: text, images (`localImage`) and sound (`localAudio`) in.
+   * Asks a Claude model ("claude-…") one question through the user's Claude
+   * Code, outside any chat and with no tools, its final answer out, held to
+   * `schema` (a JSON Schema) when given: text and images in.
    */
-  async ask(
-    model: string,
-    effort: string,
-    instructions: string,
-    input: Json[],
-    schema: Json | null,
-    timeoutMs: number,
-  ): Promise<string> {
-    if (model.startsWith("claude-")) return this.askClaude(model, effort, instructions, input, schema, timeoutMs);
-    if (!codexEnabled()) throw new Error(`Codex is off in this Edit: ${model} can't be asked (ask a Claude model)`);
-    const codex = await this.codex();
-    const workspace = join(this.dir, "workspace");
-    fs.mkdirSync(workspace, { recursive: true });
-    const started = (await codex.call(
-      "thread/start",
-      {
-        cwd: workspace,
-        approvalPolicy: "never",
-        sandbox: "read-only",
-        ephemeral: true,
-        developerInstructions: instructions,
-        serviceName: "edit",
-      },
-      30_000,
-    )) as { thread?: { id?: unknown } } | null;
-    const thread = started?.thread?.id;
-    if (typeof thread !== "string") throw new Error("Codex didn't start a thread");
-    const answer = new Promise<{ ok: string } | { error: string }>((resolve) => {
-      this.asks.set(thread, { text: "", done: resolve });
-    });
-    const params: Record<string, unknown> = { threadId: thread, input, model, effort, approvalPolicy: "never" };
-    if (schema !== null && schema !== undefined) params.outputSchema = schema;
-    try {
-      await codex.call("turn/start", params, 60_000);
-      let timer: ReturnType<typeof setTimeout> | null = null;
-      const late = new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), timeoutMs);
-      });
-      const result = await Promise.race([answer, late]);
-      if (timer !== null) clearTimeout(timer);
-      if (result === null) throw new Error(`${model} didn't answer in time`);
-      if ("error" in result) throw new Error(result.error);
-      return result.ok;
-    } finally {
-      this.asks.delete(thread);
-    }
+  async ask(model: string, effort: string, instructions: string, input: Json[], schema: Json | null, timeoutMs: number): Promise<string> {
+    if (!model.startsWith("claude-")) throw new Error(`${model} isn't a Claude model: Edit asks Claude only`);
+    return this.askClaude(model, effort, instructions, input, schema, timeoutMs);
   }
 
   /** `ask` on Claude Code: the input's text items, joined. */
@@ -1375,50 +1023,6 @@ export class Agents implements seams.AgentPanel {
     return claude.ask(binary, workspace, model, effort, instructions, texts.join("\n\n"), shape, timeoutMs, images);
   }
 
-  /** Routes a notification to a one-off question; true when it was one. */
-  private answer(thread: string, method: string, params: Record<string, unknown>): boolean {
-    const ask = this.asks.get(thread);
-    if (ask === undefined) return false;
-    const item = params.item as Record<string, unknown> | undefined;
-    if (method === "item/completed" && item?.type === "agentMessage") {
-      ask.text = typeof item.text === "string" ? item.text : "";
-    } else if (method === "turn/completed") {
-      const turn = (params.turn ?? {}) as Record<string, unknown>;
-      let result: { ok: string } | { error: string };
-      if (turn.status === "failed") {
-        const message = (turn.error as { message?: unknown } | undefined)?.message;
-        result = { error: typeof message === "string" ? message : "The model failed" };
-      } else if (turn.status === "interrupted") {
-        result = { error: "Stopped." };
-      } else {
-        result = { ok: ask.text };
-        ask.text = "";
-      }
-      const done = ask.done;
-      ask.done = null;
-      done?.(result);
-    }
-    return true;
-  }
-
-  private async startThread(codex: Codex, config: Json, instructions: string, workspace: string): Promise<string> {
-    const started = (await codex.call(
-      "thread/start",
-      {
-        cwd: workspace,
-        approvalPolicy: "never",
-        sandbox: "read-only",
-        config,
-        developerInstructions: instructions,
-        serviceName: "edit",
-      },
-      30_000,
-    )) as { thread?: { id?: unknown } } | null;
-    const id = started?.thread?.id;
-    if (typeof id !== "string") throw new Error("Codex didn't start a thread");
-    return id;
-  }
-
   async stop(project: string): Promise<void> {
     this.authPending.delete(project);
     this.saveAuthPending();
@@ -1441,18 +1045,7 @@ export class Agents implements seams.AgentPanel {
       if (running !== undefined) {
         // Not waited on for good: past the grace the turn is ended anyway.
         await Promise.race([running.interrupt(), timing.sleep(STOP_GRACE_MS)]);
-        return;
       }
-      if ((chat.on ?? chat.provider) === "claude") return;
-      const { thread, turn } = chat;
-      if (thread === null || turn === null) return;
-      const codex = this.codexProcess;
-      if (codex === null || !codex.alive) {
-        // Nothing left to tell: its Codex is gone.
-        this.abandon(project, "Stopped.");
-        return;
-      }
-      await codex.call("turn/interrupt", { threadId: thread, turnId: turn }, 15_000);
     } catch (error) {
       if (isBug(error)) throw error;
       // The agent couldn't be told: end the turn here rather than leave it running on screen.
@@ -1463,8 +1056,8 @@ export class Agents implements seams.AgentPanel {
 
   /**
    * Ends a running turn from Edit's side: its Claude query closed (the
-   * process with it), its Codex turn interrupted and its end ignored when it
-   * comes. For a stop that wasn't answered, a stalled turn or Edit quitting.
+   * process with it). For a stop that wasn't answered, a stalled turn or
+   * Edit quitting.
    */
   private abandon(project: string, error: string): void {
     const chat = this.withChat(project);
@@ -1477,14 +1070,6 @@ export class Agents implements seams.AgentPanel {
         running.close();
       } catch (thrown) {
         diag.warn("agent", `closing Claude Code for ${project}: ${diag.messageOf(thrown)}`);
-      }
-    }
-    const { thread, turn } = chat;
-    if (chat.on === "codex" && thread !== null && turn !== null) {
-      this.abandoned.add(turn);
-      const codex = this.codexProcess;
-      if (codex !== null && codex.alive) {
-        void codex.call("turn/interrupt", { threadId: thread, turnId: turn }, 15_000).catch(() => undefined);
       }
     }
     this.finish(project, error);
@@ -1529,8 +1114,8 @@ export class Agents implements seams.AgentPanel {
   }
 
   /**
-   * Edit is quitting: each running turn ends and says so in its chat, Claude
-   * Code is closed and Codex stopped. The turns stay noted as running, so a
+   * Edit is quitting: each running turn ends and says so in its chat, and
+   * Claude Code is closed. The turns stay noted as running, so a
    * restart carries them on.
    */
   shutdown(): void {
@@ -1557,8 +1142,6 @@ export class Agents implements seams.AgentPanel {
       }
     }
     this.claudeQueries.clear();
-    this.codexProcess?.kill();
-    this.codexProcess = null;
   }
 
   /**
@@ -1600,22 +1183,9 @@ export class Agents implements seams.AgentPanel {
     const started = chat.started;
     chat.started = null;
     if (started !== null) diag.record("agent", "agent turn", timing.now() - started, error);
-    const used = this.usage.get(project);
-    this.usage.delete(project);
-    if (used !== undefined && used.start !== null) {
-      // The first update already includes the turn's first call: count from before it.
-      const minus = (key: keyof Tokens) => (used.total[key] ?? 0) - (used.start![key] ?? 0) + (used.first?.[key] ?? 0);
-      const context = used.last === null ? "" : `; the last call read ${used.last.inputTokens}${used.window === null ? "" : ` of ${used.window}`}`;
-      diag.info(
-        "agent",
-        `${project}: the turn took ${started === null ? "?" : diag.human(timing.now() - started)} over ${used.calls} model calls, reading ${minus("inputTokens")} tokens (${minus("cachedInputTokens")} cached) and writing ${minus("outputTokens")} (${minus("reasoningOutputTokens")} reasoning)${context}`,
-      );
-    }
     if (error !== null) this.upsert(project, entry({ id: newId("error"), kind: "error", text: error }));
     const now = nowMs();
     chat.running = false;
-    chat.turn = null;
-    chat.on = null;
     const last = chat.entries[chat.entries.length - 1];
     if (last !== undefined) last.updated = Math.max(last.updated, now);
     // A turn that ended mid-tool leaves it unresolved; mark it.
@@ -1756,127 +1326,6 @@ export class Agents implements seams.AgentPanel {
     this.upsert(card.parent, { ...found, status: error === null ? "done" : error === "Stopped." ? "stopped" : "failed", ...(error !== null && error !== "Stopped." ? { text: `Fresh-eyes final pass: ${error}` } : {}) });
     this.save(card.parent);
   }
-
-  /** Codex notifications, mapped onto the chat of the project their thread belongs to. */
-  onMessage(message: Record<string, unknown>): void {
-    const method = typeof message.method === "string" ? message.method : "";
-    const params = (typeof message.params === "object" && message.params !== null ? message.params : {}) as Record<string, unknown>;
-    // The process is gone: no turn of it will ever complete, so end them now.
-    if (method === EXITED) {
-      // One-off questions waiting on it fail now, not when their time is up.
-      for (const ask of this.asks.values()) {
-        const done = ask.done;
-        ask.done = null;
-        done?.({ error: "Codex stopped" });
-      }
-      // Only Codex's turns: a Claude turn running meanwhile carries on (it'd go on editing unseen if ended here).
-      const running = [...this.chats].filter(([, chat]) => chat.running && chat.on === "codex").map(([project]) => project);
-      for (const project of running) {
-        this.withChat(project).halted = true;
-        this.finish(project, "Codex stopped unexpectedly; send your message again.");
-      }
-      return;
-    }
-    const thread = params.threadId;
-    if (typeof thread !== "string") return;
-    if (this.answer(thread, method, params)) return;
-    const project = this.threads.get(thread);
-    if (project === undefined) return;
-    this.withChat(project).heard = timing.now();
-    switch (method) {
-      case "thread/tokenUsage/updated": {
-        // What the turn reads and writes, logged when it ends (speed-plan 2.1):
-        // long full edits were model round trips, not tools.
-        const usage = params.tokenUsage as { total?: Tokens; last?: Tokens; modelContextWindow?: number | null } | undefined;
-        if (usage?.total === undefined) break;
-        const turnUsage = this.usage.get(project) ?? { start: null, first: null, total: usage.total, last: usage.last ?? null, calls: 0, window: null };
-        if (turnUsage.start === null) {
-          turnUsage.start = usage.total;
-          turnUsage.first = usage.last ?? null;
-        }
-        turnUsage.total = usage.total;
-        turnUsage.last = usage.last ?? null;
-        turnUsage.calls += 1;
-        turnUsage.window = typeof usage.modelContextWindow === "number" ? usage.modelContextWindow : turnUsage.window;
-        this.usage.set(project, turnUsage);
-        break;
-      }
-      case "item/agentMessage/delta": {
-        const id = typeof params.itemId === "string" ? params.itemId : "";
-        const delta = typeof params.delta === "string" ? params.delta : "";
-        const found = this.withChat(project).entries.find((item) => item.id === id);
-        if (found !== undefined) found.text += delta;
-        this.emit(project, { event: "delta", id, text: delta });
-        break;
-      }
-      case "item/started":
-      case "item/completed": {
-        const item = (params.item ?? {}) as Record<string, unknown>;
-        const id = typeof item.id === "string" ? item.id : "";
-        const done = method === "item/completed";
-        switch (item.type) {
-          case "agentMessage": {
-            let text = typeof item.text === "string" ? item.text : "";
-            // Keep streamed text if the start event arrives empty.
-            if (!done) {
-              const streamed = this.withChat(project).entries.find((existing) => existing.id === id);
-              if (streamed !== undefined) text = streamed.text;
-            }
-            this.upsert(project, entry({ id, kind: "assistant", text }));
-            break;
-          }
-          case "mcpToolCall": {
-            const status =
-              item.status === "completed" ? "done" : item.status === "failed" ? "failed" : done ? "done" : "running";
-            const failure = (item.error as { message?: unknown } | undefined)?.message;
-            const text = typeof failure === "string" ? failure : summarizeArgs(item.arguments);
-            const tool: Partial<Entry> = typeof item.tool === "string" ? { tool: item.tool } : {};
-            this.upsert(
-              project,
-              entry({ id, kind: "tool", text, ...tool, status, detail: stableStringify(item.arguments ?? null, 2) }),
-            );
-            break;
-          }
-          case "reasoning":
-            this.emit(project, { event: "thinking", active: !done });
-            break;
-          default:
-            break;
-        }
-        if (done) this.save(project);
-        break;
-      }
-      case "error": {
-        if (params.willRetry !== true) {
-          const said = (params.error as { message?: unknown } | undefined)?.message;
-          this.upsert(
-            project,
-            entry({ id: newId("error"), kind: "error", text: typeof said === "string" ? said : "Codex reported an error" }),
-          );
-        }
-        break;
-      }
-      case "turn/completed": {
-        const turn = (params.turn ?? {}) as Record<string, unknown>;
-        const id = typeof turn.id === "string" ? turn.id : null;
-        // A turn Edit already ended, or another than the one running, ends nothing.
-        if (id !== null && this.abandoned.delete(id)) break;
-        const chat = this.withChat(project);
-        if (!chat.running || (chat.turn !== null && id !== null && id !== chat.turn)) break;
-        let error: string | null = null;
-        if (turn.status === "failed") {
-          const said = (turn.error as { message?: unknown } | undefined)?.message;
-          error = typeof said === "string" ? said : "The turn failed";
-        } else if (turn.status === "interrupted") {
-          error = "Stopped.";
-        }
-        this.turnEnded(project, error);
-        break;
-      }
-      default:
-        break;
-    }
-  }
 }
 
 /** A Claude turn's state as its messages come in. */
@@ -1891,21 +1340,15 @@ class ClaudeTurn {
 }
 
 /** The developer instructions every turn carries: who the agent is, how to work fast, the house style, every tool on one line. */
-export function agentInstructions(project: Pick<Project, "name" | "style" | "settings">, provider: Provider): string {
+export function agentInstructions(project: Pick<Project, "name" | "style" | "settings">): string {
   const { settings } = project;
-  const waiting =
-    provider === "codex"
-      ? "When a tool is still running (watch_footage, map_view, export), wait for it in long blocks (yield_time_ms 30000 or more), never second by second. "
-      : "Slow tools (watch_footage, caption_speakers, map_view, export) answer when they're done: start them as early as their inputs allow and never call one again to check on it. ";
-  const tools =
-    provider === "codex"
-      ? "The edit tools (in exec: tools.mcp__edit__<name>({…}); their full declarations are in ALL_TOOLS, but this list is usually enough)"
-      : "The edit tools (call them directly; every one is listed here)";
+  const waiting = "Slow tools (watch_footage, caption_speakers, map_view, export) answer when they're done: start them as early as their inputs allow and never call one again to check on it. ";
+  const tools = "The edit tools (call them directly; every one is listed here)";
   return (
     `You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the \`edit\` tools appears live on their timeline and can be undone with ⌘Z. ` +
     `Edit only through the \`edit\` tools; you have no shell or files. The project is "${project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps). ` +
     "Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. " +
-    (provider === "claude" ? "Independent tool calls (lookups, renders) can go in one step, side by side. " : "") +
+    "Independent tool calls (lookups, renders) can go in one step, side by side. " +
     waiting +
     "When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. When asked to resume, recover or finish a partially edited/imported project, load resume-edit first and preserve completed work. For other requests, load the skill for the part you're working on (see SKILLS). " +
     `Keep replies short: say what you changed and where (timecodes).\n\n${INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}\n\n${tools}:\n${toolReference()}`
@@ -1925,9 +1368,8 @@ export function readChat(text: string): Chat {
   };
   const chat = freshChat();
   chat.thread = option("thread");
-  const provider = option("provider");
-  // Chats saved before Claude Code were all Codex's.
-  chat.provider = provider === "claude" || provider === "codex" ? provider : chat.thread !== null ? "codex" : null;
+  // A conversation from the Codex days (or before providers were saved) can't be resumed in Claude Code: its next turn starts a new one.
+  chat.provider = option("provider") === "claude" ? "claude" : null;
   chat.model = option("model");
   chat.effort = option("effort");
   chat.authRecoveryUser = option("authRecoveryUser");
@@ -1975,13 +1417,6 @@ export function summarizeArgs(argumentsValue: unknown): string {
   return joined;
 }
 
-function codexHome(): string | null {
-  const given = process.env.CODEX_HOME;
-  if (given !== undefined) return given;
-  const home = process.env.HOME;
-  return home !== undefined ? join(home, ".codex") : null;
-}
-
 /** Times a turn is started again when Edit's own tools didn't connect, and the wait before each. */
 const EDIT_TOOLS_RETRIES = 2;
 const EDIT_TOOLS_WAIT_MS = 5000;
@@ -1992,80 +1427,6 @@ export function editToolsFailed(message: Record<string, unknown>): boolean {
   const edit = (message.mcp_servers as { name?: unknown; status?: unknown }[]).find((server) => server.name === "edit");
   return edit !== undefined && edit.status !== "connected" && edit.status !== "pending";
 }
-
-/** MCP server names in the user's `~/.codex/config.toml` (`[mcp_servers.NAME]` tables). */
-export function userMcpServers(): string[] {
-  const home = codexHome() ?? "";
-  let config: string;
-  try {
-    config = fs.readFileSync(join(home, "config.toml"), "utf8");
-  } catch {
-    return [];
-  }
-  return mcpServersIn(config);
-}
-
-export function mcpServersIn(config: string): string[] {
-  const names = new Set<string>();
-  for (const line of config.split("\n")) {
-    const trimmed = trim(line.endsWith("\r") ? line.slice(0, -1) : line);
-    if (!trimmed.startsWith("[mcp_servers.") || !trimmed.endsWith("]")) continue;
-    const name = trimmed.slice("[mcp_servers.".length, -1);
-    const first = (name.split(".")[0] ?? "").replace(/^"+|"+$/g, "");
-    if (first !== "" && first !== "edit") names.add(first);
-  }
-  return [...names].sort(compareStrings);
-}
-
-/** A TOML key, quoted when it isn't a bare key (e.g. `computer-use` is fine, `a b` isn't). */
-export function tomlKey(name: string): string {
-  return /^[A-Za-z0-9_-]*$/.test(name) ? name : `"${name.replaceAll('"', '\\"')}"`;
-}
-
-export async function findCodex(): Promise<string | null> {
-  const home = process.env.HOME ?? "";
-  const candidates = [
-    "codex",
-    "/opt/homebrew/bin/codex",
-    "/usr/local/bin/codex",
-    join(home, ".local/bin/codex"),
-    join(home, ".npm-global/bin/codex"),
-  ];
-  for (const candidate of candidates) {
-    if (await claude.runs(candidate)) return candidate;
-  }
-  return null;
-}
-
-async function checkCodex(): Promise<Json> {
-  const binary = await findCodex();
-  if (binary === null) {
-    return sorted({
-      provider: "codex",
-      ready: false,
-      state: "missing",
-      error: "Codex isn't installed. Install it with `npm install -g @openai/codex`, then `codex login`.",
-    });
-  }
-  // Both at once: each is a Node start-up.
-  const [printed, login] = await Promise.all([claude.runCheck([binary, "--version"]), claude.runCheck([binary, "login", "status"])]);
-  const said = printed.code === 0 && trim(printed.out) !== "" ? trim(printed.out) : null;
-  const logged = login.code === 0;
-  if (!logged) {
-    return sorted({
-      provider: "codex",
-      ready: false,
-      state: "logged_out",
-      path: binary,
-      version: said,
-      error: "Codex isn't logged in. Run `codex login` on the machine running Edit.",
-    });
-  }
-  return sorted({ provider: "codex", ready: true, state: "ready", path: binary, version: said });
-}
-
-// ---------------------------------------------------------------------------
-// The app-server process.
 
 /** How many times in a row a turn cut off by a busy model is restarted. */
 export const MAX_RETRIES = 3;
@@ -2092,253 +1453,8 @@ export function busyModel(error: string): boolean {
   return signs.some((sign) => lower.includes(sign)) || /\b(500|502|503|504|529)\b/.test(lower);
 }
 
-/** Sent to `onMessage` (by Edit, not Codex) when Codex's output ends. */
-export const EXITED = "edit/codexExited";
-
-type Reply = (result: { ok: unknown } | { error: string }) => void;
-
-/** Where messages to Codex go: its stdin (or a test's list). */
-export interface Transport {
-  write(line: string): void;
-  kill(): void;
-  /** The end of what it printed to stderr, to say why it stopped. */
-  said?(): string;
-}
-
-/** Codex features Edit's agent never needs: a shell, a browser, the computer, pictures made. */
 /** The most model calls an agent turn may take: a stop for a runaway, well above a whole edit's few hundred. */
 export const MAX_TURNS = 1500;
 /** A turn fixing review notes (automatic, unwatched): its calls and its estimated cost at API prices. */
 export const REVIEW_MAX_TURNS = 250;
 export const REVIEW_MAX_USD = 75;
-
-export const CODEX_OFF = ["shell_tool", "unified_exec", "browser_use", "browser_use_external", "in_app_browser", "computer_use", "image_generation"];
-
-/**
- * Codex's environment: what it needs to run and sign in (its home, PATH, the
- * locale, a temp folder), not Edit's keys and tokens.
- */
-export function codexEnv(from: Record<string, string | undefined> = process.env): Record<string, string> {
-  const keep = ["HOME", "USER", "LOGNAME", "PATH", "SHELL", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME", "SSL_CERT_FILE", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY"];
-  const out: Record<string, string> = {};
-  for (const name of keep) if (from[name] !== undefined) out[name] = from[name]!;
-  return out;
-}
-
-export class Codex {
-  /** Replies awaited, by request id. */
-  readonly pending = new Map<number, Reply>();
-  private next = 1;
-  alive = true;
-
-  constructor(
-    private transport: Transport,
-    private onMessage: (message: Record<string, unknown>) => void,
-  ) {}
-
-  static async spawn(onMessage: (message: Record<string, unknown>) => void): Promise<Codex> {
-    const binary = await findCodex();
-    if (binary === null) throw new Error("Codex isn't installed");
-    // Only Edit's tools: switch off the user's own MCP servers, apps and
-    // plugins (overrides merge into their config, so each server is disabled by name).
-    const args = ["app-server", "--disable", "apps", "--disable", "plugins"];
-    // No shell, web, browser or computer of its own (the audit, Oct 23: a read-only
-    // sandbox still reads the whole disk): Edit's tools are all it needs, through code mode.
-    for (const feature of CODEX_OFF) args.push("--disable", feature);
-    args.push("-c", 'web_search="disabled"');
-    for (const name of userMcpServers()) args.push("-c", `mcp_servers.${tomlKey(name)}.enabled=false`);
-    let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
-    try {
-      child = Bun.spawn([binary, ...args], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: codexEnv() });
-    } catch (error) {
-      throw new Error(`couldn't start Codex: ${diag.messageOf(error)}`);
-    }
-    // Read as it comes (a full pipe would stop Codex), the last few lines kept for when it stops.
-    let tail = "";
-    void (async () => {
-      const decoder = new TextDecoder();
-      try {
-        for await (const chunk of child.stderr as unknown as AsyncIterable<Uint8Array>) {
-          tail = (tail + decoder.decode(chunk, { stream: true })).slice(-4000);
-        }
-      } catch {
-        // Gone with the process.
-      }
-    })();
-    const codex = new Codex(
-      {
-        write: (line) => {
-          try {
-            void child.stdin.write(line);
-            void child.stdin.flush();
-          } catch {
-            // Gone: the reader ends and says so.
-          }
-        },
-        kill: () => child.kill(),
-        said: () => tail,
-      },
-      onMessage,
-    );
-    void codex.read(child.stdout as unknown as AsyncIterable<Uint8Array>);
-    return codex;
-  }
-
-  /** Reads Codex's output line by line until it ends; then it's gone, and its callers are answered. */
-  async read(stdout: AsyncIterable<Uint8Array>): Promise<void> {
-    const decoder = new TextDecoder();
-    let buffered = "";
-    try {
-      for await (const chunk of stdout) {
-        buffered += decoder.decode(chunk, { stream: true });
-        // A line that never ends must not grow memory without bound.
-        if (buffered.length > 1_000_000 && buffered.indexOf("\n") < 0) throw new Error("Codex sent a line over 1 MB without ending it");
-        let at = buffered.indexOf("\n");
-        while (at >= 0) {
-          const line = buffered.slice(0, at);
-          buffered = buffered.slice(at + 1);
-          this.receive(line.endsWith("\r") ? line.slice(0, -1) : line);
-          at = buffered.indexOf("\n");
-        }
-      }
-      if (buffered !== "") this.receive(buffered);
-    } catch (error) {
-      if (isBug(error)) crashed("reading from Codex", error);
-    }
-    this.exited();
-  }
-
-  /** One line from Codex. */
-  receive(line: string): void {
-    let message: Record<string, unknown>;
-    try {
-      const value = JSON.parse(line) as unknown;
-      if (typeof value !== "object" || value === null) return;
-      message = value as Record<string, unknown>;
-    } catch {
-      return;
-    }
-    const hasMethod = "method" in message;
-    const id = message.id;
-    if (id !== undefined && !hasMethod) {
-      // Response to one of our requests.
-      if (typeof id !== "number") return;
-      const reply = this.pending.get(id);
-      if (reply === undefined) return;
-      this.pending.delete(id);
-      if ("error" in message) {
-        const said = (message.error as { message?: unknown } | null)?.message;
-        reply({ error: typeof said === "string" ? said : "Codex error" });
-      } else {
-        reply({ ok: message.result ?? null });
-      }
-    } else if (id !== undefined && hasMethod) {
-      // A request from Codex (approvals, elicitations): Edit's tools are
-      // pre-approved and nothing else is allowed.
-      this.write({ jsonrpc: "2.0", id, error: { code: -32601, message: "Edit only allows its own tools" } });
-    } else if (hasMethod) {
-      try {
-        this.onMessage(message);
-      } catch (error) {
-        diag.warn("agent", `a Codex notification: ${isBug(error) ? crashed("handling Codex", error) : diag.messageOf(error)}`);
-      }
-    }
-  }
-
-  /** Codex's output ended. */
-  exited(): void {
-    this.alive = false;
-    const said = trim(this.transport.said?.() ?? "");
-    if (said !== "") diag.warn("agent", `Codex stopped; it last said: ${takeChars(said.split("\n").slice(-6).join(" | "), 800)}`);
-    for (const reply of this.pending.values()) reply({ error: "Codex stopped" });
-    this.pending.clear();
-    this.onMessage({ method: EXITED });
-  }
-
-  private write(message: unknown): void {
-    this.transport.write(`${JSON.stringify(message)}\n`);
-  }
-
-  /** Sends a request; its id and the reply to wait for. */
-  request(method: string, params: unknown): [number, Promise<{ ok: unknown } | { error: string }>] {
-    if (!this.alive) throw new Error("Codex stopped");
-    const id = this.next++;
-    const reply = new Promise<{ ok: unknown } | { error: string }>((resolve) => this.pending.set(id, resolve));
-    this.write({ jsonrpc: "2.0", id, method, params });
-    return [id, reply];
-  }
-
-  async response(method: string, [id, reply]: [number, Promise<{ ok: unknown } | { error: string }>], timeoutMs: number): Promise<unknown> {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const late = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), timeoutMs);
-    });
-    const result = await Promise.race([reply, late]);
-    if (timer !== null) clearTimeout(timer);
-    if (result === null) {
-      this.pending.delete(id);
-      throw new Error(`Codex didn't answer ${method} in time`);
-    }
-    if ("error" in result) throw new Error(result.error);
-    return result.ok;
-  }
-
-  call(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
-    return this.response(method, this.request(method, params), timeoutMs);
-  }
-
-  notify(method: string, params: unknown): void {
-    const message: Record<string, unknown> = { jsonrpc: "2.0", method };
-    if (params !== null && params !== undefined) message.params = params;
-    this.write(message);
-  }
-
-  kill(): void {
-    this.transport.kill();
-  }
-}
-
-/**
- * The reasoning effort the user's Codex config sets (`model_reasoning_effort`
- * in ~/.codex/config.toml, before any [section]): Codex uses it whenever a
- * turn names none, so it, not the model list's own default, is the default.
- */
-export function configuredEffort(): string | null {
-  const home = codexHome();
-  if (home === null) return null;
-  let text: string;
-  try {
-    text = fs.readFileSync(join(home, "config.toml"), "utf8");
-  } catch {
-    return null;
-  }
-  return effortIn(text);
-}
-
-export function effortIn(text: string): string | null {
-  for (const raw of text.split("\n")) {
-    const line = trim(raw.endsWith("\r") ? raw.slice(0, -1) : raw);
-    if (line.startsWith("[")) break;
-    const eq = line.indexOf("=");
-    if (eq < 0) continue;
-    if (trim(line.slice(0, eq)) !== "model_reasoning_effort") continue;
-    const value = trim(line.slice(eq + 1)).replace(/^"+|"+$/g, "");
-    return value === "" ? null : value;
-  }
-  return null;
-}
-
-/**
- * Edit's own default thinking level: its edits are mostly the house style
- * applied again and again, which medium does as well as high in far less
- * time. The user can still pick another in the agent panel.
- */
-const DEFAULT_EFFORT = "medium";
-
-/** The models with the default each will really use: Edit's, else the one the user's Codex config sets. */
-export function withConfiguredEffort(models: Model[], configured: string | null = configuredEffort()): Model[] {
-  return models.map((model) => {
-    const effort = [DEFAULT_EFFORT, configured].find((candidate) => candidate !== null && model.efforts.includes(candidate));
-    return effort !== undefined && effort !== null ? { ...model, default_effort: effort } : { ...model };
-  });
-}

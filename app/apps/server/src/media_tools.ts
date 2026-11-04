@@ -421,11 +421,6 @@ async function agentStatusRoute(context: RouteContext<App>): Promise<Response> {
   return sortedJson(status);
 }
 
-async function agentClisRoute(context: RouteContext<App>): Promise<Response> {
-  const panel = seams.agentPanel(context.app);
-  return sortedJson(panel.clis ? await panel.clis() : { claude: await panel.status() });
-}
-
 async function claudeSetupRoute(context: RouteContext<App>): Promise<Response> {
   const panel = seams.agentPanel(context.app);
   if (!panel.claudeSetup) throw bad("Claude setup is not available");
@@ -443,19 +438,6 @@ async function agentModelsRoute(context: RouteContext<App>): Promise<Response> {
   } catch (error) {
     failed(error);
   }
-}
-
-/** Which provider the agent runs on: `{provider: "claude" | "codex"}`. */
-async function agentProviderRoute(context: RouteContext<App>): Promise<Response> {
-  const given = await body(context, "AgentProvider", ["provider"]);
-  const provider = given.provider;
-  if (provider !== "claude" && provider !== "codex") throw bad("provider: expected \"claude\" or \"codex\"");
-  try {
-    seams.agentPanel(context.app).setProvider(provider);
-  } catch (error) {
-    throw bad(diag.messageOf(error));
-  }
-  return agentStatusRoute(context);
 }
 
 /** The chat a request names: the project's own, or one of its sub-agents' (`?chat=review`). */
@@ -575,11 +557,9 @@ export function routes(router: Router<App>): void {
   router.get("/api/projects/{id}/drive", driveLinkRoute);
   router.post("/api/projects/{id}/drive", driveUploadRoute);
   router.get("/api/agent", agentStatusRoute);
-  router.get("/api/agent/clis", agentClisRoute);
   router.get("/api/agent/claude", claudeSetupRoute);
   router.post("/api/agent/claude", claudeSetupRoute);
   router.get("/api/agent/models", agentModelsRoute);
-  router.post("/api/agent/provider", agentProviderRoute);
   router.get("/api/projects/{id}/agent", agentChatRoute);
   router.post("/api/projects/{id}/agent", agentSendRoute);
   router.post("/api/projects/{id}/agent/retry-claude", agentRetryClaudeRoute);

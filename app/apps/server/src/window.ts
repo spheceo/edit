@@ -13,12 +13,12 @@ import { isFile, join, parent } from "./paths.ts";
 import * as seams from "./seams.ts";
 import { onRestart } from "./update.ts";
 
-/** The keys a Finder launch lacks that Edit needs: Homebrew's PATH (FFmpeg, Codex) and the library's sign-in. */
+/** The keys a Finder launch lacks that Edit needs: Homebrew's PATH (FFmpeg) and the library's sign-in. */
 const KEYS = ["PATH", "CLAUDE_CONFIG_DIR", "GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "GOOGLE_DOCS_REFRESH_TOKEN"];
 
 /**
  * Opened from Finder, the app gets launchd's bare environment: no Homebrew on
- * PATH (FFmpeg, Codex) and none of the shell's keys. Borrow them from the
+ * PATH (FFmpeg) and none of the shell's keys. Borrow them from the
  * user's login shell, as a terminal would have them.
  */
 export function adoptShellEnv(): void {

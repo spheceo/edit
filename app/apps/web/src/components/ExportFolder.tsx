@@ -2,14 +2,14 @@
 // can change it later. The folder is on the Mac running Edit, so the picker is
 // Edit's own file list (`/api/fs`), which works over Tailscale too.
 
-import { ChevronRight, Folder, HardDrive } from "lucide-react";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 
 import { api, type ExportFolder as FolderChoice, type FsListing } from "../lib/api";
 import { closeDialog, openDialog } from "../lib/dialogs";
 import { folderDetail } from "../lib/export-face";
-import { Button, cx, Modal } from "./ui";
+import { FolderBrowser } from "./FolderBrowser";
+import { Button, DialogTitle, Modal } from "./ui";
 
 const LATER = "edit.exportFolder.later";
 
@@ -174,70 +174,15 @@ function Picker({ ask }: { ask: boolean }) {
   };
   const here = listing?.path ?? "";
   const elsewhere = folder !== null && here !== "" && here !== folder.suggested && here !== folder.path;
-  const crumbs = listing ? listing.path.split("/").filter(Boolean) : [];
-  const dirs = listing?.entries.filter((entry) => entry.dir) ?? [];
   return (
     <div className="flex h-[520px] flex-col">
-      <div className="px-6 pt-6 pb-4">
-        <h2 className="text-[18px] font-semibold tracking-[-0.3px]">{ask ? "Where should exports go?" : "Exports folder"}</h2>
-        <p className="mt-1 text-[13px] leading-normal text-muted">
-          {ask
-            ? "Pick a folder on this Mac. Exports go there from now on. You can change this in Settings."
-            : "Exports on this Mac go in the folder you pick. One already exporting keeps the folder it started in."}
-        </p>
+      <div className="border-b border-line px-6 pt-6 pb-4">
+        <DialogTitle
+          title={ask ? "Where should exports go?" : "Exports folder"}
+          detail={ask ? "Pick a folder on this Mac. Exports go there from now on. You can change this in Settings." : "Exports on this Mac go in the folder you pick. One already exporting keeps the folder it started in."}
+        />
       </div>
-      <div className="flex min-h-0 flex-1 border-t border-line">
-        <aside className="flex w-40 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line p-2">
-          {listing?.places.map((place) => (
-            <button
-              key={place.path}
-              type="button"
-              onClick={() => go(place.path)}
-              className={cx(
-                "flex h-8 items-center gap-2 rounded-lg px-2 text-left text-[13px] transition-colors",
-                listing.path === place.path ? "bg-active text-fg" : "text-muted hover:bg-hover hover:text-fg",
-              )}
-            >
-              {place.name === "Home" ? <HardDrive size={14} /> : <Folder size={14} />}
-              <span className="min-w-0 flex-1 truncate">{place.name}</span>
-            </button>
-          ))}
-        </aside>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-10 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line px-3 text-[12px] whitespace-nowrap text-muted">
-            <button type="button" onClick={() => go("/")} className="rounded px-1 hover:text-fg">
-              /
-            </button>
-            {crumbs.map((crumb, index) => (
-              <span key={`${crumb}-${index}`} className="flex items-center">
-                <ChevronRight size={12} className="text-faint" />
-                <button
-                  type="button"
-                  onClick={() => go(`/${crumbs.slice(0, index + 1).join("/")}`)}
-                  className={cx("rounded px-1", index === crumbs.length - 1 ? "text-fg" : "hover:text-fg")}
-                >
-                  {crumb}
-                </button>
-              </span>
-            ))}
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-            {problem && <p className="px-2 py-1.5 text-[12px] text-danger">{problem}</p>}
-            {listing && dirs.length === 0 && <p className="p-6 text-center text-[13px] text-muted">No folders in here. Exports can still go in this one.</p>}
-            {dirs.map((entry) => (
-              <button
-                key={entry.path}
-                type="button"
-                onClick={() => go(entry.path)}
-                className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-fg/90 transition-colors hover:bg-hover"
-              >
-                <Folder size={15} className="shrink-0 text-info" />
-                <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
+      <FolderBrowser listing={listing} problem={problem} onGo={go} foldersOnly empty="No folders in here. Exports can still go in this one." />
       <div className="flex items-center gap-2 border-t border-line px-4 py-3">
         {elsewhere && folder && (
           <button type="button" className="min-w-0 truncate text-left text-[12px] text-muted hover:text-fg hover:underline" title={folder.suggested} disabled={busy} onClick={() => void use(folder.suggested)}>

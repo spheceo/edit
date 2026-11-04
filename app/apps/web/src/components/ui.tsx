@@ -1,5 +1,6 @@
 import { ChevronDown, Minus, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { createPortal } from "react-dom";
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
 
 import { hexToRgba, rgbaToHex } from "../lib/colors";
@@ -275,7 +276,8 @@ export function Modal({
       if (openModals.length === 0) window.removeEventListener("keydown", onEscape, true);
     };
   }, [open]);
-  return (
+  // On the page's body, so nothing it's written inside (a hidden, inert sidebar; a clipped row) can hide it or stop its clicks.
+  return createPortal(
     <AnimatePresence>
       {open && (
         <motion.div
@@ -300,7 +302,8 @@ export function Modal({
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 

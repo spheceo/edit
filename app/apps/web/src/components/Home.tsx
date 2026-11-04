@@ -28,7 +28,7 @@ import { Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
-import { Button, cx, Modal, Spinner, spring } from "./ui";
+import { Button, ConfirmDialog, cx, Modal, Spinner, spring } from "./ui";
 import { DevBadge, DevControl, promoteItem, useDevTools, useShowDev } from "./DevProjects";
 
 // Every project is 1080p at 30 fps.
@@ -936,24 +936,18 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
   ) : null;
   const dialogs = (
     <>
-      <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
-        <div className="p-6">
-          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{project.name}”?</h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            {inCloud
-              ? "It’s deleted from the cloud too, for everyone on the team. A copy is kept in this Mac’s Edit data folder; footage files stay where they are."
-              : "The project and its edit are removed (a copy is kept in Edit’s data folder). Your footage files stay where they are."}
-          </p>
-          <div className="mt-[22px] flex justify-end gap-2">
-            <Button variant="subtle" onClick={() => setDeleting(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              {inCloud ? "Delete everywhere" : "Delete project"}
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      <ConfirmDialog
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        title={`Delete “${project.name}”?`}
+        detail={
+          inCloud
+            ? "It’s deleted from the cloud too, for everyone on the team. A copy is kept in this Mac’s Edit data folder; footage files stay where they are."
+            : "The project and its edit are removed (a copy is kept in Edit’s data folder). Your footage files stay where they are."
+        }
+        confirm={inCloud ? "Delete everywhere" : "Delete project"}
+        onConfirm={() => void remove()}
+      />
       <MoveToCloud project={project} open={moving} onClose={() => setMoving(false)} onMoved={onChanged} />
     </>
   );
@@ -1236,26 +1230,17 @@ export function useIssueDialogs(issue: ScriptIssueRow) {
           </div>
         </form>
       </Modal>
-      <Modal open={open === "dismiss"} onClose={close} width={380}>
-        <div className="p-6">
-          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Dismiss “{issue.title}”?</h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">It comes off this list for everyone and stays stopped where it is. Its script keeps what was imported, and Retry there still carries it on.</p>
-          <div className="mt-[22px] flex justify-end gap-2">
-            <Button variant="subtle" onClick={close}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                close();
-                void answerIssue(issue, { kind: "dismiss" });
-              }}
-            >
-              Dismiss
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      <ConfirmDialog
+        open={open === "dismiss"}
+        onClose={close}
+        title={`Dismiss “${issue.title}”?`}
+        detail="It comes off this list for everyone and stays stopped where it is. Its script keeps what was imported, and Retry there still carries it on."
+        confirm="Dismiss"
+        onConfirm={() => {
+          close();
+          void answerIssue(issue, { kind: "dismiss" });
+        }}
+      />
     </>
   );
   return { items, dialogs, said, retry, showError: () => setOpen("error"), replace: () => setOpen("replace") };
@@ -1716,20 +1701,14 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
           </div>
         </div>
       </Modal>
-      <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
-        <div className="p-6">
-          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{script.title}”?</h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">The script, its transcript, preview and narration are deleted, for everyone on the team.</p>
-          <div className="mt-[22px] flex justify-end gap-2">
-            <Button variant="subtle" onClick={() => setDeleting(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      <ConfirmDialog
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        title={`Delete “${script.title}”?`}
+        detail="The script, its transcript, preview and narration are deleted, for everyone on the team."
+        confirm="Delete"
+        onConfirm={() => void remove()}
+      />
     </>
   );
 }
@@ -1793,20 +1772,14 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
         <Updated at={project.updated_ms} title={`by ${project.updated_by}`} />
         <RowButtons aside={aside.button} items={items} width={180} />
       </div>
-      <Modal open={deleting} onClose={() => setDeleting(false)} width={380}>
-        <div className="p-6">
-          <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Delete “{project.name}”?</h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">It’s deleted from the cloud, for everyone on the team. It isn’t on this Mac, so no copy is kept here.</p>
-          <div className="mt-[22px] flex justify-end gap-2">
-            <Button variant="subtle" onClick={() => setDeleting(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete everywhere
-            </Button>
-          </div>
-        </div>
-      </Modal>
+      <ConfirmDialog
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        title={`Delete “${project.name}”?`}
+        detail="It’s deleted from the cloud, for everyone on the team. It isn’t on this Mac, so no copy is kept here."
+        confirm="Delete everywhere"
+        onConfirm={() => void remove()}
+      />
     </>
   );
 }

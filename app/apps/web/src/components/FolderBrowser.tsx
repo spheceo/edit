@@ -6,15 +6,11 @@ import { AudioLines, ChevronRight, Film, Folder, HardDrive } from "lucide-react"
 import type { ReactNode } from "react";
 
 import type { FsEntry, FsListing } from "../lib/api";
+import { formatBytes } from "../lib/time";
 import { cx, Spinner } from "./ui";
 
 const AUDIO = /\.(wav|mp3|m4a|aac|flac|aif|aiff|ogg|opus)$/i;
 
-function formatSize(bytes: number) {
-  if (bytes > 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes > 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
-}
 
 /**
  * The places down the side, the path across the top, and what's in the folder.
@@ -101,7 +97,7 @@ export function FolderBrowser({
               >
                 {entry.dir ? <Folder size={15} className="shrink-0 text-info" /> : AUDIO.test(entry.name) ? <AudioLines size={15} className="shrink-0 text-success" /> : <Film size={15} className="shrink-0 text-pink-300" />}
                 <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                {!entry.dir && <span className="shrink-0 text-[11px] text-faint tabular">{formatSize(entry.size)}</span>}
+                {!entry.dir && <span className="shrink-0 text-[11px] text-faint tabular">{formatBytes(entry.size)}</span>}
                 {isPicked && <span className="size-1.5 shrink-0 rounded-full bg-white" />}
               </button>
             );

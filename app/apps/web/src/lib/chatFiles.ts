@@ -164,11 +164,3 @@ export function postFile(url: string, file: File, progress: (loaded: number) => 
     xhr.send(file);
   });
 }
-
-/** A file as a message carries it into the transcript: the bubble above the person's words. */
-export interface SentFile {
-  name: string;
-  kind: FileKind;
-  /** A picture to show, or null (its icon). */
-  url: string | null;
-}

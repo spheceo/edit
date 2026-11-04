@@ -1130,18 +1130,6 @@
 .writer-root .timeline-hint { display: none; }
 }
 /* The cloud's state */
-.writer-root .cloud-badge { position: relative; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px; color: var(--muted); font-size: 12px; white-space: nowrap; cursor: default; }
-.writer-root .cloud-badge i { position: absolute; left: 20px; top: 16px; width: 6px; height: 6px; border-radius: 50%; background: var(--faint); box-shadow: 0 0 0 2px #0b0b0b; }
-.writer-root .cloud-badge.compact { width: 28px; height: 28px; padding: 0; justify-content: center; margin-right: 2px; }
-.writer-root .cloud-badge.compact i { left: 17px; top: 15px; box-shadow: 0 0 0 2px #000; }
-.writer-root .cloud-badge.ok i { background: var(--ok); }
-.writer-root .cloud-badge.busy { color: #b4bcf0; }
-.writer-root .cloud-badge.busy i { background: var(--play); animation: writer-pulse 1.4s ease-in-out infinite; }
-.writer-root .cloud-badge.warn { color: #f5b45a; }
-.writer-root .cloud-badge.warn i { background: #f5b45a; }
-.writer-root .cloud-badge.bad { color: var(--danger); }
-.writer-root .cloud-badge.bad i { background: var(--danger); }
-.writer-root .cloud-badge span { font-variant-numeric: tabular-nums; }
 .writer-root .version-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; max-height: 420px; overflow: auto; }
 .writer-root .version-row { all: unset; box-sizing: border-box; width: 100%; display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .writer-root .version-row:hover, .writer-root .version-row:focus-visible { background: var(--hover); }

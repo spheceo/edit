@@ -6,6 +6,7 @@ import { makeDoc } from "./docs-dialog";
 import type { BuildStatus, Cite, DocFile, Paragraph, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, Script } from "./types";
 import { CAN, useGrants } from "./can";
 import { Dialog, Icon } from "./ui";
+import { formatBytes } from "../lib/time";
 
 /**
  * Review on a Repack link (reviews.rs): Share, the notes reviewers leave,
@@ -666,7 +667,6 @@ export function ReviewDialog({
 
 // ---- Archived ---------------------------------------------------------------------
 
-const gigabytes = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1e6))} MB`);
 
 /**
  * An archived script, read-only: its footage was deleted to free space (from
@@ -687,7 +687,7 @@ export function ArchivedBanner({ script, working, onJob, onProblem }: { script: 
     <div className="notice archived-notice">
       <span>
         <b>Footage archived</b> by {archive.by || "Repack"}, {when(archive.at)}
-        {archive.freedBytes > 0 ? `, freeing ${gigabytes(archive.freedBytes)}` : ""}. The script and its words are kept; it reads but can't be edited until the footage is back.
+        {archive.freedBytes > 0 ? `, freeing ${formatBytes(archive.freedBytes)}` : ""}. The script and its words are kept; it reads but can't be edited until the footage is back.
         {archive.missing.length > 0 && <span className="bad"> Missing after the last restore (from this Mac's disk): {archive.missing.join(", ")}.</span>}
       </span>
       <button type="button" className="primary sm" disabled={working || archive.restoring} onClick={() => void restore()}>

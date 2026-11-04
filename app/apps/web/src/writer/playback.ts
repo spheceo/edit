@@ -47,8 +47,6 @@ export function clipStarts(clips: Clip[]) {
   return starts;
 }
 
-export const editedDuration = (clips: Clip[]) => clips.reduce((sum, clip) => sum + (clip.endMs - clip.startMs), 0);
-
 /** The item at an edited moment, and where in it: footage on its own clock, a card from its start. */
 export function editedPosition(clips: Clip[], ms: number) {
   let at = 0;

@@ -187,9 +187,6 @@ const json = async <T>(response: Response): Promise<T> => {
   return body as T;
 };
 
-/** The agent's name as the panel shows it. */
-export const providerName = (status: AgentStatus | null) => (status?.provider === "codex" ? "Codex" : "Claude Code");
-
 /** Shows this project's chat (instantly if seen before), then refreshes it quietly. */
 export async function openAgent(project: string) {
   const serial = ++openedSerial;

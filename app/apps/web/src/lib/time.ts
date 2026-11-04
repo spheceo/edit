@@ -43,3 +43,10 @@ export function whenBack(until: number, now = Date.now()): string {
   if (days < 7) return new Date(until).toLocaleDateString("en-US", { weekday: "short" });
   return new Date(until).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
+
+/** A file's size as people say it: "1.2 GB", "340 MB", "12 KB". */
+export function formatBytes(bytes: number) {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
+}

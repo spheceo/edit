@@ -6,7 +6,6 @@ import { useEffect, useState } from "react";
 
 import { api } from "./api";
 import { copyText } from "./diagnostics";
-import type { Format } from "./exporting";
 import type { DriveFile, Project } from "./types";
 
 /** A subtitled video: Repack-style subtitles over footage and nothing else (as subtitles::is_subtitled). */
@@ -21,14 +20,6 @@ export function isSubtitled(project: Project) {
 export function subtitleVideo(project: Project) {
   return isSubtitled(project) || project.clips.some((clip) => clip.type === "text" && (clip.name ?? "").startsWith("Subtitle · ") && !clip.style.label);
 }
-
-/** Whether an export goes to Drive too: all of a subtitled video, as MP4 or MOV (as drive.ts wanted). */
-export function uploadsToDrive(project: Project, format: Format, range: [number, number], duration: number) {
-  return subtitleVideo(project) && (format === "h264" || format === "hevc" || format === "prores") && range[0] === 0 && range[1] >= duration && duration > 0;
-}
-
-/** The Drive folder a subtitled video's exports go to. */
-export const driveFolder = (_project: Project) => "Subtitles";
 
 /** Files asked about this session: the server checks Drive at most every few minutes anyway. */
 const asked = new Set<string>();

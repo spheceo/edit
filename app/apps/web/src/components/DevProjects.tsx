@@ -69,24 +69,6 @@ export function promoteItem(project: ProjectSummary, onChanged: () => void): Men
   return [{ label: "Promote to real project", icon: <BadgeCheck size={14} />, onSelect: () => void promote() }];
 }
 
-/** A real-looking project's ⋯ item: marked a test project (a throwaway made before the mark), hidden with the rest. */
-export function testItem(project: ProjectSummary, onChanged: () => void): MenuItem[] {
-  if (project.dev === true || project.problem || !useDevTools.getState().on) return [];
-  const mark = async () => {
-    try {
-      await post(`/api/projects/${project.id}/test`, {});
-      useEditor.getState().toast(`“${project.name}” is a test project now: hidden with the others`, "info", {
-        label: "Undo",
-        run: () => void post(`/api/projects/${project.id}/promote`, {}).then(onChanged, (error: unknown) => useEditor.getState().toastError(error, `bring “${project.name}” back`)),
-      });
-    } catch (error) {
-      useEditor.getState().toastError(error, `mark “${project.name}” a test project`);
-    }
-    onChanged();
-  };
-  return [{ label: "Mark as test project", icon: <FlaskConical size={14} />, onSelect: () => void mark() }];
-}
-
 /** Home's Dev control: show or hide dev projects, and delete them all (confirmed with the count). */
 export function DevControl({ count, cloudOnly = 0, show, onShow, onChanged }: { count: number; cloudOnly?: number; show: boolean; onShow: (show: boolean) => void; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);

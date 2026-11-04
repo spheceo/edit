@@ -181,10 +181,6 @@ export const resetScript = (id: string, accept: boolean) =>
 export const getChat = (id: string) =>
   http<ChatTurn[]>(`/api/writer/scripts/${id}/chat`);
 
-/** Starts the conversation again; the script's edits stay. */
-export const clearChat = (id: string) =>
-  http<void>(`/api/writer/scripts/${id}/chat`, { method: "DELETE" });
-
 /** Respells a transcript word; an empty text puts it back. */
 export const correctWord = (id: string, revision: number, word: string, text: string) =>
   http<Script>(`/api/writer/scripts/${id}/corrections`, { ...json({ revision, word, text }), method: "PUT" });
@@ -356,8 +352,6 @@ export type LogLine = { at: number; time: string; level: "INFO" | "WARN" | "ERRO
 
 /** Something long under way: what, on what, the step and how far. */
 export type Activity = { key: string; script: string | null; what: string; title: string; step: string; done: number; total: number; unit: "count" | "bytes" | "percent"; started: number };
-
-export const getActivity = () => (http<Activity[]>("/api/writer/activity"));
 
 /** Which Writer this is: "Writer nightly-1", "Writer v0.0.0", or a dev build. */
 export type About = { name: string; version: string; tag: string | null; release: boolean };

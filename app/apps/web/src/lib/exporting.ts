@@ -46,8 +46,6 @@ const FORMATS: { value: Format; label: string; extension: string }[] = [
   { value: "png", label: "PNG (one frame)", extension: "png" },
 ];
 
-const hasAudio = (format: Format) => format !== "gif" && format !== "png";
-const isMp4 = (format: Format) => format === "h264" || format === "hevc";
 export const extensionOf = (format: Format) => FORMATS.find((entry) => entry.value === format)!.extension;
 
 /** What an export is unless you change it: YouTube at 1080p. */
@@ -130,29 +128,4 @@ function spaced(chapters: Chapter[], fps: number) {
     if (!last || (chapter.start - last.start) / fps >= LEAST_CHAPTER) kept.push(chapter);
   }
   return kept;
-}
-
-/**
- * Roughly how big the file will be, where that's knowable: a set bitrate
- * (target size, hardware encoding), ProRes or sound. Quality-based H.264/HEVC
- * size depends on the footage, so it's left out rather than guessed.
- */
-export function estimateBytes(options: Omit<ExportOptions, "range" | "chapters">, width: number, height: number, seconds: number, fps: number): number | null {
-  const audioRate = !options.audio || !hasAudio(options.format) ? 0 : options.format === "mp3" ? { high: 320, balanced: 224, small: 160 }[options.quality] * 1000 : { high: 256, balanced: 192, small: 128 }[options.quality] * 1000;
-  const bitsPerPixel = { high: 0.14, balanced: 0.08, small: 0.045 }[options.quality];
-  let videoRate: number | null = 0;
-  if (isMp4(options.format)) {
-    if (options.target_mb) return options.target_mb * 1_000_000;
-    videoRate = options.hardware ? width * height * fps * bitsPerPixel * (options.format === "hevc" ? 0.6 : 1) : null;
-  } else if (options.format === "prores") videoRate = width * height * fps * 2.6;
-  else if (options.format === "wav") return seconds * 48_000 * 2 * 2;
-  else if (options.format === "gif" || options.format === "png") videoRate = null;
-  if (videoRate === null) return null;
-  return ((videoRate + (options.format === "prores" && options.audio ? 1_536_000 : audioRate)) * seconds) / 8;
-}
-
-export function formatBytes(bytes: number) {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
-  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }

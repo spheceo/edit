@@ -1,13 +1,11 @@
 // The thumbnails (Nov 2 2026): the team's, newest change first, each its
 // last drawing; New thumbnail opens a fresh one, where the conversation with
-// Claude starts. The sidebar Home shows the grid in its own panel (Sphe,
-// Nov 2: thumbnails "should sort of happen on that right hand side"); the
-// Home everyone has opens this page.
+// Claude starts. Home shows the grid in its own panel (Sphe, Nov 2:
+// thumbnails "should sort of happen on that right hand side").
 
-import { ArrowLeft, Image as ImageIcon, Loader, Plus } from "lucide-react";
+import { Image as ImageIcon, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { AppMenu } from "../components/AppMenu";
 import { StartedBy } from "../components/StartedBy";
 import { Button, Spinner } from "../components/ui";
 import { navigate } from "../lib/route";
@@ -27,28 +25,6 @@ export function useMakeThumbnail(): { making: boolean; make: () => void } {
       .finally(() => setMaking(false));
   };
   return { making, make };
-}
-
-export function ThumbnailsScreen() {
-  const { making, make } = useMakeThumbnail();
-  return (
-    <div className="flex h-full flex-col bg-bg">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
-        <Button variant="ghost" size="sm" onClick={() => navigate("/")}>
-          <ArrowLeft size={14} /> Home
-        </Button>
-        <h1 className="ml-1 text-[14px] font-semibold">Thumbnails</h1>
-        <div className="flex-1" />
-        <Button variant="light" size="sm" disabled={making} onClick={make}>
-          {making ? <Spinner size={13} /> : <Plus size={14} strokeWidth={2.2} />} New thumbnail
-        </Button>
-        <AppMenu />
-      </header>
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        <ThumbnailGrid making={making} onMake={make} />
-      </main>
-    </div>
-  );
 }
 
 /** The thumbnails' grid (or the way to the first), looked at again every 10 s. */
@@ -97,8 +73,8 @@ export function ThumbnailGrid({ making, onMake }: { making: boolean; onMake: () 
               <div className="flex size-full items-center justify-center text-[12px] text-faint">Nothing drawn yet</div>
             )}
             {(row.summary.run === "running" || row.summary.run === "queued") && (
-              <span className="absolute top-2 left-2 flex items-center gap-1 rounded-full bg-black/70 px-2 py-0.5 text-[11px] text-white">
-                <Loader size={11} className="animate-spin" /> {row.summary.step ?? "Working"}
+              <span className="absolute top-2 left-2 flex max-w-[calc(100%-16px)] items-center gap-1.5 rounded-full bg-black/75 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm">
+                <Spinner size={10} /> <span className="truncate">{row.summary.step ?? "Working"}</span>
               </span>
             )}
           </div>

@@ -111,9 +111,6 @@ export type ScriptTurnPart =
   | { type: "text"; text: string }
   | { type: "tools"; calls: ScriptToolCall[] };
 
-/** Where a tool starting now belongs in the answer written so far. */
-export const traceOffset = (answer: string) => answer.trimEnd().length;
-
 /**
  * Records a tool starting or settling. Tools with no words between them share
  * a group, so a run of reads shows as one block rather than several.

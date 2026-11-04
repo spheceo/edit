@@ -7,6 +7,7 @@ import { ArrowUpRight, FileText, Scissors } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { api } from "../lib/api";
+import { formatBytes } from "../lib/time";
 import { importPaste } from "../lib/import-input";
 import { CLIP_HEX } from "../lib/colors";
 import { clipEnd, withLinked } from "../lib/edit";
@@ -260,7 +261,6 @@ function cueOf(block: Extract<ScriptBlock, { kind: "footage" }>) {
 /** Seconds as m:ss.cc, to show a cut’s precision. */
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
 
-const size = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`);
 
 function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
   const labels = fileLabels(project);
@@ -315,7 +315,7 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                           : file.state === "failed"
                             ? "Couldn’t download"
                             : file.total
-                              ? `${size(file.bytes)} / ${size(file.total)}`
+                              ? `${formatBytes(file.bytes)} / ${formatBytes(file.total)}`
                               : "Starting…"}
                 </span>
               </div>

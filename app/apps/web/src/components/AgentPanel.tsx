@@ -67,12 +67,6 @@ export { ClaudeMark };
 
 /** OpenAI’s mark (same path phi uses). */
 
-/** The mark of the provider the agent runs on. */
-export function AgentMark({ size = 16 }: { size?: number }) {
-  const codex = useAgent((state) => state.status?.provider === "codex");
-  return codex ? <OpenAIMark size={size} /> : <ClaudeMark size={size} />;
-}
-
 export function OpenAIMark({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-label="OpenAI">

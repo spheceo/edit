@@ -25,45 +25,6 @@ export function Elapsed({ since }: { since: number | null }) {
   return <>{clock(Math.max(0, now - (since ?? now)))}</>;
 }
 
-/** The conversation, following itself down as it grows. */
-export function ChatLog({ trigger, children }: { trigger: string; children: ReactNode }) {
-  const log = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
-  const [away, setAway] = useState(false);
-  useEffect(() => {
-    const node = log.current;
-    if (!node) return;
-    const scroll = () => {
-      pinned.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
-      setAway(!pinned.current);
-    };
-    const follow = () => { if (pinned.current) node.scrollTop = node.scrollHeight; scroll(); };
-    const resize = new ResizeObserver(follow);
-    const observe = () => {
-      resize.disconnect();
-      resize.observe(node);
-      for (const child of node.children) resize.observe(child);
-      follow();
-    };
-    const mutation = new MutationObserver(observe);
-    mutation.observe(node, { childList: true, subtree: true, characterData: true });
-    observe();
-    node.addEventListener("scroll", scroll, { passive: true });
-    return () => { mutation.disconnect(); resize.disconnect(); node.removeEventListener("scroll", scroll); };
-  }, []);
-  useEffect(() => { if (pinned.current && log.current) log.current.scrollTop = log.current.scrollHeight; }, [trigger]);
-  return (
-    <div className="chat-scroll-area">
-      <div className="chat-log" ref={log} role="log" aria-label="Agent conversation" aria-live="polite" tabIndex={-1}>{children}</div>
-      {away && <button type="button" className="chat-latest" aria-label="Scroll to latest message" onClick={() => {
-        pinned.current = true;
-        setAway(false);
-        log.current?.scrollTo({ top: log.current.scrollHeight, behavior: "smooth" });
-      }}><Icon name="down" size={14} /> Latest</button>}
-    </div>
-  );
-}
-
 export async function copyMessage(text: string) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* Plain HTTP uses the Mac's older clipboard command. */ }
   const area = document.createElement("textarea");

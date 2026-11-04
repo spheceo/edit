@@ -8,15 +8,16 @@
 // from its sides and the same black (after Phi's composer and queue).
 // A message sent while Claude works waits in the queue and goes when it's done.
 
-import { AlertCircle, ArrowUp, FileText, Film, Music, Plus, Square, X } from "lucide-react";
+import { AlertCircle, ArrowUp, FileText, Film, Image as ImageIcon, Music, Plus, Square, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { create } from "zustand";
 
 import { attachFiles, detachFile, takeFiles, uploading, useFilesOf, type Accept, type ChatFile, type FileKind, type Uploader } from "../lib/chatFiles";
 import { useSettled } from "../lib/settled";
+import { formatBytes } from "../lib/time";
 import { useEditor } from "../lib/store";
 import { ClaudeMark } from "./ClaudeMark";
-import { cx } from "./ui";
+import { cx, ProgressRing } from "./ui";
 
 /** The card's edge, and the island's: a shade under the app's line (Sphe, Nov 3: "a slightly darker border"). */
 const EDGE = "border-[#1c1c1c]";
@@ -346,7 +347,7 @@ function QueueIsland({ chat, queue }: { chat: string; queue: Queued[] }) {
   );
 }
 
-const ICONS: Record<FileKind, typeof FileText> = { video: Film, audio: Music, file: FileText, image: FileText };
+const ICONS: Record<FileKind, typeof FileText> = { video: Film, audio: Music, file: FileText, image: ImageIcon };
 
 /** Its share sent, 0–1. */
 function progress(item: ChatFile): number {
@@ -359,21 +360,14 @@ function status(item: ChatFile): string {
   if (item.state === "queued") return "Waiting…";
   if (item.state === "uploading") return `${Math.round(progress(item) * 100)}%`;
   if (item.state === "processing") return "Adding…";
-  return size(item.size);
-}
-
-function size(bytes: number): string {
-  if (bytes <= 0) return "";
-  if (bytes < 1024 ** 2) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  return item.size > 0 ? formatBytes(item.size) : "";
 }
 
 /** The files attached to the message, inside the card above the words. */
 function FileRow({ chat, files }: { chat: string; files: ChatFile[] }) {
   return (
     <div role="list" aria-label="Attached files" className="mb-2 flex gap-1.5 overflow-x-auto [scrollbar-width:none]">
-      {files.map((item) => (item.preview !== null ? <Picture key={item.id} chat={chat} item={item} /> : <Chip key={item.id} chat={chat} item={item} />))}
+      {files.map((item) => (item.preview !== null ? <Picture key={item.id} chat={chat} item={item} /> : <FileChip key={item.id} chat={chat} item={item} />))}
     </div>
   );
 }
@@ -391,7 +385,11 @@ function Picture({ chat, item }: { chat: string; item: ChatFile }) {
   return (
     <div role="listitem" title={`${item.name}${status(item) ? ` · ${status(item)}` : ""}`} className="group relative size-12 shrink-0 overflow-hidden rounded-lg border border-line-strong bg-raised">
       <img src={item.preview ?? undefined} alt={item.name} className={cx("size-full object-cover transition-opacity", busy && "opacity-50")} />
-      {busy && <Ring value={progress(item)} className="absolute inset-0 m-auto" />}
+      {busy && (
+        <span className="absolute inset-0 flex items-center justify-center">
+          <ProgressRing value={progress(item)} size={20} />
+        </span>
+      )}
       {item.state === "failed" && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-danger">
           <AlertCircle size={16} />
@@ -402,7 +400,7 @@ function Picture({ chat, item }: { chat: string; item: ChatFile }) {
   );
 }
 
-function Chip({ chat, item }: { chat: string; item: ChatFile }) {
+function FileChip({ chat, item }: { chat: string; item: ChatFile }) {
   const Icon = ICONS[item.kind];
   const failed = item.state === "failed";
   return (
@@ -417,18 +415,6 @@ function Chip({ chat, item }: { chat: string; item: ChatFile }) {
       <Remove chat={chat} item={item} className="mt-1 self-start text-faint hover:bg-hover hover:text-fg" />
       {item.state === "uploading" && <span className="absolute bottom-0 left-0 h-0.5 bg-white/70 transition-[width]" style={{ width: `${progress(item) * 100}%` }} />}
     </div>
-  );
-}
-
-/** A small progress ring over a picture still uploading. */
-function Ring({ value, className }: { value: number; className?: string }) {
-  const r = 8;
-  const length = 2 * Math.PI * r;
-  return (
-    <svg viewBox="0 0 20 20" className={cx("size-5 -rotate-90", className)} aria-hidden>
-      <circle cx="10" cy="10" r={r} fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2.5" />
-      <circle cx="10" cy="10" r={r} fill="none" stroke="white" strokeWidth="2.5" strokeDasharray={length} strokeDashoffset={length * (1 - value)} strokeLinecap="round" />
-    </svg>
   );
 }
 

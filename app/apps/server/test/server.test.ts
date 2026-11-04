@@ -59,7 +59,7 @@ test("projects: create, read, replace with a stale rev, delete; refusals worded"
   const { app, cleanup } = fixtureHome("server-projects");
   try {
     const { send, jsonBody } = client(app);
-    expect(await (await send("/api/health")).json()).toEqual({ machine: app.machine, name: "edit", version: expect.any(String) });
+    expect(await (await send("/api/health")).json()).toEqual({ machine: app.machine, name: "edit", version: expect.any(String), busy: [] });
     const made = await send("/api/projects", jsonBody("POST", { name: "  Teen  ", width: 1080, height: 1920 }));
     const { rev, project } = (await made.json()) as { rev: number; project: { id: string; name: string; settings: unknown } };
     expect([rev, project.name, project.settings]).toEqual([1, "Teen", { width: 1080, height: 1920, fps: 30 }]);

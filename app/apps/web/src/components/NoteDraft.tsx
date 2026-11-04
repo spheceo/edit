@@ -133,6 +133,8 @@ function NoteBubble() {
         void queue();
       }}
     >
+      {/* Said over the bubble: the words are still in the field, so a placeholder would never show it. */}
+      {error !== null && <p className="mb-1.5 ml-3 text-[12px] text-danger">{error}</p>}
       <div className="flex min-h-10 items-end gap-1 rounded-[20px] border border-line-strong bg-[#161616]/95 py-1 pr-1 pl-3 shadow-[0_8px_24px_rgba(0,0,0,0.5)] backdrop-blur">
         <span className="flex h-8 shrink-0 items-center gap-1.5 self-start font-mono text-[11px] text-muted tabular @max-[260px]:hidden" title={inSpan ? "On the In–Out span" : "At the playhead"}>
           <span className="size-1.5 rounded-full bg-warning" />
@@ -143,8 +145,7 @@ function NoteBubble() {
           rows={1}
           aria-label="The note"
           value={text}
-          placeholder={error ?? "Add a note…"}
-          title={error ?? undefined}
+          placeholder="Add a note…"
           onChange={(event) => {
             setText(event.target.value);
             setError(null);
@@ -160,7 +161,7 @@ function NoteBubble() {
               void queue();
             }
           }}
-          className={cx("min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-[13px] leading-5 text-fg outline-none placeholder:text-faint", error !== null && "placeholder:text-danger")}
+          className="min-w-0 flex-1 resize-none bg-transparent px-1.5 py-1.5 text-[13px] leading-5 text-fg outline-none placeholder:text-faint"
         />
         <button
           type="button"
@@ -175,7 +176,7 @@ function NoteBubble() {
         <button
           type="submit"
           aria-label="Queue"
-          title={error ?? "Queue it for the agent (Enter) · Shift+Enter for a new line · Esc to cancel"}
+          title="Queue it for the agent (Enter) · Shift+Enter for a new line · Esc to cancel"
           disabled={text.trim() === "" || busy}
           className="flex size-8 shrink-0 items-center justify-center rounded-full bg-white text-black transition-[transform,opacity] active:scale-90 disabled:opacity-25"
         >

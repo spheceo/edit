@@ -1,6 +1,5 @@
 import { Download, FileText, Film, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { createPortal } from "react-dom";
 
 import { api, type ExportActivity as Activity } from "../lib/api";
 import { cardFace, exportLabel, exportWhere } from "../lib/export-face";
@@ -9,7 +8,7 @@ import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { ProblemView } from "./ProblemView";
-import { Button, cx, IconButton, Modal } from "./ui";
+import { Button, cx, DialogTitle, IconButton, Modal } from "./ui";
 
 export const exportActive = (job: Activity) => job.state === "queued" || job.state === "running";
 
@@ -81,11 +80,14 @@ export function ExportActivity() {
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     const look = async () => {
-      try {
-        const rows = await api.exportActivity();
-        if (live) setJobs(rows);
-      } catch {
-        /* Keep known jobs while reconnecting. */
+      // A hidden window looks again once it's shown.
+      if (!document.hidden) {
+        try {
+          const rows = await api.exportActivity();
+          if (live) setJobs(rows);
+        } catch {
+          /* Keep known jobs while reconnecting. */
+        }
       }
       if (live) timer = setTimeout(() => void look(), 2000);
     };
@@ -140,71 +142,67 @@ export function ExportActivity() {
         )}
         <QueueFace subtitle={face.subtitle} percent={face.percent} attention={face.attention} />
       </button>
-      {createPortal(
-        <Modal open={open} onClose={() => setOpen(false)} width={500}>
-          <div className="px-6 pt-6">
-            <h2 className="text-[16px] font-semibold tracking-[-0.01em]">Exports</h2>
-            <p className="mt-1 text-[13px] leading-normal text-muted">Edits and scripts share this queue. They keep going if you close this or leave the project.</p>
-          </div>
-          <div className="mt-3 max-h-[55vh] overflow-y-auto border-t border-line">
-            {visible.map((job) => {
-              const script = job.kind === "script";
-              return (
-                <div key={jobKey(job)} className="border-b border-line px-6 py-3 last:border-b-0">
-                  <div className="flex items-center gap-2">
-                    {script ? <FileText size={14} className="shrink-0 text-muted" /> : <Film size={14} className="shrink-0 text-muted" />}
-                    <button
-                      type="button"
-                      className="min-w-0 flex-1 truncate text-left text-[13px] font-medium hover:underline"
-                      title={`Open ${job.name}`}
-                      onClick={() => {
-                        setOpen(false);
-                        navigate(script ? `/scripts/${job.id}` : `/p/${job.id}`);
-                      }}
-                    >
-                      {job.name}
-                    </button>
-                    {exportActive(job) ? (
-                      <Button size="sm" variant="ghost" disabled={stopping === jobKey(job) || job.stage === "cancelling"} onClick={() => void stop(job)}>
-                        {stopping === jobKey(job) || job.stage === "cancelling" ? "Stopping…" : "Cancel"}
-                      </Button>
-                    ) : (
-                      <>
-                        {!script && (job.state === "failed" || job.state === "cancelled") && (
-                          <Button size="sm" variant="ghost" disabled={retrying === jobKey(job)} onClick={() => void again(job)}>
-                            {retrying === jobKey(job) ? "Retrying…" : "Retry"}
-                          </Button>
-                        )}
-                        <IconButton label={`Dismiss ${job.name}'s export`} onClick={() => dismiss(job)}>
-                          <X size={12} />
-                        </IconButton>
-                      </>
-                    )}
-                  </div>
-                  {job.note && <div className="mt-1 pl-[22px] text-[12px] text-muted">{job.note}</div>}
-                  {job.state === "failed" && job.error ? (
-                    <ProblemView error={job.error} doing="export it" className="mt-1.5" />
+      <Modal open={open} onClose={() => setOpen(false)} width={500}>
+        <div className="px-6 pt-6">
+          <DialogTitle title="Exports" detail="Edits and scripts share this queue. They keep going if you close this or leave the project." />
+        </div>
+        <div className="mt-3 max-h-[55vh] overflow-y-auto border-t border-line">
+          {visible.map((job) => {
+            const script = job.kind === "script";
+            return (
+              <div key={jobKey(job)} className="border-b border-line px-6 py-3 last:border-b-0">
+                <div className="flex items-center gap-2">
+                  {script ? <FileText size={14} className="shrink-0 text-muted" /> : <Film size={14} className="shrink-0 text-muted" />}
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left text-[13px] font-medium hover:underline"
+                    title={`Open ${job.name}`}
+                    onClick={() => {
+                      setOpen(false);
+                      navigate(script ? `/scripts/${job.id}` : `/p/${job.id}`);
+                    }}
+                  >
+                    {job.name}
+                  </button>
+                  {exportActive(job) ? (
+                    <Button size="sm" variant="ghost" disabled={stopping === jobKey(job) || job.stage === "cancelling"} onClick={() => void stop(job)}>
+                      {stopping === jobKey(job) || job.stage === "cancelling" ? "Stopping…" : "Cancel"}
+                    </Button>
                   ) : (
-                    <div className="mt-1 pl-[22px] text-[12px] text-muted">{script ? `Script · ${exportLabel(job)}` : exportLabel(job)}</div>
+                    <>
+                      {!script && (job.state === "failed" || job.state === "cancelled") && (
+                        <Button size="sm" variant="ghost" disabled={retrying === jobKey(job)} onClick={() => void again(job)}>
+                          {retrying === jobKey(job) ? "Retrying…" : "Retry"}
+                        </Button>
+                      )}
+                      <IconButton label={`Dismiss ${job.name}'s export`} onClick={() => dismiss(job)}>
+                        <X size={12} />
+                      </IconButton>
+                    </>
                   )}
-                  {exportActive(job) && (
-                    <div className="mt-2 ml-[22px] h-1 overflow-hidden rounded-full bg-active" aria-hidden>
-                      <div className="h-full bg-primary transition-[width] duration-300 ease-out" style={{ width: `${Math.round(job.progress * 100)}%` }} />
-                    </div>
-                  )}
-                  {!script && job.state === "done" && job.path !== "" && <Finished job={job} />}
                 </div>
-              );
-            })}
-          </div>
-          <div className="flex items-center justify-end px-6 py-4">
-            <Button variant="ghost" onClick={() => setOpen(false)}>
-              Close
-            </Button>
-          </div>
-        </Modal>,
-        document.body,
-      )}
+                {job.note && <div className="mt-1 pl-[22px] text-[12px] text-muted">{job.note}</div>}
+                {job.state === "failed" && job.error ? (
+                  <ProblemView error={job.error} doing="export it" className="mt-1.5" />
+                ) : (
+                  <div className="mt-1 pl-[22px] text-[12px] text-muted">{script ? `Script · ${exportLabel(job)}` : exportLabel(job)}</div>
+                )}
+                {exportActive(job) && (
+                  <div className="mt-2 ml-[22px] h-1 overflow-hidden rounded-full bg-active" aria-hidden>
+                    <div className="h-full bg-primary transition-[width] duration-300 ease-out" style={{ width: `${Math.round(job.progress * 100)}%` }} />
+                  </div>
+                )}
+                {!script && job.state === "done" && job.path !== "" && <Finished job={job} />}
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-end px-6 py-4">
+          <Button variant="ghost" onClick={() => setOpen(false)}>
+            Close
+          </Button>
+        </div>
+      </Modal>
     </>
   );
 }

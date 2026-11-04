@@ -212,6 +212,29 @@ export type Step = {
   label: string;
 };
 
+/**
+ * A comment pinned to a spot on the thumbnail (Sphe, Nov 4: "we can click on
+ * areas in the image… leave a comment directly on there. The agents would then
+ * be able to see that specific area"): on the version showing when it was left
+ * (none while the thumbnail has no versions), numbered for both to speak of.
+ * Claude replies when it can't quite do it, and settles it once done: settled
+ * ones stay in the thumbnail, off the page.
+ */
+export type ThumbComment = {
+  id: string;
+  /** Its number on the thumbnail (#1, #2…), never reused. */
+  n: number;
+  /** Where it's pinned, in canvas px (1280×720). */
+  x: number;
+  y: number;
+  text: string;
+  by: string;
+  at: number;
+  version?: string;
+  replies?: { by: string; text: string; at: number }[];
+  settled?: { by: string; at: number; note?: string };
+};
+
 /** One saved version of a thumbnail's layout (V1, V2…): switching keeps each one's layers as they were. */
 export type ThumbVersion = { id: string; name: string; design: Design; at: number; by: string };
 
@@ -235,6 +258,8 @@ export type Thumbnail = {
   activeVersion?: string;
   /** The version taken as final (the one the team ships), picked apart from whichever is showing. */
   finalVersion?: string;
+  /** Comments pinned to its versions, settled ones kept. */
+  comments?: ThumbComment[];
   createdAt: number;
   createdBy: string;
   updatedAt: number;

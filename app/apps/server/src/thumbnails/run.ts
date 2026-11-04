@@ -19,7 +19,7 @@ import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { canonical, checkStacked, describe, designOf, layerOf, makeVersion, record, removeVersion, step, switchVersion, takeFinal } from "./design.ts";
+import { canonical, checkStacked, commentOf, describe, describeComments, designOf, layerOf, makeVersion, openComments, record, removeVersion, step, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import { sizeOf } from "./size.ts";
@@ -198,8 +198,23 @@ export const TOOLS = [
   },
   {
     name: "look",
-    description: "The thumbnail drawn as it is now. grid: true adds a grid every 160 px across and 120 down, labelled, for placing things exactly. Read the file it names.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { grid: { type: "boolean" } } },
+    description: "The thumbnail drawn as it is now. grid: true adds a grid every 160 px across and 120 down, labelled, for placing things exactly; comments: true marks the open comments' pins on it, numbered. Read the file it names.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { grid: { type: "boolean" }, comments: { type: "boolean" } } },
+  },
+  {
+    name: "look_at_comment",
+    description: "A close look at the area a comment is pinned to (#3): that part of its version blown up to the whole size, the pin marked. Read the file it names.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { comment: { type: "string" } }, required: ["comment"] },
+  },
+  {
+    name: "reply_to_comment",
+    description: "Answer a comment on the thumbnail (#3), shown under it for the person: when you can't quite do what it asks, or need to say what you did differently and why. The comment stays open. Say it in your message too.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { comment: { type: "string" }, text: { type: "string" } }, required: ["comment", "text"] },
+  },
+  {
+    name: "settle_comment",
+    description: "Settle a comment (#3) once what it asks is done and you've looked at it done: it's kept, and leaves the page. note: what you did, in a line.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { comment: { type: "string" }, note: { type: "string" } }, required: ["comment"] },
   },
   {
     name: "save_overlay",
@@ -261,6 +276,15 @@ async function drawn(session: Session, design: Design, grid: boolean): Promise<s
     });
   }
   return `${path}${missing.length > 0 ? `\n(Not drawn, missing: ${missing.join(", ")})` : ""}`;
+}
+
+/** The thumbnail drawn with the open comments' pins on it, for Claude to read. */
+async function marked(session: Session, thumb: Thumbnail): Promise<string> {
+  const marks = openComments(thumb).map((one) => ({ x: one.x, y: one.y, n: one.n }));
+  const { bytes } = await hooks.draw(session.context.origin, session.id, thumb.design, { marks });
+  const path = join(session.folder, `comments-${Date.now()}.png`);
+  fs.writeFileSync(path, bytes);
+  return path;
 }
 
 async function runTool(session: Session, name: string, args: Args): Promise<string> {
@@ -431,8 +455,38 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
     case "look": {
       const found = await cloud.get(session.id);
       if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      if (args.comments === true) return `Read it: ${await marked(session, found.thumb)}`;
       const path = await drawn(session, found.thumb.design, args.grid === true);
       return `Read it: ${path}`;
+    }
+    case "look_at_comment": {
+      const found = await cloud.get(session.id);
+      if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      const comment = commentOf(found.thumb, args.comment);
+      const design = comment.version === undefined || comment.version === found.thumb.activeVersion ? found.thumb.design : found.thumb.versions?.find((one) => one.id === comment.version)?.design;
+      if (design === undefined) throw new Error(`#${comment.n}'s version was removed.`);
+      // A quarter of the canvas around the pin (half across, half down), kept inside it.
+      const width = WIDTH / 2;
+      const height = HEIGHT / 2;
+      const area = { x: Math.min(WIDTH - width, Math.max(0, comment.x - width / 2)), y: Math.min(HEIGHT - height, Math.max(0, comment.y - height / 2)), width, height };
+      const { bytes } = await hooks.draw(session.context.origin, session.id, design, { marks: [{ x: comment.x, y: comment.y, n: comment.n }], area });
+      const path = join(session.folder, `comment-${comment.n}-${Date.now()}.png`);
+      fs.writeFileSync(path, bytes);
+      return `#${comment.n} (${comment.by}): ${comment.text}\nThe area from (${area.x}, ${area.y}) to (${area.x + width}, ${area.y + height}), twice its size, the pin at (${comment.x}, ${comment.y}). Read it: ${path}`;
+    }
+    case "reply_to_comment":
+    case "settle_comment": {
+      const text = typeof args.text === "string" ? args.text.trim().slice(0, 2000) : typeof args.note === "string" ? args.note.trim().slice(0, 400) : "";
+      if (name === "reply_to_comment" && text === "") throw new Error("text is your answer.");
+      let n = 0;
+      await cloud.change(session.id, session.by, (thumb) => {
+        const comment = commentOf(thumb, args.comment);
+        n = comment.n;
+        if (name === "reply_to_comment") comment.replies = [...(comment.replies ?? []), { by: "claude", text, at: Date.now() }];
+        else if (comment.settled === undefined) comment.settled = { by: "claude", at: Date.now(), ...(text !== "" ? { note: text } : {}) };
+        else return false;
+      });
+      return name === "reply_to_comment" ? `Answered #${n}; it stays open.` : `Settled #${n}.`;
     }
     case "save_overlay": {
       const found = await cloud.get(session.id);
@@ -545,6 +599,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
     baseBrief(thumb),
     (thumb.versions ?? []).length > 1 ? `# Versions: ${(thumb.versions ?? []).map((one) => `${one.name}${one.id === thumb.activeVersion ? " (showing)" : ""}${one.id === thumb.finalVersion ? " (final)" : ""}`).join(", ")}` : "",
     current !== null ? `# As it looks now (Read it)\n${current}` : "",
+    await commentsBrief(session, thumb),
     (thumb.history ?? []).length > 0 ? `# Recent changes to the layout (newest last; undo steps back through them)\n${(thumb.history ?? []).slice(-8).map((one) => `- ${one.by === "claude" ? "you" : one.by}: ${one.label}`).join("\n")}` : "",
     `# The library (asset:<id> as a layer's source or a reference)\n${library.map((one) => `- asset:${one.id} “${one.name}” (${one.kind}, ${one.width}×${one.height}${one.builtIn ? "" : `, the team's`}): ${one.note}`).join("\n")}`,
     `# Fonts\n${FONTS.map((one) => `- ${one.family}: ${one.note}`).join("\n")}`,
@@ -553,6 +608,19 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
   ]
     .filter((part) => part !== "")
     .join("\n\n");
+}
+
+/**
+ * The open comments, for every turn (Sphe, Nov 4: "we shouldn't expect the
+ * user to insert some sort of specific prompt… we need to give the agents
+ * access to the comments"): each with its number, version, pin and replies,
+ * and the version showing drawn with its pins.
+ */
+async function commentsBrief(session: Session, thumb: Thumbnail): Promise<string> {
+  const listed = describeComments(thumb);
+  if (listed === "") return "";
+  const pins = openComments(thumb).length > 0 ? await marked(session, thumb).catch(() => null) : null;
+  return [`# Comments the team pinned on it (open)\n${listed}`, pins !== null ? `With their pins, numbered (Read it): ${pins}` : ""].filter(Boolean).join("\n");
 }
 
 // ---------------------------------------------------------------- turns

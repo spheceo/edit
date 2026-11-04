@@ -14,7 +14,7 @@ import { readBytes, readJson, type RouteContext, type Router } from "../http/rou
 import { mayIdeas } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { canonical, switchVersion, takeFinal } from "./design.ts";
+import { addComment, canonical, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
@@ -174,6 +174,36 @@ export function routes(router: Router<App>): void {
         return json({ ok: true });
       } catch (error) {
         if (error instanceof Error && /^(Write what|Keep the message|Claude is)/.test(error.message)) throw bad(error.message);
+        failed(error);
+      }
+    })
+    // A comment pinned where the person clicked, on the version showing; and one taken back by whoever left it.
+    .post("/api/thumbnails/{id}/comments", async (context: Context) => {
+      guard();
+      const body = await readJson<{ x?: unknown; y?: unknown; text?: unknown }>(context);
+      try {
+        const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
+          try {
+            addComment(thumb, { x: Number(body.x), y: Number(body.y) }, typeof body.text === "string" ? body.text : "", by());
+          } catch (error) {
+            throw bad(diag.messageOf(error));
+          }
+        });
+        return json({ thumb, rev });
+      } catch (error) {
+        failed(error);
+      }
+    })
+    .delete("/api/thumbnails/{id}/comments/{comment}", async ({ params }: Context) => {
+      guard();
+      try {
+        const { thumb, rev } = await cloud.change(params.id!, by(), (thumb) => {
+          const before = (thumb.comments ?? []).length;
+          thumb.comments = (thumb.comments ?? []).filter((one) => one.id !== params.comment);
+          return thumb.comments.length !== before;
+        });
+        return json({ thumb, rev });
+      } catch (error) {
         failed(error);
       }
     })

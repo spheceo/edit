@@ -4,7 +4,7 @@
 // defaults, so "a REC overlay" or "white caption, black box" is a short ask.
 
 import { captionShadow } from "@edit/types/thumbnail_render";
-import { assetOf, BLACK_BOX_FONT, HEIGHT, HOUSE_SHADOW, NO_ADJUST, WHITE_RED_FONT, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail, type ThumbVersion } from "@edit/types/thumbnails";
+import { assetOf, BLACK_BOX_FONT, HEIGHT, HOUSE_SHADOW, NO_ADJUST, WHITE_RED_FONT, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail, type ThumbComment, type ThumbVersion } from "@edit/types/thumbnails";
 
 type Args = Record<string, unknown>;
 
@@ -290,6 +290,8 @@ export function makeVersion(thumb: Thumbnail, by: string): ThumbVersion {
     const first: ThumbVersion = { id: newId(), name: "V1", design: structuredClone(thumb.design), at: Date.now(), by };
     versions.push(first);
     thumb.finalVersion ??= first.id;
+    // What was said about the thumbnail before it had versions was said about this one.
+    for (const comment of thumb.comments ?? []) comment.version ??= first.id;
   }
   const made: ThumbVersion = { id: newId(), name: `V${versions.length + 1}`, design: structuredClone(thumb.design), at: Date.now(), by };
   thumb.versions = [...versions, made];
@@ -323,6 +325,8 @@ export function removeVersion(thumb: Thumbnail, wanted: string): { removed: stri
     thumb.render = null;
   }
   if (thumb.finalVersion === removed.id) thumb.finalVersion = thumb.activeVersion;
+  // Its open comments are settled with it (kept, as every settled one is).
+  for (const comment of thumb.comments ?? []) if (comment.version === removed.id && comment.settled === undefined) comment.settled = { by: "Edit", at: Date.now(), note: `${removed.name} was removed.` };
   const renamed: [string, string][] = [];
   left.forEach((one, index) => {
     const name = `V${index + 1}`;
@@ -332,6 +336,7 @@ export function removeVersion(thumb: Thumbnail, wanted: string): { removed: stri
   const showing = left.find((one) => one.id === thumb.activeVersion)?.name ?? null;
   const final = left.find((one) => one.id === thumb.finalVersion)?.name ?? null;
   if (left.length <= 1) {
+    for (const comment of thumb.comments ?? []) if (comment.version === left[0]?.id) delete comment.version;
     delete thumb.versions;
     delete thumb.activeVersion;
     delete thumb.finalVersion;
@@ -379,4 +384,52 @@ export function step(thumb: Thumbnail, back: boolean): Step | null {
   thumb.render = null;
   syncVersion(thumb);
   return taken;
+}
+
+// ---------------------------------------------------------------- comments
+
+/** The open comments on the version showing (all of them while it has no versions), oldest first. */
+export function openComments(thumb: Thumbnail): ThumbComment[] {
+  return (thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === thumb.activeVersion);
+}
+
+/** A comment pinned where the person clicked, on the version showing. */
+export function addComment(thumb: Thumbnail, at: { x: number; y: number }, text: string, by: string): ThumbComment {
+  const words = text.trim().slice(0, 2000);
+  if (words === "") throw new Error("Write the comment.");
+  if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) throw new Error("Pin the comment somewhere on the thumbnail.");
+  const comments = thumb.comments ?? [];
+  const comment: ThumbComment = {
+    id: newId(),
+    n: comments.reduce((most, one) => Math.max(most, one.n), 0) + 1,
+    x: Math.round(Math.min(WIDTH, Math.max(0, at.x))),
+    y: Math.round(Math.min(HEIGHT, Math.max(0, at.y))),
+    text: words,
+    by,
+    at: Date.now(),
+    ...(thumb.activeVersion !== undefined ? { version: thumb.activeVersion } : {}),
+  };
+  thumb.comments = [...comments, comment];
+  return comment;
+}
+
+/** A comment by its number (#3, "3") or id. */
+export function commentOf(thumb: Thumbnail, wanted: unknown): ThumbComment {
+  const key = (typeof wanted === "string" || typeof wanted === "number" ? String(wanted) : "").trim().replace(/^#/, "");
+  const found = (thumb.comments ?? []).find((one) => one.id === key || String(one.n) === key);
+  if (found === undefined) throw new Error(`There's no comment ${key || "given"}: ${(thumb.comments ?? []).filter((one) => one.settled === undefined).map((one) => `#${one.n}`).join(", ") || "none open"}.`);
+  return found;
+}
+
+/** The comments as Claude's message lists them: each open one, its version, where it is, what it says and the replies. */
+export function describeComments(thumb: Thumbnail): string {
+  const open = (thumb.comments ?? []).filter((one) => one.settled === undefined);
+  if (open.length === 0) return "";
+  const name = (version: string | undefined) => (version === undefined ? "" : `${thumb.versions?.find((one) => one.id === version)?.name ?? "?"}${version === thumb.activeVersion ? ", showing" : ""}; `);
+  return open
+    .map((one) => {
+      const replies = (one.replies ?? []).map((reply) => `\n  ↳ ${reply.by === "claude" ? "you" : reply.by}: ${reply.text}`).join("");
+      return `- #${one.n} (${name(one.version)}pinned at ${one.x}, ${one.y}) ${one.by}: ${one.text}${replies}`;
+    })
+    .join("\n");
 }

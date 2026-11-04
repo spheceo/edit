@@ -7,8 +7,8 @@
 // anywhere go to Claude with the next message.
 
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowLeft, Check, ChevronDown, Download, Image as ImageIcon } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, Check, ChevronDown, Download, Image as ImageIcon, MessageSquare, Trash2 } from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
@@ -20,8 +20,9 @@ import { Button, cx, IconButton, Spinner, spring } from "../components/ui";
 import { conversationEntries } from "../lib/agentTurns";
 import { saveFile } from "../lib/files";
 import { navigate } from "../lib/route";
+import { ago } from "../lib/time";
 import { useEditor } from "../lib/store";
-import { sourceUrl, thumbnailsApi, working, type Design, type OpenArtAccount, type OpenArtState, type Thumbnail, type ThumbVersion } from "../lib/thumbnails";
+import { sourceUrl, thumbnailsApi, working, type Design, type OpenArtAccount, type OpenArtState, type Thumbnail, type ThumbComment, type ThumbVersion } from "../lib/thumbnails";
 import { drawThumbnail, type Context as DrawContext } from "@edit/types/thumbnail_render";
 import { captionShadow, HEIGHT, WIDTH } from "@edit/types/thumbnails";
 
@@ -139,6 +140,24 @@ export function ThumbnailScreen({ id }: { id: string }) {
   const showVersion = (version: string) =>
     // The list's picture is drawn again by the server (switching clears it), once its pictures have loaded.
     void thumbnailsApi.switchVersion(id, version).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "show that version"));
+  // The comment tool (C, or the header's button): the cursor pins a comment where it's clicked; Escape puts it down.
+  const [commenting, setCommenting] = useState(false);
+  useEffect(() => {
+    const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+    const onKey = (event: KeyboardEvent) => {
+      if (typing(event.target) || event.metaKey || event.ctrlKey || event.altKey || document.querySelector('[role="dialog"]') !== null) return;
+      if (event.key.toLowerCase() === "c") setCommenting((was) => !was);
+      else if (event.key === "Escape") setCommenting(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const comment = (at: { x: number; y: number }, text: string) =>
+    thumbnailsApi.comment(id, at, text).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => {
+      toastError(error, "leave the comment");
+      throw error;
+    });
+  const removeComment = (comment: string) => void thumbnailsApi.removeComment(id, comment).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "remove the comment"));
   const takeFinal = (version: string) =>
     void thumbnailsApi.takeFinal(id, version).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "mark it final"));
 
@@ -199,6 +218,8 @@ export function ThumbnailScreen({ id }: { id: string }) {
       <Header
         thumb={thumb}
         running={running}
+        commenting={commenting}
+        onCommenting={() => setCommenting((was) => !was)}
         onTitle={(title) =>
           void thumbnailsApi.change(id, { title }).then(
             ({ thumb, rev }) => show(thumb, rev),
@@ -214,7 +235,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
             <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
           ) : (
             <>
-              <Stage canvas={canvas} empty={design.layers.length === 0} running={running} step={thumb.run?.step} />
+              <Stage canvas={canvas} empty={design.layers.length === 0} running={running} step={thumb.run?.step}>
+                {(scale) => <Comments thumb={thumb} scale={scale} commenting={commenting} onComment={comment} onRemove={removeComment} />}
+              </Stage>
               <Versions thumb={thumb} picture={picture} tick={tick} running={running} onShow={showVersion} onFinal={takeFinal} />
             </>
           )}
@@ -231,8 +254,8 @@ export function ThumbnailScreen({ id }: { id: string }) {
 
 let scratch: CanvasRenderingContext2D | null = null;
 
-/** The way back, its name, its OpenArt account and Download: nothing else (Sphe, Nov 4: undo and redo are the agent's, the ⋯ went; delete is on the list). */
-function Header({ thumb, running, onTitle, onDownload }: { thumb: Thumbnail | null; running: boolean; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void }) {
+/** The way back, its name, the comment tool, its OpenArt account and Download: nothing else (Sphe, Nov 4: undo and redo are the agent's, the ⋯ went; delete is on the list). */
+function Header({ thumb, running, commenting, onCommenting, onTitle, onDownload }: { thumb: Thumbnail | null; running: boolean; commenting: boolean; onCommenting: () => void; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void }) {
   const [title, setTitle] = useState(thumb?.title ?? "");
   useEffect(() => setTitle(thumb?.title ?? ""), [thumb?.title]);
   // The title's box fits its words, as the edit page's name does: measured, capped.
@@ -266,6 +289,17 @@ function Header({ thumb, running, onTitle, onDownload }: { thumb: Thumbnail | nu
         style={{ width: titleWidth, maxWidth: "38vw" }}
       />
       <div className="flex-1" />
+      {thumb !== null && thumb.design.layers.length > 0 && (
+        <button
+          type="button"
+          title={commenting ? "Stop commenting (Esc)" : "Comment on the thumbnail (C)"}
+          aria-pressed={commenting}
+          onClick={onCommenting}
+          className={cx("mr-1 flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] transition-colors", commenting ? "bg-fg text-black" : "text-secondary hover:bg-hover hover:text-fg")}
+        >
+          <MessageSquare size={14} /> Comment
+        </button>
+      )}
       {thumb !== null && <OpenArtMenu thumb={thumb} running={running} />}
       <Button
         variant="subtle"
@@ -422,7 +456,7 @@ function OpenArtMenu({ thumb, running }: { thumb: Thumbnail; running: boolean })
 
 // ---------------------------------------------------------------- the canvas
 
-function Stage({ canvas, empty, running, step }: { canvas: React.RefObject<HTMLCanvasElement | null>; empty: boolean; running: boolean; step?: string }) {
+function Stage({ canvas, empty, running, step, children }: { canvas: React.RefObject<HTMLCanvasElement | null>; empty: boolean; running: boolean; step?: string; children: (scale: number) => ReactNode }) {
   const area = useRef<HTMLDivElement>(null);
   // The canvas as big as the space allows, at 16:9.
   const [size, setSize] = useState({ width: 640, height: 360 });
@@ -446,6 +480,7 @@ function Stage({ canvas, empty, running, step }: { canvas: React.RefObject<HTMLC
             Drop a frame or a thumbnail here, or ask Claude for one.
           </div>
         )}
+        {children(size.width / WIDTH)}
         <AnimatePresence>
           {running && (
             <motion.div
@@ -461,6 +496,189 @@ function Stage({ canvas, empty, running, step }: { canvas: React.RefObject<HTMLC
         </AnimatePresence>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- comments
+
+/** The cursor while commenting: a pin, its point at the bottom left where the comment goes. */
+const PIN_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26"><path d="M2 24V12C2 6.5 6.5 2 12 2h2c5.5 0 10 4.5 10 10s-4.5 10-10 10H4z" fill="#fff" stroke="#000" stroke-width="1.5"/><path d="M9 12h8M13 8v8" stroke="#000" stroke-width="1.8" stroke-linecap="round"/></svg>')}") 2 24, crosshair`;
+
+/**
+ * Comments pinned on the thumbnail (Sphe, Nov 4: "our cursor sort of takes on
+ * that comment tool, and we can click on areas in the image"): the open ones
+ * on the version showing, each a numbered pin; hovered, its words; clicked,
+ * the comment with Claude's answers. Claude reads them every turn and settles
+ * each once it's done (settled ones leave the page).
+ */
+function Comments({ thumb, scale, commenting, onComment, onRemove }: { thumb: Thumbnail; scale: number; commenting: boolean; onComment: (at: { x: number; y: number }, text: string) => Promise<void>; onRemove: (id: string) => void }) {
+  const open = (thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === thumb.activeVersion);
+  const [draft, setDraft] = useState<{ x: number; y: number } | null>(null);
+  const [opened, setOpened] = useState<string | null>(null);
+  const layer = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!commenting) setDraft(null);
+  }, [commenting]);
+  // A click anywhere else puts an open comment down.
+  useEffect(() => {
+    if (opened === null && draft === null) return;
+    const away = (event: PointerEvent) => {
+      if (!(event.target instanceof Element) || event.target.closest("[data-comment]") === null) {
+        setOpened(null);
+        if (!commenting || !layer.current?.contains(event.target as Node)) setDraft(null);
+      }
+    };
+    window.addEventListener("pointerdown", away, true);
+    return () => window.removeEventListener("pointerdown", away, true);
+  }, [opened, draft, commenting]);
+  return (
+    <div
+      ref={layer}
+      className={cx("absolute inset-0", commenting ? "pointer-events-auto" : "pointer-events-none")}
+      style={commenting ? { cursor: PIN_CURSOR } : undefined}
+      onClick={(event) => {
+        if (!commenting || (event.target as Element).closest("[data-comment]") !== null) return;
+        const box = event.currentTarget.getBoundingClientRect();
+        setOpened(null);
+        setDraft({ x: (event.clientX - box.left) / scale, y: (event.clientY - box.top) / scale });
+      }}
+    >
+      <AnimatePresence>
+        {open.map((one) => (
+          <Pin key={one.id} comment={one} scale={scale} opened={opened === one.id} onOpen={() => setOpened(opened === one.id ? null : one.id)} onRemove={() => onRemove(one.id)} />
+        ))}
+        {draft !== null && (
+          <Draft
+            key="draft"
+            at={draft}
+            scale={scale}
+            n={(thumb.comments ?? []).reduce((most, one) => Math.max(most, one.n), 0) + 1}
+            onCancel={() => setDraft(null)}
+            onSave={(text) => onComment(draft, text).then(() => setDraft(null))}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/** A comment's bubble, its point at the bottom left on the spot. */
+function Bubble({ n, active, replied }: { n: number | null; active: boolean; replied?: boolean }) {
+  return (
+    <span className={cx("relative flex size-7 items-center justify-center rounded-full rounded-bl-none text-[12px] font-semibold shadow-[0_2px_10px_#0008] ring-2 transition-colors duration-150 tabular", active ? "bg-fg text-black ring-black" : "bg-black/85 text-white ring-white/90")}>
+      {n ?? <MessageSquare size={12} />}
+      {replied && <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-agent ring-2 ring-black" />}
+    </span>
+  );
+}
+
+/** Where a comment's card goes beside its pin: to the right, or the left near the right edge; below, or above near the bottom. */
+function cardSide(at: { x: number; y: number }): string {
+  return cx(at.x > WIDTH * 0.62 ? "right-full mr-2" : "left-full ml-2", at.y > HEIGHT * 0.6 ? "bottom-0" : "top-0");
+}
+
+function Pin({ comment, scale, opened, onOpen, onRemove }: { comment: ThumbComment; scale: number; opened: boolean; onOpen: () => void; onRemove: () => void }) {
+  const [hover, setHover] = useState(false);
+  const replies = comment.replies ?? [];
+  return (
+    <motion.div
+      data-comment
+      initial={{ opacity: 0, scale: 0.6 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.6, transition: { duration: 0.14 } }}
+      transition={{ type: "spring", stiffness: 520, damping: 32 }}
+      style={{ left: comment.x * scale, top: comment.y * scale, transformOrigin: "bottom left" }}
+      className={cx("pointer-events-auto absolute -translate-y-full", opened ? "z-30" : "z-20 hover:z-30")}
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
+    >
+      <button type="button" aria-label={`Comment ${comment.n}`} onClick={onOpen} className="block cursor-pointer">
+        <Bubble n={comment.n} active={opened || hover} replied={replies.length > 0} />
+      </button>
+      <AnimatePresence>
+        {(opened || hover) && (
+          <motion.div
+            initial={{ opacity: 0, y: 4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, transition: { duration: 0.1 } }}
+            transition={spring}
+            className={cx("absolute w-[264px] rounded-xl border border-line-strong bg-raised p-3 text-left shadow-[0_16px_40px_#000a]", cardSide(comment), !opened && "pointer-events-none")}
+          >
+            <div className="flex items-center gap-2 text-[11.5px]">
+              <span className="truncate font-medium text-fg">{comment.by.split(" ")[0]}</span>
+              <span className="text-faint">{ago(comment.at)}</span>
+              <div className="flex-1" />
+              {opened && (
+                <IconButton label="Remove the comment" onClick={onRemove} className="-my-1 size-6">
+                  <Trash2 size={12} />
+                </IconButton>
+              )}
+            </div>
+            <p className={cx("mt-1 text-[13px] leading-snug whitespace-pre-wrap text-secondary", !opened && "line-clamp-3")}>{comment.text}</p>
+            {opened &&
+              replies.map((reply) => (
+                <div key={reply.at} className="mt-2.5 border-t border-line pt-2.5">
+                  <div className="flex items-center gap-2 text-[11.5px]">
+                    <span className={cx("font-medium", reply.by === "claude" ? "text-agent" : "text-fg")}>{reply.by === "claude" ? "Claude" : reply.by.split(" ")[0]}</span>
+                    <span className="text-faint">{ago(reply.at)}</span>
+                  </div>
+                  <p className="mt-1 text-[13px] leading-snug whitespace-pre-wrap text-secondary">{reply.text}</p>
+                </div>
+              ))}
+            {!opened && replies.length > 0 && <p className="mt-1.5 text-[11.5px] text-agent">Claude answered</p>}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
+  );
+}
+
+/** A new comment where the person clicked: its words, Enter to leave it, Escape to drop it. */
+function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number }; scale: number; n: number; onCancel: () => void; onSave: (text: string) => Promise<void> }) {
+  const [text, setText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const save = () => {
+    if (text.trim() === "" || saving) return;
+    setSaving(true);
+    onSave(text).catch(() => setSaving(false));
+  };
+  return (
+    <motion.div
+      data-comment
+      initial={{ opacity: 0, scale: 0.6 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.6, transition: { duration: 0.12 } }}
+      transition={{ type: "spring", stiffness: 520, damping: 32 }}
+      style={{ left: at.x * scale, top: at.y * scale, transformOrigin: "bottom left", cursor: "auto" }}
+      className="pointer-events-auto absolute z-40 -translate-y-full"
+    >
+      <Bubble n={n} active />
+      <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} transition={spring} className={cx("absolute w-[280px] rounded-xl border border-line-strong bg-raised p-2 shadow-[0_16px_40px_#000a]", cardSide(at))}>
+        <textarea
+          autoFocus
+          rows={2}
+          value={text}
+          disabled={saving}
+          placeholder="What should change here?"
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              onCancel();
+            } else if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              save();
+            }
+          }}
+          className="block w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-snug text-fg outline-none placeholder:text-faint"
+        />
+        <div className="flex items-center justify-end gap-1.5 pt-1">
+          <Button variant="light" size="sm" disabled={text.trim() === "" || saving} onClick={save}>
+            {saving ? <Spinner size={12} /> : "Comment"}
+          </Button>
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -494,6 +712,7 @@ function Versions({ thumb, picture, tick, running, onShow, onFinal }: { thumb: T
                   design={version.id === thumb.activeVersion ? thumb.design : version.design}
                   showing={version.id === thumb.activeVersion}
                   final={version.id === thumb.finalVersion}
+                  comments={(thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === version.id).length}
                   running={running}
                   picture={picture}
                   tick={tick}
@@ -512,7 +731,7 @@ function Versions({ thumb, picture, tick, running, onShow, onFinal }: { thumb: T
 // One full-size canvas every tile draws on before it's scaled into its own.
 let full: HTMLCanvasElement | null = null;
 
-function VersionTile({ version, design, showing, final, running, picture, tick, onShow, onFinal }: { version: ThumbVersion; design: Design; showing: boolean; final: boolean; running: boolean; picture: (source: string) => HTMLImageElement | null; tick: number; onShow: () => void; onFinal: () => void }) {
+function VersionTile({ version, design, showing, final, comments, running, picture, tick, onShow, onFinal }: { version: ThumbVersion; design: Design; showing: boolean; final: boolean; comments: number; running: boolean; picture: (source: string) => HTMLImageElement | null; tick: number; onShow: () => void; onFinal: () => void }) {
   const small = useRef<HTMLCanvasElement>(null);
   const shape = JSON.stringify(design);
   useEffect(() => {
@@ -529,19 +748,24 @@ function VersionTile({ version, design, showing, final, running, picture, tick, 
   // While Claude works it changes the version showing: another isn't shown until it's done.
   const locked = running && !showing;
   return (
-    <motion.div layout initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }} transition={spring} className="group flex w-[clamp(120px,13vw,176px)] shrink-0 flex-col gap-1.5">
+    <motion.div layout initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }} transition={spring} className="group flex w-[clamp(84px,7vw,112px)] shrink-0 flex-col gap-1">
       <button
         type="button"
         title={locked ? "Claude is working on the version showing" : showing ? `${version.name} is showing` : `Show ${version.name}`}
         disabled={locked}
         onClick={() => !showing && onShow()}
         className={cx(
-          "relative aspect-video overflow-hidden rounded-lg bg-panel ring-offset-2 ring-offset-black transition-[box-shadow,opacity] duration-200",
+          "relative aspect-video overflow-hidden rounded-md bg-panel ring-offset-2 ring-offset-black transition-[box-shadow,opacity] duration-200",
           showing ? "ring-2 ring-white" : "ring-1 ring-line hover:ring-line-strong",
           locked && "opacity-50",
         )}
       >
-        <canvas ref={small} width={352} height={198} className="block size-full" />
+        <canvas ref={small} width={224} height={126} className="block size-full" />
+        {comments > 0 && (
+          <span title={`${comments} open comment${comments === 1 ? "" : "s"}`} className="absolute top-1 right-1 flex h-4 items-center gap-0.5 rounded-full bg-black/80 px-1 text-[10px] font-medium text-white tabular">
+            <MessageSquare size={9} /> {comments}
+          </span>
+        )}
       </button>
       <div className="flex h-6 items-center gap-1.5 px-0.5">
         <span className={cx("text-[12px] font-medium tabular", showing ? "text-fg" : "text-muted")}>{version.name}</span>

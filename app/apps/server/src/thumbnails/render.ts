@@ -38,7 +38,7 @@ function picture(url) {
   return pictures.get(url);
 }
 const sourceUrl = (id, source) => source.startsWith("asset:") ? "/api/thumbnails/assets/" + encodeURIComponent(source.slice(6)) + "/file" : "/api/thumbnails/" + encodeURIComponent(id) + "/images/" + encodeURIComponent(source);
-window.render = async (design, id, grid, type) => {
+window.render = async (design, id, grid, type, marks, area) => {
   const loaded = new Map();
   for (const layer of design.layers) {
     if (layer.kind === "image") loaded.set(layer.source, await picture(sourceUrl(id, layer.source)));
@@ -55,8 +55,25 @@ window.render = async (design, id, grid, type) => {
     for (let y = 120; y < ${HEIGHT}; y += 120) { context.beginPath(); context.moveTo(0, y); context.lineTo(${WIDTH}, y); context.stroke(); context.fillText(String(y), 3, y - 3); }
     context.restore();
   }
+  // Comments' pins, numbered, where they were left.
+  for (const mark of marks ?? []) {
+    context.save();
+    context.beginPath(); context.arc(mark.x, mark.y, 17, 0, Math.PI * 2);
+    context.fillStyle = "#ffd60a"; context.fill();
+    context.lineWidth = 3; context.strokeStyle = "#000"; context.stroke();
+    context.fillStyle = "#000"; context.font = "bold 17px Helvetica"; context.textAlign = "center"; context.textBaseline = "middle";
+    context.fillText(String(mark.n), mark.x, mark.y + 1);
+    context.restore();
+  }
+  let out = canvas;
+  // One area of it, as big as the whole (a comment's surroundings, for a close look).
+  if (area) {
+    out = document.createElement("canvas");
+    out.width = ${WIDTH}; out.height = ${HEIGHT};
+    out.getContext("2d").drawImage(canvas, area.x, area.y, area.width, area.height, 0, 0, ${WIDTH}, ${HEIGHT});
+  }
   const missing = [...loaded].filter(([, one]) => one === null).map(([source]) => source);
-  return { data: canvas.toDataURL(type, 0.9), missing };
+  return { data: out.toDataURL(type, 0.9), missing };
 };
 window.ready = true;
 </script></body></html>`;
@@ -200,9 +217,11 @@ function close(): void {
 
 /**
  * The design drawn as a PNG (or JPEG): a grid every 160 px across and 120 down
- * when asked, for placing things by eye. Missing pictures are named.
+ * when asked, for placing things by eye; comments' numbered pins when given;
+ * one area of it blown up to the whole size when asked. Missing pictures are
+ * named.
  */
-export function draw(origin: string, id: string, design: Design, options: { grid?: boolean; type?: "image/png" | "image/jpeg" } = {}): Promise<{ bytes: Uint8Array; missing: string[] }> {
+export function draw(origin: string, id: string, design: Design, options: { grid?: boolean; type?: "image/png" | "image/jpeg"; marks?: { x: number; y: number; n: number }[]; area?: { x: number; y: number; width: number; height: number } } = {}): Promise<{ bytes: Uint8Array; missing: string[] }> {
   const work = queue.then(async () => {
     if (idle !== null) clearTimeout(idle);
     for (let attempt = 0; ; attempt++) {
@@ -214,7 +233,7 @@ export function draw(origin: string, id: string, design: Design, options: { grid
       try {
         const open = await browser!;
         const started = Date.now();
-        const answer = await open.call("Runtime.evaluate", { expression: `window.render(${JSON.stringify(design)}, ${JSON.stringify(id)}, ${options.grid === true}, ${JSON.stringify(options.type ?? "image/png")})`, awaitPromise: true, returnByValue: true });
+        const answer = await open.call("Runtime.evaluate", { expression: `window.render(${JSON.stringify(design)}, ${JSON.stringify(id)}, ${options.grid === true}, ${JSON.stringify(options.type ?? "image/png")}, ${JSON.stringify(options.marks ?? [])}, ${JSON.stringify(options.area ?? null)})`, awaitPromise: true, returnByValue: true });
         const value = (answer.result as { value?: { data?: string; missing?: string[] } } | undefined)?.value;
         if (typeof value?.data !== "string") throw new Error(String((answer.exceptionDetails as { exception?: { description?: string } } | undefined)?.exception?.description ?? "Chrome drew nothing"));
         diag.record("thumbnails", "draw", Date.now() - started);

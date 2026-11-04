@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { canonical, designOf, labelOf, layerOf, makeVersion, record, removeVersion, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
+import { addComment, canonical, commentOf, describeComments, designOf, labelOf, layerOf, makeVersion, openComments, record, removeVersion, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
 import { baseBrief, changed, fresh, pickModel } from "../src/thumbnails/run.ts";
 import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
@@ -243,4 +243,34 @@ test("removing a version: the ones after it move down a number, and what showed 
   // Versions again start from V1.
   expect(makeVersion(thumb, "Sphe").name).toBe("V2");
   expect(thumb.versions?.map((one) => one.name)).toEqual(["V1", "V2"]);
+});
+
+test("comments: pinned on the version showing, numbered for good, settled ones off the page and versions' bookkeeping", () => {
+  const thumb = fresh("t10", "Sphe", "", "");
+  thumb.design = designOf([{ id: "base", kind: "image", source: "img1" }], thumb.design, sources);
+  const first = addComment(thumb, { x: 2000, y: 300.4 }, "  brighter face ", "Sphe");
+  expect(first).toMatchObject({ n: 1, x: 1280, y: 300, text: "brighter face", by: "Sphe" });
+  expect(first.version).toBeUndefined();
+  expect(() => addComment(thumb, { x: 1, y: 1 }, "   ", "Sphe")).toThrow("Write the comment");
+  // Versions made: what was said before is V1's; a new comment is on the one showing.
+  makeVersion(thumb, "Sphe");
+  const [v1, v2] = thumb.versions!;
+  expect(first.version).toBe(v1!.id);
+  const second = addComment(thumb, { x: 100, y: 100 }, "move the caption up", "Sphe");
+  expect(second).toMatchObject({ n: 2, version: v2!.id });
+  expect(openComments(thumb).map((one) => one.n)).toEqual([2]);
+  expect(describeComments(thumb)).toContain("#2 (V2, showing; pinned at 100, 100) Sphe: move the caption up");
+  expect(describeComments(thumb)).toContain("#1 (V1; pinned at 1280, 300) Sphe: brighter face");
+  expect(commentOf(thumb, "#2").id).toBe(second.id);
+  expect(() => commentOf(thumb, 9)).toThrow("There's no comment 9");
+  // Settled: kept, off the list; numbers aren't reused.
+  second.settled = { by: "claude", at: 1 };
+  expect(openComments(thumb)).toEqual([]);
+  expect(addComment(thumb, { x: 5, y: 5 }, "and the red", "Sphe").n).toBe(3);
+  // V1 removed: its open comment is settled with it; down to one, the rest belong to the thumbnail again.
+  removeVersion(thumb, "V1");
+  expect(first.settled).toMatchObject({ by: "Edit", note: "V1 was removed." });
+  expect(thumb.versions).toBeUndefined();
+  expect(thumb.comments!.filter((one) => one !== first).every((one) => one.version === undefined)).toBe(true);
+  expect(openComments(thumb).map((one) => one.n)).toEqual([3]);
 });

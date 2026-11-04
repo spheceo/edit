@@ -54,6 +54,7 @@ person asks; Claude changes it through its tools:
 - `undo`, `redo`: back or forward on the layout's timeline (below).
 - `new_version`, `switch_version`, `take_final`, `remove_version`: versions
   (below).
+- `look_at_comment`, `reply_to_comment`, `settle_comment`: comments (below).
 - `save_overlay`: a picture the person gave, into the team's library with a
   note on where it goes, when they ask to keep it.
 - `openart_models`, `model_options`, `rename`.
@@ -78,7 +79,19 @@ move down a number (Sphe, Nov 4: "if version 1 is removed, version 2 becomes
 version 1"), what showed or was final passes to a neighbour, and down to one
 the thumbnail has no versions again.
 
-The header is the way back, the name, the OpenArt account and Download; a
+Comments (Sphe, Nov 4: "our cursor sort of takes on that comment tool, and we
+can click on areas in the image… The agents would then be able to see that
+specific area"): the header's Comment (or C) makes the cursor a pin; a click
+leaves a numbered comment on that spot of the version showing (`comments` on
+the thumbnail: where, words, who, which version). There's no queue and no
+special prompt: every turn's message lists the open ones with a drawing of
+their pins, and Claude does them with whatever is asked, `look_at_comment`
+showing it the area close. Done and looked at, it settles one (kept, off the
+page); one it can't quite do it answers under the comment and says so in the
+chat. A version's tile counts its open ones; a removed version's are settled
+with it.
+
+The header is the way back, the name, Comment, the OpenArt account and Download; a
 thumbnail is deleted from the list (its ⋯ on hover, or a right click).
 
 Credits: the header's account button shows the account in use and its credits

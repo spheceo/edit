@@ -23,7 +23,7 @@ import { FONTS, playhead } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import { shortDuration, timecode } from "../lib/time";
 import { changedShake, HOUSE_BOX, HOUSE_SHADOW, resolvedShake, SHAKE_PRESETS, type Clip, type Project, type Rgba, type ShakeDirection, type ShakeEdges, type ShakeEnvelope, type ShakeMotion, type ShakePreset, type TextPreset, rate } from "../lib/types";
-import { Button, ColorField, cx, Scrub, Select, Switch } from "./ui";
+import { Button, ColorField, cx, Field, Scrub, Section, Select, Switch } from "./ui";
 
 const useInspectorFrame = () =>
   useSyncExternalStore(playhead.subscribe, () => (playhead.playing ? Math.floor(playhead.frame / 6) * 6 : Math.floor(playhead.frame)));
@@ -67,28 +67,6 @@ function Header({ icon, title, subtitle, color }: { icon: ReactNode; title: stri
         <div className="truncate font-medium">{title}</div>
       </div>
       {subtitle && <span className="ml-auto shrink-0 text-[11px] text-faint tabular">{subtitle}</span>}
-    </div>
-  );
-}
-
-function Section({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
-  return (
-    <div className="border-b border-line px-3 py-2.5 last:border-b-0">
-      <div className="mb-1.5 flex h-5 items-center justify-between">
-        <span className="text-[12px] font-medium text-muted">{title}</span>
-        {aside}
-      </div>
-      <div className="flex flex-col gap-0.5">{children}</div>
-    </div>
-  );
-}
-
-function Row({ label, children, keyframe }: { label: string; children: ReactNode; keyframe?: ReactNode }) {
-  return (
-    <div className="grid h-7 grid-cols-[1fr_16px_112px] items-center gap-1.5">
-      <span className="truncate text-muted">{label}</span>
-      <span className="flex justify-center">{keyframe}</span>
-      <div className="flex justify-end">{children}</div>
     </div>
   );
 }
@@ -171,7 +149,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
     const animated = isAnimated(clip, name);
     const onKey = keyframeAt(clip, name, frame);
     return (
-      <Row
+      <Field
         key={name}
         label={label}
         keyframe={
@@ -196,7 +174,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
           onEnd={end}
           onChange={(value) => update((live) => setParam(live, name, value / scale, frame))}
         />
-      </Row>
+      </Field>
     );
   };
 
@@ -216,7 +194,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
   ) => {
     const scale = options.scale ?? 1;
     return (
-      <Row key={label} label={label}>
+      <Field key={label} label={label}>
         <Scrub
           value={value * scale}
           step={options.step ?? 1}
@@ -228,7 +206,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
           onEnd={end}
           onChange={(next) => update((live) => set(live, next / scale))}
         />
-      </Row>
+      </Field>
     );
   };
 
@@ -270,7 +248,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                 onKeyDown={(event) => event.stopPropagation()}
                 className="mb-1.5 w-full resize-none rounded-lg border border-line bg-black px-2.5 py-2 text-[13px] text-fg outline-none focus:border-muted"
               />
-              <Row label="Font">
+              <Field label="Font">
                 <Select
                   value={clip.style.font}
                   onChange={(font) =>
@@ -286,9 +264,9 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   }
                   options={(FAMILIES.includes(clip.style.font) ? FAMILIES : [clip.style.font, ...FAMILIES]).map((family) => ({ value: family, label: family }))}
                 />
-              </Row>
+              </Field>
               {weightsOf(clip.style.font).length > 1 && (
-                <Row label="Weight">
+                <Field label="Weight">
                   <Select
                     value={clip.style.weight}
                     onChange={(weight) => once((live) => live.type === "text" && (live.style.weight = weight))}
@@ -297,10 +275,10 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                       label: WEIGHT_NAMES[weight] ?? String(weight),
                     }))}
                   />
-                </Row>
+                </Field>
               )}
               {param("Size", "size", { min: 4, suffix: "px" })}
-              <Row label="Color">
+              <Field label="Color">
                 <ColorField
                   value={clip.style.color}
                   onChange={(color) =>
@@ -309,9 +287,9 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                       : recolour(color, (live) => live.type === "text" && (live.style.color = color))
                   }
                 />
-              </Row>
+              </Field>
               {param("Tracking", "tracking", { step: 0.25, precision: 1 })}
-              <Row label="Wrap">
+              <Field label="Wrap">
                 <Switch
                   checked={clip.style.max_width != null}
                   onChange={(wrap) =>
@@ -322,7 +300,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                     })
                   }
                 />
-              </Row>
+              </Field>
               {clip.style.max_width != null &&
                 field("Wrap width", clip.style.max_width, (live, value) => live.type === "text" && (live.style.max_width = value), { min: 1, suffix: "px" })}
             </Section>
@@ -343,12 +321,12 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             >
               {clip.style.background && (
                 <>
-                  <Row label="Color">
+                  <Field label="Color">
                     <ColorField
                       value={clip.style.background.color}
                       onChange={(color) => once((live) => live.type === "text" && live.style.background && (live.style.background.color = color))}
                     />
-                  </Row>
+                  </Field>
                   {field(
                     "Opacity",
                     clip.style.background.opacity,
@@ -380,12 +358,12 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                     { min: 0, suffix: "px" },
                   )}
                   {(clip.style.background.border ?? 0) > 0 && (
-                    <Row label="Border color">
+                    <Field label="Border color">
                       <ColorField
                         value={clip.style.background.border_color ?? [1, 1, 1, 1]}
                         onChange={(color) => once((live) => live.type === "text" && live.style.background && (live.style.background.border_color = color))}
                       />
-                    </Row>
+                    </Field>
                   )}
                 </>
               )}
@@ -407,12 +385,12 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             >
               {clip.style.shadow && (
                 <>
-                  <Row label="Color">
+                  <Field label="Color">
                     <ColorField
                       value={clip.style.shadow.color}
                       onChange={(color) => once((live) => live.type === "text" && live.style.shadow && (live.style.shadow.color = color))}
                     />
-                  </Row>
+                  </Field>
                   {field(
                     "Opacity",
                     clip.style.shadow.opacity,
@@ -457,7 +435,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             >
               {clip.style.glow.enabled && (
                 <>
-                  <Row
+                  <Field
                     label="Color"
                     keyframe={
                       clip.style.glow.color ? (
@@ -476,7 +454,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                       label={clip.style.glow.color ? undefined : "Text"}
                       onChange={(color) => once((live) => live.type === "text" && (live.style.glow.color = color))}
                     />
-                  </Row>
+                  </Field>
                   {param("Blur", "glow.radius", {
                     min: 0,
                     max: 200,
@@ -512,20 +490,20 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             >
               {clip.style.label && (
                 <>
-                  <Row label="Name">
+                  <Field label="Name">
                     <input
                       value={clip.style.label.text}
                       onChange={(event) => once((live) => live.type === "text" && live.style.label && (live.style.label.text = event.target.value))}
                       spellCheck={false}
                       className="h-6 w-full min-w-0 rounded-md bg-raised px-1.5 text-right text-[12px] text-fg outline-none ring-1 ring-line focus:ring-line-strong"
                     />
-                  </Row>
-                  <Row label="Color">
+                  </Field>
+                  <Field label="Color">
                     <ColorField
                       value={clip.style.label.color}
                       onChange={(color) => recolour(color, (live) => live.type === "text" && live.style.label && (live.style.label.color = color))}
                     />
-                  </Row>
+                  </Field>
                   {field("Size", clip.style.label.size, (live, value) => live.type === "text" && live.style.label && (live.style.label.size = value), {
                     min: 1,
                     suffix: "px",
@@ -534,7 +512,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               )}
             </Section>
             <Section title="Animate in">
-              <Row label="Style">
+              <Field label="Style">
                 <Select<TextPreset>
                   value={clip.animation.preset}
                   onChange={(preset) => once((live) => live.type === "text" && (live.animation.preset = preset))}
@@ -549,10 +527,10 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                     { value: "word", label: "One word at a time" },
                   ]}
                 />
-              </Row>
+              </Field>
               {clip.animation.preset !== "none" && (
                 <>
-                  <Row label="Duration">
+                  <Field label="Duration">
                     <Scrub
                       value={clip.animation.duration}
                       min={1}
@@ -561,9 +539,9 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                       onEnd={end}
                       onChange={(value) => update((live) => live.type === "text" && (live.animation.duration = value))}
                     />
-                  </Row>
+                  </Field>
                   {clip.animation.preset !== "fade" && (
-                    <Row label="Stagger">
+                    <Field label="Stagger">
                       <Scrub
                         value={clip.animation.stagger}
                         min={0}
@@ -574,7 +552,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                         onEnd={end}
                         onChange={(value) => update((live) => live.type === "text" && (live.animation.stagger = value))}
                       />
-                    </Row>
+                    </Field>
                   )}
                 </>
               )}
@@ -585,15 +563,15 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
         {clip.type === "video" && <>
           {transform}
           <Section title="Picture">
-            <Row label="Blend">
+            <Field label="Blend">
               <Select value={clip.blend ?? "normal"} onChange={(value) => once((live) => live.type === "video" && (live.blend = value))}
                 options={[{ value: "normal", label: "Normal" }, { value: "multiply", label: "Multiply" }, { value: "screen", label: "Screen" }]} />
-            </Row>
-            <Row label="Frame">
+            </Field>
+            <Field label="Frame">
               <Switch checked={clip.frame != null} onChange={(checked) => once((live) => {
                 if (live.type === "video") live.frame = checked ? { width: 4, color: [1, 1, 1, 1], shadow: 0.7, radius: 14, glow: 0.4 } : undefined;
               })} />
-            </Row>
+            </Field>
             {clip.frame && <>
               {field("Border", clip.frame.width, (c, v) => c.type === "video" && c.frame && (c.frame.width = v), { min: 0, max: 100, suffix: "px" })}
               {field("Corners", clip.frame.radius ?? 0, (c, v) => c.type === "video" && c.frame && (c.frame.radius = v), { min: 0, max: 300, suffix: "px" })}
@@ -607,7 +585,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
         </>}
         {clip.type === "adjustment" && (
           <Section title="Shake">
-            <Row label="Preset">
+            <Field label="Preset">
               <Select<ShakePreset>
                 value={clip.shake?.preset ?? "none"}
                 onChange={(preset) =>
@@ -620,8 +598,8 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                 }
                 options={(Object.keys(SHAKE_PRESETS) as ShakePreset[]).map((value) => ({ value, label: SHAKE_PRESETS[value].label }))}
               />
-            </Row>
-            <Row label="Motion">
+            </Field>
+            <Field label="Motion">
               <Select<ShakeMotion>
                 value={resolvedShake(clip.shake).motion}
                 onChange={(motion) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { motion })))}
@@ -630,7 +608,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   { value: "drop", label: "Drop (one fast move)" },
                 ]}
               />
-            </Row>
+            </Field>
             {param("Amount", "shake", { step: 1, min: resolvedShake(clip.shake).motion === "drop" ? -2000 : 0, max: 2000, precision: 0, suffix: "px" })}
             {field("Frequency", resolvedShake(clip.shake).frequency, (live, value) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { frequency: value })), {
               step: 0.1,
@@ -653,7 +631,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               precision: 2,
               suffix: "fr",
             })}
-            <Row label="Envelope">
+            <Field label="Envelope">
               <Select<ShakeEnvelope>
                 value={resolvedShake(clip.shake).envelope}
                 onChange={(envelope) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { envelope })))}
@@ -664,8 +642,8 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   { value: "swell", label: "Swell" },
                 ]}
               />
-            </Row>
-            <Row label="Edges">
+            </Field>
+            <Field label="Edges">
               <Select<ShakeEdges>
                 value={resolvedShake(clip.shake).edges}
                 onChange={(edges) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { edges })))}
@@ -674,8 +652,8 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   { value: "zoom", label: "Zoom to hide" },
                 ]}
               />
-            </Row>
-            <Row label="Direction">
+            </Field>
+            <Field label="Direction">
               <Select<ShakeDirection>
                 value={resolvedShake(clip.shake).direction}
                 onChange={(direction) => once((live) => live.type === "adjustment" && (live.shake = changedShake(live.shake, { direction })))}
@@ -685,7 +663,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   { value: "horizontal", label: "Horizontal" },
                 ]}
               />
-            </Row>
+            </Field>
           </Section>
         )}
         {clip.type === "adjustment" && (
@@ -740,7 +718,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                 {param("Width", "blur.width", { min: 0, suffix: "px" })}
                 {param("Height", "blur.height", { min: 0, suffix: "px" })}
                 {field("Feather", clip.blur?.feather ?? 0, (live, value) => live.type === "adjustment" && (live.blur = { radius: 0, ...live.blur, feather: value }), { min: 0, suffix: "px" })}
-                <Row label="Shape">
+                <Field label="Shape">
                   <Select<"ellipse" | "rect">
                     value={clip.blur?.shape ?? "ellipse"}
                     options={[
@@ -749,7 +727,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                     ]}
                     onChange={(shape) => once((live) => live.type === "adjustment" && (live.blur = { radius: 0, ...live.blur, shape }))}
                   />
-                </Row>
+                </Field>
               </>
             )}
           </Section>
@@ -757,7 +735,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
         {clip.type === "waveform" && (
           <>
             <Section title="Waveform">
-              <Row label="Style">
+              <Field label="Style">
                 <Select<"line" | "bars">
                   value={clip.style.kind ?? "line"}
                   options={[
@@ -766,10 +744,10 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                   ]}
                   onChange={(kind) => once((live) => live.type === "waveform" && (live.style.kind = kind))}
                 />
-              </Row>
-              <Row label="Color">
+              </Field>
+              <Field label="Color">
                 <ColorField value={clip.style.color} onChange={(color) => once((live) => live.type === "waveform" && (live.style.color = color))} />
-              </Row>
+              </Field>
               {(clip.style.kind ?? "line") === "bars"
                 ? field("Bars", clip.style.bars, (live, value) => live.type === "waveform" && (live.style.bars = Math.round(value)), { min: 1, max: 512 })
                 : field("Strands", clip.style.strands ?? 3, (live, value) => live.type === "waveform" && (live.style.strands = Math.round(value)), { min: 1, max: 8 })}
@@ -804,7 +782,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
             >
               {clip.style.glow.enabled && (
                 <>
-                  <Row
+                  <Field
                     label="Color"
                     keyframe={
                       clip.style.glow.color ? (
@@ -823,7 +801,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                       label={clip.style.glow.color ? undefined : "Waveform"}
                       onChange={(color) => once((live) => live.type === "waveform" && (live.style.glow.color = color))}
                     />
-                  </Row>
+                  </Field>
                   {param("Blur", "glow.radius", { min: 0, max: 200, suffix: "px" })}
                   {param("Opacity", "glow.strength", { step: 0.5, min: 0, max: 100, suffix: "%", scale: 100 })}
                 </>
@@ -834,9 +812,9 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
         )}
         {clip.type === "solid" && (
           <Section title="Fill">
-            <Row label="Color">
+            <Field label="Color">
               <ColorField value={clip.fill} onChange={(fill) => once((live) => live.type === "solid" && (live.fill = fill))} />
-            </Row>
+            </Field>
             {param("Opacity", "opacity", {
               step: 0.5,
               min: 0,
@@ -859,10 +837,10 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
         )}
 
         <Section title="Timing">
-          <Row label="Start">
+          <Field label="Start">
             <span className="px-1.5 font-mono text-[12px] text-muted tabular">{timecode(clip.start, fps)}</span>
-          </Row>
-          <Row label="Duration">
+          </Field>
+          <Field label="Duration">
             <Scrub
               value={clip.duration / fps}
               min={1 / fps}
@@ -874,9 +852,9 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               onEnd={end}
               onChange={(value) => useEditor.getState().gesture((draft) => setDuration(draft, [clip.id], value * fps))}
             />
-          </Row>
+          </Field>
           {(clip.type === "video" || clip.type === "audio") && (
-            <Row label="Speed">
+            <Field label="Speed">
               <Scrub
                 value={clip.speed * 100}
                 min={5}
@@ -886,9 +864,9 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
                 onEnd={end}
                 onChange={(value) => useEditor.getState().gesture((draft) => setSpeed(draft, [clip.id], value / 100))}
               />
-            </Row>
+            </Field>
           )}
-          <Row label="Fade in">
+          <Field label="Fade in">
             <Scrub
               value={clip.fade_in}
               min={0}
@@ -898,8 +876,8 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               onEnd={end}
               onChange={(value) => update((live) => (live.fade_in = Math.round(value)))}
             />
-          </Row>
-          <Row label="Fade out">
+          </Field>
+          <Field label="Fade out">
             <Scrub
               value={clip.fade_out}
               min={0}
@@ -909,7 +887,7 @@ function ClipInspector({ clip, project }: { clip: Clip; project: Project }) {
               onEnd={end}
               onChange={(value) => update((live) => (live.fade_out = Math.round(value)))}
             />
-          </Row>
+          </Field>
         </Section>
       </div>
     </>
@@ -938,9 +916,9 @@ function GraphicKnobs({ clip, project }: { clip: Clip; project: Project }) {
   const start = Math.min(...group.map((own) => own.start));
   const end = Math.max(...group.map((own) => own.start + own.duration));
   const scrub = (label: string, value: number, change: (next: number) => void, options: { step?: number; min?: number; precision?: number; suffix?: string } = {}) => (
-    <Row key={label} label={label}>
+    <Field key={label} label={label}>
       <Scrub value={value} step={options.step ?? 1} min={options.min} precision={options.precision ?? 0} suffix={options.suffix} onStart={() => state().beginGesture()} onEnd={() => state().endGesture()} onChange={change} />
-    </Row>
+    </Field>
   );
   return (
     <Section title={`Graphic · ${group.length} pieces`}>
@@ -1011,20 +989,20 @@ function ProjectInfo({ project }: { project: Project }) {
       <Header icon={<Clapperboard size={14} />} title="Project" color="#8f8f8f" />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <Section title="Sequence">
-          <Row label="Resolution">
+          <Field label="Resolution">
             <span className="px-1.5 text-[12px] tabular">
               {project.settings.width} × {project.settings.height}
             </span>
-          </Row>
-          <Row label="Frame rate">
+          </Field>
+          <Field label="Frame rate">
             <span className="px-1.5 text-[12px] tabular">{fps} fps</span>
-          </Row>
-          <Row label="Duration">
+          </Field>
+          <Field label="Duration">
             <span className="px-1.5 font-mono text-[12px] tabular">{timecode(projectDuration(project), fps)}</span>
-          </Row>
-          <Row label="Clips">
+          </Field>
+          <Field label="Clips">
             <span className="px-1.5 text-[12px] tabular">{project.clips.length}</span>
-          </Row>
+          </Field>
         </Section>
       </div>
     </>

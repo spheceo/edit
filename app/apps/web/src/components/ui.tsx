@@ -1,6 +1,6 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Minus, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type TextareaHTMLAttributes } from "react";
 
 import { hexToRgba, rgbaToHex } from "../lib/colors";
 import type { Rgba } from "../lib/types";
@@ -167,16 +167,18 @@ export function Scrub({
   );
 }
 
-export function ColorField({ value, onChange, label }: { value: Rgba; onChange: (value: Rgba) => void; label?: string }) {
+/** A colour swatch and its hex, opening the system picker. Takes an Rgba (the timeline's) or a "#rrggbb" string (a thumbnail's) and answers in the same shape. */
+export function ColorField<T extends Rgba | string>({ value, onChange, label }: { value: T; onChange: (value: T) => void; label?: string }) {
+  const hex = typeof value === "string" ? (/^#[0-9a-f]{6}$/i.test(value) ? value : "#000000") : rgbaToHex(value);
   return (
-    <label className="relative flex h-6 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 hover:bg-hover">
-      <span className="size-4 shrink-0 rounded-[5px] ring-1 ring-white/15" style={{ background: rgbaToHex(value) }} />
-      <span className="font-mono text-[12px] text-muted uppercase">{label ?? rgbaToHex(value).slice(1)}</span>
+    <label className="relative flex h-6 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 hover:bg-hover">
+      <span className="size-4 shrink-0 rounded-[5px] ring-1 ring-white/15" style={{ background: hex }} />
+      <span className="font-mono text-[12px] text-muted uppercase">{label ?? hex.slice(1)}</span>
       <input
         type="color"
         className="absolute inset-0 opacity-0"
-        value={rgbaToHex(value)}
-        onChange={(event) => onChange(hexToRgba(event.target.value, value[3]))}
+        value={hex}
+        onChange={(event) => onChange((typeof value === "string" ? event.target.value : hexToRgba(event.target.value, value[3])) as T)}
       />
     </label>
   );
@@ -367,5 +369,300 @@ export function ProgressRing({ value, size = 16 }: { value: number; size?: numbe
         style={{ transition: "stroke-dashoffset 250ms ease-out" }}
       />
     </svg>
+  );
+}
+
+// ---------------------------------------------------------------- fields and sections
+
+/**
+ * A setting's row: its label and its control. `stacked` puts the label over a
+ * wide control (a dialog's name or note); `wide` gives the control the rest of
+ * a roomy panel (a dialog's sliders); otherwise the control sits right in a
+ * fixed column, with a keyframe slot beside it when `keyframe` is given (the
+ * Inspector).
+ */
+export function Field({ label, children, keyframe, wide, stacked, className }: { label: ReactNode; children: ReactNode; keyframe?: ReactNode; wide?: boolean; stacked?: boolean; className?: string }) {
+  if (stacked)
+    return (
+      <label className={cx("flex flex-col gap-1.5 text-[12px] text-muted", className)}>
+        {label}
+        {children}
+      </label>
+    );
+  if (wide)
+    return (
+      <div className={cx("grid min-h-8 grid-cols-[88px_minmax(0,1fr)] items-center gap-3 text-[12px]", className)}>
+        <span className="truncate text-muted">{label}</span>
+        <div className="flex min-w-0 items-center">{children}</div>
+      </div>
+    );
+  return (
+    <div className={cx("grid h-7 grid-cols-[1fr_16px_112px] items-center gap-1.5", className)}>
+      <span className="truncate text-muted">{label}</span>
+      <span className="flex justify-center">{keyframe}</span>
+      <div className="flex justify-end">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * A titled group of fields, divided from the next. `toggle` puts a switch in
+ * its title for something that can be off (a drop shadow) and hides the
+ * fields while it is; `roomy` is a dialog's padding.
+ */
+export function Section({ title, aside, toggle, roomy, children }: { title: string; aside?: ReactNode; toggle?: { on: boolean; onChange: (on: boolean) => void }; roomy?: boolean; children?: ReactNode }) {
+  const open = toggle === undefined || toggle.on;
+  return (
+    <div className={cx("border-b border-line last:border-b-0", roomy ? "px-4 py-3" : "px-3 py-2.5")}>
+      <div className={cx("flex items-center justify-between gap-2", roomy ? "h-6" : "h-5")}>
+        <span className="text-[12px] font-medium text-muted">{title}</span>
+        {toggle !== undefined ? <Switch checked={toggle.on} onChange={toggle.onChange} /> : aside}
+      </div>
+      {open && children !== undefined && children !== null && children !== false && <div className={cx("flex flex-col", roomy ? "mt-1.5 gap-1" : "mt-1.5 gap-0.5")}>{children}</div>}
+    </div>
+  );
+}
+
+/** A card with a small titled head: a side panel's group (a thumbnail's layers, its pictures). */
+export function Panel({ title, icon, action, children, className }: { title: string; icon?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {
+  return (
+    <section className={cx("rounded-xl border border-line bg-panel", className)}>
+      <div className="flex h-9 items-center gap-1.5 pr-1.5 pl-2.5 text-[12px] font-medium text-secondary">
+        {icon && <span className="text-faint">{icon}</span>}
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {action}
+      </div>
+      <div className="px-1.5 pb-1.5">{children}</div>
+    </section>
+  );
+}
+
+const textBox = "w-full rounded-md border border-line bg-bg px-2 text-[13px] text-fg outline-none transition-colors placeholder:text-faint focus:border-line-strong";
+
+export function TextField({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  return <input {...props} className={cx("h-8", textBox, className)} />;
+}
+
+export function TextArea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea {...props} className={cx("resize-none py-1.5 leading-normal", textBox, className)} />;
+}
+
+/** A small word beside something: its state ("Final"), where it's from ("OpenArt"). `over` is for one sitting on a picture. */
+export function Badge({ tone = "neutral", children, title, className }: { tone?: "neutral" | "success" | "over"; children: ReactNode; title?: string; className?: string }) {
+  return (
+    <span
+      title={title}
+      className={cx(
+        "inline-flex h-[18px] shrink-0 items-center rounded-full px-1.5 text-[10.5px] leading-none font-medium whitespace-nowrap",
+        tone === "neutral" && "border border-line text-muted",
+        tone === "success" && "bg-success-soft text-success",
+        tone === "over" && "bg-black/70 text-white/85 backdrop-blur-[2px]",
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** One of a row of rounded choices (a thumbnail's versions); `active` is the one shown. */
+export function Chip({ active, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { active?: boolean }) {
+  return (
+    <button
+      type="button"
+      {...props}
+      className={cx(
+        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors",
+        active ? "border-line-strong bg-active text-fg" : "border-line text-muted hover:bg-hover hover:text-fg",
+        className,
+      )}
+    />
+  );
+}
+
+/**
+ * A number on a bar that fills as it grows (Camera Raw's controls, the way the
+ * team's other tools draw them; Sphe, Nov 3). A range through zero fills from
+ * the middle. Drag along it to change it (Alt for fine steps), click to type,
+ * double-click to put it back; `steppers` adds − and + at its sides.
+ */
+export function Slider({
+  value,
+  onChange,
+  min,
+  max,
+  step = 1,
+  precision = 0,
+  suffix,
+  reset,
+  steppers,
+  label,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  min: number;
+  max: number;
+  step?: number;
+  precision?: number;
+  suffix?: string;
+  /** What a double-click puts back: zero for a range through it, else the least. */
+  reset?: number;
+  steppers?: boolean;
+  /** Read out for the bar and its buttons. */
+  label: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState("");
+  const drag = useRef<{ x: number; width: number; value: number; moved: boolean } | null>(null);
+  const origin = min < 0 && max > 0 ? 0 : min;
+  const settle = (next: number) => Math.min(max, Math.max(min, Number((Math.round(next / step) * step).toFixed(precision))));
+  const at = (v: number) => (max > min ? ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * 100 : 0);
+  const shown = Number.isFinite(value) ? value.toFixed(precision) : "–";
+  const nudge = step < 1 ? step * 5 : step;
+  const from = Math.min(at(origin), at(value));
+  const to = Math.max(at(origin), at(value));
+
+  const bar = editing ? (
+    <input
+      autoFocus
+      value={text}
+      aria-label={label}
+      onChange={(event) => setText(event.target.value)}
+      onFocus={(event) => event.currentTarget.select()}
+      onBlur={() => {
+        const parsed = Number.parseFloat(text);
+        if (Number.isFinite(parsed)) onChange(settle(parsed));
+        setEditing(false);
+      }}
+      onKeyDown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Enter") event.currentTarget.blur();
+        if (event.key === "Escape") setEditing(false);
+      }}
+      className="h-7 min-w-0 flex-1 rounded-md bg-active px-2 text-center font-mono text-[12px] text-fg tabular outline-none"
+    />
+  ) : (
+    <div
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={value}
+      onPointerDown={(event) => {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        drag.current = { x: event.clientX, width: event.currentTarget.clientWidth, value, moved: false };
+      }}
+      onPointerMove={(event) => {
+        const state = drag.current;
+        if (state === null) return;
+        const dx = event.clientX - state.x;
+        if (!state.moved && Math.abs(dx) < 3) return;
+        state.moved = true;
+        onChange(settle(state.value + (dx / state.width) * (max - min) * (event.altKey ? 0.1 : 1)));
+      }}
+      onPointerUp={() => {
+        const state = drag.current;
+        drag.current = null;
+        if (state !== null && !state.moved) {
+          setText(shown);
+          setEditing(true);
+        }
+      }}
+      onPointerCancel={() => (drag.current = null)}
+      onDoubleClick={() => onChange(reset ?? origin)}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+        event.preventDefault();
+        event.stopPropagation();
+        const up = event.key === "ArrowRight" || event.key === "ArrowUp";
+        onChange(settle(value + (up ? 1 : -1) * nudge * (event.shiftKey ? 10 : 1)));
+      }}
+      className="relative h-7 min-w-0 flex-1 cursor-ew-resize overflow-hidden rounded-md bg-white/[0.05] transition-colors outline-none hover:bg-white/[0.07] focus-visible:ring-1 focus-visible:ring-line-strong"
+    >
+      <span className="absolute inset-y-0 bg-white/[0.11]" style={{ left: `${from}%`, width: `${to - from}%` }} />
+      {origin !== min && (
+        <>
+          <span className="absolute top-0 h-1.5 w-px bg-white/25" style={{ left: `${at(origin)}%` }} />
+          <span className="absolute bottom-0 h-1.5 w-px bg-white/25" style={{ left: `${at(origin)}%` }} />
+        </>
+      )}
+      <span className="relative flex h-full items-center justify-center font-mono text-[12px] text-fg tabular">
+        {shown}
+        {suffix && <span className="ml-0.5 text-faint">{suffix}</span>}
+      </span>
+    </div>
+  );
+  if (!steppers) return bar;
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-0.5">
+      <IconButton label={`${label} down`} onClick={() => onChange(settle(value - nudge))} className="size-7 shrink-0">
+        <Minus size={12} />
+      </IconButton>
+      {bar}
+      <IconButton label={`${label} up`} onClick={() => onChange(settle(value + nudge))} className="size-7 shrink-0">
+        <Plus size={12} />
+      </IconButton>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- dialogs' parts
+
+/** A dialog's title and the line under it, as every dialog in Edit has them. */
+export function DialogTitle({ title, detail }: { title: ReactNode; detail?: ReactNode }) {
+  return (
+    <>
+      <h2 className="text-[18px] font-semibold tracking-[-0.3px]">{title}</h2>
+      {detail && <div className="mt-1 text-[13px] leading-relaxed text-muted">{detail}</div>}
+    </>
+  );
+}
+
+/** A dialog's answers, right-aligned under what it says. */
+export function DialogActions({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cx("mt-[22px] flex items-center justify-end gap-2", className)}>{children}</div>;
+}
+
+/** "Delete this?": a question, what it means, Cancel and the answer. */
+export function ConfirmDialog({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  detail,
+  confirm,
+  busy,
+  tone = "destructive",
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+  title: ReactNode;
+  detail?: ReactNode;
+  /** The answer's words ("Delete", "Dismiss"). */
+  confirm: string;
+  busy?: boolean;
+  tone?: "destructive" | "primary" | "light";
+  /** Anything between the words and the answers (a choice, a list). */
+  children?: ReactNode;
+}) {
+  return (
+    <Modal open={open} onClose={onClose} width={380}>
+      <div className="p-6">
+        <DialogTitle title={title} detail={detail} />
+        {children}
+        <DialogActions>
+          <Button variant="subtle" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button variant={tone} disabled={busy} onClick={onConfirm}>
+            {busy && <Spinner size={13} />}
+            {confirm}
+          </Button>
+        </DialogActions>
+      </div>
+    </Modal>
   );
 }

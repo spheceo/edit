@@ -113,6 +113,7 @@ const THUMB_TOOLS: Record<string, [string, string]> = {
   switch_version: ["Switching version", "Switched version"],
   take_final: ["Taking the final version", "Took the final version"],
   remove_version: ["Removing a version", "Removed a version"],
+  compare: ["Comparing pictures", "Compared pictures"],
   comments: ["Checking the comments", "Checked the comments"],
   remove_comment: ["Removing a comment", "Removed a comment"],
   look_at_comment: ["Looking at a comment", "Looked at a comment"],

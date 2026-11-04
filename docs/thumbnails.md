@@ -54,6 +54,11 @@ person asks; Claude changes it through its tools:
 - `undo`, `redo`: back or forward on the layout's timeline (below).
 - `new_version`, `switch_version`, `take_final`, `remove_version`: versions
   (below).
+- `compare`: two to four pictures or versions side by side, the same area of
+  each blown up and labelled, so an edit is checked against what it had to
+  keep (the guide's "Getting a picture edit right": the reference, what must
+  hold and change, made from the reference, compared close, up to three tries,
+  a comment settled only when the comparison shows it done).
 - `comments`, `look_at_comment`, `reply_to_comment`, `settle_comment`,
   `remove_comment`: comments (below).
 - `save_overlay`: a picture the person gave, into the team's library with a

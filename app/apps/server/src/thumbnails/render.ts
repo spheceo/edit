@@ -38,7 +38,7 @@ function picture(url) {
   return pictures.get(url);
 }
 const sourceUrl = (id, source) => source.startsWith("asset:") ? "/api/thumbnails/assets/" + encodeURIComponent(source.slice(6)) + "/file" : "/api/thumbnails/" + encodeURIComponent(id) + "/images/" + encodeURIComponent(source);
-window.render = async (design, id, grid, type, marks, area) => {
+async function drawDesign(design, id) {
   const loaded = new Map();
   for (const layer of design.layers) {
     if (layer.kind === "image") loaded.set(layer.source, await picture(sourceUrl(id, layer.source)));
@@ -48,6 +48,36 @@ window.render = async (design, id, grid, type, marks, area) => {
   canvas.width = ${WIDTH}; canvas.height = ${HEIGHT};
   const context = canvas.getContext("2d", { willReadFrequently: true });
   drawThumbnail(context, design, { picture: (source) => loaded.get(source) ?? null, canvas: (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; } }, ${WIDTH}, ${HEIGHT});
+  return { canvas, context, missing: [...loaded].filter(([, one]) => one === null).map(([source]) => source) };
+}
+// Pictures side by side (two across, four in two rows), the same area of each blown up, each labelled in its corner.
+window.compare = async (panels, id, area) => {
+  const drawn = [];
+  for (const panel of panels) drawn.push({ ...(await drawDesign(panel.design, id)), label: panel.label });
+  const across = drawn.length <= 2 ? drawn.length : 2;
+  const down = Math.ceil(drawn.length / across);
+  const width = drawn.length <= 2 ? 1000 : 820;
+  const height = Math.round(Math.min(width * (area.height / area.width), 900));
+  const gap = 12;
+  const out = document.createElement("canvas");
+  out.width = across * width + (across - 1) * gap; out.height = down * height + (down - 1) * gap;
+  const context = out.getContext("2d");
+  context.fillStyle = "#000"; context.fillRect(0, 0, out.width, out.height);
+  drawn.forEach((one, index) => {
+    const x = (index % across) * (width + gap);
+    const y = Math.floor(index / across) * (height + gap);
+    context.imageSmoothingQuality = "high";
+    context.drawImage(one.canvas, area.x, area.y, area.width, area.height, x, y, width, height);
+    context.font = "bold 20px Helvetica";
+    const text = one.label;
+    const box = context.measureText(text).width + 20;
+    context.fillStyle = "rgba(0,0,0,0.78)"; context.fillRect(x + 10, y + 10, box, 32);
+    context.fillStyle = "#fff"; context.textBaseline = "middle"; context.fillText(text, x + 20, y + 27);
+  });
+  return { data: out.toDataURL("image/png"), missing: drawn.flatMap((one) => one.missing) };
+};
+window.render = async (design, id, grid, type, marks, area) => {
+  const { canvas, context, missing } = await drawDesign(design, id);
   if (grid) {
     context.save();
     context.strokeStyle = "rgba(0,255,255,0.55)"; context.fillStyle = "rgba(0,255,255,0.95)"; context.lineWidth = 1; context.font = "bold 14px Helvetica";
@@ -72,7 +102,6 @@ window.render = async (design, id, grid, type, marks, area) => {
     out.width = ${WIDTH}; out.height = ${HEIGHT};
     out.getContext("2d").drawImage(canvas, area.x, area.y, area.width, area.height, 0, 0, ${WIDTH}, ${HEIGHT});
   }
-  const missing = [...loaded].filter(([, one]) => one === null).map(([source]) => source);
   return { data: out.toDataURL(type, 0.9), missing };
 };
 window.ready = true;
@@ -221,7 +250,24 @@ function close(): void {
  * one area of it blown up to the whole size when asked. Missing pictures are
  * named.
  */
-export function draw(origin: string, id: string, design: Design, options: { grid?: boolean; type?: "image/png" | "image/jpeg"; marks?: { x: number; y: number; n: number }[]; area?: { x: number; y: number; width: number; height: number } } = {}): Promise<{ bytes: Uint8Array; missing: string[] }> {
+export function draw(origin: string, id: string, design: Design, options: { grid?: boolean; type?: "image/png" | "image/jpeg"; marks?: { x: number; y: number; n: number }[]; area?: Area } = {}): Promise<{ bytes: Uint8Array; missing: string[] }> {
+  return inChrome(origin, `window.render(${JSON.stringify(design)}, ${JSON.stringify(id)}, ${options.grid === true}, ${JSON.stringify(options.type ?? "image/png")}, ${JSON.stringify(options.marks ?? [])}, ${JSON.stringify(options.area ?? null)})`);
+}
+
+export type Area = { x: number; y: number; width: number; height: number };
+
+/**
+ * Layouts side by side as one PNG, the same area of each (canvas px) blown up
+ * and labelled: an edit checked against what it had to keep (Sphe, Nov 4:
+ * "let me have these images side by side… compare what went wrong with the
+ * eyes").
+ */
+export function compare(origin: string, id: string, panels: { design: Design; label: string }[], area: Area): Promise<{ bytes: Uint8Array; missing: string[] }> {
+  return inChrome(origin, `window.compare(${JSON.stringify(panels)}, ${JSON.stringify(id)}, ${JSON.stringify(area)})`);
+}
+
+/** One drawing on the page in the Chrome kept open (started again once if it went away): its PNG and the pictures it lacked. */
+function inChrome(origin: string, expression: string): Promise<{ bytes: Uint8Array; missing: string[] }> {
   const work = queue.then(async () => {
     if (idle !== null) clearTimeout(idle);
     for (let attempt = 0; ; attempt++) {
@@ -233,7 +279,7 @@ export function draw(origin: string, id: string, design: Design, options: { grid
       try {
         const open = await browser!;
         const started = Date.now();
-        const answer = await open.call("Runtime.evaluate", { expression: `window.render(${JSON.stringify(design)}, ${JSON.stringify(id)}, ${options.grid === true}, ${JSON.stringify(options.type ?? "image/png")}, ${JSON.stringify(options.marks ?? [])}, ${JSON.stringify(options.area ?? null)})`, awaitPromise: true, returnByValue: true });
+        const answer = await open.call("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
         const value = (answer.result as { value?: { data?: string; missing?: string[] } } | undefined)?.value;
         if (typeof value?.data !== "string") throw new Error(String((answer.exceptionDetails as { exception?: { description?: string } } | undefined)?.exception?.description ?? "Chrome drew nothing"));
         diag.record("thumbnails", "draw", Date.now() - started);

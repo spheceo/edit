@@ -202,6 +202,21 @@ export const TOOLS = [
     inputSchema: { type: "object", additionalProperties: false, properties: { grid: { type: "boolean" }, comments: { type: "boolean" } } },
   },
   {
+    name: "compare",
+    description:
+      'Two to four pictures side by side, the same area of each blown up and labelled: to check an edit against what it had to keep. Each is an image id, a version\'s name (V1…) as it\'s drawn, or "showing". area: {x, y, width, height} in canvas px (1280×720) — the part to judge (his eyes, a face, a caption) — or comment: "#5" for the area round its pin; left out, the whole frame. Read the file it names, and judge each point plainly ("gaze: up-left in the first, straight ahead in the second").',
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        pictures: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 4 },
+        area: { type: "object", properties: { x: { type: "number" }, y: { type: "number" }, width: { type: "number" }, height: { type: "number" } }, required: ["x", "y", "width", "height"] },
+        comment: { type: "string" },
+      },
+      required: ["pictures"],
+    },
+  },
+  {
     name: "comments",
     description: "The open comments on the thumbnail as they are now (the team may pin one while you work): each with its number, version, pin and replies, and the version showing drawn with its pins. Run it before you finish any turn that changed the thumbnail: do what's new on the version showing; ask about those on other versions.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
@@ -483,6 +498,38 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       const path = await drawn(session, found.thumb.design, args.grid === true);
       return `Read it: ${path}`;
     }
+    case "compare": {
+      const found = await cloud.get(session.id);
+      if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      const thumb = found.thumb;
+      const asked = Array.isArray(args.pictures) ? args.pictures.filter((one): one is string => typeof one === "string") : [];
+      if (asked.length < 2 || asked.length > 4) throw new Error("pictures is two to four: image ids, version names (V1…) or \"showing\".");
+      const panels = asked.map((one) => {
+        const key = one.trim();
+        const image = thumb.images.find((each) => each.id === key);
+        if (image !== undefined) return { design: { layers: [{ id: "picture", name: image.name, kind: "image" as const, source: image.id, x: 0, y: 0, width: WIDTH, height: HEIGHT, fit: "cover" as const, opacity: 100 }] }, label: `${image.id} · ${image.name}`.slice(0, 70) };
+        if (key.toLowerCase() === "showing") return { design: thumb.design, label: "showing" };
+        const version = thumb.versions?.find((each) => each.name.toLowerCase() === key.toLowerCase());
+        if (version !== undefined) return { design: version.id === thumb.activeVersion ? thumb.design : version.design, label: version.name };
+        throw new Error(`There's no picture or version ${key}: give image ids, version names (${(thumb.versions ?? []).map((each) => each.name).join(", ") || "it has one version"}) or "showing".`);
+      });
+      let area: render.Area = { x: 0, y: 0, width: WIDTH, height: HEIGHT };
+      if (typeof args.comment === "string" && args.comment.trim() !== "") {
+        const comment = commentOf(thumb, args.comment);
+        const width = WIDTH / 2;
+        const height = HEIGHT / 2;
+        area = { x: Math.min(WIDTH - width, Math.max(0, comment.x - width / 2)), y: Math.min(HEIGHT - height, Math.max(0, comment.y - height / 2)), width, height };
+      } else if (args.area !== null && typeof args.area === "object") {
+        const given = args.area as Record<string, unknown>;
+        const x = Math.min(WIDTH - 16, Math.max(0, Number(given.x) || 0));
+        const y = Math.min(HEIGHT - 16, Math.max(0, Number(given.y) || 0));
+        area = { x, y, width: Math.min(WIDTH - x, Math.max(16, Number(given.width) || WIDTH)), height: Math.min(HEIGHT - y, Math.max(16, Number(given.height) || HEIGHT)) };
+      }
+      const { bytes, missing } = await render.compare(session.context.origin, session.id, panels, area);
+      const path = join(session.folder, `compare-${Date.now()}.png`);
+      fs.writeFileSync(path, bytes);
+      return `${panels.map((one) => one.label).join(" | ")}, the area from (${Math.round(area.x)}, ${Math.round(area.y)}) to (${Math.round(area.x + area.width)}, ${Math.round(area.y + area.height)}).${missing.length > 0 ? ` (Not drawn, missing: ${missing.join(", ")})` : ""} Read it: ${path}`;
+    }
     case "comments": {
       const found = await cloud.get(session.id);
       if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
@@ -623,7 +670,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
   const images: string[] = [];
   for (const image of thumb.images.slice(-24)) {
     const path = await fileOf(session, image).catch(() => null);
-    images.push(`- ${image.id} “${image.name}” (${image.from}${image.model ? `, ${image.model}` : ""}, ${image.width}×${image.height})${image.prompt !== undefined ? `, its OpenArt prompt is stored (picture_prompt ${image.id})` : ""}${given.includes(image.id) ? " — given with this message" : ""}${path !== null ? `: ${path}` : ""}`);
+    images.push(`- ${image.id} “${image.name}” (${image.from}${image.model ? `, ${image.model}` : ""}, ${image.width}×${image.height})${image.references !== undefined && image.references.length > 0 ? `, made from ${image.references.join(", ")}` : ""}${image.prompt !== undefined ? `, its OpenArt prompt is stored (picture_prompt ${image.id})` : ""}${given.includes(image.id) ? " — given with this message" : ""}${path !== null ? `: ${path}` : ""}`);
   }
   const current = thumb.render !== null ? await assets.localPath(session.context.cacheDir, thumb.render.key).then((path) => {
     const copy = join(session.folder, "current.png");

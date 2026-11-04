@@ -499,8 +499,13 @@ export function startAudio(context: Context, base: string, layout: Layout): Audi
   return run;
 }
 
-/** This Mac's file of a piece: here, R2's, or made now. */
-export function ensureVideo(context: Context, base: string, layout: Layout, n: number): Promise<string> {
+/**
+ * This Mac's file of a piece: here, R2's, or made now. `urgent` (a read
+ * someone waits on: the viewer jumping to an hour in) is made before the
+ * pieces the background fill has in line; on the 10-hour trial (Nov 4) a
+ * jump waited 2 min 09 s, a minute of it behind the fill's piece.
+ */
+export function ensureVideo(context: Context, base: string, layout: Layout, n: number, urgent = true): Promise<string> {
   const key = videoKey(base, n);
   const local = context.local(key);
   if (isFile(local)) return Promise.resolve(local);
@@ -515,7 +520,7 @@ export function ensureVideo(context: Context, base: string, layout: Layout, n: n
     }
     const head = fs.readFileSync(await ensureHead(context, base));
     const expected = videoEntryOf(head);
-    const made = await making.with(() => makeVideo(context, base, layout, n, expected));
+    const made = await making.with(() => makeVideo(context, base, layout, n, expected), urgent);
     share(context, made.file, key);
     return made.file;
   });
@@ -619,7 +624,7 @@ export async function fill(context: Context, wants: { base: string; seconds: num
     for (let waited = 0; waited < 3600 && context.exporting() && !stop(); waited += 5) await Bun.sleep(5000);
     if (stop()) break;
     try {
-      await ensureVideo(context, want.base, layout, n);
+      await ensureVideo(context, want.base, layout, n, false);
       made++;
     } catch (error) {
       diag.warn("pieces", `${want.base}: piece ${n}: ${diag.messageOf(error)}`);

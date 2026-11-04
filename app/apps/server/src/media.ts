@@ -32,11 +32,12 @@ export class Semaphore {
 
   constructor(private permits: number) {}
 
-  async acquire(): Promise<() => void> {
+  /** `urgent`: someone is waiting on it now (a viewer's read), so it goes ahead of the background work in line. */
+  async acquire(urgent = false): Promise<() => void> {
     if (this.permits > 0) {
       this.permits -= 1;
     } else {
-      await new Promise<void>((resolve) => this.waiting.push(resolve));
+      await new Promise<void>((resolve) => (urgent ? this.waiting.unshift(resolve) : this.waiting.push(resolve)));
     }
     let released = false;
     return () => {
@@ -48,9 +49,9 @@ export class Semaphore {
     };
   }
 
-  /** Runs `work` holding a permit. */
-  async with<T>(work: () => Promise<T>): Promise<T> {
-    const release = await this.acquire();
+  /** Runs `work` holding a permit (`urgent`: ahead of the background work in line). */
+  async with<T>(work: () => Promise<T>, urgent = false): Promise<T> {
+    const release = await this.acquire(urgent);
     try {
       return await work();
     } finally {

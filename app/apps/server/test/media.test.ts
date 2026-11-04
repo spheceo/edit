@@ -51,6 +51,18 @@ test("a semaphore lets one through at a time", async () => {
   expect(order).toEqual(["a in", "a out", "b in", "b out", "c in", "c out"]);
 });
 
+test("an urgent wait goes ahead of the background work in line, never ahead of the one running", async () => {
+  const slots = new Semaphore(1);
+  const order: string[] = [];
+  const job = (name: string, urgent = false) =>
+    slots.with(async () => {
+      order.push(name);
+      await Bun.sleep(1);
+    }, urgent);
+  await Promise.all([job("fill 1"), job("fill 2"), job("fill 3"), job("viewer", true)]);
+  expect(order).toEqual(["fill 1", "viewer", "fill 2", "fill 3"]);
+});
+
 /** Waits for `source`'s stages to settle (none pending or working), from its `media` events. */
 function settled(store: { subscribe: (fn: (event: Record<string, unknown>) => void) => () => void }, source: string, done: (status: MediaStatus) => boolean): Promise<MediaStatus> {
   return new Promise((resolve) => {

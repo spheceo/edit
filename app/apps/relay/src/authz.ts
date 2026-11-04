@@ -101,6 +101,11 @@ export function ideaRefused(found: Caller, key: string): string | null {
 /** Where Edit writes in R2 (cloud_media.ts, covers.ts, reviews.ts, reports, ideas). */
 export const WRITABLE = [
   "edit/originals/", "edit/proxies/", "edit/excerpts/", "edit/analysis/", "edit/sound/",
+  // A long video's proxy in pieces (proxy_pieces.ts): its layout, head and each piece's picture and sound.
+  "edit/pieces/",
+  // A project's chat (chat_sync.ts), its finished exports (exports.ts), scrub strips (cloud_media.ts) and
+  // research (research_cloud.ts). Only admins could write them before Nov 4, so a teammate's never went up.
+  "edit/chats/", "edit/exports/", "edit/scrub/", "edit/research/",
   "edit/covers/", "edit/reviews/",
   // A long recording to be heard by link (transcribe_jobs.ts); the relay deletes it once heard.
   "edit/transcribe/",

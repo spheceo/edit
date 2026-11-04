@@ -181,7 +181,9 @@ export function bindBlurs(project: Project, ids: Iterable<string>): string[] {
     if (x1 <= x0 || y1 <= y0) continue;
     const same = x0 === cx - region.width! / 2 && y0 === cy - region.height! / 2 && x1 === cx + region.width! / 2 && y1 === cy + region.height! / 2;
     if (given !== undefined && same) continue;
-    blur.blur = { ...region, x: Math.fround((x0 + x1) / 2), y: Math.fround((y0 + y1) / 2), width: Math.fround(x1 - x0), height: Math.fround(y1 - y0) };
+    // A soft edge reaches past the box: where the box was cut to the picture's edge, a wide one blurred its border (N3on, 4:03).
+    const feather = same ? region.feather : Math.min(region.feather ?? 0, (4 * height) / 1080);
+    blur.blur = { ...region, x: Math.fround((x0 + x1) / 2), y: Math.fround((y0 + y1) / 2), width: Math.fround(x1 - x0), height: Math.fround(y1 - y0), feather: Math.fround(feather ?? 0) };
     bound.push(id);
   }
   return bound;

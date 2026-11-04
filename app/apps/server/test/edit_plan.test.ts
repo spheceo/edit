@@ -947,12 +947,12 @@ test("a_box_blur_over_a_card_sliding_in_moves_with_it_and_stops_at_its_edges", (
   const card = p.clips[0]!.id;
   // 540 px square at rest (1080 tall × 0.5); the box hangs 80 px off its left side.
   const result = apply(p, [
-    { op: "add", clip: { type: "adjustment", track: "new", start: 0, duration: 120, blur: { radius: 30, x: -250, y: 200, width: 200, height: 200, shape: "rect" } } },
+    { op: "add", clip: { type: "adjustment", track: "new", start: 0, duration: 120, blur: { radius: 30, x: -250, y: 200, width: 200, height: 200, feather: 20, shape: "rect" } } },
   ]);
   const blur = p.clips.find((one) => one.type === "adjustment")!;
   expect(result.bound).toEqual([blur.id]);
   expect(blur.parent).toBe(card);
-  expect(blur.type === "adjustment" && blur.blur).toMatchObject({ x: -210, y: 185, width: 120, height: 170 });
+  expect(blur.type === "adjustment" && blur.blur).toMatchObject({ x: -210, y: 185, width: 120, height: 170, feather: 4 });
   valid(p);
   // A parent given by hand is kept, and the box is still cut to it (N3on: the agent set it, the box spilled).
   apply(p, [{ op: "add", clip: { type: "adjustment", track: "new", start: 0, duration: 120, parent: card, blur: { radius: 30, x: 250, y: 0, width: 200, height: 100 } } }]);

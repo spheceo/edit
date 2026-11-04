@@ -954,6 +954,11 @@ test("a_box_blur_over_a_card_sliding_in_moves_with_it_and_stops_at_its_edges", (
   expect(blur.parent).toBe(card);
   expect(blur.type === "adjustment" && blur.blur).toMatchObject({ x: -210, y: 185, width: 120, height: 170 });
   valid(p);
+  // A parent given by hand is kept, and the box is still cut to it (N3on: the agent set it, the box spilled).
+  apply(p, [{ op: "add", clip: { type: "adjustment", track: "new", start: 0, duration: 120, parent: card, blur: { radius: 30, x: 250, y: 0, width: 200, height: 100 } } }]);
+  const own = p.clips.filter((one) => one.type === "adjustment").at(-1)!;
+  expect(own.parent).toBe(card);
+  expect(own.type === "adjustment" && own.blur).toMatchObject({ x: 210, width: 120, height: 100 });
   // Over a picture that stays put, a blur stays as it was put.
   const still = project("plan");
   still.media.push(media({ id: "m1", name: "stream", path: "/s.png", kind: "image", duration: 10, width: 1000, height: 1000, has_audio: false }));

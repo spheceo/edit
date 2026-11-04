@@ -143,17 +143,20 @@ export function bindBlurs(project: Project, ids: Iterable<string>): string[] {
   const bound: string[] = [];
   for (const id of ids) {
     const blur = clipOf(project, id);
-    if (blur === undefined || blur.type !== "adjustment" || blur.parent !== undefined) continue;
+    if (blur === undefined || blur.type !== "adjustment") continue;
     const region = blur.blur;
     if (region === undefined || (region.radius ?? 0) <= 0 || !((region.width ?? 0) > 0 && (region.height ?? 0) > 0)) continue;
     if (blur.keyframes?.["blur.x"] !== undefined || blur.keyframes?.["blur.y"] !== undefined) continue;
     const [cx, cy] = [region.x ?? 0, region.y ?? 0];
+    // A parent given (the agent's own, N3on: set by hand, the box still spilled off the card): only cut to it.
+    const given = blur.parent === undefined ? undefined : clipOf(project, blur.parent);
     const level = order.get(blur.track) ?? -1;
     // The topmost picture beneath it there, as it's set (its rest).
     let top: { clip: Clip; box: [number, number, number, number] } | null = null;
-    for (const clip of project.clips) {
-      if (clip.type !== "video" || hidden.has(clip.track) || (order.get(clip.track) ?? -1) >= level) continue;
-      if (!(clip.start <= blur.start && blur.start < clipEnd(clip)) || (clip.blend ?? "normal") !== "normal") continue;
+    for (const clip of given === undefined ? project.clips : [given]) {
+      if (clip.type !== "video") continue;
+      if (given === undefined && (hidden.has(clip.track) || (order.get(clip.track) ?? -1) >= level)) continue;
+      if (given === undefined && (!(clip.start <= blur.start && blur.start < clipEnd(clip)) || (clip.blend ?? "normal") !== "normal")) continue;
       const media = mediaOf(project, clip.media);
       if (media === undefined) continue;
       const [mw, mh] = [media.width || width, media.height || height];
@@ -165,16 +168,19 @@ export function bindBlurs(project: Project, ids: Iterable<string>): string[] {
         clip.transform.x + mw * fit * (0.5 - (crop.right ?? 0)),
         clip.transform.y + mh * fit * (0.5 - (crop.bottom ?? 0)),
       ];
-      if (cx < box[0] || cx > box[2] || cy < box[1] || cy > box[3]) continue;
+      if (given === undefined && (cx < box[0] || cx > box[2] || cy < box[1] || cy > box[3])) continue;
       if (top === null || (order.get(clip.track) ?? -1) > (order.get(top.clip.track) ?? -1)) top = { clip, box };
     }
     if (top === null || top.clip.type !== "video") continue;
     const moves = (top.clip.transform.shake ?? 0) > 0 || MOVES.some((name) => (top.clip.keyframes?.[name]?.length ?? 0) > 0);
-    if (!moves) continue;
+    if (given === undefined && !moves) continue;
     blur.parent = top.clip.id;
     // Cut to the picture: a box spilling past its edge blurred the wallpaper beside the card.
     const [x0, y0] = [Math.max(cx - region.width! / 2, top.box[0]), Math.max(cy - region.height! / 2, top.box[1])];
     const [x1, y1] = [Math.min(cx + region.width! / 2, top.box[2]), Math.min(cy + region.height! / 2, top.box[3])];
+    if (x1 <= x0 || y1 <= y0) continue;
+    const same = x0 === cx - region.width! / 2 && y0 === cy - region.height! / 2 && x1 === cx + region.width! / 2 && y1 === cy + region.height! / 2;
+    if (given !== undefined && same) continue;
     blur.blur = { ...region, x: Math.fround((x0 + x1) / 2), y: Math.fround((y0 + y1) / 2), width: Math.fround(x1 - x0), height: Math.fround(y1 - y0) };
     bound.push(id);
   }

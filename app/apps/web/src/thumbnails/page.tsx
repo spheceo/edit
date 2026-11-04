@@ -7,7 +7,7 @@
 // anywhere go to Claude with the next message.
 
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowLeft, Check, ChevronDown, Download, Image as ImageIcon, MessageSquare, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Copy, Download, FolderDown, Image as ImageIcon, MessageSquare, Trash2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ChatShell, ChatTurns, Empty, useChatTurns, useSentNow } from "../components/AgentPanel";
@@ -15,10 +15,11 @@ import { ChatComposer } from "../components/ChatComposer";
 import { ChatDock } from "../components/ChatDock";
 import { attachFiles, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
-import { toggleMenu } from "../components/ContextMenu";
+import { openMenu, toggleMenu, type MenuItem } from "../components/ContextMenu";
+import { FolderPicker } from "../components/FolderBrowser";
 import { Button, cx, IconButton, spring } from "../components/ui";
 import { conversationEntries, thumbActivity } from "../lib/agentTurns";
-import { saveFile } from "../lib/files";
+import { onThisMac, saveFile } from "../lib/files";
 import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
 import { ago } from "../lib/time";
@@ -321,15 +322,23 @@ export function ThumbnailScreen({ id }: { id: string }) {
     };
   });
 
-  const download = (type: "image/png" | "image/jpeg") => {
-    canvas.current?.toBlob(
-      (blob) => {
-        if (blob !== null) void saveFile(`${(thumb?.title || "thumbnail").replace(/[^\w -]+/g, "").trim() || "thumbnail"}.${type === "image/png" ? "png" : "jpg"}`, blob);
-      },
-      type,
-      0.92,
-    );
-  };
+  const named = (thumb?.title || "thumbnail").replace(/[^\w -]+/g, "").trim() || "thumbnail";
+  const [savingAs, setSavingAs] = useState<Picture | null>(null);
+  /** What a right click on the thumbnail (or a version's tile) offers, in place of the window's own menu. */
+  const imageMenu = (image: Picture): MenuItem[] => [
+    { label: "Copy image", icon: <Copy size={14} />, onSelect: () => copyImage(image.drawing) },
+    // Its folder is picked on this Mac: from another device, Export is the download.
+    ...(onThisMac() ? [{ label: "Save image as…", icon: <FolderDown size={14} />, onSelect: () => setSavingAs(image) }] : []),
+    {
+      label: "Export",
+      icon: <Download size={14} />,
+      submenu: [
+        { label: "JPEG", onSelect: () => exportImage(image, "image/jpeg") },
+        { label: "PNG", onSelect: () => exportImage(image, "image/png") },
+      ],
+    },
+  ];
+  const showing = (): Picture | null => (design === null || design.layers.length === 0 ? null : { drawing: drawingOf(design, picture), name: named });
 
   return (
     <div
@@ -355,8 +364,12 @@ export function ThumbnailScreen({ id }: { id: string }) {
             (error: unknown) => toastError(error, "rename it"),
           )
         }
-        onDownload={download}
+        onDownload={(type) => {
+          const image = showing();
+          if (image !== null) exportImage(image, type);
+        }}
       />
+      <SaveImageAs image={savingAs} onClose={() => setSavingAs(null)} />
       {/* No padding on the right: the chat's edge sits there. */}
       <div className="flex min-h-0 flex-1 pb-2 pl-2">
         <main className="flex min-w-0 flex-1 flex-col items-center gap-3 px-4 pt-2 pb-2">
@@ -364,10 +377,18 @@ export function ThumbnailScreen({ id }: { id: string }) {
             <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Loader size={32} />}</div>
           ) : (
             <>
-              <Stage canvas={canvas} empty={design.layers.length === 0} run={viewing === thumb.activeVersion ? thumb.run : null}>
+              <Stage
+                canvas={canvas}
+                empty={design.layers.length === 0}
+                run={viewing === thumb.activeVersion ? thumb.run : null}
+                onContextMenu={(event) => {
+                  const image = showing();
+                  if (image !== null) openMenu(event, imageMenu(image), { width: 190 });
+                }}
+              >
                 {(scale) => <Comments thumb={thumb} viewing={viewing} scale={scale} commenting={commenting} onComment={comment} onRemove={removeComment} />}
               </Stage>
-              <Versions thumb={thumb} viewing={viewing} picture={picture} tick={tick} running={running} onShow={showVersion} onFinal={takeFinal} />
+              <Versions thumb={thumb} viewing={viewing} picture={picture} tick={tick} running={running} onShow={showVersion} onFinal={takeFinal} onMenu={(event, version, design) => openMenu(event, imageMenu({ drawing: drawingOf(design, picture), name: `${named} ${version.name}` }), { width: 190 })} />
             </>
           )}
         </main>
@@ -379,6 +400,72 @@ export function ThumbnailScreen({ id }: { id: string }) {
   );
 }
 
+// ---------------------------------------------------------------- keeping the picture
+
+type Format = "image/jpeg" | "image/png";
+
+/** A thumbnail as drawn, full size, and the name its file takes. */
+interface Picture {
+  drawing: HTMLCanvasElement;
+  name: string;
+}
+
+const blobOf = (drawing: HTMLCanvasElement, type: Format) =>
+  new Promise<Blob>((resolve, reject) => drawing.toBlob((blob) => (blob === null ? reject(new Error("the picture couldn't be made")) : resolve(blob)), type, 0.92));
+
+function exportImage(image: Picture, type: Format): void {
+  blobOf(image.drawing, type).then(
+    (blob) => saveFile(`${image.name}.${type === "image/png" ? "png" : "jpg"}`, blob),
+    (error: unknown) => useEditor.getState().toastError(error, "export it"),
+  );
+}
+
+/** Onto the clipboard as a PNG (what macOS pastes as a picture); the blob is handed over as a promise so the click still counts as the person's. */
+function copyImage(drawing: HTMLCanvasElement): void {
+  navigator.clipboard.write([new ClipboardItem({ "image/png": blobOf(drawing, "image/png") })]).then(
+    () => useEditor.getState().toast("Copied the image"),
+    (error: unknown) => useEditor.getState().toastError(error, "copy the image"),
+  );
+}
+
+const SAVE_FOLDER = "thumbnails.save-folder";
+
+/** Save image as…: a folder on this Mac (the last one picked opens first) and the file's name; a name ending in .png saves a PNG, anything else a JPEG. */
+function SaveImageAs({ image, onClose }: { image: Picture | null; onClose: () => void }) {
+  const [name, setName] = useState("");
+  useEffect(() => {
+    if (image !== null) setName(`${image.name}.jpg`);
+  }, [image]);
+  return (
+    <FolderPicker
+      open={image !== null}
+      onClose={onClose}
+      title="Save image as"
+      detail="A JPEG, or a PNG if its name ends in .png."
+      start={localStorage.getItem(SAVE_FOLDER) ?? undefined}
+      confirm="Save here"
+      onPick={async (folder) => {
+        if (image === null) return;
+        const typed = name.trim().replace(/[/\\:]+/g, " ") || `${image.name}.jpg`;
+        const type: Format = /\.png$/i.test(typed) ? "image/png" : "image/jpeg";
+        const file = type === "image/png" || /\.jpe?g$/i.test(typed) ? typed : `${typed}.jpg`;
+        await saveFile(file, await blobOf(image.drawing, type), folder);
+        localStorage.setItem(SAVE_FOLDER, folder);
+        onClose();
+      }}
+      aside={(_here, _pick, busy) => (
+        <input
+          value={name}
+          disabled={busy}
+          aria-label="File name"
+          onChange={(event) => setName(event.target.value)}
+          className="h-[34px] w-[260px] min-w-0 rounded-md border border-line bg-panel px-3 text-[13px] text-fg outline-none focus:border-line-strong"
+        />
+      )}
+    />
+  );
+}
+
 // ---------------------------------------------------------------- the header
 
 let scratch: CanvasRenderingContext2D | null = null;
@@ -387,6 +474,7 @@ let scratch: CanvasRenderingContext2D | null = null;
 function Header({ thumb, running, commenting, onCommenting, onTitle, onDownload }: { thumb: Thumbnail | null; running: boolean; commenting: boolean; onCommenting: () => void; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void }) {
   const [title, setTitle] = useState(thumb?.title ?? "");
   useEffect(() => setTitle(thumb?.title ?? ""), [thumb?.title]);
+  const empty = thumb === null || thumb.design.layers.length === 0;
   // The title's box fits its words, as the edit page's name does: measured, capped.
   const titleInput = useRef<HTMLInputElement>(null);
   const [titleWidth, setTitleWidth] = useState(120);
@@ -430,20 +518,27 @@ function Header({ thumb, running, commenting, onCommenting, onTitle, onDownload 
         </button>
       )}
       {thumb !== null && <OpenArtMenu thumb={thumb} running={running} />}
-      <Button
-        variant="subtle"
-        size="sm"
-        className="mr-1.5"
-        disabled={thumb === null || thumb.design.layers.length === 0}
-        onClick={(event) =>
-          toggleMenu(event.currentTarget, [
-            { label: "PNG", onSelect: () => onDownload("image/png") },
-            { label: "JPEG", onSelect: () => onDownload("image/jpeg") },
-          ])
-        }
-      >
-        <Download size={14} /> Download
-      </Button>
+      {/* A JPEG by default (Sphe, Nov 4); the arrow beside it has PNG. */}
+      <div className="mr-1.5 flex">
+        <Button variant="subtle" size="sm" className="rounded-r-none" disabled={empty} onClick={() => onDownload("image/jpeg")}>
+          <Download size={14} /> Download
+        </Button>
+        <Button
+          variant="subtle"
+          size="sm"
+          aria-label="Download as"
+          className="-ml-px rounded-l-none px-1.5"
+          disabled={empty}
+          onClick={(event) =>
+            toggleMenu(event.currentTarget, [
+              { label: "JPEG", hint: "Default", onSelect: () => onDownload("image/jpeg") },
+              { label: "PNG", onSelect: () => onDownload("image/png") },
+            ], { width: 160 })
+          }
+        >
+          <ChevronDown size={13} />
+        </Button>
+      </div>
       <AppMenu />
     </header>
   );
@@ -587,7 +682,7 @@ function OpenArtMenu({ thumb, running }: { thumb: Thumbnail; running: boolean })
 
 // ---------------------------------------------------------------- the canvas
 
-function Stage({ canvas, empty, run, children }: { canvas: React.RefObject<HTMLCanvasElement | null>; empty: boolean; run: ThumbRun | null; children: (scale: number) => ReactNode }) {
+function Stage({ canvas, empty, run, onContextMenu, children }: { canvas: React.RefObject<HTMLCanvasElement | null>; empty: boolean; run: ThumbRun | null; onContextMenu: (event: React.MouseEvent) => void; children: (scale: number) => ReactNode }) {
   const area = useRef<HTMLDivElement>(null);
   const running = run !== null && (run.state === "running" || run.state === "queued");
   // The canvas as big as the space allows, at 16:9.
@@ -610,7 +705,7 @@ function Stage({ canvas, empty, run, children }: { canvas: React.RefObject<HTMLC
     <div ref={area} className="relative flex min-h-0 w-full flex-1 items-center justify-center pb-4">
       {/* While Claude works: the page breathes behind the thumbnail. */}
       <AnimatePresence>{running && <motion.div key="aura" {...fade} className="pointer-events-none absolute -inset-x-4 -inset-y-2"><div className="working-aura" /></motion.div>}</AnimatePresence>
-      <div style={{ width: size.width, height: size.height }} className="relative isolate shrink-0 rounded-xl select-none">
+      <div style={{ width: size.width, height: size.height }} onContextMenu={onContextMenu} className="relative isolate shrink-0 rounded-xl select-none">
         <AnimatePresence>
           {running && (
             <motion.div key="light" {...fade} className="pointer-events-none absolute inset-0 -z-10 rounded-xl">
@@ -854,7 +949,7 @@ function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number 
  * than one (Sphe, Nov 4: the V1 / V2 pills "changed significantly"): a click
  * shows one, and the one that ships is marked Final, on its own tile.
  */
-function Versions({ thumb, viewing, picture, tick, running, onShow, onFinal }: { thumb: Thumbnail; viewing: string | undefined; picture: (source: string) => HTMLImageElement | null; tick: number; running: boolean; onShow: (version: string) => void; onFinal: (version: string) => void }) {
+function Versions({ thumb, viewing, picture, tick, running, onShow, onFinal, onMenu }: { thumb: Thumbnail; viewing: string | undefined; picture: (source: string) => HTMLImageElement | null; tick: number; running: boolean; onShow: (version: string) => void; onFinal: (version: string) => void; onMenu: (event: React.MouseEvent, version: ThumbVersion, design: Design) => void }) {
   const versions = thumb.versions ?? [];
   return (
     <AnimatePresence initial={false}>
@@ -883,6 +978,7 @@ function Versions({ thumb, viewing, picture, tick, running, onShow, onFinal }: {
                   tick={tick}
                   onShow={() => onShow(version.id)}
                   onFinal={() => onFinal(version.id)}
+                  onMenu={(event) => onMenu(event, version, settleCaptions(version.id === thumb.activeVersion ? thumb.design : version.design))}
                 />
               ))}
             </AnimatePresence>
@@ -893,7 +989,7 @@ function Versions({ thumb, viewing, picture, tick, running, onShow, onFinal }: {
   );
 }
 
-function VersionTile({ version, design, showing, worked, final, comments, picture, tick, onShow, onFinal }: { version: ThumbVersion; design: Design; showing: boolean; worked: boolean; final: boolean; comments: number; picture: (source: string) => HTMLImageElement | null; tick: number; onShow: () => void; onFinal: () => void }) {
+function VersionTile({ version, design, showing, worked, final, comments, picture, tick, onShow, onFinal, onMenu }: { version: ThumbVersion; design: Design; showing: boolean; worked: boolean; final: boolean; comments: number; picture: (source: string) => HTMLImageElement | null; tick: number; onShow: () => void; onFinal: () => void; onMenu: (event: React.MouseEvent) => void }) {
   const small = useRef<HTMLCanvasElement>(null);
   const shape = JSON.stringify(design);
   useEffect(() => {
@@ -911,6 +1007,7 @@ function VersionTile({ version, design, showing, worked, final, comments, pictur
         type="button"
         title={showing ? `${version.name} is showing` : `Show ${version.name}`}
         onClick={() => !showing && onShow()}
+        onContextMenu={onMenu}
         className={cx(
           "relative aspect-video overflow-hidden rounded-md bg-panel ring-offset-2 ring-offset-black transition-[box-shadow,opacity] duration-200",
           showing ? "ring-2 ring-white" : "ring-1 ring-line hover:ring-line-strong",

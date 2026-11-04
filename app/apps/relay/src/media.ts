@@ -63,7 +63,12 @@ export interface EdgeCache {
 export async function media(request: Request, url: URL, env: MediaEnv, r2: R2 | null, cache: EdgeCache | null, now = Date.now()): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") return new Response("GET only", { status: 405 });
   if (!env.MEDIA_SECRET || r2 === null) return new Response("media isn't set up on this relay", { status: 404 });
-  const key = decodeURIComponent(url.pathname.slice("/v1/media/".length));
+  let key: string;
+  try {
+    key = decodeURIComponent(url.pathname.slice("/v1/media/".length));
+  } catch {
+    return new Response("not a valid media address (or it has lapsed)", { status: 403 });
+  }
   const exp = Number(url.searchParams.get("exp"));
   const sig = url.searchParams.get("sig") ?? "";
   if (!cacheable(key) || !Number.isInteger(exp) || exp * 1000 < now || !same(sig, await signature(env.MEDIA_SECRET, key, exp))) {

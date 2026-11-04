@@ -119,7 +119,7 @@ async function codecOf(path: string): Promise<string | null> {
 }
 
 /** The render's sound file now: the joined render's once it's there, else the mix beside the render being made. */
-function soundOf(app: App, id: string, output: string, manifest: Manifest | null): string | null {
+function soundOf(id: string, output: string, manifest: Manifest | null): string | null {
   if (manifest !== null && manifest.sound !== null && isFile(manifest.output)) return manifest.output;
   const folder = output.slice(0, output.lastIndexOf("/"));
   const stem = output.slice(output.lastIndexOf("/") + 1);
@@ -131,7 +131,6 @@ function soundOf(app: App, id: string, output: string, manifest: Manifest | null
   }
   // The export's partial file is `<output>.<pid>-<project>.partial.mp4` (this server's pid: the engine runs in it),
   // its mix beside it with `.sound.m4a`; one another process left is never this render's.
-  void app;
   const mix = names.find((name) => name === `${stem}.${process.pid}-${id}.playback.partial.mp4.sound.m4a`);
   return mix === undefined ? null : join(folder, mix);
 }
@@ -190,7 +189,7 @@ export function segment(app: App, id: string, key: string, fps: number): Respons
 
 /** The sound's address now, versioned by the file it reads (the mix, then the joined render): a new one is a new address. */
 export function soundUrl(app: App, id: string, output: string): string | null {
-  const path = soundOf(app, id, output, manifestOf(chunkDir(app, id)));
+  const path = soundOf(id, output, manifestOf(chunkDir(app, id)));
   if (path === null) return null;
   try {
     const stat = fs.statSync(path);
@@ -214,7 +213,7 @@ export function routes(router: Router<App>, lookup: Lookup, fpsOf: (app: App, id
     .get("/api/projects/{id}/playback/segment/{key}", ({ app, params }) => segment(app, params.id ?? "", params.key ?? "", fpsOf(app, params.id ?? "")))
     .get("/api/projects/{id}/playback/sound", ({ app, params, request }) => {
       const id = params.id ?? "";
-      const path = soundOf(app, id, output(app, id), manifestOf(chunkDir(app, id)));
+      const path = soundOf(id, output(app, id), manifestOf(chunkDir(app, id)));
       if (path === null) throw notFound("the sound isn't mixed yet");
       const response = serveFile(request, path);
       // Each file is its own address (`soundUrl`'s `v`).

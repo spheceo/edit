@@ -19,7 +19,12 @@ function context(dir: string, over: Partial<Context> = {}): Context {
   return { now: 100 * DAY, roots: [`${dir}/Movies/Edit`], reviewed: () => null, onDrive: () => null, busy: () => false, ...over };
 }
 
-const record = (path: string, daysAgo: number): Kept => ({ path, name: path.split("/").pop()!, finished_ms: 100 * DAY - daysAgo * DAY, bytes: 100 });
+/** An export listed as finished `daysAgo` before the test's day 100; its file (when there is one) written then, as an export's is. */
+function record(path: string, daysAgo: number): Kept {
+  const finished = 100 * DAY - daysAgo * DAY;
+  if (fs.existsSync(path)) fs.utimesSync(path, finished / 1000, finished / 1000);
+  return { path, name: path.split("/").pop()!, finished_ms: finished, bytes: 100 };
+}
 
 test("the newest export always stays; older ones go once a newer one is a week old, shared or not, saying where they still are", () => {
   const { dir, cleanup } = scratch("retention-rule");
@@ -40,6 +45,23 @@ test("the newest export always stays; older ones go once a newer one is a week o
     const onDrive = decide({ p: [record(v1!, 20), record(v2!, 9)] }, context(dir, { onDrive: () => 100 * DAY - 10 * DAY }));
     expect(onDrive.find((one) => one.path === v1!)?.removed).toMatchObject({ drive: true, reason: "still on Drive" });
     expect(AFTER_MS).toBe(7 * DAY);
+  } finally {
+    cleanup();
+  }
+});
+
+test("never another project's newest file, nor a file written there after the export", () => {
+  const { dir, cleanup } = scratch("retention-shared-path");
+  try {
+    const [same, later] = files(dir, ["Untitled.mp4", "later.mp4"]);
+    // Project a's older export and project b's newest were both written to Untitled.mp4.
+    const shared = decide({ a: [record(same!, 20), record(later!, 9)], b: [record(same!, 1)] }, context(dir));
+    expect(shared.find((one) => one.project === "a" && one.path === same!)).toMatchObject({ remove: false, why: "another project's newest export is at that path" });
+    // Written over by hand (or by an export Edit no longer lists) after this one finished.
+    const listed = record(same!, 20);
+    fs.utimesSync(same!, (100 * DAY) / 1000, (100 * DAY) / 1000);
+    const rewritten = decide({ a: [listed, record(later!, 9)] }, context(dir));
+    expect(rewritten.find((one) => one.path === same!)).toMatchObject({ remove: false, why: "the file there was written after this export" });
   } finally {
     cleanup();
   }

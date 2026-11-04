@@ -81,21 +81,30 @@ const inside = (path: string, roots: string[]) => roots.some((root) => root !== 
 /** What becomes of each export of each project here, by the rule above. */
 export function decide(records: Record<string, Kept[]>, context: Context): Decision[] {
   const out: Decision[] = [];
+  // Every project's newest file: an older entry of another project naming the same path (two projects
+  // exported under one name) is that project's newest now, never this one's to delete.
+  const newestPaths = new Set(Object.values(records).flatMap((own) => {
+    const newest = [...own].sort((a, b) => a.finished_ms - b.finished_ms).at(-1);
+    return newest === undefined ? [] : [newest.path];
+  }));
   for (const [project, own] of Object.entries(records)) {
     const ordered = [...own].sort((a, b) => a.finished_ms - b.finished_ms);
     const newest = ordered.at(-1);
     ordered.forEach((record, index) => {
       if (record.removed !== undefined) return;
-      let bytes = 0;
+      let file: fs.Stats;
       try {
-        bytes = fs.statSync(record.path).size;
+        file = fs.statSync(record.path);
       } catch {
         // Not here (archived to the cloud, or deleted by hand): nothing to free.
         return;
       }
-      const decision: Decision = { project, path: record.path, name: record.name, version: index + 1, bytes, remove: false, why: "" };
+      const decision: Decision = { project, path: record.path, name: record.name, version: index + 1, bytes: file.size, remove: false, why: "" };
       const settle = (remove: boolean, why: string, removed?: Removed) => out.push({ ...decision, remove, why, ...(removed === undefined ? {} : { removed }) });
       if (record === newest) return settle(false, "the newest: re-exports copy from it");
+      if (newestPaths.has(record.path)) return settle(false, "another project's newest export is at that path");
+      // Written after this export finished: another export (or a person) put a different file there.
+      if (file.mtimeMs > record.finished_ms + 60_000) return settle(false, "the file there was written after this export");
       if (!inside(record.path, context.roots)) return settle(false, "not in Edit's export folders");
       const later = ordered.slice(index + 1);
       const full = (context.short ?? 0) > 0;

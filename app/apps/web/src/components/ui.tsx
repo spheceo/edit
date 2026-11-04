@@ -307,25 +307,39 @@ export function Modal({
   );
 }
 
+/**
+ * One of a few, the chosen one's highlight sliding to it. `framed` draws it as
+ * the kit's segmented control (.sp-seg): a bordered track, for a choice inside
+ * a form; bare, it's a panel's tabs.
+ */
 export function Tabs<T extends string>({
   value,
   tabs,
   onChange,
   id,
+  framed,
+  label,
 }: {
   value: T;
   tabs: { value: T; label: string }[];
   onChange: (value: T) => void;
   id: string;
+  framed?: boolean;
+  /** What the choice is, read out. */
+  label?: string;
 }) {
   return (
-    <div className="flex gap-1">
+    <div role="radiogroup" aria-label={label} className={cx("flex", framed ? "h-[30px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5" : "gap-1")}>
       {tabs.map((tab) => (
         <button
           key={tab.value}
+          type="button"
+          role="radio"
+          aria-checked={value === tab.value}
           onClick={() => onChange(tab.value)}
           className={cx(
-            "relative h-7 rounded-md px-2.5 text-[12px] font-medium transition-colors",
+            "relative rounded-md px-2.5 text-[12px] font-medium transition-colors",
+            framed ? "h-full" : "h-7",
             value === tab.value ? "text-fg" : "text-muted hover:text-fg",
           )}
         >

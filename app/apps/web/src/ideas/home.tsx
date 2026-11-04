@@ -5,7 +5,7 @@
 import { ArrowUpRight, CircleAlert, ExternalLink, Eye, Lightbulb, MessageSquare, Send, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Button, cx, Modal, Spinner, Switch } from "../components/ui";
+import { Button, cx, DialogActions, DialogTitle, Field, Modal, Spinner, Switch, Tabs, TextArea, TextField } from "../components/ui";
 import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LengthCell, NAME, ROW, RowButtons, StatusCell, Updated, useAside, withAside } from "../components/HomeTable";
 import { WORKSPACE_NAMES, type Workspace } from "@edit/types/ideas";
 import { ideasApi, NICHE, viewsLabel, type ChangeCard, type IdeaRow, type IdeasHome } from "../lib/ideas";
@@ -250,77 +250,60 @@ export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () 
   };
   return (
     <Modal open={open} onClose={close} width={520}>
-      <div className="p-5">
-        <h2 className="text-[15px] font-semibold">New idea</h2>
-        <p className="mt-1 text-[12px] text-muted">{KIND[workspace].what}, one a line. Each becomes an idea Claude repackages: 3–5 titles and a thumbnail guide.</p>
-        <textarea
-          autoFocus
-          value={links}
-          onChange={(event) => setLinks(event.target.value)}
-          placeholder="https://www.youtube.com/watch?v=…"
-          rows={4}
-          className="mt-4 w-full resize-none rounded-lg border border-line-strong bg-bg px-3 py-2 text-[13px] text-fg outline-none placeholder:text-faint focus:border-muted"
-        />
-        {workspaces.length > 1 && (
-          <div className="mt-3 flex items-center justify-between text-[13px]">
-            <span>Kind</span>
-            {/* The kit's segmented control (.sp-seg), as Home's tabs. */}
-            <div className="flex h-[30px] gap-0.5 rounded-[9px] border border-line bg-panel p-0.5" role="radiogroup" aria-label="Kind of idea">
-              {workspaces.map((value) => (
-                <button
-                  key={value}
-                  role="radio"
-                  aria-checked={workspace === value}
-                  onClick={() => choose(value)}
-                  className={cx("rounded-md px-2.5 text-[12.5px] font-medium transition-colors", workspace === value ? "bg-active text-fg" : "text-muted hover:text-fg")}
-                >
-                  {WORKSPACE_NAMES[value]}
-                </button>
-              ))}
+      <div className="p-6">
+        <DialogTitle title="New idea" detail={`${KIND[workspace].what}, one a line. Each becomes an idea Claude repackages: 3–5 titles and a thumbnail guide.`} />
+        <div className="mt-4 flex flex-col gap-3">
+          <TextArea autoFocus value={links} onChange={(event) => setLinks(event.target.value)} placeholder="https://www.youtube.com/watch?v=…" rows={4} aria-label="Links" />
+          {workspaces.length > 1 && (
+            <div className="flex items-center justify-between text-[13px]">
+              <span>Kind</span>
+              <Tabs framed id="new-idea-kind" label="Kind of idea" value={workspace} onChange={choose} tabs={workspaces.map((value) => ({ value, label: WORKSPACE_NAMES[value] }))} />
             </div>
-          </div>
-        )}
-        <label className="mt-3 block text-[12px] text-muted">
-          Angle <span className="text-faint">(optional)</span>
-          <input
-            value={steer}
-            onChange={(event) => setSteer(event.target.value)}
-            placeholder={KIND[workspace].angle}
-            className="mt-1 h-[34px] w-full rounded-lg border border-line-strong bg-bg px-3 text-[13px] text-fg outline-none placeholder:text-faint focus:border-muted"
-          />
-        </label>
-        {count <= 1 && (
-          <label className="mt-3 block text-[12px] text-muted">
-            Footage <span className="text-faint">(optional: YouTube or Drive links; the idea's page adds more and marks reuses)</span>
-            <input
-              value={footage}
-              onChange={(event) => setFootage(event.target.value)}
-              placeholder="https://drive.google.com/drive/folders/…  https://youtu.be/…"
-              className="mt-1 h-[34px] w-full rounded-lg border border-line-strong bg-bg px-3 text-[13px] text-fg outline-none placeholder:text-faint focus:border-muted"
-            />
+          )}
+          <Field
+            stacked
+            label={
+              <span>
+                Angle <span className="text-faint">(optional)</span>
+              </span>
+            }
+          >
+            <TextField value={steer} onChange={(event) => setSteer(event.target.value)} placeholder={KIND[workspace].angle} />
+          </Field>
+          {count <= 1 && (
+            <Field
+              stacked
+              label={
+                <span>
+                  Footage <span className="text-faint">(optional: YouTube or Drive links; the idea's page adds more and marks reuses)</span>
+                </span>
+              }
+            >
+              <TextField value={footage} onChange={(event) => setFootage(event.target.value)} placeholder="https://drive.google.com/drive/folders/…  https://youtu.be/…" />
+            </Field>
+          )}
+          <label className="flex items-center justify-between text-[13px]">
+            <span>
+              Write a summary <span className="text-[12px] text-faint">one paragraph, 35–55 words</span>
+            </span>
+            <Switch checked={summary} onChange={setSummary} />
           </label>
-        )}
-        <label className="mt-3 flex items-center justify-between text-[13px]">
-          <span>
-            Write a summary <span className="text-[12px] text-faint">one paragraph, 35–55 words</span>
-          </span>
-          <Switch checked={summary} onChange={setSummary} />
-        </label>
+        </div>
         {problem !== null && <p className="mt-3 text-[12px] whitespace-pre-line text-danger">{problem}</p>}
         {known.map((one) => (
-          <button key={one.id} onClick={() => navigate(`/ideas/${one.id}`)} className="mt-2 block text-left text-[12px] text-warning hover:underline hover:underline-offset-[3px]">
+          <button key={one.id} type="button" onClick={() => navigate(`/ideas/${one.id}`)} className="mt-2 block text-left text-[12px] text-warning hover:underline hover:underline-offset-[3px]">
             {one.why} Open it ›
           </button>
         ))}
-      </div>
-      <div className="flex justify-end gap-2 border-t border-line bg-bg/40 px-5 py-3">
-        <Button variant="ghost" onClick={close} disabled={busy}>
-          Cancel
-        </Button>
-        <Button variant="primary" onClick={make} disabled={busy || count === 0}>
-          {busy && <Spinner size={13} />}
-          {count > 1 ? `Repackage ${count}` : "Repackage"}
-        </Button>
+        <DialogActions>
+          <Button variant="subtle" onClick={close} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={make} disabled={busy || count === 0}>
+            {busy && <Spinner size={13} />}
+            {count > 1 ? `Repackage ${count}` : "Repackage"}
+          </Button>
+        </DialogActions>
       </div>
     </Modal>
   );

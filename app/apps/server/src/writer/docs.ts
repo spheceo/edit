@@ -9,6 +9,7 @@
 import type { Script } from "@edit/types/writer";
 
 import * as diag from "../diag.ts";
+import * as endpoints from "../endpoints.ts";
 import * as drive from "./drive.ts";
 import * as jobs from "./jobs.ts";
 import * as store from "./store.ts";
@@ -35,7 +36,8 @@ async function google(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("authorization", `Bearer ${await drive.hooks.accessToken()}`);
   if (init.body && typeof init.body === "string" && !headers.has("content-type")) headers.set("content-type", "application/json");
-  const answer = await fetch(url, { ...init, headers, signal: AbortSignal.timeout(120_000) });
+  // Through the relay's Google gateway unless this Mac signs in to Google itself (endpoints.ts).
+  const answer = await fetch(endpoints.google(url.toString()), { ...init, headers, signal: AbortSignal.timeout(120_000) });
   if (!answer.ok) {
     const reason = ((await answer.json().catch(() => ({}))) as { error?: { message?: string } }).error?.message ?? "";
     throw new Error(`Google ${answer.status}: ${reason.slice(0, 300) || "request failed"}`);

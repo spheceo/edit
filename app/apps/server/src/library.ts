@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
-import { google, googleProto } from "./endpoints.ts";
+import { google, googleProto, useGateway } from "./endpoints.ts";
 import { catchBugsAsync } from "./guard.ts";
 import { importPaths } from "./import.ts";
 import { Semaphore } from "./media.ts";
@@ -222,30 +222,21 @@ export class Library implements seams.Library {
   }
 
   /**
-   * An access token for the team's Google Drive sign-in (scope: all of
-   * Drive), cached until shortly before it expires. Never log it.
+   * What Google's API is asked with: on a Mac with the team's Google sign-in
+   * of its own (GOOGLE_DRIVE_*, a developer's), an access token for it,
+   * cached until shortly before it expires; everywhere else the person's own
+   * Edit sign-in, which the relay's Google gateway takes in its place (Nov 4:
+   * the team's token never leaves the relay; `endpoints.google` sends the
+   * calls there). Never log it.
    */
   async accessToken(): Promise<string> {
-    if (this.token !== null && this.now() < this.token[1]) return this.token[0];
-    const [id, secret, refresh] = ["GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET", "GOOGLE_DOCS_REFRESH_TOKEN"].map(
-      (name) => {
-        const value = process.env[name];
-        return value !== undefined && value !== "" ? value : null;
-      },
-    );
-    if (id === null || secret === null || refresh === null || id === undefined || secret === undefined || refresh === undefined) {
-      if (relay.token() === null) {
-        throw new Error(
-          "The sound library and Google Drive need the team's sign-in: this build has no cloud token (use a release build, or start Edit with GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET and GOOGLE_DOCS_REFRESH_TOKEN set).",
-        );
-      }
-      // The relay keeps the sign-in and hands out an access token for an hour.
-      const given = await relay.json<{ access_token?: unknown; expires_in?: unknown }>("POST", "/v1/cloud/google/token", {}, "Google sign-in", 30);
-      if (typeof given.access_token !== "string") throw new Error("the relay's Google sign-in came back without a token");
-      const lasts = typeof given.expires_in === "number" && given.expires_in > 0 ? given.expires_in : 3600;
-      this.token = [given.access_token, this.now() + Math.max(lasts - 120, 0) * 1000];
-      return given.access_token;
+    const [id, secret, refresh] = ownGoogleSignIn();
+    if (id === null || secret === null || refresh === null) {
+      const token = relay.token();
+      if (token === null) throw new Error("The sound library and Google Drive need you signed in to Edit.");
+      return token;
     }
+    if (this.token !== null && this.now() < this.token[1]) return this.token[0];
     const config = (
       [
         ["client_id", id],
@@ -699,3 +690,15 @@ function isFile(path: string): boolean {
     return false;
   }
 }
+
+/** This Mac's own Google sign-in (GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET, GOOGLE_DOCS_REFRESH_TOKEN), each null when unset. */
+export function ownGoogleSignIn(): [string | null, string | null, string | null] {
+  const read = (name: string) => {
+    const value = process.env[name];
+    return value !== undefined && value !== "" ? value : null;
+  };
+  return [read("GOOGLE_DRIVE_CLIENT_ID"), read("GOOGLE_DRIVE_CLIENT_SECRET"), read("GOOGLE_DOCS_REFRESH_TOKEN")];
+}
+
+// Google's API through the relay unless this Mac signs in to Google itself (endpoints.ts).
+useGateway(() => (ownGoogleSignIn().every((value) => value !== null) ? null : `${relay.url().replace(/\/+$/, "")}/v1/google`));

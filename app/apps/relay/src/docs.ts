@@ -29,7 +29,7 @@ function json(status: number, body: unknown): Response {
 let cached: { token: string; until: number } | null = null;
 
 /** The team account's access token, kept until five minutes before it runs out. */
-async function docsToken(env: JobsEnv): Promise<string> {
+export async function docsToken(env: JobsEnv): Promise<string> {
   if (cached && cached.until > Date.now()) return cached.token;
   const signedIn = await googleSignIn(env);
   cached = { token: signedIn.access_token, until: Date.now() + (signedIn.expires_in - 300) * 1000 };
@@ -56,7 +56,7 @@ const problem = (error: unknown) =>
   error instanceof Problem ? json(error.status, { error: error.message }) : json(502, { error: `Google Docs failed: ${String(error).slice(0, 200)}` });
 
 /** One folder in the account's Drive holds every exported script. */
-async function docsFolder(env: JobsEnv): Promise<string> {
+export async function docsFolder(env: JobsEnv): Promise<string> {
   const params = new URLSearchParams({ q: `name = '${DOCS_FOLDER}' and mimeType = '${FOLDER_MIME}' and 'root' in parents and trashed = false`, fields: "files(id)", pageSize: "1" });
   const found = (await (await google(env, `files?${params}`)).json()) as { files?: { id: string }[] };
   if (found.files?.[0]?.id) return found.files[0].id;

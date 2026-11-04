@@ -20,13 +20,13 @@
  *   /v1/cloud/jobs/drive            {file, key}  → {id, status}: Drive file → R2 in the cloud (jobs.ts)
  *   /v1/cloud/jobs/status           {id}         → {id, status, bytes?, total?, output?, error?}
  *   /v1/cloud/jobs/cancel           {id}         → {ok}
- *   /v1/cloud/google/token          {}           → {access_token, expires_in}: the team's Google sign-in
- *                                   (Drive and Docs: the sound library, script imports, Drive links and uploads)
+ *   (`/v1/cloud/google/token` handed out the team's Google token until Nov 4: Drive goes through
+ *   `/v1/google/…` now, google.ts, and the token never leaves the relay)
  *   /v1/cloud/writer/…              Script mode's scripts, their reviews and lessons, under Writer's rules (writer_cloud.ts)
  */
 import { allow, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, ideaRefused, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
-import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
+import { cancelJob, driveJob, jobStatus, type JobsEnv } from "./jobs";
 import { readable as scriptReadable, scriptKeyRefused, writerCloud } from "./writer_cloud";
 import { mediaUrl, type MediaEnv } from "./media";
 
@@ -79,7 +79,7 @@ const callable = (path: string, kind: string) =>
 
 /** Each cloud route's permission: `use` for all of them (accounts' contract v2); null for a route that isn't one. */
 function permissionOf(route: string): Permission | null {
-  if (route === "google/token" || route === "convex" || route === "support-config" || route.startsWith("r2/") || route.startsWith("jobs/")) return "use";
+  if (route === "convex" || route === "support-config" || route.startsWith("r2/") || route.startsWith("jobs/")) return "use";
   return null;
 }
 
@@ -91,6 +91,8 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
     if (env.CLOUD_BURST !== undefined && !(await env.CLOUD_BURST.limit({ key: `writer:${burstKey(request, found)}` })).success) return json(429, { error: "Too many cloud requests at once; try again in a minute." });
     return writerCloud(request, url, env, found);
   }
+  // Retired Nov 4 (the security audit): the team's Google token no longer leaves the relay.
+  if (url.pathname === "/v1/cloud/google/token") return json(410, { error: "This Edit is out of date: update it (Edit → Update) to use Google Drive." });
   const permission = permissionOf(url.pathname.slice("/v1/cloud/".length));
   if (permission === null) return json(404, { error: "not found" });
   const found = await allow(request, env, permission, url.pathname.slice("/v1/".length));
@@ -112,14 +114,6 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
     return json(200, { url: env.CONVEX_URL });
   }
   if (route === "convex") return convex(body, env, found);
-  if (route === "google/token") {
-    try {
-      return json(200, await googleSignIn(env));
-    } catch (error) {
-      if (error instanceof Upstream) return json(502, { error: error.message });
-      throw error;
-    }
-  }
   if (route.startsWith("jobs/")) {
     const r2 = r2Config(env);
     if (!r2) return json(503, { error: "Cloud storage is not configured on the relay yet." });

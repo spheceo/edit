@@ -3,7 +3,7 @@
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
-import { base, googleThrough, protocols } from "../src/endpoints.ts";
+import { base, google, googleThrough, protocols } from "../src/endpoints.ts";
 import * as library from "../src/library.ts";
 import { cleanNote, curl, encode, notes, quote, spanLevels } from "../src/library.ts";
 import { dispatch } from "../src/mcp/index.ts";
@@ -135,7 +135,7 @@ test("the library is read from Drive, with its notes and guide, through one sign
 test("a sign-in that's missing or refused says so", async () => {
   const restoreEnv = mock.useEnv({ GOOGLE_DOCS_REFRESH_TOKEN: "" });
   try {
-    await expect(new library.Library().accessToken()).rejects.toThrow("need the team's sign-in");
+    await expect(new library.Library().accessToken()).rejects.toThrow("need you signed in to Edit");
   } finally {
     restoreEnv();
   }
@@ -299,19 +299,24 @@ test("safe names keep files on every disk", () => {
   expect(library.safeName("...")).toBe("sound.wav");
 });
 
-test("without a sign-in of its own, Edit borrows the relay's (with the cloud token)", async () => {
-  const put = mock.useEnv({ GOOGLE_DRIVE_CLIENT_ID: undefined, GOOGLE_DRIVE_CLIENT_SECRET: undefined, GOOGLE_DOCS_REFRESH_TOKEN: undefined });
+test("without a Google sign-in of its own, Edit asks Google's API through the relay with the person's own sign-in; the team's token never comes down (Nov 4)", async () => {
+  const put = mock.useEnv({ GOOGLE_DRIVE_CLIENT_ID: undefined, GOOGLE_DRIVE_CLIENT_SECRET: undefined, GOOGLE_DOCS_REFRESH_TOKEN: undefined, EDIT_GOOGLE_API_URL: undefined });
   try {
-    await expect(new library.Library().accessToken()).rejects.toThrow("this build has no cloud token");
-    const back = mock.useEnv({ EDIT_RELAY_TOKEN: "cloud-tok" });
+    await expect(new library.Library().accessToken()).rejects.toThrow("signed in to Edit");
+    const back = mock.useEnv({ EDIT_GOOGLE_API_URL: undefined, EDIT_RELAY_TOKEN: "person-tok" });
     try {
-      mock.on("POST", "/v1/cloud/google/token", () => Response.json({ access_token: "from-relay", expires_in: 3600 }));
       const signedIn = new library.Library();
-      expect(await signedIn.accessToken()).toBe("from-relay");
-      expect(await signedIn.accessToken()).toBe("from-relay");
-      const asked = mock.calls("/v1/cloud/google/token", "POST");
+      expect(await signedIn.accessToken()).toBe("person-tok");
+      // Google's API goes to the relay's gateway; a Doc's public export and other hosts don't.
+      expect(google("https://www.googleapis.com/drive/v3/files?q=x")).toBe(`${mock.url}/v1/google/www.googleapis.com/drive/v3/files?q=x`);
+      expect(google("https://docs.google.com/document/d/x/export?format=html")).toBe("https://docs.google.com/document/d/x/export?format=html");
+      mock.on("GET", "/v1/google/www.googleapis.com/drive/v3/files", () => Response.json({ files: [] }));
+      const [code] = await curl(`header = ${quote(`Authorization: Bearer ${await signedIn.accessToken()}`)}\n`, ["--max-time", "10", "https://www.googleapis.com/drive/v3/files?q=x"]);
+      expect(code).toBe(200);
+      const asked = mock.calls("/v1/google/www.googleapis.com/drive/v3/files", "GET");
       expect(asked.length).toBe(1);
-      expect(asked[0]!.headers.get("authorization")).toBe("Bearer cloud-tok");
+      expect(asked[0]!.headers.get("authorization")).toBe("Bearer person-tok");
+      expect(mock.calls("/v1/cloud/google/token", "POST").length).toBe(0);
     } finally {
       back();
     }

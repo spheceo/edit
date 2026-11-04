@@ -11,6 +11,7 @@ import type { Adding, Cite, Commentary, Draft, NoteMark, Pacing, Paragraph, Piec
 
 import { writerGuide } from "../agent_text.ts";
 import * as diag from "../diag.ts";
+import * as endpoints from "../endpoints.ts";
 import { safeFetch } from "../net_guard.ts";
 import { decodeEntities } from "../research.ts";
 import { isAlphanumeric, splitWhitespace } from "../rust.ts";
@@ -330,10 +331,10 @@ async function driveApi(id: string, doc: boolean): Promise<[string, string]> {
   }
   const api = "https://www.googleapis.com/drive/v3/files";
   const headers = { authorization: `Bearer ${token}` };
-  const meta = await fetch(`${api}/${id}?fields=name,mimeType&supportsAllDrives=true`, { headers }).then((answer) => (answer.ok ? (answer.json() as Promise<{ name?: string; mimeType?: string }>) : null), () => null);
+  const meta = await fetch(endpoints.google(`${api}/${id}?fields=name,mimeType&supportsAllDrives=true`), { headers }).then((answer) => (answer.ok ? (answer.json() as Promise<{ name?: string; mimeType?: string }>) : null), () => null);
   if (meta === null) throw new Error(NOT_SHARED);
   const isDoc = doc || meta.mimeType === "application/vnd.google-apps.document";
-  const answer = await fetch(isDoc ? `${api}/${id}/export?mimeType=text/html` : `${api}/${id}?alt=media&supportsAllDrives=true`, { headers }).catch(() => null);
+  const answer = await fetch(endpoints.google(isDoc ? `${api}/${id}/export?mimeType=text/html` : `${api}/${id}?alt=media&supportsAllDrives=true`), { headers }).catch(() => null);
   if (answer === null || !answer.ok) throw new Error(NOT_SHARED);
   const bytes = new Uint8Array(await answer.arrayBuffer());
   if (bytes.length > MAX_SOURCE_BYTES) throw new Error(`That's over ${MAX_SOURCE_BYTES / 1_000_000} MB of text. Trim it first.`);

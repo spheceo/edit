@@ -7,6 +7,7 @@ import { media, type EdgeCache } from "./media";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
 import { fromOtherRelay, openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
 import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
+import { google } from "./google";
 
 export { DriveToR2 } from "./jobs";
 
@@ -29,6 +30,8 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  *                          → audio (ElevenLabs text to speech; x-request-id for stitching)
  *   POST /v1/cloud/…       Edit's cloud: R2 presigned URLs and `edit:` Convex functions,
  *                          with the cloud token only (see cloud.ts)
+ *   GET|POST|PATCH /v1/google/www.googleapis.com/…  the Drive calls Edit makes, with the team's
+ *                          sign-in kept here (google.ts)
  *   GET|POST /v1/ideas/…   ideas: their Convex rows, YouTube's details, the Interrogation
  *                          board's Trello (ideas.ts), with an `ideas.*` capability
  *   POST /v1/openart/mcp   the team's OpenArt account's MCP server, for thumbnails (openart.ts),
@@ -90,6 +93,8 @@ export default {
     }
     if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY), openart: openartReady(env) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
+    // The team's Google Drive, with its sign-in kept here (google.ts): only the calls Edit makes.
+    if (url.pathname.startsWith("/v1/google/")) return google(request, url, env);
     // Proxies by signed URL, cached at the edge (media.ts): no sign-in on each read, the URL is the grant.
     if (url.pathname.startsWith("/v1/media/")) return media(request, url, env, r2Config(env), typeof caches === "undefined" ? null : (caches as unknown as { default: EdgeCache }).default);
     if (url.pathname === "/v1/voices") return voices(request, env);

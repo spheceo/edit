@@ -367,8 +367,9 @@ export function location(answer: string): string | null {
       break;
     }
   }
-  // Only ever Google's upload address: the bytes go nowhere else.
-  return url !== null && url.startsWith(google("https://www.googleapis.com/")) ? url : null;
+  // Only ever Google's upload address: the bytes go nowhere else (straight to Google even when the session was
+  // started through the relay's gateway: the address is the session's own grant, and holds no sign-in).
+  return url !== null && (url.startsWith("https://www.googleapis.com/upload/") || url.startsWith(google("https://www.googleapis.com/"))) ? url : null;
 }
 
 /** The body of a response printed headers first. */

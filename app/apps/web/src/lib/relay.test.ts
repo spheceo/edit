@@ -673,21 +673,92 @@ describe("relay cloud jobs: Drive → R2", () => {
   });
 });
 
-describe("relay cloud: Google sign-in", () => {
+describe("relay: the team's Google Drive, its token kept here (Nov 4)", () => {
   const env = { GOOGLE_DRIVE_CLIENT_ID: "c", GOOGLE_DRIVE_CLIENT_SECRET: "s", GOOGLE_DOCS_REFRESH_TOKEN: "r" } as Env;
-  const post = (route: string, body: string, token = "", given: Env = env) =>
-    relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method: "POST", headers: { authorization: `Bearer ${token || PERSON}`, "content-type": "application/json", "content-length": String(body.length) }, body }), given);
+  const EXPORTS = "12q4jbYhXI53BYZtTwOxzFEOJV2d1wJTk";
+  const ask = (method: string, path: string, options: { token?: string | null; body?: string; type?: string } = {}) => {
+    const token = options.token === undefined ? PERSON : options.token;
+    const headers: Record<string, string> = { "content-type": options.type ?? "application/json" };
+    if (token !== null) headers.authorization = `Bearer ${token}`;
+    return relay.fetch(new Request(`https://relay.test/v1/google/${path}`, { method, headers, body: options.body }), env);
+  };
+  const stand = () => {
+    const upstream = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.host === "oauth2.googleapis.com") return Response.json({ access_token: "ya29.team", expires_in: 3599 });
+      if (url.pathname === "/drive/v3/files" && (url.searchParams.get("q") ?? "").includes("Writer scripts")) return Response.json({ files: [{ id: "writerFolder01" }] });
+      if (url.searchParams.get("fields") === "parents") return Response.json({ parents: url.pathname.includes("insideFile") ? [EXPORTS] : ["someOtherFolder"] });
+      return new Response(init?.method === "POST" ? "{}" : "bytes", { headers: { "content-type": "application/octet-stream", location: "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=abc" } });
+    });
+    vi.stubGlobal("fetch", upstream);
+    return upstream;
+  };
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it("hands Edit a short-lived Google access token, only to a signed-in person", async () => {
-    const upstream = vi.fn(async () => Response.json({ access_token: "ya29.x", expires_in: 3599 }));
-    vi.stubGlobal("fetch", upstream);
-    expect((await post("google/token", "{}", "wrong")).status).toBe(401);
+  it("makes Edit's Drive reads with the team's token for anyone with a kind of work, and never hands the token out", async () => {
+    const upstream = stand();
+    expect((await ask("GET", "www.googleapis.com/drive/v3/files?q=x", { token: null })).status).toBe(401);
+    // `use` alone isn't work that needs Drive.
+    expect((await ask("GET", "www.googleapis.com/drive/v3/files?q=x", { token: USE_ONLY })).status).toBe(403);
     expect(upstream).not.toHaveBeenCalled();
-    const answer = await post("google/token", "{}");
-    expect(answer.status).toBe(200);
-    expect(await answer.json()).toEqual({ access_token: "ya29.x", expires_in: 3599 });
-    expect((await post("google/token", "{}", "", { ...env, GOOGLE_DOCS_REFRESH_TOKEN: undefined })).status).toBe(502);
+    for (const path of ["drive/v3/files?q=x", "drive/v3/files/abcdefghijk1?alt=media", "drive/v3/files/abcdefghijk1/export?mimeType=text/html", "drive/v3/files/abcdefghijk1/comments"]) {
+      const answer = await ask("GET", `www.googleapis.com/${path}`, { token: SUBS });
+      expect(answer.status).toBe(200);
+      expect(await answer.text()).not.toContain("ya29");
+    }
+    const [, sent] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(new Headers(sent.headers).get("authorization")).toBe("Bearer ya29.team");
+    // The old handout is gone: an old build is told to update.
+    const old = await relay.fetch(new Request("https://relay.test/v1/cloud/google/token", { method: "POST", headers: { authorization: `Bearer ${PERSON}` }, body: "{}" }), env);
+    expect(old.status).toBe(410);
+  });
+
+  it("refuses every other call: deletes, moves, other sharing, other APIs and hosts", async () => {
+    const upstream = stand();
+    for (const [method, path] of [
+      ["DELETE", "www.googleapis.com/drive/v3/files/insideFile123"],
+      ["PATCH", "www.googleapis.com/drive/v3/files/insideFile123"],
+      ["POST", "www.googleapis.com/drive/v3/files/insideFile123/copy"],
+      ["GET", "www.googleapis.com/drive/v3/about"],
+      ["GET", "www.googleapis.com/gmail/v1/users/me/messages"],
+      ["GET", "gmail.googleapis.com/gmail/v1/users/me/messages"],
+      ["PATCH", "www.googleapis.com/upload/drive/v3/files/insideFile123?uploadType=resumable&addParents=x"],
+    ] as const) {
+      expect((await ask(method, path, { token: ADMIN, body: method === "GET" ? undefined : "{}" })).status).toBe(403);
+    }
+    expect(upstream.mock.calls.filter(([input]) => !String(input).includes("oauth2"))).toHaveLength(0);
+  });
+
+  it("writes only into Edit's folders, and shares only by link", async () => {
+    stand();
+    const session = (parents: string[]) => ask("POST", "www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id", { body: JSON.stringify({ name: "a.mp4", parents }) });
+    const started = await session([EXPORTS]);
+    expect(started.status).toBe(200);
+    // The session's address comes back: the bytes go straight to Google.
+    expect(started.headers.get("location")).toContain("upload_id=abc");
+    expect((await session(["someOtherFolder"])).status).toBe(403);
+    expect((await session([])).status).toBe(403);
+    // A re-export: new contents for a file Edit put in its folder, never another's.
+    const replace = (file: string, body: unknown) => ask("PATCH", `www.googleapis.com/upload/drive/v3/files/${file}?uploadType=resumable&supportsAllDrives=true&fields=id`, { body: JSON.stringify(body) });
+    expect((await replace("insideFile123", { name: "a.mp4" })).status).toBe(200);
+    expect((await replace("outsideFile12", { name: "a.mp4" })).status).toBe(403);
+    expect((await replace("insideFile123", { name: "a.mp4", parents: ["x"] })).status).toBe(403);
+    // Sharing: by link only, of a file in Edit's folders.
+    const share = (file: string, body: unknown) => ask("POST", `www.googleapis.com/drive/v3/files/${file}/permissions?supportsAllDrives=true`, { body: JSON.stringify(body) });
+    expect((await share("insideFile123", { type: "anyone", role: "reader" })).status).toBe(200);
+    expect((await share("insideFile123", { type: "anyone", role: "writer", allowFileDiscovery: false })).status).toBe(200);
+    expect((await share("outsideFile12", { type: "anyone", role: "reader" })).status).toBe(403);
+    expect((await share("insideFile123", { type: "user", role: "owner", emailAddress: "x@gmail.com" })).status).toBe(403);
+    expect((await share("insideFile123", { type: "anyone", role: "writer" })).status).toBe(403);
+    // A script's Doc: multipart, into the scripts' folder only.
+    const docx = (parents: string[]) => ask("POST", "www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,createdTime", { type: "multipart/related; boundary=b1", body: `--b1\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ name: "S", parents })}\r\n--b1\r\nContent-Type: x\r\n\r\nDOCX\r\n--b1--` });
+    expect((await docx(["writerFolder01"])).status).toBe(200);
+    expect((await docx(["someOtherFolder"])).status).toBe(403);
+    // The scripts' folder is the only folder made.
+    const folder = (body: unknown) => ask("POST", "www.googleapis.com/drive/v3/files?fields=id", { body: JSON.stringify(body) });
+    expect((await folder({ name: "Writer scripts", mimeType: "application/vnd.google-apps.folder" })).status).toBe(200);
+    expect((await folder({ name: "Anything", mimeType: "application/vnd.google-apps.folder" })).status).toBe(403);
+    expect((await folder({ name: "Writer scripts", mimeType: "application/vnd.google-apps.folder", parents: ["x"] })).status).toBe(403);
   });
 });
 

@@ -36,6 +36,12 @@ export declare class ExportJob {
 }
 
 /**
+ * Has every analysis of the media at `path` decode `read` in its place (a
+ * pieced proxy's original); none: `path` itself again.
+ */
+export declare function analyseFrom(path: string, read?: string | undefined | null): void
+
+/**
  * The parameter paths that take keyframes, per clip type ("video", "audio",
  * "text", "adjustment", "solid", "waveform").
  */

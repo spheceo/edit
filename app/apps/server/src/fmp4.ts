@@ -425,6 +425,50 @@ export function writeFragment(out: string, sequence: number, tracks: FragmentTra
   return size;
 }
 
+/**
+ * The runs of a fragment file `writeFragment` wrote (its moof read back):
+ * each track's samples, their bytes where they are in `file`, ready to be
+ * written into another fragment.
+ */
+export function readFragment(file: string): FragmentTrack[] {
+  const fd = fs.openSync(file, "r");
+  let moof: Uint8Array;
+  try {
+    const header = new Uint8Array(8);
+    if (fs.readSync(fd, header, 0, 8, 0) !== 8) throw new Error(`${file} is too short for a fragment`);
+    const size = new DataView(header.buffer).getUint32(0);
+    if (String.fromCharCode(...header.subarray(4, 8)) !== "moof" || size < 16) throw new Error(`${file} doesn't start with a moof`);
+    moof = new Uint8Array(size);
+    if (fs.readSync(fd, moof, 0, size, 0) !== size) throw new Error(`${file}'s moof is cut short`);
+  } finally {
+    fs.closeSync(fd);
+  }
+  const view = new DataView(moof.buffer);
+  const root = boxes(moof, 0, moof.length)[0]!;
+  return boxes(moof, root.start, root.end)
+    .filter((box) => box.type === "traf")
+    .map((traf) => {
+      const tfhd = child(moof, traf, "tfhd");
+      const tfdt = child(moof, traf, "tfdt");
+      const trun = child(moof, traf, "trun");
+      if (tfhd === null || tfdt === null || trun === null) throw new Error(`${file}: a traf without its tfhd, tfdt or trun`);
+      const id = view.getUint32(tfhd.start + 4);
+      const baseTime = moof[tfdt.start] === 1 ? Number(view.getBigUint64(tfdt.start + 4)) : view.getUint32(tfdt.start + 4);
+      const flags = view.getUint32(trun.start) & 0xffffff;
+      if ((flags & 0x701) !== 0x701) throw new Error(`${file}: a trun this doesn't read (flags ${flags.toString(16)})`);
+      const withCts = (flags & 0x800) !== 0;
+      const count = view.getUint32(trun.start + 4);
+      let offset = view.getInt32(trun.start + 8);
+      const samples: FragmentSample[] = [];
+      for (let n = 0, at = trun.start + 12; n < count; n++, at += withCts ? 16 : 12) {
+        const size = view.getUint32(at + 4);
+        samples.push({ size, duration: view.getUint32(at), sync: view.getUint32(at + 8) === SYNC, cts: withCts ? view.getInt32(at + 12) : 0, from: file, offset });
+        offset += size;
+      }
+      return { id, baseTime, samples };
+    });
+}
+
 /** The random-access index at a file's end (mfra: a tfra per track, then mfro): each fragment's time and moof's place. */
 export function mfra(tracks: { id: number; entries: { time: number; offset: number }[] }[]): Uint8Array {
   const tfras = tracks.map((track) =>

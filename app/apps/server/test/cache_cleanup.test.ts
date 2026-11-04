@@ -377,6 +377,7 @@ test("past the budget, cloud copies go by project: footage nobody uses, then a d
     expect(ownerToken("edit/sound/originals/drive/abcFile01/x.mp4.mov")).toBe("drive/abcFile01");
     expect(ownerToken("edit/excerpts/drive/abcFile01/0-1000.mov")).toBe("drive/abcFile01");
     expect(ownerToken("edit/pieces/drive/abcFile01/video/3.m4s")).toBe("drive/abcFile01");
+    expect(ownerToken("edit/pieces/v3/sha256/abcFile01/audio/3.m4s")).toBe("sha256/abcFile01");
     expect(ownerToken("edit/exports/playback/p123/abc.mp4")).toBe("playback:p123");
     expect(ownerToken("edit/reviews/p/x.mp4")).toBe(null);
   } finally { forget(store.home); cleanup(); }

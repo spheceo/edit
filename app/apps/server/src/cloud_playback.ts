@@ -23,5 +23,5 @@ export function playbackKey(path: string): string | null {
  * answered from its pieces; none of the pieces' own files).
  */
 export function previewable(key: string): boolean {
-  return /^edit\/(proxies|originals|excerpts)\//.test(key) || /^edit\/pieces\/[^/]+\/[^/]+\/proxy\.mp4$/.test(key);
+  return /^edit\/(proxies|originals|excerpts)\//.test(key) || /^edit\/pieces\/(v\d+\/)?[^/]+\/[^/]+\/proxy\.mp4$/.test(key);
 }

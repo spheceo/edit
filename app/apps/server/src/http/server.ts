@@ -187,7 +187,8 @@ async function logged(method: string, route: string, path: string, ms: number, r
       // immutable headers (a passed-on response): leave them
     }
   }
-  if (status < 400) {
+  // A 503 with Retry-After is "ask again soon" (a pieced proxy's stretch still being made), not a failure.
+  if (status < 400 || (status === 503 && response.headers.has("retry-after"))) {
     // The window's long poll for "come to the front" is meant to take its 25 s: not timed.
     if (route !== "/api/window/next") diag.record("http", name, ms, null);
     return response;

@@ -2,8 +2,9 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { isImagePath, isLocalCopy, isMediaPath, Processor, Semaphore } from "../src/media.ts";
+import { isImagePath, isLocalCopy, isMediaPath, makeThumbs, Processor, Semaphore } from "../src/media.ts";
 import type { MediaStatus } from "../src/media.ts";
+import type { CachePaths } from "../src/native/index.ts";
 import * as tools from "../src/tools.ts";
 import { timing } from "../src/transcribe.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -153,14 +154,16 @@ test("a failed step says why and the rest go on", async () => {
   }
 });
 
-test.skipIf(ffmpeg === null)("a pieced proxy's thumbnails, waveform and censor check read its original, kept as the proxy's", async () => {
+test.skipIf(ffmpeg === null)("a pieced proxy's thumbnails, waveform, censor check and loudness read its original, kept as the proxy's", async () => {
   // Reading the pieced proxy itself would make every piece of it (off Modal, step 6).
   const { dir, app, store, cleanup } = fixtureHome("media-analysis-input");
   const { mediaHooks } = await import("../src/media.ts");
   const { native } = await import("../src/native/index.ts");
   const was = mediaHooks.analysisInput;
   const censor = native().censorWarm;
+  const analyseFrom = native().analyseFrom;
   const warmed: [string, string | null | undefined][] = [];
+  const redirected: [string, string | null | undefined][] = [];
   try {
     const original = `${dir}/original.mp4`;
     const made = Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-shortest", "-c:v", "libx264", "-g", "15", "-c:a", "aac", original]);
@@ -170,6 +173,7 @@ test.skipIf(ffmpeg === null)("a pieced proxy's thumbnails, waveform and censor c
     fs.writeFileSync(source, "not a video");
     mediaHooks.analysisInput = async (asked) => (asked === source ? original : null);
     native().censorWarm = (path, read) => void warmed.push([path, read]);
+    native().analyseFrom = (path, read) => void redirected.push([path, read]);
     const probe = await app.native.probe(original);
     const done = settled(store, source, (status) => status.light !== "pending" && status.light !== "working" && status.proxy !== "working");
     app.media.ensure(source, probe);
@@ -177,9 +181,33 @@ test.skipIf(ffmpeg === null)("a pieced proxy's thumbnails, waveform and censor c
     expect([status.thumbs, status.peaks]).toEqual(["ready", "ready"]);
     expect(fs.existsSync(app.media.paths(source).thumbs)).toBe(true);
     expect(warmed).toEqual([[source, original]]);
+    // The engine's own analyses (loudness) are told, once.
+    expect(redirected).toEqual([[source, original]]);
   } finally {
     mediaHooks.analysisInput = was;
     native().censorWarm = censor;
+    native().analyseFrom = analyseFrom;
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null)("long footage's thumbnails are each read where they are, one a frame past the end its neighbour's", async () => {
+  const { dir, app, cleanup } = fixtureHome("media-long-thumbs");
+  try {
+    // 50 minutes at 1 fps, a keyframe every 5 s: 120 thumbnails, 25 s apart.
+    const file = `${dir}/long.mp4`;
+    const made = Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "testsrc=size=64x36:rate=1:duration=3000", "-c:v", "mpeg4", "-g", "5", file]);
+    expect(made.exitCode).toBe(0);
+    const probe = await app.native.probe(file);
+    // Probed a minute longer than it is: the last thumbnails are past its end.
+    const paths = { thumbs: `${dir}/thumbs.jpg`, thumbsMeta: `${dir}/thumbs.json` } as CachePaths;
+    const count = await makeThumbs(file, { ...probe, duration: 3060 }, paths);
+    expect(count).toBe(120);
+    expect(JSON.parse(fs.readFileSync(paths.thumbsMeta, "utf8"))).toEqual({ count: 120, interval: 25.5 });
+    const strip = await app.native.probe(paths.thumbs);
+    expect([strip.width, strip.height]).toEqual([128 * 120, 72]);
+    expect(fs.existsSync(`${dir}/thumbs.frames`)).toBe(false);
+  } finally {
+    cleanup();
+  }
+}, 60_000);

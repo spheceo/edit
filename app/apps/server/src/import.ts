@@ -10,7 +10,6 @@ import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import * as media from "./media.ts";
 import type { Clip, ClipColor, Media, Project } from "./model.ts";
-import { native } from "./native/index.ts";
 import { fileName, join } from "./paths.ts";
 import { duration, fps, freshId, mediaOf } from "./project.ts";
 import { cloudEnabled } from "./relay.ts";
@@ -164,7 +163,7 @@ export async function houseMedia(app: App, project: Project, paths: string[]): P
 /** After a project with `houseMedia` in it is saved: their previews and analysis. */
 export function houseMediaSaved(app: App, made: seams.Made[]): void {
   for (const { path, probe } of made) {
-    if (probe.has_audio) native().loudnessWarm(path);
+    if (probe.has_audio) app.media.warmLoudness(path);
     app.media.ensure(path, probe);
   }
 }
@@ -236,8 +235,7 @@ async function addMedia(
       app.media.transcribe(path, true, names);
       transcribing.push(path);
     }
-    // Its loudness analysis, so the first measure_audio / set_loudness is instant.
-    if (probe.has_audio) native().loudnessWarm(path);
+    if (probe.has_audio) app.media.warmLoudness(path);
     app.media.ensure(path, probe);
   }
   if (noScript && names.length === 0 && items.some(({ probe }) => probe.kind === "video" && probe.has_audio)) {

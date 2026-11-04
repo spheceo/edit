@@ -616,10 +616,14 @@ export function removeWhenUploaded(file: string): void {
  * next start tries again.
  */
 export function uploadLater(home: string, upload: Upload): void {
+  // The same footage imported again while its upload goes on: that one carries it (two sent it twice, and the
+  // first to end crossed off the job both were noted under).
+  const running = uploading.get(upload.file)?.upload;
+  if (running !== undefined && running.originalKey === upload.originalKey && running.uploadOriginal === upload.uploadOriginal && (upload.proxy === null || running.proxy === upload.proxy)) return;
   const key = jobs.begin(home, "upload", "-", { ...upload }, upload.source);
   const entry = { key, home, upload, done: Promise.resolve(true) };
   entry.done = uploadSlot
-    .with(() => diag.timeOnAsync("cloud", "cloud: upload import", upload.file, () => runUpload(upload)))
+    .with(() => diag.timeOnAsync("cloud", "cloud: upload import", upload.file, () => runUpload(upload, () => jobs.progressed(home, key))))
     .then(
       () => {
         jobs.end(home, key);
@@ -637,9 +641,20 @@ export function uploadLater(home: string, upload: Upload): void {
   uploading.set(upload.file, entry);
 }
 
-async function runUpload(upload: Upload): Promise<void> {
+/** `progressed`: said once a big original's upload sends a part past those already up (it resumes; cloud.ts). */
+async function runUpload(upload: Upload, progressed: () => void): Promise<void> {
   if (upload.uploadOriginal) {
-    await cloud.uploadFile(upload.file, upload.originalKey);
+    // Up already, whole (the same footage imported again while its first upload went on: the 10-hour trial,
+    // Nov 4, sent 58 GB twice): the key is its content's, so it isn't sent again.
+    if ((await cloud.head(upload.originalKey).catch(() => null))?.size === upload.size) {
+      cloud.forgetUpload(upload.originalKey);
+    } else {
+      // The first report is what's up already; any later one is new.
+      let reports = 0;
+      await cloud.uploadFile(upload.file, upload.originalKey, () => {
+        if (++reports === 2) progressed();
+      });
+    }
     await putRecord({ source: upload.source, originalReady: true, size: upload.size, duration: upload.duration });
   }
   if (upload.proxy !== null && upload.local !== null) {
@@ -758,8 +773,8 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
   rememberLocalOriginal(cache, originalKey, path);
   if (probe.has_audio) shareSound(cache, path, originalKey);
   const ready = readyProxy(record);
-  // EDIT_PROXY_PIECES=1: a long file's proxy made a piece at a time (proxy_pieces.ts), read from this file while it's here; its upload goes on behind.
-  if (ready === null && pieces.enabled() && probe.kind === "video" && probe.duration >= PIECED_FROM) {
+  // A long file's proxy made a piece at a time (proxy_pieces.ts), read from this file while it's here; its upload goes on behind.
+  if (ready === null && probe.kind === "video" && probe.duration >= PIECED_FROM) {
     const layout = await pieces.tryCreate(piecesContext(cache), source, originalKey, probe);
     if (layout !== null) {
       if (needOriginal && later !== null) {
@@ -1158,19 +1173,19 @@ export async function driveExcerpts(
 
 /** Excerpts of one file made at once. */
 const EXCERPTS_AT_ONCE = 3;
-/** Files at least this long (seconds) get a pieced proxy with EDIT_PROXY_PIECES=1 (a shorter one's whole proxy takes a minute or two). */
-const PIECED_FROM = Number(process.env.EDIT_PROXY_PIECES_FROM ?? 1200);
+/** Files at least this long (seconds) get a pieced proxy (a shorter one's whole proxy takes a minute or two). */
+const PIECED_FROM = 1200;
 
 /** The whole Drive file as one media: its proxy made straight from R2. */
 async function wholeMedia(cache: string, original: Original, url: string): Promise<Made> {
   const probe = await probeUrl(url);
   const record = await getRecord(original.source);
   const ready = readyProxy(record);
-  // EDIT_PROXY_PIECES=1: a long file's proxy made a piece at a time as it's
-  // read (proxy_pieces.ts), unless a whole one is there already; the whole
-  // one, as before, when that can't be made. The registry keeps no pieced
-  // key: a Mac without the setting still makes its own whole proxy.
-  if (ready === null && pieces.enabled() && probe.kind === "video" && probe.duration >= PIECED_FROM) {
+  // A long file's proxy made a piece at a time as it's read (proxy_pieces.ts),
+  // unless a whole one is there already; the whole one, as before, when that
+  // can't be made. The registry keeps no pieced key (a Mac on an older build
+  // makes its own whole proxy).
+  if (ready === null && probe.kind === "video" && probe.duration >= PIECED_FROM) {
     const layout = await pieces.tryCreate(piecesContext(cache), original.source, original.key, probe);
     if (layout !== null) {
       const proxy = pieces.proxyKeyOf(original.source);
@@ -1438,9 +1453,11 @@ export async function streamFromCloud(request: Request, cloudMedia: { proxy?: st
   const pieced = pieces.baseOf(key);
   if (pieced !== null && playbackBlocks !== null) {
     const context = piecesContext(parent(parent(playbackBlocks)!)!);
-    // The page's reads (not the preview path's, FFmpeg's) are answered 503 past 15 s, and ask again.
-    const native = new URL(request.url).pathname === PLAYBACK_ROUTE;
-    return pieces.serve(context, request, pieced, native ? null : 15_000).catch((error: unknown) => {
+    // The page's reads (not the preview path's, FFmpeg's) are answered 503 past 15 s, and ask again. A
+    // background render's (`behind`) are made like the fill's pieces, giving way to anyone waiting.
+    const url = new URL(request.url);
+    const native = url.pathname === PLAYBACK_ROUTE;
+    return pieces.serve(context, request, pieced, native ? null : 15_000, url.searchParams.get("behind") !== "1").catch((error: unknown) => {
       diag.warn("pieces", `reading ${key}: ${diag.scrub(diag.messageOf(error))}`);
       return new Response(diag.scrub(diag.messageOf(error)), { status: 503, headers: { "retry-after": "5" } });
     });
@@ -1511,7 +1528,9 @@ export async function prefetchProject(app: App, id: string, from = 0): Promise<n
     const base = pieces.baseOf(streamKey(media?.cloud, "proxy") ?? "");
     if (base === null) continue;
     const speed = clip.speed ?? 1;
-    for (let frame = Math.max(clip.start, from); frame < clip.start + clip.duration; frame += 60 * fps) {
+    // Half a piece of the source at a time (a fast clip passes through more of it): every piece it plays, once.
+    const step = Math.max(1, Math.floor((pieces.PIECE_SECONDS / 2 / Math.max(speed, 1)) * fps));
+    for (let frame = Math.max(clip.start, from); frame < clip.start + clip.duration; frame += step) {
       wants.push({ base, seconds: (clip.source_in ?? 0) + ((frame - clip.start) / fps) * speed });
     }
   }

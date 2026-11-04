@@ -120,6 +120,54 @@ test("a browser upload's copy is removed only once its upload went up, after a r
   }
 });
 
+test("an original already in the cloud whole isn't sent again (the same footage imported twice)", async () => {
+  const fixture = home("cloud-upload-twice");
+  const { dir, store, cleanup } = fixture;
+  try {
+    const video = `${dir}/twice.mov`;
+    fs.writeFileSync(video, "the same footage, twice");
+    mock.cloud.failPuts = 1000;
+    const made = await cloudMedia.importLocal(store.cacheDir(), video, VIDEO, "twice.mov");
+    expect(await cloudMedia.uploaded(video)).toBe(false);
+    // The first import's upload got there meanwhile: this one sends its proxy, not the original again.
+    mock.cloud.objects.set(made.cloud!.original, fs.readFileSync(video));
+    mock.cloud.failPuts = 0;
+    const before = mock.calls(`/r2/${made.cloud!.original}`, "PUT").length;
+    const noted = (JSON.parse(fs.readFileSync(`${fixture.home}/jobs.json`, "utf8")) as { kind: string; args: Record<string, unknown> }[]).filter((job) => job.kind === "upload");
+    cloudMedia.resumeUpload(fixture.home, noted[0]!.args);
+    expect(await cloudMedia.uploaded(video)).toBe(true);
+    expect(mock.calls(`/r2/${made.cloud!.original}`, "PUT").length).toBe(before);
+  } finally {
+    mock.cloud.failPuts = 0;
+    cleanup();
+  }
+});
+
+test("footage imported again while its upload goes on joins that upload", async () => {
+  const fixture = home("cloud-upload-joins");
+  const { dir, store, cleanup } = fixture;
+  try {
+    const video = `${dir}/again.mov`;
+    fs.writeFileSync(video, "footage imported twice at once");
+    // R2 slow to take it: the first upload is still going when the second import comes.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    mock.on("PUT", /^\/r2\/edit\/originals\//, async (request) => {
+      await held;
+      mock.cloud.objects.set(decodeURIComponent(request.path.slice("/r2/".length)), request.body);
+      return new Response(null, { status: 200, headers: { etag: '"x"' } });
+    }, 1);
+    const first = await cloudMedia.importLocal(store.cacheDir(), video, VIDEO, "again.mov");
+    expect(cloudMedia.uploadingNow(video)).toBe(true);
+    await cloudMedia.importLocal(store.cacheDir(), video, VIDEO, "again.mov");
+    release();
+    expect(await cloudMedia.uploaded(video)).toBe(true);
+    expect(mock.calls(`/r2/${first.cloud!.original}`, "PUT").length).toBe(1);
+  } finally {
+    cleanup();
+  }
+});
+
 test("analysis_sits_beside_the_source", () => {
   expect(cloudMedia.analysisPrefix("sha256:abc")).toBe("edit/analysis/sha256/abc/");
   expect(cloudMedia.analysisPrefix("drive:F1#100-2000")).toBe("edit/analysis/drive/F1/100-2000/");

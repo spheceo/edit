@@ -394,6 +394,8 @@ impl Analyser {
 /// Decodes the first audio stream (as 32-bit float WAV, mono or stereo:
 /// more channels are mixed down) and analyses it.
 fn analyse(path: &Path) -> Result<Blocks, String> {
+    let input = crate::media::analysis_input(path);
+    let path = input.as_path();
     let mut child = Command::new(crate::util::ffmpeg())
         .args([
             "-hide_banner",

@@ -251,6 +251,33 @@ fn parse_rate(rate: Option<&str>) -> Option<f64> {
     (num.is_finite() && den.is_finite() && num > 0.0 && den > 0.0).then_some(num / den)
 }
 
+/// Media whose analyses decode another file in their place (a pieced
+/// proxy's original: reading the proxy would make every piece of it), by
+/// `media_key`; what they make is still kept as the media's own.
+fn read_instead() -> &'static parking_lot::Mutex<std::collections::HashMap<String, PathBuf>> {
+    static READ: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashMap<String, PathBuf>>> =
+        std::sync::OnceLock::new();
+    READ.get_or_init(Default::default)
+}
+
+/// Has every analysis of `path` decode `read` instead (none: `path` itself).
+pub fn analyse_from(path: &Path, read: Option<PathBuf>) {
+    let key = media_key(path);
+    match read {
+        Some(read) => read_instead().lock().insert(key, read),
+        None => read_instead().lock().remove(&key),
+    };
+}
+
+/// The file an analysis of `path` decodes.
+pub fn analysis_input(path: &Path) -> PathBuf {
+    read_instead()
+        .lock()
+        .get(&media_key(path))
+        .cloned()
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
 /// Identity of a source file's content for cache reuse across projects.
 pub fn media_key(path: &Path) -> String {
     // The loopback endpoint is only a range transport. Its port can change
@@ -1236,5 +1263,23 @@ mod background_tests {
             run_background(Command::new("sh").args(["-c", "echo first >&2; echo why >&2; exit 3"]))
                 .unwrap_err();
         assert_eq!(error, "why");
+    }
+}
+
+#[cfg(test)]
+mod analysis_input_tests {
+    use super::*;
+
+    #[test]
+    fn a_media_analysed_from_another_file_reads_it_until_told_otherwise() {
+        // A pieced proxy's address (its port changes; the key is the identity) and its original.
+        let proxy = Path::new("http://127.0.0.1:7710/api/cloud/preview?key=edit%2Fpieces%2Fv2%2Fsha256%2Fab%2Fproxy.mp4");
+        let original = PathBuf::from("/footage/ten-hours.mp4");
+        assert_eq!(analysis_input(proxy), proxy);
+        analyse_from(proxy, Some(original.clone()));
+        let moved = Path::new("http://127.0.0.1:7700/api/cloud/preview?key=edit%2Fpieces%2Fv2%2Fsha256%2Fab%2Fproxy.mp4");
+        assert_eq!(analysis_input(moved), original);
+        analyse_from(proxy, None);
+        assert_eq!(analysis_input(proxy), proxy);
     }
 }

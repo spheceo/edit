@@ -26,9 +26,9 @@ import { Effect, Option, Predicate, Schedule, Schema } from "effect";
 import * as diag from "./diag.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
 import * as service from "./effect/service.ts";
-import { ioMessage } from "./files.ts";
+import { ioMessage, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
-import { extension, parent } from "./paths.ts";
+import { extension, join, parent } from "./paths.ts";
 import * as relay from "./relay.ts";
 import { byteLength, debugStr, takeChars } from "./rust.ts";
 import { stableStringify } from "./stable.ts";
@@ -62,6 +62,8 @@ export const timing = {
   stallMs: STALL_WINDOW_MS,
   /** A download may take this long to answer at all. */
   connectMs: CONNECT_MS,
+  /** A file this big or more uploads resumably. */
+  resumableFrom: 512 * MIB,
 };
 
 /** Whether cloud calls can work: someone is signed in (or `EDIT_RELAY_TOKEN` is set). Cloud is always on then. */
@@ -247,20 +249,184 @@ export async function uploadFile(path: string, key: string, progress: Report = (
   if (signal?.aborted) throw new Error("the share was cancelled");
   await diag.timeOnAsync("cloud", "cloud: upload file", `${path} → ${key}`, async () => {
     let fd: number;
-    let size: number;
+    let stat: fs.Stats;
     try {
       fd = fs.openSync(path, "r");
-      size = fs.fstatSync(fd).size;
+      stat = fs.fstatSync(fd);
     } catch (error) {
       throw new Error(ioMessage(error));
     }
     try {
+      const size = stat.size;
+      const journal = size >= timing.resumableFrom ? journalPath(key) : null;
+      if (journal !== null) {
+        await resumable(fd, journal, { key, size, mtimeMs: stat.mtimeMs, part: partSize(timing.filePart, size) }, progress, signal);
+        const now = fs.statSync(path);
+        if (now.size !== size || now.mtimeMs !== stat.mtimeMs) throw new TransferMismatch({ message: `${path} changed while uploading` });
+        return;
+      }
       const sent = await upload(fileSource(fd), key, size, partSize(timing.filePart, size), FILE_PARALLEL, progress, signal);
       if (sent !== size) throw new TransferMismatch({ message: `${path} changed while uploading (${size} bytes, sent ${sent})` });
     } finally {
       fs.closeSync(fd);
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Resumable uploads: a big file's finished parts are kept in a journal, so
+// after a restart only the rest go up (the 10-hour trial, Nov 4: a 58 GB
+// original took 3 h to go up and began again from nothing after every
+// restart). R2 keeps an upload's parts until it's completed, or for 7 days.
+
+let journals: string | null = null;
+
+/** Where resumable uploads keep their journals (the server's home); null (tests, the CLI): a big upload that stops begins again. Those older than R2 keeps an upload are let go. */
+export function keepUploadJournalsIn(dir: string | null): void {
+  journals = dir;
+  if (dir === null) return;
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const file = join(dir, name);
+    try {
+      if (Date.now() - fs.statSync(file).mtimeMs > 7 * 86_400_000) fs.rmSync(file, { force: true });
+    } catch {
+      // Gone already.
+    }
+  }
+}
+
+/** An upload under way: which file it is, R2's upload id, and the parts R2 holds (their ETags). */
+interface Journal {
+  key: string;
+  size: number;
+  mtimeMs: number;
+  part: number;
+  uploadId: string;
+  parts: Record<string, string>;
+}
+
+function journalPath(key: string): string | null {
+  return journals === null ? null : join(journals, `${new Bun.CryptoHasher("sha256").update(key).digest("hex").slice(0, 32)}.json`);
+}
+
+function readJournal(file: string): Journal | null {
+  try {
+    const value = JSON.parse(fs.readFileSync(file, "utf8")) as Journal;
+    return typeof value.uploadId === "string" && typeof value.parts === "object" && value.parts !== null ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Lets go of a resumable upload of `key` begun here (the object got there another way): its parts in R2 and its journal. */
+export function forgetUpload(key: string): void {
+  const file = journalPath(key);
+  if (file === null) return;
+  const saved = readJournal(file);
+  if (saved !== null) abortUpload(saved.key, saved.uploadId);
+  fs.rmSync(file, { force: true });
+}
+
+function abortUpload(key: string, uploadId: string): void {
+  void relayJson("r2/multipart/abort", { key, uploadId }).catch((error: unknown) => diag.warn("cloud", `couldn't abort the upload of ${key}: ${diag.messageOf(error)}`));
+}
+
+/**
+ * Uploads open file `fd` (`file`: its key, size, time and part size) to its
+ * key, picking up the upload `journal` holds when it's this file's. One that
+ * fails is kept to resume on the next try, unless it was cancelled; one R2
+ * no longer has is begun again, once.
+ */
+async function resumable(fd: number, journal: string, file: Omit<Journal, "uploadId" | "parts">, report: Report, signal?: AbortSignal): Promise<void> {
+  let saved = readJournal(journal);
+  if (saved !== null && (saved.key !== file.key || saved.size !== file.size || saved.mtimeMs !== file.mtimeMs || saved.part !== file.part)) {
+    abortUpload(saved.key, saved.uploadId);
+    saved = null;
+  }
+  for (;;) {
+    const resumed = saved !== null;
+    let state: Journal;
+    if (saved !== null) {
+      state = saved;
+      diag.info("cloud", `resuming the upload of ${file.key}: ${Object.keys(state.parts).length} of ${Math.ceil(file.size / file.part)} parts are up`);
+    } else {
+      const created = await relayJson("r2/multipart/create", { key: file.key, contentType: contentType(file.key) });
+      if (typeof created.uploadId !== "string") throw lacking("the relay gave no upload id");
+      state = { ...file, uploadId: created.uploadId, parts: {} };
+      fs.mkdirSync(parent(journal)!, { recursive: true });
+      writeAtomic(journal, JSON.stringify(state));
+    }
+    try {
+      await sendParts(fd, journal, state, report, signal);
+      fs.rmSync(journal, { force: true });
+      return;
+    } catch (error) {
+      if (signal?.aborted || error instanceof TransferMismatch) {
+        abortUpload(state.key, state.uploadId);
+        fs.rmSync(journal, { force: true });
+        throw error;
+      }
+      // A refusal of one picked up (R2 let it go): begun again; anything temporary stays kept for the next try.
+      if (resumed && !service.isTemporary(error)) {
+        diag.warn("cloud", `the upload of ${file.key} couldn't be picked up (${diag.messageOf(error)}); beginning it again`);
+        fs.rmSync(journal, { force: true });
+        saved = null;
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+/** Sends the parts R2 doesn't hold yet, `FILE_PARALLEL` at once, each noted in the journal as it's up; then completes the upload. */
+async function sendParts(fd: number, journal: string, state: Journal, report: Report, signal?: AbortSignal): Promise<void> {
+  const count = Math.max(1, Math.ceil(state.size / state.part));
+  if (count > MAX_PARTS) throw new Error(`${state.key} needs more than ${MAX_PARTS} parts`);
+  const lengthOf = (n: number) => Math.min(state.part, state.size - (n - 1) * state.part);
+  const progress = new Progress(state.size, report);
+  const missing: number[] = [];
+  let up = 0;
+  for (let n = 1; n <= count; n++) {
+    if (state.parts[n] !== undefined) up += lengthOf(n);
+    else missing.push(n);
+  }
+  if (up > 0) progress.add(up);
+  let next = 0;
+  let failure: unknown = null;
+  const worker = async () => {
+    while (failure === null && next < missing.length) {
+      if (signal?.aborted) throw new Error("the share was cancelled");
+      const n = missing[next++]!;
+      const data = Buffer.allocUnsafe(lengthOf(n));
+      for (let got = 0; got < data.length; ) {
+        const read = await new Promise<number>((resolve, reject) => fs.read(fd, data, got, data.length - got, (n - 1) * state.part + got, (error, bytes) => (error ? reject(error) : resolve(bytes))));
+        if (read === 0) throw new TransferMismatch({ message: `${state.key}'s file ended before ${state.size} bytes` });
+        got += read;
+      }
+      state.parts[n] = await putPart(state.key, state.uploadId, n, data, progress, signal);
+      writeAtomic(journal, JSON.stringify(state));
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(FILE_PARALLEL, Math.max(missing.length, 1)) }, () =>
+      worker().catch((error: unknown) => {
+        failure ??= error;
+      }),
+    ),
+  );
+  if (failure !== null) throw failure;
+  const parts = Object.entries(state.parts)
+    .map(([n, etag]) => ({ partNumber: Number(n), etag }))
+    .sort((a, b) => a.partNumber - b.partNumber);
+  const done = await relayJson("r2/multipart/complete", { key: state.key, uploadId: state.uploadId, parts });
+  const stored = asU64(done.size);
+  if (stored !== null && stored !== state.size) throw new TransferMismatch({ message: `${state.key} came out ${stored} bytes in the cloud, not ${state.size}` });
 }
 
 /**

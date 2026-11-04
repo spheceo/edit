@@ -1,7 +1,7 @@
-// Pieced proxies (off Modal, step 6; behind EDIT_PROXY_PIECES=1): a long
-// Drive file's proxy made five minutes at a time, when something reads that
-// stretch, instead of whole before the import answers (a ten-hour file's
-// proxy took hours: every frame read from R2 and encoded first).
+// Pieced proxies (off Modal, step 6): a long file's proxy made a minute at a
+// time, when something reads that stretch, instead of whole before the
+// import answers (a ten-hour file's proxy took hours: every frame read and
+// encoded first).
 //
 // Every reader still sees one MP4 at one address (the preview path, a
 // cloud media's `proxy` key): this server answers its byte ranges from the
@@ -11,16 +11,18 @@
 //   head    ftyp, moov (no samples; mehd: the whole duration), a sidx per
 //           track (FFmpeg's index), `free` to `layout.head`
 //   sound   a fragment per piece's stretch, each in a slot of `audio.slot`
-//           bytes (`free` after it): made all at once from the original's
-//           sound as the import starts, so transcription, the waveform and
-//           loudness never wait for the picture
+//           bytes (`free` after it): encoded from that stretch of the
+//           original alone (a second or two wherever it is in the file), on
+//           one grid of AAC frames so the stretches join without a seam
 //   picture a fragment per piece (`perPiece` frames), each in a slot of
-//           `slot` bytes: made when a read reaches it (the viewer, the
-//           agent's looks, a render), or in timeline order behind the viewer
+//           `slot` bytes (about 10 s to make on its own)
 //   tail    mfra (mediabunny's index: each fragment's time and place)
 //
 // A slot not made yet is made when a range touches it, so a reader waits
-// for its stretch only. Pieces are kept in the cache and in R2 at
+// for its stretch only (the viewer, the agent's looks, a render); behind
+// the viewer the fill makes the timeline's in its order, giving the encoder
+// up to anyone waiting. Transcription, the waveform and loudness read the
+// original, never these. Pieces are kept in the cache and in R2 at
 // `edit/pieces/<source>/…`, so another Mac fetches them rather than making
 // them again.
 
@@ -34,7 +36,7 @@ import { isFile, join, parent } from "./paths.ts";
 import * as tools from "./tools.ts";
 
 /** Seconds of the source in a piece. */
-export const PIECE_SECONDS = 300;
+export const PIECE_SECONDS = 60;
 /** The picture's timescale (any frame rate lands on it within a tick). */
 export const VIDEO_TIMESCALE = 90_000;
 /** The sound: AAC at 48 kHz, 1024 samples a frame. */
@@ -48,11 +50,6 @@ const MAX_HEIGHT = 1080;
 /** The track ids in the virtual file. */
 const VIDEO_TRACK = 1;
 const AUDIO_TRACK = 2;
-
-/** Whether long imports get pieced proxies. */
-export function enabled(): boolean {
-  return process.env.EDIT_PROXY_PIECES === "1";
-}
 
 /** A pieced proxy's layout (`layout.json`): everything needed to answer any byte of it. */
 export interface Layout {
@@ -131,39 +128,47 @@ export function audioFramesOf(layout: Layout, n: number): [number, number] {
   return [at(n), at(n + 1)];
 }
 
-/** Where things are in the virtual file. */
-export function audioSlotAt(layout: Layout, n: number): number {
-  return layout.head + n * (layout.audio?.slot ?? 0);
-}
-
 /**
- * The picture's segment index (sidx) sits right before its first slot:
- * FFmpeg takes an index as whole only when its first fragment follows it
- * at once (`first_offset` 0; FFmpeg 8.1 `mov_read_sidx`), and otherwise
- * walks every fragment in the file as it opens it, which made every piece.
+ * Where things are in the virtual file: the head, the picture's segment
+ * index (sidx), then a region per piece holding one fragment of its picture
+ * and its sound together (`join`), as a muxer interleaves them, so a reader
+ * that seeks has both: with each sound in its own fragment, FFmpeg read a
+ * minute of picture before it found any sound, and with all the sound first
+ * (v2, Nov 4) a cut of the first 30 s walked the sound of all 633 pieces,
+ * making each, before it reached a picture.
+ *
+ * The sidx sits right before the first piece: FFmpeg takes an index as
+ * whole only when its first fragment follows it at once (`first_offset` 0;
+ * FFmpeg 8.1 `mov_read_sidx`), and otherwise walks every fragment in the
+ * file as it opens it, which made every piece.
  */
 export function indexAt(layout: Layout): number {
-  return layout.head + layout.pieces * (layout.audio?.slot ?? 0);
+  return layout.head;
 }
 
 export function indexSize(layout: Layout): number {
   return 40 + 12 * layout.pieces;
 }
 
-export function videoSlotAt(layout: Layout, n: number): number {
-  return indexAt(layout) + indexSize(layout) + n * layout.slot;
+/** Bytes of a piece's region: room for its picture and its sound. */
+export function pieceSize(layout: Layout): number {
+  return layout.slot + (layout.audio?.slot ?? 0);
+}
+
+export function pieceSlotAt(layout: Layout, n: number): number {
+  return indexAt(layout) + indexSize(layout) + n * pieceSize(layout);
 }
 
 /** The picture's sidx, from the layout alone. */
 export function index(layout: Layout): Uint8Array {
   return fmp4.sidx(VIDEO_TRACK, VIDEO_TIMESCALE, 0, Array.from({ length: layout.pieces }, (_, n) => {
     const [a, b] = framesOf(layout, n);
-    return { size: layout.slot, duration: videoTime(layout, b) - videoTime(layout, a) };
+    return { size: pieceSize(layout), duration: videoTime(layout, b) - videoTime(layout, a) };
   }));
 }
 
 export function tailAt(layout: Layout): number {
-  return videoSlotAt(layout, layout.pieces);
+  return pieceSlotAt(layout, layout.pieces);
 }
 
 /** The piece the timeline's time `seconds` of the source is in. */
@@ -174,10 +179,10 @@ export function pieceAt(layout: Layout, seconds: number): number {
 /** The index at the file's end (mfra), from the layout alone. */
 export function tail(layout: Layout): Uint8Array {
   const tracks = [
-    { id: VIDEO_TRACK, entries: Array.from({ length: layout.pieces }, (_, n) => ({ time: videoTime(layout, framesOf(layout, n)[0]), offset: videoSlotAt(layout, n) })) },
+    { id: VIDEO_TRACK, entries: Array.from({ length: layout.pieces }, (_, n) => ({ time: videoTime(layout, framesOf(layout, n)[0]), offset: pieceSlotAt(layout, n) })) },
   ];
   if (layout.audio !== null) {
-    tracks.push({ id: AUDIO_TRACK, entries: Array.from({ length: layout.pieces }, (_, n) => ({ time: audioFramesOf(layout, n)[0] * AAC_FRAME, offset: audioSlotAt(layout, n) })) });
+    tracks.push({ id: AUDIO_TRACK, entries: Array.from({ length: layout.pieces }, (_, n) => ({ time: audioFramesOf(layout, n)[0] * AAC_FRAME, offset: pieceSlotAt(layout, n) })) });
   }
   return fmp4.mfra(tracks);
 }
@@ -201,7 +206,9 @@ export function headOf(layout: Layout, videoEntry: Uint8Array, audioEntry: Uint8
 /** Where a source's pieces are (R2 and, under `cloud/`, the cache): `edit/pieces/<drive/<id>>`. */
 export function baseKey(source: string): string {
   const [scheme, ...rest] = source.split(":");
-  return `edit/pieces/${scheme}/${rest.join(":").replace(/[^A-Za-z0-9._-]/g, "_")}`;
+  // v3 (Nov 4): one-minute pieces, each one's sound beside its picture, on the file's clock; the five-minute ones before
+  // (no version) stay where they are, never mixed in (v2 was the 10-hour trial's alone).
+  return `edit/pieces/v3/${scheme}/${rest.join(":").replace(/[^A-Za-z0-9._-]/g, "_")}`;
 }
 
 /** The address readers use for a pieced proxy (its media's `cloud.proxy`): no object is there. */
@@ -218,6 +225,8 @@ const layoutKey = (base: string) => `${base}/layout.json`;
 const headKey = (base: string) => `${base}/head.mp4`;
 const audioKey = (base: string, n: number) => `${base}/audio/${n}.m4s`;
 const videoKey = (base: string, n: number) => `${base}/video/${n}.m4s`;
+/** A piece's picture and sound joined (`ensurePiece`): made from those on each Mac, never shared. */
+const joinedKey = (base: string, n: number) => `${base}/joined/${n}.m4s`;
 
 /** What a Mac needs to make and serve pieces: its cache, R2's calls and the original's address. */
 export interface Context {
@@ -309,7 +318,7 @@ export function videoCommand(layout: Layout, n: number, url: string, out: string
  * Makes piece `n`'s picture from the original into its fragment file; its
  * sample entry (the decoder's setup: every piece's must be the head's).
  */
-export async function makeVideo(context: Context, base: string, layout: Layout, n: number, expected: Uint8Array | null): Promise<{ file: string; entry: Uint8Array }> {
+export async function makeVideo(context: Context, base: string, layout: Layout, n: number, expected: Uint8Array | null, signal?: AbortSignal): Promise<{ file: string; entry: Uint8Array }> {
   const url = await context.originalUrl(layout.original);
   const out = context.local(videoKey(base, n));
   let bitrate = layout.bitrate;
@@ -319,14 +328,17 @@ export async function makeVideo(context: Context, base: string, layout: Layout, 
     try {
       const began = performance.now();
       const hardware = !softwareScaled.has(base);
+      const options = { timeoutMs: 30 * 60_000, ...(signal ? { signal } : {}) };
+      // Stopped (the fill's piece giving way): why, not FFmpeg's end.
+      const stopped = (error: unknown) => (signal?.aborted ? (signal.reason as Error) : new Error(`piece ${n}'s picture: ${diag.scrub(diag.messageOf(error))}`));
       try {
-        await tools.run(videoCommand(layout, n, url, encoded, bitrate, hardware), { timeoutMs: 30 * 60_000 });
+        await tools.run(videoCommand(layout, n, url, encoded, bitrate, hardware), options);
       } catch (error) {
-        if (!hardware) throw new Error(`piece ${n}'s picture: ${diag.scrub(diag.messageOf(error))}`);
+        if (!hardware || signal?.aborted) throw stopped(error);
         diag.warn("pieces", `${base}: VideoToolbox couldn't scale piece ${n} (${diag.scrub(diag.messageOf(error))}); FFmpeg scales it`);
         softwareScaled.add(base);
-        await tools.run(videoCommand(layout, n, url, encoded, bitrate, false), { timeoutMs: 30 * 60_000 }).catch((again: unknown) => {
-          throw new Error(`piece ${n}'s picture: ${diag.scrub(diag.messageOf(again))}`);
+        await tools.run(videoCommand(layout, n, url, encoded, bitrate, false), options).catch((again: unknown) => {
+          throw stopped(again);
         });
       }
       const track = fmp4.readMp4(encoded).find((one) => one.handler === "vide");
@@ -386,131 +398,111 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
-/** FFmpeg's command for the whole sound of `url` as AAC (ADTS) on its stdout. */
-export function audioCommand(url: string): string[] {
-  return [
-    tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-    "-protocol_whitelist", tools.protocols(url), ...tools.urlArgs(url), "-i", url,
-    "-map", "0:a:0", "-vn", "-sn", "-dn", "-c:a", "aac", "-b:a", String(AUDIO_BITRATE), "-ac", "2", "-ar", String(AUDIO_RATE),
-    "-f", "adts", "pipe:1",
-  ];
+/**
+ * AAC frames encoded before a stretch's first and after its last, and
+ * dropped: FFmpeg's encoder takes a few seconds of sound to settle (a pure
+ * tone's first 3 s came out ten times further off than the rest), so each
+ * stretch starts already settled and joins the one before without a seam.
+ */
+const PRE_ROLL = 240;
+const POST_ROLL = 2;
+/**
+ * An encode starts on a multiple of this many AAC frames: a time on a sample
+ * of the source at every usual rate (44.1 kHz, 32, 22.05, 16…), so each
+ * stretch is resampled from the same instants and none is a few µs off the
+ * next (a tick at the join of a pure tone).
+ */
+const SEEK_GRID = 15;
+
+/**
+ * FFmpeg's command for piece `n`'s sound from `url` as AAC (ADTS) on its
+ * stdout, and how many of its frames come before the stretch's first (the
+ * encoder's delay, then the pre-roll). Every stretch is on one grid of AAC
+ * frames counted from the file's start (where the picture's times are
+ * counted from too): a sound starting late is padded to it with silence
+ * (aresample's first_pts), one ending early after it (apad).
+ */
+export function audioCommand(layout: Layout, n: number, url: string): { command: string[]; skip: number } {
+  const [first, end] = audioFramesOf(layout, n);
+  const from = Math.max(0, Math.floor((first - PRE_ROLL) / SEEK_GRID) * SEEK_GRID);
+  const skip = 1 + (first - from);
+  return {
+    command: [
+      tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+      ...(from > 0 ? ["-ss", ((from * AAC_FRAME) / AUDIO_RATE).toFixed(6)] : []),
+      "-protocol_whitelist", tools.protocols(url), ...tools.urlArgs(url), "-i", url,
+      "-map", "0:a:0", "-vn", "-sn", "-dn", "-af", `aresample=${AUDIO_RATE}:async=1:first_pts=0,apad`,
+      "-c:a", "aac", "-b:a", String(AUDIO_BITRATE), "-ac", "2", "-ar", String(AUDIO_RATE),
+      "-frames:a", String(skip + (end - first) + POST_ROLL), "-f", "adts", "pipe:1",
+    ],
+    skip,
+  };
 }
 
 /** The sound's sample entry: AAC-LC, 48 kHz stereo (what `audioCommand` makes). */
 export const AUDIO_ENTRY = fmp4.aacEntry(AUDIO_RATE, 2, AUDIO_BITRATE);
 
-/** A sound being made: each piece's fragment written as soon as its frames are in. */
-interface AudioRun {
-  piece(n: number): Promise<void>;
-  done: Promise<void>;
+/** Piece `n`'s sound: its stretch's AAC frames, encoded from the original now (a minute's in about a second, wherever it is in the file). */
+export async function soundOf(context: Pick<Context, "originalUrl">, layout: Layout, n: number, signal?: AbortSignal): Promise<Uint8Array[]> {
+  const url = await context.originalUrl(layout.original);
+  const { command, skip } = audioCommand(layout, n, url);
+  const [first, end] = audioFramesOf(layout, n);
+  let out: Uint8Array;
+  try {
+    out = await tools.run(command, { timeoutMs: 10 * 60_000, ...(signal ? { signal } : {}) });
+  } catch (error) {
+    throw new Error(`piece ${n}'s sound: ${diag.scrub(diag.messageOf(error))}`);
+  }
+  const frames = fmp4.adtsFrames(out).frames.slice(skip, skip + (end - first));
+  if (frames.length < end - first) throw new Error(`piece ${n}'s sound came out ${frames.length} frames of ${end - first}`);
+  return frames;
 }
 
-const audioRuns = new Map<string, AudioRun>();
+/** Sounds made at once (a stretch's is a second or two of one core). */
+const sounding = new Semaphore(2);
 
-/**
- * Makes every piece's sound from one encode of the original's, streamed
- * (one grid of AAC frames for the whole file, so the pieces join without a
- * seam), each piece's written as soon as its frames are in: the sound of
- * the first five minutes is there seconds after it starts, the rest
- * behind it. Pieces already here are kept.
- */
-export function startAudio(context: Context, base: string, layout: Layout): AudioRun {
-  const running = audioRuns.get(base);
-  if (running !== undefined) return running;
+/** Makes piece `n`'s sound into its fragment file. */
+async function makeAudio(context: Context, base: string, layout: Layout, n: number): Promise<string> {
   if (layout.audio === null) throw new Error("no sound to make");
-  const slot = layout.audio.slot;
-  const waiters = Array.from({ length: layout.pieces }, () => Promise.withResolvers<void>());
-  for (const waiter of waiters) waiter.promise.catch(() => {});
-  const done = (async () => {
-    const url = await context.originalUrl(layout.original);
-    const began = performance.now();
-    const child = Bun.spawn(audioCommand(url), { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-    const stderr = new Response(child.stderr).text();
-    let frames: Uint8Array[] = [];
-    let skipped = false;
-    let piece = 0;
-    let [, end] = audioFramesOf(layout, 0);
-    let first = 0;
-    const write = (n: number, own: Uint8Array[], from: number) => {
-      const key = audioKey(base, n);
-      const out = context.local(key);
-      if (isFile(out)) {
-        waiters[n]!.resolve();
-        return;
-      }
-      fs.mkdirSync(parent(out)!, { recursive: true });
-      const partial = `${out}.partial`;
-      const size = fmp4.writeFragment(partial, n + 1, [
-        { id: AUDIO_TRACK, baseTime: from * AAC_FRAME, samples: own.map((bytes) => ({ size: bytes.length, duration: AAC_FRAME, sync: true, cts: 0, from: "", offset: 0, bytes })) },
-      ]);
-      if (size + 8 + QUIET > slot) {
-        fs.rmSync(partial, { force: true });
-        throw new Error(`piece ${n}'s sound takes ${size} bytes, more than its slot's ${slot}`);
-      }
-      fs.renameSync(partial, out);
-      waiters[n]!.resolve();
-      share(context, out, key);
-    };
-    let rest: Uint8Array = new Uint8Array(0);
-    let seen = 0;
-    try {
-      for await (const chunk of child.stdout) {
-        const joined = new Uint8Array(rest.length + chunk.length);
-        joined.set(rest);
-        joined.set(chunk, rest.length);
-        const parsed = fmp4.adtsFrames(joined);
-        rest = parsed.rest;
-        for (const frame of parsed.frames) {
-          // FFmpeg's AAC starts with one frame of the encoder's delay: dropped, so frame k is the source's k.
-          if (!skipped) {
-            skipped = true;
-            continue;
-          }
-          frames.push(frame);
-          seen++;
-          while (piece < layout.pieces && first + frames.length >= end) {
-            const own = frames.slice(0, end - first);
-            frames = frames.slice(end - first);
-            write(piece, own, first);
-            first = end;
-            piece++;
-            if (piece < layout.pieces) end = audioFramesOf(layout, piece)[1];
-          }
-        }
-      }
-      const code = await child.exited;
-      if (code !== 0) throw new Error(`the sound: ${diag.scrub((await stderr).trim().split("\n").pop() ?? `FFmpeg exited ${code}`)}`);
-      // The source's sound ended before its planned last frame: the pieces left get what there is.
-      for (; piece < layout.pieces; piece++) {
-        write(piece, frames, first);
-        first += frames.length;
-        frames = [];
-      }
-      diag.info("pieces", `${base}: the sound of all ${layout.pieces} pieces (${Math.round(layout.duration / 60)} min, ${seen} frames) made in ${diag.human(performance.now() - began)}`);
-    } catch (error) {
-      child.kill();
-      for (const waiter of waiters) waiter.reject(error);
-      throw error;
-    }
-  })().finally(() => audioRuns.delete(base));
-  done.catch((error: unknown) => diag.warn("pieces", `${base}: ${diag.messageOf(error)}`));
-  const run: AudioRun = { piece: (n) => waiters[n]?.promise ?? Promise.reject(new Error(`no sound piece ${n}`)), done };
-  audioRuns.set(base, run);
-  return run;
+  const began = performance.now();
+  const own = await sounding.with(() => soundOf(context, layout, n));
+  const [first] = audioFramesOf(layout, n);
+  const out = context.local(audioKey(base, n));
+  fs.mkdirSync(parent(out)!, { recursive: true });
+  const partial = `${out}.partial`;
+  try {
+    const size = fmp4.writeFragment(partial, n + 1, [
+      { id: AUDIO_TRACK, baseTime: first * AAC_FRAME, samples: own.map((bytes) => ({ size: bytes.length, duration: AAC_FRAME, sync: true, cts: 0, from: "", offset: 0, bytes })) },
+    ]);
+    if (size + 8 + QUIET > layout.audio.slot) throw new Error(`piece ${n}'s sound takes ${size} bytes, more than its slot's ${layout.audio.slot}`);
+    fs.renameSync(partial, out);
+  } finally {
+    fs.rmSync(partial, { force: true });
+  }
+  diag.info("pieces", `${base}: sound piece ${n} of ${layout.pieces} made in ${diag.human(performance.now() - began)}`);
+  return out;
 }
 
-/**
- * This Mac's file of a piece: here, R2's, or made now. `urgent` (a read
- * someone waits on: the viewer jumping to an hour in) is made before the
- * pieces the background fill has in line; on the 10-hour trial (Nov 4) a
- * jump waited 2 min 09 s, a minute of it behind the fill's piece.
- */
-export function ensureVideo(context: Context, base: string, layout: Layout, n: number, urgent = true): Promise<string> {
-  const key = videoKey(base, n);
+/** How long R2 has to say whether another Mac made a piece before it's made here (the relay once took 2 min to fail to). */
+const SHARED_MS = 5_000;
+
+/** R2's object at `key`, or null: none, or no answer in `SHARED_MS`. */
+async function shared(context: Context, key: string): Promise<{ size: number } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), SHARED_MS)));
+  try {
+    return await Promise.race([context.head(key).catch(() => null), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** This Mac's file of `key`: here, fetched from R2 (another Mac made it), or `make`d now. */
+function obtain(context: Context, key: string, make: () => Promise<string>): Promise<string> {
   const local = context.local(key);
   if (isFile(local)) return Promise.resolve(local);
   return once(key, async () => {
-    if ((await context.head(key).catch(() => null)) !== null) {
+    if ((await shared(context, key)) !== null) {
       try {
         await context.fetch(key, local);
         if (isFile(local)) return local;
@@ -518,31 +510,113 @@ export function ensureVideo(context: Context, base: string, layout: Layout, n: n
         diag.warn("pieces", `fetching ${key}: ${diag.messageOf(error)}; making it here`);
       }
     }
-    const head = fs.readFileSync(await ensureHead(context, base));
-    const expected = videoEntryOf(head);
-    const made = await making.with(() => makeVideo(context, base, layout, n, expected), urgent);
+    return make();
+  });
+}
+
+/** The background fill's picture piece being made now: stopped (and made again later) when a read someone waits on needs the encoder. */
+let background: { key: string; stop: AbortController } | null = null;
+/** Picture pieces someone is waiting on (a fill's piece one of them is, is never stopped), and how many wait on each. */
+const waitedOn = new Map<string, number>();
+
+/** Why a background piece stopped: someone needed the encoder first. */
+export class GaveWay extends Error {
+  constructor() {
+    super("gave way to a piece someone is waiting on");
+  }
+}
+
+/**
+ * This Mac's file of a picture piece: here, R2's, or made now. `urgent` (a
+ * read someone waits on: the viewer jumping to an hour in) stops the piece
+ * the background fill is making, if it's another, and goes first; on the
+ * 10-hour trial (Nov 4) a jump waited 2 min 27 s, most of it behind the
+ * fill's piece.
+ */
+export async function ensureVideo(context: Context, base: string, layout: Layout, n: number, urgent = true): Promise<string> {
+  const key = videoKey(base, n);
+  // Behind the viewer: one that gave way is made again once those waited on are.
+  if (!urgent) {
+    for (;;) {
+      try {
+        return await makePicture(context, base, layout, n, false);
+      } catch (error) {
+        if (!(error instanceof GaveWay)) throw error;
+      }
+    }
+  }
+  if (isFile(context.local(key))) return Promise.resolve(context.local(key));
+  waitedOn.set(key, (waitedOn.get(key) ?? 0) + 1);
+  // One that joined the fill's piece as another stopped it asks again, first in line.
+  return makePicture(context, base, layout, n, true)
+    .catch((error: unknown) => (error instanceof GaveWay ? makePicture(context, base, layout, n, true) : Promise.reject(error)))
+    .finally(() => {
+      const left = (waitedOn.get(key) ?? 1) - 1;
+      if (left > 0) waitedOn.set(key, left);
+      else waitedOn.delete(key);
+    });
+}
+
+function makePicture(context: Context, base: string, layout: Layout, n: number, urgent: boolean): Promise<string> {
+  const key = videoKey(base, n);
+  return obtain(context, key, async () => {
+    const expected = videoEntryOf(fs.readFileSync(await ensureHead(context, base)));
+    if (urgent && background !== null && background.key !== key && !waitedOn.has(background.key)) background.stop.abort(new GaveWay());
+    const made = await making.with(async () => {
+      if (urgent) return makeVideo(context, base, layout, n, expected);
+      const own = { key, stop: new AbortController() };
+      background = own;
+      try {
+        return await makeVideo(context, base, layout, n, expected, own.stop.signal);
+      } finally {
+        if (background === own) background = null;
+      }
+    }, urgent);
     share(context, made.file, key);
     return made.file;
   });
 }
 
+/** This Mac's file of a sound piece: here, R2's, or made now from the original. */
 export function ensureAudio(context: Context, base: string, layout: Layout, n: number): Promise<string> {
   const key = audioKey(base, n);
-  const local = context.local(key);
-  if (isFile(local)) return Promise.resolve(local);
-  return once(key, async () => {
-    if ((await context.head(key).catch(() => null)) !== null) {
-      try {
-        await context.fetch(key, local);
-        if (isFile(local)) return local;
-      } catch (error) {
-        diag.warn("pieces", `fetching ${key}: ${diag.messageOf(error)}; making the sound here`);
-      }
+  return obtain(context, key, async () => {
+    const made = await makeAudio(context, base, layout, n);
+    share(context, made, key);
+    return made;
+  });
+}
+
+/** Whether piece `n`'s picture and sound are both on this Mac. */
+function made(context: Context, base: string, layout: Layout, n: number): boolean {
+  return isFile(context.local(videoKey(base, n))) && (layout.audio === null || isFile(context.local(audioKey(base, n))));
+}
+
+/**
+ * This Mac's file of piece `n` as the virtual file holds it: one fragment
+ * of its picture and its sound (made, or fetched, apart), joined here and
+ * kept beside them; a piece with no sound is its picture's.
+ */
+export function ensurePiece(context: Context, base: string, layout: Layout, n: number, urgent = true): Promise<string> {
+  if (layout.audio === null) return ensureVideo(context, base, layout, n, urgent);
+  const out = context.local(joinedKey(base, n));
+  if (isFile(out)) return Promise.resolve(out);
+  // The picture is asked for apart from the join, so a read someone waits on is first in line even when one behind the viewer started the join.
+  const picture = ensureVideo(context, base, layout, n, urgent);
+  picture.catch(() => {});
+  return once(joinedKey(base, n), async () => {
+    const [, sound] = await Promise.all([picture, ensureAudio(context, base, layout, n)]);
+    const tracks = [...fmp4.readFragment(await picture), ...fmp4.readFragment(sound)];
+    fs.mkdirSync(parent(out)!, { recursive: true });
+    const partial = `${out}.partial`;
+    try {
+      const size = fmp4.writeFragment(partial, n + 1, tracks);
+      if (size + 8 + QUIET > pieceSize(layout)) throw new Error(`piece ${n} takes ${size} bytes, more than its slot's ${pieceSize(layout)}`);
+      fs.renameSync(partial, out);
+    } finally {
+      fs.rmSync(partial, { force: true });
     }
-    // Made here (another Mac's never reached R2): the sound streamed again, the pieces here kept.
-    await startAudio(context, base, layout).piece(n);
-    if (!isFile(local)) throw new Error(`${key} wasn't made`);
-    return local;
+    return out;
   });
 }
 
@@ -581,9 +655,8 @@ export async function create(context: Context, source: string, original: string,
   }
   const layout = plan(source, original, probe.duration, probe.fps, probe.width, probe.height, probe.has_audio);
   const began = performance.now();
-  // The sound streams from the start; the first piece's picture and sound are all the import waits for.
-  const sound = layout.audio === null ? null : startAudio(context, base, layout);
-  const [picture] = await Promise.all([making.with(() => makeVideo(context, base, layout, 0, null)), sound?.piece(0)]);
+  // The first piece's picture and sound are all the import waits for.
+  const [picture, sound] = await Promise.all([making.with(() => makeVideo(context, base, layout, 0, null), true), layout.audio === null ? null : makeAudio(context, base, layout, 0)]);
   const head = headOf(layout, picture.entry, sound === null ? null : AUDIO_ENTRY);
   const headFile = context.local(headKey(base));
   fs.mkdirSync(parent(headFile)!, { recursive: true });
@@ -595,6 +668,7 @@ export async function create(context: Context, source: string, original: string,
   await context.upload(headFile, headKey(base));
   await context.upload(layoutFile, layoutKey(base));
   share(context, picture.file, videoKey(base, 0));
+  if (sound !== null) share(context, sound, audioKey(base, 0));
   diag.info("pieces", `${source}: a pieced proxy of ${layout.pieces} pieces (${Math.round(layout.duration / 60)} min) playable in ${diag.human(performance.now() - began)}`);
   return layout;
 }
@@ -620,11 +694,12 @@ export async function fill(context: Context, wants: { base: string; seconds: num
     const key = videoKey(want.base, n);
     if (seen.has(key)) continue;
     seen.add(key);
-    if (isFile(context.local(key))) continue;
+    const sound = layout.audio !== null && !isFile(context.local(audioKey(want.base, n)));
+    if (isFile(context.local(key)) && !sound) continue;
     for (let waited = 0; waited < 3600 && context.exporting() && !stop(); waited += 5) await Bun.sleep(5000);
     if (stop()) break;
     try {
-      await ensureVideo(context, want.base, layout, n, false);
+      await Promise.all([ensureVideo(context, want.base, layout, n, false), sound ? ensureAudio(context, want.base, layout, n) : null]);
       made++;
     } catch (error) {
       diag.warn("pieces", `${want.base}: piece ${n}: ${diag.messageOf(error)}`);
@@ -649,7 +724,7 @@ export async function tryCreate(context: Context, source: string, original: stri
 /** The parts of the virtual file a range covers: [start, end) of each region. */
 type Region =
   | { kind: "head"; at: number; size: number }
-  | { kind: "audio" | "video"; n: number; at: number; size: number }
+  | { kind: "piece"; n: number; at: number; size: number }
   | { kind: "index"; at: number; size: number }
   | { kind: "tail"; at: number; size: number };
 
@@ -659,14 +734,9 @@ export function regions(layout: Layout, from: number, to: number): Region[] {
     if (region.at < to && region.at + region.size > from) out.push(region);
   };
   add({ kind: "head", at: 0, size: layout.head });
-  if (layout.audio !== null) {
-    const first = Math.max(0, Math.floor((from - layout.head) / layout.audio.slot));
-    for (let n = first; n < layout.pieces && audioSlotAt(layout, n) < to; n++) add({ kind: "audio", n, at: audioSlotAt(layout, n), size: layout.audio.slot });
-  }
   add({ kind: "index", at: indexAt(layout), size: indexSize(layout) });
-  const start = videoSlotAt(layout, 0);
-  const first = Math.max(0, Math.floor((from - start) / layout.slot));
-  for (let n = first; n < layout.pieces && videoSlotAt(layout, n) < to; n++) add({ kind: "video", n, at: videoSlotAt(layout, n), size: layout.slot });
+  const first = Math.max(0, Math.floor((from - pieceSlotAt(layout, 0)) / pieceSize(layout)));
+  for (let n = first; n < layout.pieces && pieceSlotAt(layout, n) < to; n++) add({ kind: "piece", n, at: pieceSlotAt(layout, n), size: pieceSize(layout) });
   add({ kind: "tail", at: tailAt(layout), size: layout.total - tailAt(layout) });
   return out;
 }
@@ -697,12 +767,8 @@ function readyUpTo(context: Context, base: string, layout: Layout, from: number,
   const all = regions(layout, from, asked);
   let end = Math.min(asked, all[0] === undefined ? asked : all[0].at + all[0].size);
   for (const region of all.slice(1)) {
-    const made =
-      region.kind === "tail" ||
-      region.kind === "index" ||
-      (region.kind === "audio" && isFile(context.local(audioKey(base, region.n)))) ||
-      (region.kind === "video" && isFile(context.local(videoKey(base, region.n))));
-    if (!made) break;
+    const here = region.kind === "tail" || region.kind === "index" || (region.kind === "piece" && made(context, base, layout, region.n));
+    if (!here) break;
     end = Math.min(asked, region.at + region.size);
   }
   return end;
@@ -730,7 +796,7 @@ export function parseRange(header: string | null, size: number): [number, number
  * while its pieces go on being made (the page's reads give up after 20 s and
  * ask again on a 503); without, it waits (FFmpeg's reads have no deadline).
  */
-export async function serve(context: Context, request: Request, base: string, patience: number | null = null): Promise<Response> {
+export async function serve(context: Context, request: Request, base: string, patience: number | null = null, urgent = true): Promise<Response> {
   const layout = await layoutOf(context, base);
   const range = parseRange(request.headers.get("range"), layout.total);
   if (range === null) return new Response(null, { status: 416, headers: { "content-range": `bytes */${layout.total}` } });
@@ -747,9 +813,8 @@ export async function serve(context: Context, request: Request, base: string, pa
       if (region.kind === "head") return { bytes: fs.readFileSync(await ensureHead(context, base)) };
       if (region.kind === "tail") return { bytes: tail(layout) };
       if (region.kind === "index") return { bytes: index(layout) };
-      const key = region.kind === "audio" ? audioKey(base, region.n) : videoKey(base, region.n);
-      if (Math.max(from, region.at) - region.at >= region.size - QUIET && !isFile(context.local(key))) return { quiet: true as const };
-      return { file: region.kind === "audio" ? await ensureAudio(context, base, layout, region.n) : await ensureVideo(context, base, layout, region.n) };
+      if (Math.max(from, region.at) - region.at >= region.size - QUIET && !made(context, base, layout, region.n)) return { quiet: true as const };
+      return { file: await ensurePiece(context, base, layout, region.n, urgent) };
     }),
   );
   let contents: ({ bytes: Uint8Array } | { file: string } | { quiet: true })[];

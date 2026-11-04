@@ -3,19 +3,20 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import * as diag from "../src/diag.ts";
 import * as fmp4 from "../src/fmp4.ts";
 import * as pieces from "../src/proxy_pieces.ts";
 
 const MIB = 1 << 20;
 
-test("a long file's proxy is laid out in five-minute pieces, every frame and sound frame in exactly one", () => {
+test("a long file's proxy is laid out in one-minute pieces, every frame and sound frame in exactly one", () => {
   // Robyn in custody: 82 min 58 s at 30 fps, 1080p.
   const layout = pieces.plan("drive:abc", "edit/originals/drive/abc/a.mp4", 4978.244, 30, 1920, 1080, true);
-  expect(layout.perPiece).toBe(9000);
+  expect(layout.perPiece).toBe(1800);
   expect(layout.frames).toBe(149_347);
-  expect(layout.pieces).toBe(17);
-  expect(pieces.framesOf(layout, 0)).toEqual([0, 9000]);
-  expect(pieces.framesOf(layout, 16)).toEqual([144_000, 149_347]);
+  expect(layout.pieces).toBe(83);
+  expect(pieces.framesOf(layout, 0)).toEqual([0, 1800]);
+  expect(pieces.framesOf(layout, 82)).toEqual([147_600, 149_347]);
   // The pieces cover every frame once.
   let next = 0;
   for (let n = 0; n < layout.pieces; n++) {
@@ -34,10 +35,10 @@ test("a long file's proxy is laid out in five-minute pieces, every frame and sou
   }
   expect(sound).toBe(layout.audio!.frames);
   expect(layout.audio!.frames).toBe(Math.ceil((4978.244 * 48_000) / 1024));
-  // At 29.97 fps a piece is 8991 frames, each 3003 ticks of the 90 kHz clock exactly.
+  // At 29.97 fps a piece is 1798 frames, each 3003 ticks of the 90 kHz clock exactly.
   const ntsc = pieces.plan("drive:b", "k", 600, 30_000 / 1001, 1280, 720, false);
-  expect(ntsc.perPiece).toBe(8991);
-  expect(pieces.videoTime(ntsc, 8991)).toBe(8991 * 3003);
+  expect(ntsc.perPiece).toBe(1798);
+  expect(pieces.videoTime(ntsc, 1798)).toBe(1798 * 3003);
   expect(ntsc.audio).toBeNull();
   expect([ntsc.width, ntsc.height]).toEqual([1280, 720]);
   // A 4K source fits in 1080p at the top rate; a small one gets less.
@@ -46,22 +47,23 @@ test("a long file's proxy is laid out in five-minute pieces, every frame and sou
   expect(pieces.bitrateFor(640, 360)).toBe(800_000);
   // The piece a time of the source is in.
   expect(pieces.pieceAt(layout, 0)).toBe(0);
-  expect(pieces.pieceAt(layout, 299.99)).toBe(0);
-  expect(pieces.pieceAt(layout, 300)).toBe(1);
-  expect(pieces.pieceAt(layout, 99_999)).toBe(16);
+  expect(pieces.pieceAt(layout, 59.99)).toBe(0);
+  expect(pieces.pieceAt(layout, 60)).toBe(1);
+  expect(pieces.pieceAt(layout, 99_999)).toBe(82);
 });
 
 const entry = (type: string) => fmp4.box(type, new Uint8Array(70));
 
-test("the virtual file: a head of whole MiB, the sound's slots, the picture's, an index at the end, and ranges mapped onto them", () => {
+test("the virtual file: a head of whole MiB, the picture's index, a region per piece for its picture and sound, an index at the end, and ranges mapped onto them", () => {
   const layout = pieces.plan("drive:abc", "k", 4978.244, 30, 1920, 1080, true);
   const head = pieces.headOf(layout, entry("avc1"), entry("mp4a"));
   expect(layout.head % MIB).toBe(0);
   expect(head.length + 8).toBeLessThanOrEqual(layout.head);
-  expect(pieces.audioSlotAt(layout, 0)).toBe(layout.head);
-  expect(pieces.indexAt(layout)).toBe(layout.head + 17 * layout.audio!.slot);
-  expect(pieces.videoSlotAt(layout, 0)).toBe(pieces.indexAt(layout) + pieces.indexSize(layout));
-  expect(pieces.tailAt(layout)).toBe(pieces.videoSlotAt(layout, 17));
+  expect(pieces.indexAt(layout)).toBe(layout.head);
+  expect(pieces.pieceSlotAt(layout, 0)).toBe(pieces.indexAt(layout) + pieces.indexSize(layout));
+  expect(pieces.pieceSize(layout)).toBe(layout.slot + layout.audio!.slot);
+  expect(pieces.pieceSlotAt(layout, 1)).toBe(pieces.pieceSlotAt(layout, 0) + pieces.pieceSize(layout));
+  expect(pieces.tailAt(layout)).toBe(pieces.pieceSlotAt(layout, 83));
   const tail = pieces.tail(layout);
   expect(layout.total).toBe(pieces.tailAt(layout) + tail.length);
   // The index's last word is its own size (mediabunny finds it so).
@@ -75,13 +77,14 @@ test("the virtual file: a head of whole MiB, the sound's slots, the picture's, a
   expect(sidx.length).toBe(pieces.indexSize(layout));
   const view = new DataView(sidx.buffer, sidx.byteOffset);
   expect(Number(view.getBigUint64(28))).toBe(0);
-  expect(view.getUint16(38)).toBe(17);
-  expect(view.getUint32(40)).toBe(layout.slot);
+  expect(view.getUint16(38)).toBe(83);
+  // Each entry spans a piece's picture and its sound.
+  expect(view.getUint32(40)).toBe(layout.slot + layout.audio!.slot);
   expect(pieces.regions(layout, pieces.indexAt(layout), pieces.indexAt(layout) + 1).map((r) => r.kind)).toEqual(["index"]);
   expect(pieces.videoEntryOf(head)).toEqual(entry("avc1"));
-  // A range across the end of picture piece 2 and into piece 3: those two slots only.
-  const at = pieces.videoSlotAt(layout, 3);
-  expect(pieces.regions(layout, at - 10, at + 10).map((r) => ("n" in r ? `${r.kind}${r.n}` : r.kind))).toEqual(["video2", "video3"]);
+  // A range across the end of piece 2 and into piece 3: those two regions only.
+  const at = pieces.pieceSlotAt(layout, 3);
+  expect(pieces.regions(layout, at - 10, at + 10).map((r) => ("n" in r ? `${r.kind}${r.n}` : r.kind))).toEqual(["piece2", "piece3"]);
   expect(pieces.regions(layout, 0, 100).map((r) => r.kind)).toEqual(["head"]);
   expect(pieces.regions(layout, layout.total - 4, layout.total).map((r) => r.kind)).toEqual(["tail"]);
   expect(pieces.parseRange("bytes=10-19", 100)).toEqual([10, 20]);
@@ -89,7 +92,7 @@ test("the virtual file: a head of whole MiB, the sound's slots, the picture's, a
   expect(pieces.parseRange("bytes=-10", 100)).toEqual([90, 100]);
   expect(pieces.parseRange("bytes=100-", 100)).toBeNull();
   expect(pieces.parseRange(null, 100)).toEqual([0, 100]);
-  expect(pieces.baseOf(pieces.proxyKeyOf("drive:abc"))).toBe("edit/pieces/drive/abc");
+  expect(pieces.baseOf(pieces.proxyKeyOf("drive:abc"))).toBe("edit/pieces/v3/drive/abc");
   expect(pieces.baseOf("edit/proxies/drive/abc.mp4")).toBeNull();
 });
 
@@ -134,8 +137,8 @@ test("a range of the virtual file is the pieces' bytes with free boxes after the
   // Piece 1 only in R2 (another Mac made it).
   const piece1 = Uint8Array.from({ length: 500 }, (_, i) => (i * 7) % 253);
   cloudFiles.set(`${base}/video/1.m4s`, piece1);
-  const at0 = pieces.videoSlotAt(layout, 0);
-  const at1 = pieces.videoSlotAt(layout, 1);
+  const at0 = pieces.pieceSlotAt(layout, 0);
+  const at1 = pieces.pieceSlotAt(layout, 1);
   // The end of piece 0's bytes, its free box, and the start of piece 1.
   const ask = async (from: number, to: number) => {
     const response = await pieces.serve(context, new Request("http://x/", { headers: { range: `bytes=${from}-${to - 1}` } }), base);
@@ -159,7 +162,7 @@ test("a range of the virtual file is the pieces' bytes with free boxes after the
   const end = await ask(layout.total - 4, layout.total);
   expect(new DataView(end.bytes.buffer).getUint32(0)).toBe(pieces.tail(layout).length);
   // A piece nobody has and none can make: the read fails (the preview path answers 503), nothing half-written stays.
-  await expect(ask(pieces.videoSlotAt(layout, 2), pieces.videoSlotAt(layout, 2) + 10)).rejects.toThrow("no original here");
+  await expect(ask(pieces.pieceSlotAt(layout, 2), pieces.pieceSlotAt(layout, 2) + 10)).rejects.toThrow("no original here");
   expect(fs.existsSync(context.local(`${base}/video/2.m4s`))).toBe(false);
 });
 
@@ -253,6 +256,181 @@ test("the preview path streams a pieced proxy's address, not its pieces' files",
   expect(previewable(pieces.proxyKeyOf("drive:1jKGSJSlkSEnHaQYmxUMW7vVvbJ1PjLif"))).toBe(true);
   expect(previewable("edit/pieces/drive/abc/video/3.m4s")).toBe(false);
   expect(previewable("edit/pieces/drive/abc/layout.json")).toBe(false);
+  expect(previewable("edit/pieces/v3/drive/abc/audio/3.m4s")).toBe(false);
+  // The five-minute ones from before v2 still play.
+  expect(previewable("edit/pieces/sha256/abc/proxy.mp4")).toBe(true);
   expect(previewable("edit/proxies/drive/abc.mp4")).toBe(true);
   expect(previewable("edit/exports/x.mp4")).toBe(false);
 });
+
+/** AAC payloads back into an ADTS stream (LC, 48 kHz, stereo), for FFmpeg to decode. */
+function adts(frames: Uint8Array[]): Uint8Array {
+  const out: number[] = [];
+  for (const frame of frames) {
+    const length = frame.length + 7;
+    out.push(0xff, 0xf1, 0x4c, 0x80 | ((length >> 11) & 3), (length >> 3) & 0xff, ((length & 7) << 5) | 0x1f, 0xfc, ...frame);
+  }
+  return Uint8Array.from(out);
+}
+
+test("each stretch's sound, made on its own, joins the next without a seam, on the file's clock", async () => {
+  // 150 s of a 440 Hz tone at 44.1 kHz that starts 0.3 s into the file (after the picture), so three one-minute pieces.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pieces-sound-"));
+  const file = path.join(root, "tone.mp4");
+  const made = Bun.spawnSync([
+    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=black:size=64x36:rate=30:duration=150",
+    "-itsoffset", "0.3", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=149.7",
+    "-c:v", "mpeg4", "-c:a", "aac", "-b:a", "192k", file,
+  ]);
+  expect(made.exitCode).toBe(0);
+  const layout = pieces.plan("sha256:t", "k", 150, 30, 64, 36, true);
+  expect(layout.pieces).toBe(3);
+  const context = { originalUrl: async () => file };
+  const stretches = await Promise.all([0, 1, 2].map((n) => pieces.soundOf(context, layout, n)));
+  stretches.forEach((frames, n) => expect(frames.length).toBe(pieces.audioFramesOf(layout, n)[1] - pieces.audioFramesOf(layout, n)[0]));
+  const decoded = Bun.spawnSync(["ffmpeg", "-v", "error", "-f", "aac", "-i", "pipe:0", "-ac", "1", "-f", "f32le", "pipe:1"], { stdin: adts(stretches.flat()) });
+  expect(decoded.exitCode).toBe(0);
+  const pcm = new Float32Array(decoded.stdout.buffer, decoded.stdout.byteOffset, decoded.stdout.byteLength / 4);
+  // How the decoded sound fits the tone over [from, from + 0.1) s: its lag (samples, within half the tone's period) and the worst miss there.
+  const fit = (from: number) => {
+    let best = { lag: 0, miss: Infinity };
+    for (let lag = -54; lag <= 54; lag++) {
+      let miss = 0;
+      for (let i = Math.round(from * 48_000); i < Math.round((from + 0.1) * 48_000); i += 3) {
+        const t = (i - lag) / 48_000;
+        miss = Math.max(miss, Math.abs(pcm[i]! - (t < 0.3 ? 0 : Math.sin(2 * Math.PI * 440 * (t - 0.3)) / 8)));
+      }
+      if (miss < best.miss) best = { lag, miss };
+    }
+    return best;
+  };
+  // Silence before the sound starts; then the tone on the file's clock (FFmpeg's own MP4 of it is 0.8 ms early: within 1 ms).
+  expect(fit(0.05).miss).toBeLessThan(0.002);
+  const inside = fit(30);
+  expect(Math.abs(inside.lag)).toBeLessThan(48);
+  expect(inside.miss).toBeLessThan(0.005);
+  // Across each join: the same lag, and no further from the tone than inside the stretches either side
+  // (each is a few µs off the file's clock: 44.1 kHz cut where a 48 kHz frame starts).
+  for (const n of [0, 1]) {
+    const join = (pieces.audioFramesOf(layout, n)[1] * 1024) / 48_000;
+    const across = fit(join - 0.05);
+    const either = Math.max(fit(join - 20).miss, fit(join + 20).miss);
+    expect(across.lag).toBe(inside.lag);
+    expect(across.miss).toBeLessThan(Math.max(either * 1.5, 0.002));
+    expect(across.miss).toBeLessThan(0.01);
+  }
+}, 60_000);
+
+test("the background fill's piece gives way to one someone is waiting on, and is made after it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pieces-way-"));
+  // The original is a pipe nobody writes to yet: FFmpeg waits on it, so a piece stays being made until the test lets go.
+  const original = path.join(root, "original.mp4");
+  expect(Bun.spawnSync(["mkfifo", original]).exitCode).toBe(0);
+  const context = { ...fakeContext(root), originalUrl: async () => original };
+  const layout = pieces.plan("sha256:w", "k", 600, 30, 1920, 1080, false);
+  const base = pieces.baseKey("sha256:w");
+  const headFile = context.local(`${base}/head.mp4`);
+  fs.mkdirSync(path.dirname(headFile), { recursive: true });
+  fs.writeFileSync(headFile, pieces.headOf(layout, entry("avc1"), null));
+  const order: string[] = [];
+  const watch = (name: string, promise: Promise<string>) => promise.then(() => order.push(`${name} made`), (error: unknown) => order.push(`${name}: ${diag.messageOf(error)}`));
+  const behind = watch("3", pieces.ensureVideo(context, base, layout, 3, false));
+  await Bun.sleep(300);
+  const wanted = watch("7", pieces.ensureVideo(context, base, layout, 7));
+  // FFmpeg reads nothing it can use from here on: each piece's try fails in turn.
+  for (let tries = 0; tries < 16 && order.length < 2; tries++) {
+    const pipe = fs.openSync(original, "w");
+    fs.writeSync(pipe, "not a video");
+    fs.closeSync(pipe);
+    await Bun.sleep(300);
+  }
+  await Promise.all([behind, wanted]);
+  // 7 went first; 3 was stopped for it, not failed by it, and tried again after.
+  expect(order.map((one) => one.split(":")[0])).toEqual(["7", "3"]);
+  expect(order[1]).toContain("piece 3's picture");
+  expect(fs.existsSync(context.local(`${base}/video/3.m4s`))).toBe(false);
+}, 30_000);
+
+test("FFmpeg reads a pieced proxy's picture and sound together, from its start and after a seek", async () => {
+  // 150 s of picture and a tone: three pieces. Their pictures as makeVideo leaves them (from libx264 here,
+  // VideoToolbox in Edit: a keyframe at each piece's start, no B-frames); their sound made as it's read.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pieces-ffmpeg-"));
+  const original = path.join(root, "original.mp4");
+  const made = Bun.spawnSync([
+    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=150", "-f", "lavfi", "-i", "sine=frequency=440:duration=150",
+    "-c:v", "libx264", "-bf", "0", "-g", "15", "-force_key_frames", "expr:gte(t,n_forced*60)", "-c:a", "aac", original,
+  ]);
+  expect(made.exitCode).toBe(0);
+  const layout = pieces.plan("sha256:ff", "k", 150, 30, 320, 180, true);
+  const base = pieces.baseKey("sha256:ff");
+  const context = { ...fakeContext(root), originalUrl: async () => original };
+  const picture = fmp4.readMp4(original).find((track) => track.handler === "vide")!;
+  for (let n = 0; n < layout.pieces; n++) {
+    const [first, end] = pieces.framesOf(layout, n);
+    const file = context.local(`${base}/video/${n}.m4s`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fmp4.writeFragment(file, layout.pieces + n + 1, [
+      {
+        id: 1,
+        baseTime: pieces.videoTime(layout, first),
+        samples: picture.samples.slice(first, end).map((sample, index) => ({
+          size: sample.size, duration: pieces.videoTime(layout, first + index + 1) - pieces.videoTime(layout, first + index), sync: sample.sync, cts: 0, from: original, offset: sample.offset,
+        })),
+      },
+    ]);
+  }
+  const head = pieces.headOf(layout, picture.entry, pieces.AUDIO_ENTRY);
+  fs.writeFileSync(context.local(`${base}/head.mp4`), head);
+  fs.writeFileSync(context.local(`${base}/layout.json`), JSON.stringify(layout));
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: (request) => pieces.serve(context, request, base) });
+  try {
+    const url = `http://127.0.0.1:${server.port}/proxy.mp4`;
+    // FFmpeg runs apart from this process (its server answers while it reads).
+    const cut = async (from: number, out: string) => {
+      const child = Bun.spawn(["ffmpeg", "-v", "error", "-nostdin", "-y", "-ss", String(from), "-i", url, "-t", "4", "-c:v", "copy", "-c:a", "pcm_s16le", out], { stderr: "pipe" });
+      expect(await child.exited).toBe(0);
+      const probe = Bun.spawnSync(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,duration", "-of", "csv=p=0", out]);
+      return new TextDecoder().decode(probe.stdout).trim().split("\n").map((line) => line.split(","));
+    };
+    for (const from of [0, 70]) {
+      const streams = await cut(from, path.join(root, `cut-${from}.mov`));
+      expect(streams.map(([kind]) => kind).sort()).toEqual(["audio", "video"]);
+      for (const [, seconds] of streams) expect(Math.abs(Number(seconds) - 4)).toBeLessThan(0.1);
+    }
+    // Each piece read is one fragment of both, joined here; piece 2 was never read.
+    expect(fmp4.readFragment(context.local(`${base}/joined/1.m4s`)).map((track) => track.id)).toEqual([1, 2]);
+    expect(fs.existsSync(context.local(`${base}/joined/2.m4s`))).toBe(false);
+  } finally {
+    await server.stop(true);
+  }
+}, 60_000);
+
+test("the fill's piece someone joined is never stopped for another", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pieces-joined-"));
+  const original = path.join(root, "original.mp4");
+  expect(Bun.spawnSync(["mkfifo", original]).exitCode).toBe(0);
+  const context = { ...fakeContext(root), originalUrl: async () => original };
+  const layout = pieces.plan("sha256:j", "k", 600, 30, 1920, 1080, false);
+  const base = pieces.baseKey("sha256:j");
+  const headFile = context.local(`${base}/head.mp4`);
+  fs.mkdirSync(path.dirname(headFile), { recursive: true });
+  fs.writeFileSync(headFile, pieces.headOf(layout, entry("avc1"), null));
+  const settled: string[] = [];
+  const watch = (name: string, promise: Promise<string>) => promise.then(() => settled.push(`${name} made`), (error: unknown) => settled.push(`${name}: ${error instanceof pieces.GaveWay ? "gave way" : "failed"}`));
+  const behind = watch("fill's 3", pieces.ensureVideo(context, base, layout, 3, false));
+  await Bun.sleep(300);
+  // The viewer waits on piece 3 too, then something else on piece 7: 3 goes on being made.
+  const joined = watch("viewer's 3", pieces.ensureVideo(context, base, layout, 3));
+  const other = watch("7", pieces.ensureVideo(context, base, layout, 7));
+  await Bun.sleep(500);
+  expect(settled).toEqual([]);
+  // Let FFmpeg read (nothing usable) until all of them are done.
+  for (let tries = 0; tries < 12 && settled.length < 3; tries++) {
+    const pipe = fs.openSync(original, "w");
+    fs.writeSync(pipe, "not a video");
+    fs.closeSync(pipe);
+    await Bun.sleep(300);
+  }
+  await Promise.all([behind, joined, other]);
+  expect(settled.some((one) => one.includes("gave way"))).toBe(false);
+}, 30_000);

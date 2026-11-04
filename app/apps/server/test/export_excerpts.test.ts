@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import * as cloudBlocks from "../src/cloud_blocks.ts";
-import { CELL, cellKey, cellSpan, cellsOf, objectOf, pin, pinned, prepare, TO_THE_END } from "../src/export_excerpts.ts";
+import { behind, CELL, cellKey, cellSpan, cellsOf, objectOf, pin, pinned, prepare, TO_THE_END } from "../src/export_excerpts.ts";
 import type { Project } from "../src/model.ts";
 import * as tools from "../src/tools.ts";
 import { scratch } from "./helpers/home.ts";
@@ -152,4 +152,11 @@ test("objects are named as the engine names them: an original without its signat
   expect(objectOf(proxy(7700))).toBe("cloud:edit/proxies/drive/abc.mp4");
   expect(objectOf(proxy(7710))).toBe(objectOf(proxy(7700)));
   expect(objectOf(`http://127.0.0.1:7700/api/cloud/preview?key=${encodeURIComponent("edit/proxies/drive/other.mp4")}`)).not.toBe(objectOf(proxy(7700)));
+});
+
+test("a background render's reads of this server's preview path say they're behind the viewer; others are as they are", () => {
+  const preview = "http://127.0.0.1:7700/api/cloud/preview?key=edit%2Fpieces%2Fv3%2Fsha256%2Fab%2Fproxy.mp4";
+  expect(behind(preview)).toBe(`${preview}&behind=1`);
+  expect(behind("/footage/a.mp4")).toBe("/footage/a.mp4");
+  expect(behind("https://r2.example/edit/originals/a.mp4?X-Amz-Signature=x")).toBe("https://r2.example/edit/originals/a.mp4?X-Amz-Signature=x");
 });

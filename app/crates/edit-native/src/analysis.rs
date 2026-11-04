@@ -219,6 +219,13 @@ pub fn censor_warm(path: String, read: Option<String>) {
     }
 }
 
+/// Has every analysis of the media at `path` decode `read` in its place (a
+/// pieced proxy's original); none: `path` itself again.
+#[napi]
+pub fn analyse_from(path: String, read: Option<String>) {
+    edit_engine::media::analyse_from(Path::new(&path), read.map(PathBuf::from));
+}
+
 #[napi(object)]
 pub struct Scenes {
     /// (start, end seconds, camera angle or null for a cutaway); the last

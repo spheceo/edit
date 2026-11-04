@@ -52,6 +52,25 @@ test("a restart starts unfinished jobs again, but not one cut short three times"
   }
 });
 
+test("a job that gets further each run (a big upload resuming) is started again however often it's cut short", async () => {
+  const dir = home();
+  try {
+    jobs.begin(dir, "upload", "-", { file: "/ten-hours.mp4" }, "sha256:e0");
+    const resumed: string[] = [];
+    const resumers: jobs.Resumers = {
+      upload: (job) => {
+        resumed.push(job.key);
+        const key = jobs.begin(dir, "upload", job.project, job.args, "sha256:e0");
+        jobs.progressed(dir, key);
+      },
+    };
+    for (let restart = 1; restart <= 5; restart++) await jobs.resume(dir, resumers);
+    expect(resumed.length).toBe(5);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("without a data folder nothing is written", () => {
   expect(jobs.begin(null, "export", "p", {})).toBe("export:p");
   jobs.end(null, "export:p");

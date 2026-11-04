@@ -33,6 +33,7 @@ import { localPath, scratchDir } from "./cloud_media.ts";
 import * as diag from "./diag.ts";
 import { Semaphore } from "./media.ts";
 import type { Media, Project } from "./model.ts";
+import { PLAYBACK_ROUTE } from "./cloud_playback.ts";
 import type { ExportExcerpt } from "./native/index.ts";
 import { extension, isFile, join } from "./paths.ts";
 import * as tools from "./tools.ts";
@@ -256,6 +257,11 @@ async function cellFile(cache: string, key: string, url: string, cell: Cell, sig
  * of its original, `originals` → its key). Cells in timeline order,
  * `AT_ONCE` at a time; `cancelled` stops it between cells.
  */
+/** `url` read behind the viewer: said to this server's preview path, so a pieced proxy's pieces for it give way to the viewer's. */
+export function behind(url: string): string {
+  return url.includes(`${PLAYBACK_ROUTE}?`) ? `${url}&behind=1` : url;
+}
+
 export async function prepare(
   project: Project,
   start: number,
@@ -318,7 +324,7 @@ export async function prepare(
         const release = await slots.acquire();
         try {
           if (cancelled() || stop.signal.aborted) return null;
-          const file = await cellFile(cache, key, url, cell, stop.signal);
+          const file = await cellFile(cache, key, options.behindViewer === true ? behind(url) : url, cell, stop.signal);
           if (file === null) {
             counts.failed += 1;
             return null;

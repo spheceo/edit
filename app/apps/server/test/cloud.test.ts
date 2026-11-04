@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as cloud from "../src/cloud.ts";
 import * as diag from "../src/diag.ts";
 import { scratch } from "./helpers/home.ts";
+import { etagOf } from "./mocks/cloud.ts";
 import { MockServer } from "./mocks/server.ts";
 
 const MIB = 1024 * 1024;
@@ -26,6 +27,8 @@ afterAll(() => {
 beforeEach(() => {
   cloud.timing.filePart = cloud.FILE_PART;
   cloud.timing.streamPart = cloud.STREAM_PART;
+  cloud.timing.resumableFrom = 512 * MIB;
+  cloud.keepUploadJournalsIn(null);
 });
 
 function pattern(length: number): Uint8Array {
@@ -154,6 +157,76 @@ test("big files go up in parts, a failed part is retried with a fresh URL, and p
     expect(seen.every((sent, index) => index === 0 || sent >= seen[index - 1]!)).toBe(true);
     expect(seen.at(-1)).toBe(data.length);
     expect(diag.lines(50).some((line) => line.message.includes("failed (try 1): R2 refused the upload (500): InternalError: try again"))).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
+/** A big file whose upload stops at part 4 (R2 refuses parts 4 and 5 until it's let go): parts 1 to 3 are up, its journal kept. */
+async function stoppedUpload(dir: string, key: string): Promise<{ file: string; data: Uint8Array; journal: () => string[] }> {
+  cloud.timing.filePart = MIB;
+  cloud.timing.resumableFrom = MIB;
+  cloud.keepUploadJournalsIn(`${dir}/uploads`);
+  const data = pattern(4 * MIB + 777);
+  const file = `${dir}/original.mp4`;
+  fs.writeFileSync(file, data);
+  let refusing = true;
+  mock.on("PUT", `/r2/${key}`, (request) => {
+    const n = Number(request.query.get("partNumber"));
+    if (refusing && n >= 4) return new Response("<Error><Code>AccessDenied</Code><Message>not now</Message></Error>", { status: 403 });
+    const upload = mock.cloud.uploads.get(request.query.get("uploadId")!);
+    if (upload === undefined) return new Response("<Error><Code>NoSuchUpload</Code><Message>The specified multipart upload does not exist.</Message></Error>", { status: 404 });
+    upload.parts.set(n, request.body);
+    return new Response(null, { status: 200, headers: { etag: etagOf(request.body) } });
+  });
+  await expect(cloud.uploadFile(file, key)).rejects.toThrow("403");
+  refusing = false;
+  return { file, data, journal: () => (fs.existsSync(`${dir}/uploads`) ? fs.readdirSync(`${dir}/uploads`) : []) };
+}
+
+test("a big upload that stops picks up where it was: only the parts R2 doesn't hold go again", async () => {
+  const { dir, cleanup } = scratch("cloud-resume");
+  try {
+    const key = "edit/test/resume.mp4";
+    const { file, data, journal } = await stoppedUpload(dir, key);
+    expect(journal().length).toBe(1);
+    expect(mock.cloud.objects.has(key)).toBe(false);
+    const before = mock.calls(`/r2/${key}`, "PUT").length;
+    const seen: number[] = [];
+    await cloud.uploadFile(file, key, (sent) => seen.push(sent));
+    // Parts 4 and 5 only; progress starts from the three already up.
+    expect(mock.calls(`/r2/${key}`, "PUT").length - before).toBe(2);
+    expect(seen[0]).toBeGreaterThanOrEqual(3 * MIB);
+    expect(seen.at(-1)).toBe(data.length);
+    expect(Buffer.from(mock.cloud.objects.get(key)!).equals(Buffer.from(data))).toBe(true);
+    expect(journal()).toEqual([]);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an upload R2 let go of, or a file that changed, begins again", async () => {
+  const { dir, cleanup } = scratch("cloud-resume-again");
+  try {
+    const key = "edit/test/again.mp4";
+    const { file, data, journal } = await stoppedUpload(dir, key);
+    // R2 dropped the unfinished upload (after 7 days): the parts are refused, so it all goes again.
+    mock.cloud.uploads.clear();
+    const before = mock.calls(`/r2/${key}`, "PUT").length;
+    await cloud.uploadFile(file, key);
+    // Part 4 (and maybe 5, sent beside it) refused, then all five again.
+    expect(mock.calls(`/r2/${key}`, "PUT").length - before).toBeGreaterThanOrEqual(6);
+    expect(diag.lines(20).some((line) => line.message.includes("couldn't be picked up"))).toBe(true);
+    expect(Buffer.from(mock.cloud.objects.get(key)!).equals(Buffer.from(data))).toBe(true);
+    expect(journal()).toEqual([]);
+    // A journal of another version of the file is never picked up.
+    const second = await stoppedUpload(dir, "edit/test/again2.mp4");
+    const changed = pattern(4 * MIB + 778).map((value) => value ^ 1);
+    fs.writeFileSync(second.file, changed);
+    const aborts = mock.calls("/v1/cloud/r2/multipart/abort").length;
+    await cloud.uploadFile(second.file, "edit/test/again2.mp4");
+    expect(Buffer.from(mock.cloud.objects.get("edit/test/again2.mp4")!).equals(Buffer.from(changed))).toBe(true);
+    expect(mock.calls("/v1/cloud/r2/multipart/abort").length).toBe(aborts + 1);
   } finally {
     cleanup();
   }

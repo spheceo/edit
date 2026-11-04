@@ -229,6 +229,8 @@ export class Processor {
         status.peaks = "skipped";
       });
     }
+    // Told to the engine at once, before anything there measures it.
+    void this.inputOf(source);
     const key = mediaKey(source);
     if (this.processing.has(key)) return;
     this.processing.add(key);
@@ -257,15 +259,40 @@ export class Processor {
       .finally(() => this.processing.delete(key));
   }
 
+  private readonly inputs = new Map<string, Promise<string>>();
+
+  /**
+   * What analysis of `source` decodes: the source, or the original where
+   * it's a pieced proxy (reading the proxy whole would make every piece of
+   * it: the 10-hour trial's loudness asked for all 633), told to the engine
+   * so its analyses read the same.
+   */
+  private inputOf(source: string): Promise<string> {
+    const known = this.inputs.get(source);
+    if (known !== undefined) return known;
+    const found = (async () => {
+      try {
+        const input = (await mediaHooks.analysisInput?.(source)) ?? source;
+        if (input !== source) native().analyseFrom(source, input);
+        return input;
+      } catch (error) {
+        this.inputs.delete(source);
+        diag.warn("media", `finding what to read for ${diag.scrub(source)}: ${diag.messageOf(error)}; reading it`);
+        return source;
+      }
+    })();
+    this.inputs.set(source, found);
+    return found;
+  }
+
+  /** Its loudness analysis made now, in the background, so the first measure_audio / set_loudness is instant. */
+  warmLoudness(source: string): void {
+    void this.inputOf(source).then(() => native().loudnessWarm(source));
+  }
+
   private async process(source: string, probe: Probe, paths: CachePaths): Promise<void> {
     const status = this.status(source);
-    // Read from the original where the source is a pieced proxy (only what's played of it gets made).
-    let input = source;
-    try {
-      input = (await mediaHooks.analysisInput?.(source)) ?? source;
-    } catch (error) {
-      diag.warn("media", `finding what to read for ${diag.scrub(source)}: ${diag.messageOf(error)}; reading it`);
-    }
+    const input = await this.inputOf(source);
     const pictured = (kind: MediaKind) => kind === "video" || kind === "image";
     const failed = (error: unknown) => diag.scrub(diag.messageOf(error));
     if (pictured(probe.kind) && status.thumbs !== "ready") {
@@ -515,38 +542,47 @@ export function lightPreview(source: string): string | null {
 /**
  * The thumbnail strip: keyframes only (fast), at most one per interval, tiled
  * into one JPEG strip 72 px high. Sparse keyframes yield fewer frames, so it
- * counts what came out before tiling.
+ * counts what came out before tiling. Long footage (a thumbnail every 20 s
+ * or more) has each read where it is instead of the whole file read through
+ * for them: a 10-hour original's 54 GB took the pass longer than the trial
+ * (Nov 4) ran between restarts, and slowed everything else on its drive.
  */
+/** Thumbnails this far apart (seconds) or more are each read where they are. */
+const LONG_THUMB_INTERVAL = 20;
+
 export async function makeThumbs(source: string, probe: Probe, paths: CachePaths): Promise<number> {
   const wanted = Math.min(Math.max(Math.ceil(probe.duration / 2), 1), 120);
   const interval = Math.max(probe.duration / wanted, 0.05);
   const framesDir = withExtension(paths.thumbs, "frames");
   fs.rmSync(framesDir, { recursive: true, force: true });
   fs.mkdirSync(framesDir, { recursive: true });
-  await tools.run([
-    tools.ffmpeg(),
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-y",
-    "-skip_frame",
-    "nokey",
-    "-protocol_whitelist",
-    tools.protocols(source),
-    ...tools.urlArgs(source),
-    "-i",
-    source,
-    "-an",
-    "-vf",
-    `select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,${(interval * 0.99).toFixed(4)})',scale=-2:${THUMB_HEIGHT}`,
-    "-fps_mode",
-    "vfr",
-    "-frames:v",
-    String(wanted),
-    "-q:v",
-    "5",
-    join(framesDir, "%04d.jpg"),
-  ]);
+  const read = (extra: string[], out: string, frames: number) =>
+    tools.run([
+      tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey",
+      ...extra, "-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source), "-i", source, "-an",
+      "-vf", frames === 1 ? `scale=-2:${THUMB_HEIGHT}` : `select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,${(interval * 0.99).toFixed(4)})',scale=-2:${THUMB_HEIGHT}`,
+      "-fps_mode", "vfr", "-frames:v", String(frames), "-q:v", "5", out,
+    ]);
+  if (interval >= LONG_THUMB_INTERVAL) {
+    const frame = (n: number) => join(framesDir, `${String(n + 1).padStart(4, "0")}.jpg`);
+    let next = 0;
+    const one = async () => {
+      for (let n = next++; n < wanted; n = next++) {
+        await read(["-ss", (n * interval).toFixed(3)], frame(n), 1).catch(() => {});
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, one));
+    // One that couldn't be read (past a file's real end) is its neighbour's, so each stays at its time.
+    const made = Array.from({ length: wanted }, (_, n) => isFile(frame(n)));
+    if (made.includes(true)) {
+      for (let n = 0, last = made.indexOf(true); n < wanted; n++) {
+        if (made[n]) last = n;
+        else fs.copyFileSync(frame(last), frame(n));
+      }
+    }
+  } else {
+    await read([], join(framesDir, "%04d.jpg"), wanted);
+  }
   const count = fs.readdirSync(framesDir).length;
   if (count === 0) {
     fs.rmSync(framesDir, { recursive: true, force: true });

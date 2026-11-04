@@ -12,6 +12,7 @@ import { importing } from "./drive_import.ts";
 import { createApp, hostname, type App } from "./app.ts";
 import { pauseForExports, setListening } from "./broll.ts";
 import { startCleaning } from "./cache_cleanup.ts";
+import * as cloud from "./cloud.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
 import { agentHooks } from "./agent.ts";
@@ -198,6 +199,7 @@ export function start(home: string, host: string | null, port: number): { app: A
     ffprobe: tools.ffprobe(),
   });
   holdDataLock(store.home);
+  cloud.keepUploadJournalsIn(join(store.home, "uploads"));
   const ip = tailscaleIp();
   const app = createApp({
     store,

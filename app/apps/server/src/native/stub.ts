@@ -526,6 +526,7 @@ export function createStub(): Stub {
     },
     SCREEN_TEXT_RATE: 1.0,
     censorWarm() {},
+    analyseFrom() {},
     censorIssues() {
       return { issues: [], pending: [] };
     },

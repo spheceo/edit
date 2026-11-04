@@ -9,7 +9,7 @@
 // upload sends its files again, a moving map shot carries on from its
 // frames. A job that was resumed
 // twice and still didn't end (it may be what brings the server down) isn't
-// started a third time.
+// started a third time, unless it got further each time (`progressed`).
 
 
 import { Effect } from "effect";
@@ -78,6 +78,16 @@ export function end(home: string | null, key: string): void {
   const jobs = read(home);
   const left = jobs.filter((job) => job.key !== key);
   if (left.length !== jobs.length) write(home, left);
+}
+
+/** A job that got further this run than the last (a big upload sending parts past those already up): its restarts so far don't count against it. */
+export function progressed(home: string | null, key: string): void {
+  if (home === null) return;
+  const jobs = read(home);
+  const job = jobs.find((one) => one.key === key);
+  if (job === undefined || !(job.resumes > 0)) return;
+  job.resumes = 0;
+  write(home, jobs);
 }
 
 /** Add a durable remote receipt without resetting a job's resume counter. */

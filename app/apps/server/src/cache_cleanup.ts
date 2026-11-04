@@ -355,6 +355,8 @@ export function ownerToken(key: string): string | null {
       }
     }
   }
+  // A pieced proxy's layout version (proxy_pieces.ts `baseKey`).
+  rest = rest.replace(/^v\d+\//, "");
   const match = /^(drive|youtube|sha256)\/([A-Za-z0-9_-]+)/.exec(rest);
   return match === null ? null : `${match[1]}/${match[2]}`;
 }

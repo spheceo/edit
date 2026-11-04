@@ -133,9 +133,12 @@ test("a horror script pasted as plain text: its posts are footage where they're 
   const [first, reel, , post] = parsed.blocks as Record<string, unknown>[];
   expect(first!.text).not.toContain("https://");
   expect(first!.notes).toEqual([`${RECORDING_NOTE}https://drive.google.com/file/d/13i0819vUB7tQ8VHdd388rz_bHKQ8nuCi/view?usp=sharing`, "No link given for (0:00-0:01) + (0:58-1:03): choose those moments from the story's own footage"]);
-  expect(reel).toMatchObject({ file: "post:https://www.instagram.com/p/DU6q9WeEjRX/", start: 0, label: "Source (the whole video)" });
-  // Tracking dropped.
-  expect(post).toMatchObject({ file: "post:https://x.com/ephraimwindex/status/2020035205374017941" });
+  const posts = await import("../src/posts.ts");
+  expect(reel).toMatchObject({ start: 0, label: "Source (the whole video)" });
+  expect(posts.urlOf(reel!.file as string)).toBe("https://www.instagram.com/p/DU6q9WeEjRX/");
+  // A path-safe word, as edit-core holds script files; tracking dropped.
+  expect(post!.file).toMatch(/^post:[A-Za-z0-9_-]+$/u);
+  expect(posts.urlOf(post!.file as string)).toBe("https://x.com/ephraimwindex/status/2020035205374017941");
 });
 
 test("a post link never claims another script's unlinked ranges", async () => {
@@ -144,5 +147,5 @@ test("a post link never claims another script's unlinked ranges", async () => {
   const parsed = parse(html);
   const footage = parsed.blocks.filter((b) => b.kind === "footage");
   expect(footage[0]).toMatchObject({ file: "abcdefghijklmnopqrstuvwxyz1", start: 10 });
-  expect(footage.at(-1)).toMatchObject({ file: "post:https://www.instagram.com/p/DU6q9WeEjRX/" });
+  expect(footage.at(-1)!.url).toBe("https://www.instagram.com/p/DU6q9WeEjRX/");
 });

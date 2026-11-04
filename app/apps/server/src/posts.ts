@@ -2,8 +2,9 @@
 // video, as a script or the agent links it. A horror script is the story's
 // own posts between its narration ("Take a look at this:" and the reel's
 // link), so a post is footage like a Drive file or a YouTube video: its file
-// in a script is `post:<url>`, downloaded whole (posts are short) by yt-dlp,
-// which reads these sites without a sign-in.
+// in a script is `post:<the link, base64url>` (a file id stays one path-safe
+// word, as edit-core's validate holds every script file), downloaded whole
+// (posts are short) by yt-dlp, which reads these sites without a sign-in.
 
 import * as fs from "node:fs";
 
@@ -26,20 +27,30 @@ function siteOf(url: string): string | null {
   }
 }
 
-/** A post's script file (`post:<url>`, the link without its tracking), else null. */
-export function fileOf(url: string): string | null {
+/** A post's link without its tracking, else null when it isn't a post. */
+export function canonical(url: string): string | null {
   if (siteOf(url) === null) return null;
   const parsed = new URL(url);
   // Instagram's carousel item (img_index) picks the video; the rest (?s=20, igsh, utm) is tracking.
   const keep = parsed.searchParams.get("img_index");
   parsed.search = keep !== null && /^\d+$/u.test(keep) ? `?img_index=${keep}` : "";
   parsed.hash = "";
-  return `${PREFIX}${parsed.toString()}`;
+  return parsed.toString();
+}
+
+/** A post's script file (`post:<its canonical link, base64url>`), else null. */
+export function fileOf(url: string): string | null {
+  const link = canonical(url);
+  return link === null ? null : `${PREFIX}${Buffer.from(link, "utf8").toString("base64url")}`;
 }
 
 /** The link of a post's script file, else null. */
 export function urlOf(file: string): string | null {
-  return file.startsWith(PREFIX) && siteOf(file.slice(PREFIX.length)) !== null ? file.slice(PREFIX.length) : null;
+  if (!file.startsWith(PREFIX)) return null;
+  const encoded = file.slice(PREFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/u.test(encoded)) return null;
+  const link = Buffer.from(encoded, "base64url").toString("utf8");
+  return siteOf(link) !== null ? link : null;
 }
 
 /** A name for a post's file: its site and its id ("instagram DU6q9WeEjRX"). */

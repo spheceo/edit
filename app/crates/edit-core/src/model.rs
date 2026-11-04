@@ -2029,9 +2029,14 @@ impl Project {
                                 && version.bytes().all(|byte| byte.is_ascii_digit())
                         })
                     });
-                    if !drive && !youtube && !shared && !feedback && !review {
+                    // A post (an Instagram reel, an X video): `post:<its link, base64url>`
+                    // (apps/server/src/posts.ts).
+                    let post = file
+                        .strip_prefix("post:")
+                        .is_some_and(|id| !id.is_empty() && id.len() <= 800 && id_chars(id));
+                    if !drive && !youtube && !shared && !feedback && !review && !post {
                         return Err(
-                            "script file must be a Google Drive ID, youtube:<video id> or sha256:<hash>, without path separators"
+                            "script file must be a Google Drive ID, youtube:<video id>, post:<link> or sha256:<hash>, without path separators"
                                 .to_owned(),
                         );
                     }
@@ -2566,7 +2571,12 @@ mod validation_tests {
         // A finished video by its review link, before and after it's looked up.
         assert!(with("feedback:9YYjQzHWrP9lh4nJWSs8DA").is_ok());
         assert!(with("review:p1793003918016-1/8").is_ok());
+        // A post by its link, base64url (posts.ts): https://www.instagram.com/p/DU6q9WeEjRX/
+        assert!(with("post:aHR0cHM6Ly93d3cuaW5zdGFncmFtLmNvbS9wL0RVNnE5V2VFalJYLw").is_ok());
         for bad in [
+            "post:",
+            "post:https://www.instagram.com/p/x/",
+            "post:../../etc/x",
             "feedback:short",
             "review:p1/../../x",
             "review:p1793003918016-1/",

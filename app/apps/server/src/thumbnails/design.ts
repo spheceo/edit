@@ -4,7 +4,7 @@
 // defaults, so "a REC overlay" or "white caption, black box" is a short ask.
 
 import { captionShadow } from "@edit/types/thumbnail_render";
-import { assetOf, BLACK_BOX_FONT, HEIGHT, HOUSE_SHADOW, NO_ADJUST, WHITE_RED_FONT, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail, type ThumbComment, type ThumbVersion } from "@edit/types/thumbnails";
+import { assetOf, BLACK_BOX_FONT, HEIGHT, HOUSE_SHADOW, NO_ADJUST, WHITE_RED_FONT, WIDTH, type Adjust, type Box, type Design, type ImageLayer, type Layer, type Mask, type Shadow, type Step, type Stroke, type TextLayer, type Thumbnail, type ThumbComment, type ThumbVersion } from "@edit/types/thumbnails";
 
 type Args = Record<string, unknown>;
 
@@ -126,6 +126,8 @@ export function layerOf(given: unknown, before: Layer | undefined, sources: Set<
     if (adjust !== undefined && Object.values(adjust).some((one) => one !== 0)) layer.adjust = adjust;
     const shadow = shadowOf(given.shadow, was?.shadow);
     if (shadow !== undefined) layer.shadow = shadow;
+    const mask = maskOf(given.mask, was?.mask);
+    if (mask !== undefined) layer.mask = mask;
     return layer;
   }
   const was = before as TextLayer | undefined;
@@ -222,13 +224,28 @@ export function describe(design: Design): string {
     .map((layer, index) => {
       const at = `${index + 1}. ${layer.id} "${layer.name}"${layer.hidden ? " (hidden)" : ""}${layer.opacity < 100 ? ` at ${layer.opacity}%` : ""}`;
       if (layer.kind === "image") {
-        const extra = [layer.zoom ? `zoom ${layer.zoom}` : "", layer.adjust ? `adjust ${JSON.stringify(Object.fromEntries(Object.entries(layer.adjust).filter(([, value]) => value !== 0)))}` : "", layer.shadow ? "shadow" : ""].filter(Boolean).join(", ");
+        const extra = [layer.zoom ? `zoom ${layer.zoom}` : "", layer.adjust ? `adjust ${JSON.stringify(Object.fromEntries(Object.entries(layer.adjust).filter(([, value]) => value !== 0)))}` : "", layer.shadow ? "shadow" : "", layer.mask ? `only an oval ${Math.round(layer.mask.x)},${Math.round(layer.mask.y)} ${Math.round(layer.mask.width)}×${Math.round(layer.mask.height)} feathered ${layer.mask.feather}px` : ""].filter(Boolean).join(", ");
         return `${at}: picture ${layer.source}, ${layer.fit}, box ${Math.round(layer.x)},${Math.round(layer.y)} ${Math.round(layer.width)}×${Math.round(layer.height)}${extra ? `, ${extra}` : ""}`;
       }
       const casing = layer.casing === "upper" || (layer.casing === undefined && layer.uppercase) ? ", capitals" : layer.casing === "keep" ? ", as written" : "";
       return `${at}: text “${layer.text}”, ${layer.font} ${layer.weight} ${layer.size}px ${layer.color}${casing}, centred at ${Math.round(layer.x)},${Math.round(layer.y)} (wraps at ${Math.round(layer.width)})${layer.box ? `, box ${layer.box.color}` : ""}${layer.stroke ? `, stroke ${layer.stroke.width}px` : ""}${layer.shadow ? `, shadow spread ${layer.shadow.spread} size ${layer.shadow.size}` : ""}`;
     })
     .join("\n");
+}
+
+/** An oval mask as given (`null` takes it off), else as it was. */
+function maskOf(given: unknown, was: Mask | undefined): Mask | undefined {
+  if (given === null) return undefined;
+  if (given === undefined) return was;
+  if (typeof given !== "object") throw new Error("mask is {x, y, width, height, feather} in canvas px, or null.");
+  const raw = given as Record<string, unknown>;
+  return {
+    x: number(raw.x, was?.x ?? 0, -WIDTH, WIDTH * 2, "mask x"),
+    y: number(raw.y, was?.y ?? 0, -HEIGHT, HEIGHT * 2, "mask y"),
+    width: number(raw.width, was?.width ?? WIDTH, 8, WIDTH * 3, "mask width"),
+    height: number(raw.height, was?.height ?? HEIGHT, 8, HEIGHT * 3, "mask height"),
+    feather: number(raw.feather, was?.feather ?? 40, 0, 400, "mask feather"),
+  };
 }
 
 /** What a change to the layout did, in a few words, for undo ("changed “She smiled”", "added REC overlay"). */

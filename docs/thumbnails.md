@@ -65,6 +65,12 @@ person asks; Claude changes it through its tools:
   `subjectCutout`: Vision's foreground instances on the Mac, half a second, no
   credits), added to the pictures as a transparent PNG at the picture's size,
   to lay over another base instead of OpenArt redrawing him.
+- `flatten`: the layout's pictures drawn into one picture, to hand OpenArt
+  for a pass over the whole. A picture layer's `mask` shows only an oval of
+  it, its edge feathered (a patch of a clean plate over the original). With
+  `cut_out`, the guide's way of putting a subject into another scene (Sphe's
+  Photoshop way): a clean plate, only its oval over the original, the cut-out
+  on top, a light pass over the flattened whole, what drifted taken back.
 - `save_overlay`: a picture the person gave, into the team's library with a
   note on where it goes, when they ask to keep it.
 - `openart_models`, `model_options`, `rename`.

@@ -115,6 +115,7 @@ const THUMB_TOOLS: Record<string, [string, string]> = {
   remove_version: ["Removing a version", "Removed a version"],
   compare: ["Comparing pictures", "Compared pictures"],
   cut_out: ["Cutting out the subject", "Cut out the subject"],
+  flatten: ["Flattening the layout", "Flattened the layout"],
   comments: ["Checking the comments", "Checked the comments"],
   remove_comment: ["Removing a comment", "Removed a comment"],
   look_at_comment: ["Looking at a comment", "Looked at a comment"],

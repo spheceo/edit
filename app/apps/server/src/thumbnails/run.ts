@@ -109,7 +109,7 @@ export const TOUCH_UP_MODELS = [/nano[\s-]?banana[\s-]?2/i, /nano[\s-]?banana[\s
 const LAYER_SCHEMA = {
   type: "object",
   description:
-    'A layer. Picture: {kind:"image", source (an image id, or asset:<id> for a library overlay), x, y, width, height (canvas px; the canvas is 1280×720), fit ("cover" | "contain" | "stretch"), zoom (cover: 1+), focusX/focusY (cover: 0…1, the point kept in the middle), flip, rotation, opacity (0…100), adjust {exposure in stops (-5…+5, as +0.60), contrast, saturation, vibrance, warmth, shadows, highlights: -100…100; vignette, sharpen: 0…100}, shadow}. Text: {kind:"text", text (shown in lower case unless casing is "keep" or "upper"), x, y (its centre), width (wraps there), font, weight (100…900), size (px), color, align, lineHeight, casing ("keep" | "upper"; left out is lower case), italic, rotation, box {color, opacity, padX, padY, radius} (a solid box behind it), stroke {color, width}, shadow {color, opacity, angle, distance, spread (0…100), size}}. White and red (no box) is Arabic-font-2013 with no stroke and the house shadow (opacity 100, spread 36, size 32, angle 90): do not send stroke (one sent, or already on the layer, is dropped). Leave shadow out. A black box is ITC Avant Garde Gothic. Give id and name to keep track; anything left out keeps its value (a change) or the default.',
+    'A layer. Picture: {kind:"image", source (an image id, or asset:<id> for a library overlay), x, y, width, height (canvas px; the canvas is 1280×720), fit ("cover" | "contain" | "stretch"), zoom (cover: 1+), focusX/focusY (cover: 0…1, the point kept in the middle), flip, rotation, opacity (0…100), mask {x, y, width, height, feather} (only an oval of it shows, in canvas px, its edge fading over feather px; null takes it off), adjust {exposure in stops (-5…+5, as +0.60), contrast, saturation, vibrance, warmth, shadows, highlights: -100…100; vignette, sharpen: 0…100}, shadow}. Text: {kind:"text", text (shown in lower case unless casing is "keep" or "upper"), x, y (its centre), width (wraps there), font, weight (100…900), size (px), color, align, lineHeight, casing ("keep" | "upper"; left out is lower case), italic, rotation, box {color, opacity, padX, padY, radius} (a solid box behind it), stroke {color, width}, shadow {color, opacity, angle, distance, spread (0…100), size}}. White and red (no box) is Arabic-font-2013 with no stroke and the house shadow (opacity 100, spread 36, size 32, angle 90): do not send stroke (one sent, or already on the layer, is dropped). Leave shadow out. A black box is ITC Avant Garde Gothic. Give id and name to keep track; anything left out keeps its value (a change) or the default.',
   additionalProperties: true,
 };
 
@@ -256,6 +256,16 @@ export const TOOLS = [
         name: { type: "string" },
       },
       required: ["image"],
+    },
+  },
+  {
+    name: "flatten",
+    description:
+      "The layout's pictures drawn into one picture (1280×720), added to the thumbnail's images: the composite to hand OpenArt for a pass over the whole (light that makes a pasted-in subject belong). Its overlays and captions are left out unless include_all; layers: the ids to draw (bottom first), else every picture layer. Read the file it names.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { layers: { type: "array", items: { type: "string" } }, include_all: { type: "boolean" }, name: { type: "string" } },
     },
   },
   {
@@ -632,6 +642,21 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       });
       const shown = `${box.map((one) => one.toFixed(2)).join(", ")}`;
       return `Cut out ${image.id} from ${source.id} (${source.width}×${source.height}, transparent but for the subject; the subject spans ${shown} of it, x0, y0, x1, y1 from the top left). Over the canvas as its picture's layer was (cover, 0, 0, 1280×720) he sits where he was. Read it: ${output}`;
+    }
+    case "flatten": {
+      const found = await cloud.get(session.id);
+      if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      const wanted = Array.isArray(args.layers) ? args.layers.filter((one): one is string => typeof one === "string") : null;
+      const layers = found.thumb.design.layers.filter((one) => (wanted !== null ? wanted.includes(one.id) : args.include_all === true || (one.kind === "image" && !one.source.startsWith("asset:"))) && !one.hidden);
+      if (layers.length === 0) throw new Error(`Nothing to draw: ${found.thumb.design.layers.map((one) => one.id).join(", ") || "no layers yet"}.`);
+      const { bytes, missing } = await hooks.draw(session.context.origin, session.id, { layers }, {});
+      if (missing.length > 0) throw new Error(`Not drawn, missing: ${missing.join(", ")}.`);
+      const key = await cloud.put(session.id, bytes, "image/png", "png");
+      const image: ThumbImage = { id: newId(), name: typeof args.name === "string" && args.name.trim() !== "" ? args.name.trim().slice(0, 80) : "the layout flattened", key, from: "render", width: WIDTH, height: HEIGHT, at: Date.now(), by: session.by };
+      await cloud.change(session.id, session.by, (thumb) => {
+        thumb.images = [...thumb.images, image].slice(-60);
+      });
+      return `Flattened ${layers.map((one) => one.id).join(", ")} into ${image.id} (${WIDTH}×${HEIGHT}). Read it: ${await fileOf(session, image)}`;
     }
     case "save_overlay": {
       const found = await cloud.get(session.id);

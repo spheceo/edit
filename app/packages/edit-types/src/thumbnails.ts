@@ -136,7 +136,15 @@ export type ImageLayer = LayerBase & {
   rotation?: number;
   adjust?: Adjust;
   shadow?: Shadow;
+  /**
+   * Only an oval of it shows, its edge feathered (Photoshop's ellipse
+   * selection with a soft edge): the box the oval fills, in canvas px, and how
+   * many px the edge fades over. A patch of one picture blended over another.
+   */
+  mask?: Mask;
 };
+
+export type Mask = { x: number; y: number; width: number; height: number; feather: number };
 
 /** Words on the canvas, centred on (x, y), wrapped at `width`. */
 export type TextLayer = LayerBase & {

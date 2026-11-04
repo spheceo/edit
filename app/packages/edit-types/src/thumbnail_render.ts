@@ -3,7 +3,7 @@
 // sees is what the person sees). Canvas 2D only, and no imports but types:
 // the server hands it to Chrome as it is.
 
-import type { Adjust, Design, ImageLayer, Layer, Shadow, TextLayer } from "./thumbnails";
+import type { Adjust, Design, ImageLayer, Layer, Mask, Shadow, TextLayer } from "./thumbnails";
 
 /** A picture to draw from: an <img>, a bitmap, a canvas. */
 export type Picture = { width: number; height: number };
@@ -46,6 +46,7 @@ export interface Context {
   beginPath(): void;
   moveTo(x: number, y: number): void;
   arcTo(x1: number, y1: number, x2: number, y2: number, radius: number): void;
+  ellipse(x: number, y: number, radiusX: number, radiusY: number, rotation: number, startAngle: number, endAngle: number): void;
   closePath(): void;
   fill(): void;
 }
@@ -88,12 +89,34 @@ function drawLayer(context: Context, layer: Layer, surfaces: Surfaces, width: nu
   if (ownContext === null) return;
   if (layer.kind === "image") {
     if (!drawPicture(ownContext, layer, surfaces, width, height)) return;
+    if (layer.mask !== undefined) keepOval(ownContext, layer.mask, surfaces, width, height);
   } else drawText(ownContext, layer);
   context.save();
   context.globalAlpha = clamp(layer.opacity, 0, 100) / 100;
   const shadow = layer.kind === "text" ? captionShadow(layer) : layer.shadow;
   if (shadow !== undefined && shadow.opacity > 0) dropShadow(context, own, shadow, surfaces, width, height);
   context.drawImage(own, 0, 0);
+  context.restore();
+}
+
+/**
+ * Only the oval of what's drawn stays, its edge fading over `feather` px (the
+ * fade sits inside the box: the oval is solid in its middle and gone at the
+ * box's edge).
+ */
+function keepOval(context: Context, mask: Mask, surfaces: Surfaces, width: number, height: number): void {
+  const shape = surfaces.canvas(width, height);
+  const shapeContext = shape.getContext("2d") as Context | null;
+  if (shapeContext === null) return;
+  const feather = clamp(mask.feather, 0, Math.min(mask.width, mask.height) / 2);
+  shapeContext.filter = feather > 0 ? `blur(${(feather / 2).toFixed(2)}px)` : "none";
+  shapeContext.fillStyle = "#fff";
+  shapeContext.beginPath();
+  shapeContext.ellipse(mask.x + mask.width / 2, mask.y + mask.height / 2, Math.max(1, mask.width / 2 - feather / 2), Math.max(1, mask.height / 2 - feather / 2), 0, 0, Math.PI * 2);
+  shapeContext.fill();
+  context.save();
+  context.globalCompositeOperation = "destination-in";
+  context.drawImage(shape, 0, 0);
   context.restore();
 }
 

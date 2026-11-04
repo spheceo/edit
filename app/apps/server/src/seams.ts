@@ -189,6 +189,13 @@ export interface CloudMediaSeam {
     scratch: string,
     progress: (bytes: number, total: number | null, name: string) => void,
   ): Promise<[Original, string | null]>;
+  /** Puts post `file` (`post:<url>`, posts.ts) on R2 unless the registry has it; the local download, for the caller to remove. */
+  postOriginal(
+    home: string,
+    file: string,
+    scratch: string,
+    progress: (bytes: number, total: number | null, name: string) => void,
+  ): Promise<[Original, string | null]>;
   /** Puts Drive file `file` on R2, streamed from Drive into the upload, unless the registry has it. */
   driveOriginal(file: string, scratch: string, progress: (bytes: number, total: number | null, name: string) => void): Promise<Original>;
   /** A finished video of ours (`review:<project>/<version>`) among the originals, fetched from its review once; the local copy too (the caller removes it). */

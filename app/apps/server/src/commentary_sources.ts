@@ -15,6 +15,7 @@ import { join, parent } from "./paths.ts";
 import * as cloud from "./cloud.ts";
 import * as seams from "./seams.ts";
 import * as youtube from "./youtube.ts";
+import * as posts from "./posts.ts";
 import { stableStringify } from "./stable.ts";
 import { capture } from "./evidence_capture.ts";
 
@@ -147,30 +148,9 @@ registerTool("read_broll_source", async ({ app, args, projectId }) => {
   return text(stableStringify({ ...source, lines: lines.slice(0, 140), omitted: Math.max(0, lines.length - 140), note: "Automatic captions guide the search; they do not prove what is visible. Narrow by phrase/start/end, then inspect an imported range." }));
 });
 
-/**
- * A post's video, downloaded whole once (posts are short) into the cache: an
- * Instagram carousel's `img_index` picks its item. yt-dlp's own last error
- * line comes back when it fails (an image-only post, a private account).
- */
+/** A post's video, downloaded whole once into the cache (posts.ts). */
 async function postVideo(app: App, url: string): Promise<string> {
-  const dir = join(app.store.cacheDir(), "posts"); fs.mkdirSync(dir, { recursive: true });
-  const key = Bun.hash(url).toString(16);
-  const had = () => fs.readdirSync(dir).find((f) => f.startsWith(`${key}.`) && /\.(mp4|mov|webm|mkv)$/u.test(f));
-  const found = had(); if (found !== undefined) return join(dir, found);
-  const item = new URL(url).searchParams.get("img_index");
-  const binary = await youtube.ytdlp(app.store.home);
-  const child = Bun.spawn([binary, "--no-warnings", "--socket-timeout", "20", "-f", "bv*+ba/b", "--merge-output-format", "mp4", "--max-filesize", "800M",
-    ...(item !== null && /^\d+$/u.test(item) ? ["--playlist-items", item] : ["--no-playlist"]), "-o", join(dir, `${key}.%(ext)s`), url], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const timer = setTimeout(() => child.kill(), 300_000);
-  try {
-    const [, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    const got = had();
-    if (code !== 0 || got === undefined) {
-      const why = err.trim().split("\n").filter((l) => l.startsWith("ERROR")).pop()?.replace(/^ERROR:\s*/u, "").slice(0, 300) ?? "the download failed or timed out";
-      throw new Error(`${why}${/no video/iu.test(why) ? " (an image post: capture_evidence on its url, or collect_images)" : ""}`);
-    }
-    return join(dir, got);
-  } finally { clearTimeout(timer); }
+  return (await posts.download(app.store.home, url, join(app.store.cacheDir(), "posts"))).path;
 }
 
 registerTool("import_broll", async ({ app, args, projectId }) => {

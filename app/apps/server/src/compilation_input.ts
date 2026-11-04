@@ -2,6 +2,7 @@
 // only an explicitly marked video is a finished, untouched reused section.
 import type { App } from "./app.ts";
 import * as script from "./script.ts";
+import * as posts from "./posts.ts";
 import { LINK_PREFIX, lookUp, reviewCode } from "./finished.ts";
 import { folderId, videosIn } from "./drive_import.ts";
 import { trelloGet } from "./writer/trello.ts";
@@ -178,19 +179,34 @@ export function pastedScript(text: string): Parsed | null {
   // A Doc's comment markers ("[a]", linked to the comment) aren't the script's words.
   const lines = text.split(/\r?\n/u).map((line) => line.replace(/\[\[[a-z]{1,3}\]\]\(#cmnt\d+\)/gu, "").trim()).filter((line) => line !== "");
   const linked = /\[[^\]]+\]\(https?:\/\/[^)\s]+\)/u;
+  // A footage link left bare by a plain-text paste (a horror script's reel after "Take a look at this:", its "Voice-over: <Drive link>").
+  const bare = /(?<![(\[])\bhttps?:\/\/[^\s)\]]+/gu;
+  const footage = (url: string) => script.footageFile(url) !== null;
+  const posted = (line: string) => [...line.matchAll(bare)].some((m) => posts.fileOf(m[0]) !== null);
   // Narration: a line of words with no link in it.
   const prose = lines.filter((line) => !/https?:\/\//u.test(line) && line.split(/\s+/u).length >= 12).length;
-  if (lines.length < 3 || prose < 1 || !lines.some((line) => linked.test(line))) return null;
+  if (lines.length < 3 || prose < 1 || !lines.some((line) => linked.test(line) || posted(line))) return null;
   const escape = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  // A post's bare link becomes a link, as the Doc had it.
+  const bareLinks = (text: string) => {
+    let out = "";
+    let at = 0;
+    for (const match of text.matchAll(bare)) {
+      if (!footage(match[0])) continue;
+      out += escape(text.slice(at, match.index)) + `<a href="${escape(match[0])}">${escape(match[0])}</a>`;
+      at = match.index! + match[0].length;
+    }
+    return out + escape(text.slice(at));
+  };
   const html = `<html><body>${lines
     .map((line) => {
       let out = "";
       let at = 0;
       for (const match of line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu)) {
-        out += escape(line.slice(at, match.index)) + `<a href="${escape(match[2]!)}">${escape(match[1]!)}</a>`;
+        out += bareLinks(line.slice(at, match.index)) + `<a href="${escape(match[2]!)}">${escape(match[1]!)}</a>`;
         at = match.index! + match[0].length;
       }
-      return `<p>${out}${escape(line.slice(at))}</p>`;
+      return `<p>${out}${bareLinks(line.slice(at))}</p>`;
     })
     .join("")}</body></html>`;
   const parsed = script.parse(html);

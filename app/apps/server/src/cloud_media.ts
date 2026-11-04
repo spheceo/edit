@@ -72,6 +72,7 @@ import * as jobs from "./jobs.ts";
 import { mediaHooks, mediaKey, Semaphore } from "./media.ts";
 import * as finished from "./finished.ts";
 import * as youtube from "./youtube.ts";
+import * as posts from "./posts.ts";
 import type { Clip, Media, Probe, Project } from "./model.ts";
 import { native, type ExportExcerpt } from "./native/index.ts";
 import { canonical, extension, fileStem, isFile, join, parent } from "./paths.ts";
@@ -972,6 +973,44 @@ export async function youtubeOriginal(
 }
 
 /**
+ * Puts post `file` (`post:<url>`, posts.ts: an Instagram reel, an X or
+ * TikTok video) among the originals unless the registry has it: downloaded
+ * whole once, as a YouTube video is, the local copy returned for its proxy.
+ */
+export async function postOriginal(
+  home: string,
+  file: string,
+  scratch: string,
+  progress: (bytes: number, total: number | null, name: string) => void,
+): Promise<[Original, string | null]> {
+  const url = posts.urlOf(file);
+  if (url === null) throw new Error(`${debugStr(file)} isn't a post`);
+  const source = file;
+  const record = await getRecord(source);
+  const ready = readyOriginal(record);
+  if (record !== null && ready !== null) {
+    const size = Math.max(Math.trunc(record.size), 0);
+    progress(size, size, record.name);
+    return [{ file, source, key: ready, name: record.name, size }, null];
+  }
+  const got = await posts.download(home, url, join(scratch, `post-${Bun.hash(url).toString(16)}`), progress);
+  const name = scriptParts.safeName(got.name);
+  const key = record !== null && cloud.validKey(record.originalKey) ? record.originalKey : `edit/originals/posts/${Bun.hash(url).toString(16)}/${segment(name)}`;
+  if (record === null) await putRecord({ source, name, originalKey: key, size: got.size });
+  await diag.timeOnAsync("cloud", "cloud: upload post", source, () => cloud.uploadFile(got.path, key));
+  let duration: number | null = null;
+  try {
+    duration = await scriptParts.durationOf(got.path);
+  } catch {
+    duration = null;
+  }
+  const done: Record<string, unknown> = { source, originalReady: true, size: got.size };
+  if (duration !== null) done.duration = duration;
+  await putRecord(done);
+  return [{ file, source, key, name, size: got.size }, got.path];
+}
+
+/**
  * Puts finished video `file` (`review:<project>/<version>`, finished.ts) among
  * the originals unless the registry has it: its review's full-quality file
  * fetched once and kept as an original (a review's files are only lent for an
@@ -1415,6 +1454,8 @@ export async function restoreHere(app: App, id: string, progress: (bytes: number
       found =
         youtube.idOf(file) !== null
           ? youtubeOriginal(home, file, scratch, progress)
+          : posts.urlOf(file) !== null
+            ? postOriginal(home, file, scratch, progress)
           : finished.reviewOf(file) !== null
             ? reviewOriginal(file, scratch, progress)
             : driveOriginal(file, scratch, progress).then((one): [Original, null] => [one, null]);
@@ -1426,13 +1467,13 @@ export async function restoreHere(app: App, id: string, progress: (bytes: number
     for (const media of live.project.media) {
       const source = media.cloud?.source;
       if (source === undefined || isFile(media.path)) continue;
-      const found = /^(drive|youtube):([^#]+)(?:#(\d+)-(\d+))?$/u.exec(source);
+      const found = /^(drive|youtube|post):([^#]+)(?:#(\d+)-(\d+))?$/u.exec(source);
       if (found === null) {
         lost.push(media.name);
         continue;
       }
       const [, kind, fileId, from, to] = found;
-      const file = kind === "youtube" ? `youtube:${fileId}` : fileId!;
+      const file = kind === "youtube" ? `youtube:${fileId}` : kind === "post" ? `post:${fileId}` : fileId!;
       const [original, local] = await originalOf(file);
       const url = local ?? (await getUrl(original.key, 6 * HOUR));
       if (from === undefined || to === undefined) {

@@ -33,6 +33,7 @@ import * as tools from "./tools.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 import { MODEL as CAPTIONS_MODEL } from "./youtube_captions.ts";
 import * as youtube from "./youtube.ts";
+import * as posts from "./posts.ts";
 import { LINK_PREFIX as FINISHED_LINK, reviewCode, reviewOf } from "./finished.ts";
 import { finishCase, pendingCase } from "./case_insertion.ts";
 import * as durableJobs from "./jobs.ts";
@@ -721,7 +722,7 @@ export function footageFile(url: string): string | null {
   const review = reviewCode(url);
   // A finished video of ours by its review link: looked up before the import (compilation_input).
   if (review !== null) return `${FINISHED_LINK}${review}`;
-  return driveFileId(url) ?? youtube.fileOf(url);
+  return driveFileId(url) ?? youtube.fileOf(url) ?? posts.fileOf(url);
 }
 
 /** A link's `t=` in seconds: Drive's `91.506`, YouTube's `86`, `86s` or `1m26s`. */
@@ -781,6 +782,27 @@ function withoutDocLinks(para: { text: string; links: [number, number, string][]
   return words.length < 5 || /[:\-–—]$/.test(text) ? null : text;
 }
 
+/** A script's line giving the narrator's recording: "Voice-over: <link>", "VO - <link>", "Recording: <link>". */
+const RECORDING_LINE = /^(voice[\s-]?over|vo|recording|narration)( recording)?\s*[:\-–—]/iu;
+/** The note on a script's first narration that carries its recording's link, until the import fetches it. */
+export const RECORDING_NOTE = "Voice-over recording: ";
+
+/**
+ * The recording a script gave ("Voice-over: <Drive link>"), fetched into the
+ * project as audio off the timeline, where the import's next step places it
+ * on the cut-ins it reads. Nothing when it's there already.
+ */
+async function fetchRecording(app: App, id: string): Promise<void> {
+  const project = app.store.get(id)?.project;
+  if (project === undefined || unplacedAudio(project)) return;
+  const note = (project.script?.blocks ?? []).flatMap((block) => block.notes ?? []).find((n) => n.startsWith(RECORDING_NOTE));
+  const file = note === undefined ? null : driveFileId(note.slice(RECORDING_NOTE.length));
+  if (file === null) return;
+  const path = await diag.timeOnAsync("script", "script: the recording", `Drive file ${file}`, () => download(join(app.store.driveDir(), file), file, () => {}));
+  const [, ids, errors] = await importPaths(app, id, [path], false, "script");
+  if (ids[0] === undefined) throw new Error(errors[0] ?? "the recording didn't import");
+}
+
 /** Reads a script Doc's HTML export into footage ranges and narration. */
 export function parse(html: string): Parsed {
   const [title, paras, comments] = readHtml(html);
@@ -791,9 +813,12 @@ export function parse(html: string): Parsed {
   // A range without its own link belongs to the last linked file (or the only one).
   const files: [string, string][] = [];
   for (const para of paras) {
+    // The recording's line isn't footage.
+    if (RECORDING_LINE.test(collapse(para.text))) continue;
     for (const [, , url] of para.links) {
       const id = footageFile(url);
-      if (id !== null) files.push([url, id]);
+      // A post is only ever where it's linked.
+      if (id !== null && posts.urlOf(id) === null) files.push([url, id]);
     }
   }
   const only = new Set(files.map(([, id]) => id)).size === 1 ? (files[0] ?? null) : null;
@@ -837,7 +862,13 @@ export function parse(html: string): Parsed {
   // Paragraphs of narration one after another are one cut-in; narration
   // written on from ranges starts its own (`own`): a hook paragraph followed
   // by a paragraph that runs the setup on into the hearing is two cut-ins.
-  const narrate = (text: string, found: string[], own = false) => {
+  // Ranges given with no link (an intro's "(0:00-0:01) + (0:58-1:03)" whose
+  // clips weren't picked yet): said to the next narration, never bound to
+  // some other file.
+  let unbound: string[] = [];
+  const narrate = (text: string, given: string[], own = false) => {
+    const found = unbound.length > 0 ? [`No link given for ${unbound.join(" + ")}: choose those moments from the story's own footage`, ...given] : given;
+    unbound = [];
     const previous = blocks[blocks.length - 1];
     const after = caseBreak;
     caseBreak = false;
@@ -848,8 +879,15 @@ export function parse(html: string): Parsed {
       blocks.push({ kind: "narration", text, notes: found });
     }
   };
+  // "Voice-over: <Drive link>": the narrator's recording, wherever it's written.
+  let recording: string | null = null;
   for (const para of paras) {
     const ranges = findRanges(para.text);
+    const drive = para.links.find(([, , url]) => driveFileId(url) !== null);
+    if (ranges.length === 0 && drive !== undefined && RECORDING_LINE.test(collapse(para.text))) {
+      recording = drive[2];
+      continue;
+    }
     if (ranges.length === 0) {
       const text = collapse(para.text);
       // The video opens on the first timestamp: anything before it is the
@@ -867,10 +905,21 @@ export function parse(html: string): Parsed {
         continue;
       }
       const found = notes(para.refs, comments);
+      // A post's link (an Instagram reel, an X video: posts.ts) is never
+      // voiced: its words are the line before it, and the post plays where
+      // it's linked, whole until it's cut ("Take a look at this:" <link>).
+      const postLinks = para.links.filter(([, , url]) => posts.fileOf(url) !== null);
+      let said = para.text;
+      for (const [start, end] of postLinks) said = said.slice(0, start) + " ".repeat(Math.max(0, end - start)) + said.slice(end);
+      said = said.replace(/https?:\/\/\S+/gu, (url) => (posts.fileOf(url) !== null ? " ".repeat(url.length) : url));
       // A reused script's link, alone or under a short label ("Case 2:
       // <link>"), is where that script goes, never words to voice.
-      const spoken = withoutDocLinks(para);
+      const spoken = /[\p{L}\p{N}]/u.test(said) ? withoutDocLinks({ text: said, links: para.links }) : null;
       if (spoken !== null) narrate(spoken, found);
+      for (const [, , url] of postLinks) {
+        const file = posts.fileOf(url)!;
+        blocks.push({ kind: "footage", url, file, start: 0, end: 1, label: WHOLE_SOURCE_LABEL, notes: spoken === null ? found : [] });
+      }
       reuse(found);
       caseNotes(found);
       docLinks(para.links);
@@ -908,7 +957,10 @@ export function parse(html: string): Parsed {
         }
       }
       const chosen: [string, string] | null = linked ?? last;
-      if (chosen === null) return;
+      if (chosen === null) {
+        unbound.push(`(${collapse(para.text.slice(range.start, range.end)).replace(/[‑–—]/g, "-")})`);
+        return;
+      }
       const [url, file] = chosen;
       last = [url, file];
       // The link's ?t= is the exact start (the text rounds to the second).
@@ -951,6 +1003,10 @@ export function parse(html: string): Parsed {
       caseNotes(found);
     }
     docsBefore(Number.MAX_SAFE_INTEGER);
+  }
+  if (recording !== null) {
+    const narration = blocks.find((block) => block.kind === "narration");
+    if (narration !== undefined) narration.notes = [`${RECORDING_NOTE}${recording}`, ...(narration.notes ?? [])];
   }
   const first = heading === undefined ? "" : collapse(heading.text);
   return { title, blocks, ...(cases.length > 0 ? { cases } : {}), ...(style !== null ? { style } : {}), ...(first !== "" ? { heading: first } : {}) };
@@ -2017,6 +2073,14 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       // A kind of video narrated by the team's recording: the one given with
       // the script (audio in the project, not on the timeline) is placed on
       // the cut-ins it reads; only what it doesn't read is voiced, as a stand-in.
+      if (!inserting && NARRATION[app.store.get(id)?.project.style ?? "bodycam"] === "recording") {
+        try {
+          await fetchRecording(app, id);
+        } catch (error) {
+          if (isBug(error)) throw error;
+          diag.warn("script", `${title}: getting the voice-over recording: ${diag.messageOf(error)}`);
+        }
+      }
       const project = app.store.get(id)?.project;
       if (!inserting && project !== undefined && NARRATION[project.style] === "recording" && unplacedAudio(project)) {
         try {
@@ -2113,7 +2177,9 @@ type Fetched = [bytes: number, name: string | null, cut: Excerpt[]];
 async function footageToDisk(app: App, id: string, index: number, file: string): Promise<Fetched> {
   const progress = fileProgress(app, id, index);
   const video = youtube.idOf(file);
-  const path = await diag.timeOnAsync("script", "script: download", video === null ? `Drive file ${file}` : `YouTube video ${video}`, async () => {
+  const post = posts.urlOf(file);
+  const path = await diag.timeOnAsync("script", "script: download", post !== null ? `post ${post}` : video === null ? `Drive file ${file}` : `YouTube video ${video}`, async () => {
+    if (post !== null) return (await posts.download(app.store.home, post, join(app.store.driveDir(), "posts"), progress)).path;
     if (video !== null) {
       const dir = join(app.store.driveDir(), "youtube", video);
       return (await youtube.download(app.store.home, video, dir, progress)).path;
@@ -2155,6 +2221,8 @@ async function footageToCloud(app: App, id: string, index: number, file: string)
       ? [await seams.cloudMedia.registeredOriginal(file, expectedKey), null]
       : reviewOf(file) !== null
         ? await diag.timeOnAsync("script", "script: finished video to cloud", file, () => seams.cloudMedia.reviewOriginal(file, scratch, progress))
+        : posts.urlOf(file) !== null
+        ? await diag.timeOnAsync("script", "script: post to cloud", file, () => seams.cloudMedia.postOriginal(app.store.home, file, scratch, progress))
         : youtube.idOf(file) !== null
       ? await diag.timeOnAsync("script", "script: youtube to cloud", file, () =>
           seams.cloudMedia.youtubeOriginal(app.store.home, file, scratch, progress),

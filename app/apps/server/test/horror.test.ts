@@ -113,5 +113,36 @@ test("a post's link imports whole or by range; YouTube still needs its range", (
 });
 
 test("horror's ban list is the guide's, with its other forms", () => {
-  for (const word of ["die", "died", "death", "dead", "killed", "murder", "shooting", "torture", "tortured", "gun", "molest", "robbed"]) expect(HORROR_TERMS).toContain(word);
+  for (const word of ["die", "died", "death", "dead", "killed", "murder", "shooting", "torture", "tortured", "gun", "molest", "robbed"]) expect(HORROR_TERMS as readonly string[]).toContain(word);
+});
+
+test("a horror script pasted as plain text: its posts are footage where they're linked, never voiced; its recording is noted; a range with no link is said, not bound", async () => {
+  const { pastedScript } = await import("../src/compilation_input.ts");
+  const { RECORDING_NOTE } = await import("../src/script.ts");
+  const pasted = [
+    "Intro:",
+    "(0:00-0:01) + (0:58-1:03)",
+    "If you're not living under a rock, you should know by now that Instagram Reels are weird and getting weirder every day. Take a look at this:",
+    "https://www.instagram.com/p/DU6q9WeEjRX/",
+    "But it gets even worse, let me explain to you really quick what your eyes are looking at right now.",
+    "https://x.com/ephraimwindex/status/2020035205374017941?s=20",
+    "Voice-over: https://drive.google.com/file/d/13i0819vUB7tQ8VHdd388rz_bHKQ8nuCi/view?usp=sharing",
+  ].join("\n");
+  const parsed = pastedScript(pasted)!;
+  expect(parsed.blocks.map((b) => b.kind)).toEqual(["narration", "footage", "narration", "footage"]);
+  const [first, reel, , post] = parsed.blocks as Record<string, unknown>[];
+  expect(first!.text).not.toContain("https://");
+  expect(first!.notes).toEqual([`${RECORDING_NOTE}https://drive.google.com/file/d/13i0819vUB7tQ8VHdd388rz_bHKQ8nuCi/view?usp=sharing`, "No link given for (0:00-0:01) + (0:58-1:03): choose those moments from the story's own footage"]);
+  expect(reel).toMatchObject({ file: "post:https://www.instagram.com/p/DU6q9WeEjRX/", start: 0, label: "Source (the whole video)" });
+  // Tracking dropped.
+  expect(post).toMatchObject({ file: "post:https://x.com/ephraimwindex/status/2020035205374017941" });
+});
+
+test("a post link never claims another script's unlinked ranges", async () => {
+  const { parse } = await import("../src/script.ts");
+  const html = `<html><body><p>(0:10-0:20)</p><p>The officer walks up to the car and asks for the driver's licence and registration right away.</p><p><a href="https://drive.google.com/file/d/abcdefghijklmnopqrstuvwxyz1/view">bodycam</a> (0:30-0:40)</p><p>And then everything changes in a matter of seconds, as you're about to see here.</p><p><a href="https://www.instagram.com/p/DU6q9WeEjRX/">https://www.instagram.com/p/DU6q9WeEjRX/</a></p></body></html>`;
+  const parsed = parse(html);
+  const footage = parsed.blocks.filter((b) => b.kind === "footage");
+  expect(footage[0]).toMatchObject({ file: "abcdefghijklmnopqrstuvwxyz1", start: 10 });
+  expect(footage.at(-1)).toMatchObject({ file: "post:https://www.instagram.com/p/DU6q9WeEjRX/" });
 });

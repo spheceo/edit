@@ -130,7 +130,7 @@ export function fail(message: string): never {
  * Ends the work a restart left running under this process: a reload (bun
  * --watch) and an update's exec keep the process id, so the agent's
  * `claude` and FFmpeg the last run started are still its
- * children, working for nobody. Their turns and jobs are resumed afresh, so
+ * children, working for nobody (and, run as the server exits, what it leaves). Their turns and jobs are resumed afresh, so
  * the old ones went on in parallel (Oct 30: a review fix's agent ran twice
  * on one project, both editing it). Nothing of this run has started yet.
  */
@@ -165,6 +165,12 @@ export function start(home: string, host: string | null, port: number): { app: A
   diag.open(home);
   const ended = endLeftovers();
   if (ended.length > 0) diag.info("edit", `ended ${ended.length} process(es) the last run left (${[...new Set(ended)].join(", ")}): their work starts again`);
+  // And on the way out: a quit, Edit.app closed or a server stopped leaves its FFmpeg and `claude` running for
+  // nobody, with a new process id the next start can't tell apart (the 10-hour trial, Nov 4: a sound copy and a
+  // thumbnail pass went on reading 58 GB beside the restarted server's own). Their jobs start again with the next run.
+  process.on("exit", () => {
+    endLeftovers();
+  });
   for (const [tool, path] of [
     ["ffmpeg", tools.ffmpeg()],
     ["ffprobe", tools.ffprobe()],

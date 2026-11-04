@@ -278,7 +278,13 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     expect([busy.status, await busy.json()]).toEqual([409, { error: "an export is running; update when it's done" }]);
     expect((await send(`/api/exports/file?path=${encodeURIComponent(path)}`)).status).toBe(404);
     while (app.exports.running()) await Bun.sleep(10);
-    expect(events.map((event) => event.state)).toEqual(["running", "running", "done"]);
+    // Its prep is said before the encode's progress (Nov 3: a share sat at 0% while it got ready).
+    expect(events.map((event) => [event.state, event.phase ?? null])).toEqual([
+      ["running", "preparing the footage"],
+      ["running", "starting the export"],
+      ["running", null],
+      ["done", null],
+    ]);
     expect(events.at(-1)).toMatchObject({ id, path, progress: 1, bytes: 8, drive: false });
     const file = await send(`/api/exports/file?path=${encodeURIComponent(path)}`);
     expect([file.status, file.headers.get("content-disposition"), await file.text()]).toEqual([

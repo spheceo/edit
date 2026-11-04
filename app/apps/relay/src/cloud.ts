@@ -27,7 +27,7 @@
 import { allow, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, ideaRefused, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
 import { cancelJob, driveJob, googleSignIn, jobStatus, type JobsEnv } from "./jobs";
-import { writerCloud } from "./writer_cloud";
+import { readable as scriptReadable, scriptKeyRefused, writerCloud } from "./writer_cloud";
 import { mediaUrl, type MediaEnv } from "./media";
 
 export interface CloudEnv extends JobsEnv, MediaEnv {
@@ -220,13 +220,28 @@ async function mayTouch(access: Access, op: "read" | "write", key: string): Prom
   if (project !== null) await mayOpen(access, project);
 }
 
+/** Projects' summaries as the cloud last said, briefly: a project's files (its chat, covers, research) are presigned many times a minute. */
+const projectSummaries = new Map<string, { summary: unknown; at: number }>();
+const PROJECT_SUMMARY_MS = 30_000;
+
+/** Tests: forget the summaries kept. */
+export function forgetProjects(): void {
+  projectSummaries.clear();
+}
+
 /** Refuses a project outside the caller's kinds (a project not in the cloud yet is anyone's to start). */
-async function mayOpen(access: Access, projectId: string): Promise<Record<string, unknown> | null> {
+async function mayOpen(access: Access, projectId: string): Promise<void> {
   const given = grantedTo(access.found);
-  if (given === null) return null;
-  const row = await projectRow(access.env, projectId);
-  if (row !== null && !mayWork(shapeOf(row.summary), given)) throw new Forbidden(UNAVAILABLE);
-  return row;
+  if (given === null) return;
+  const id = `${access.env.CONVEX_URL ?? ""}\n${projectId}`;
+  let kept = projectSummaries.get(id);
+  if (kept === undefined || Date.now() - kept.at >= PROJECT_SUMMARY_MS) {
+    const row = await projectRow(access.env, projectId);
+    kept = { summary: row === null ? null : (row.summary ?? {}), at: Date.now() };
+    if (projectSummaries.size > 5000) projectSummaries.clear();
+    projectSummaries.set(id, kept);
+  }
+  if (kept.summary !== null && !mayWork(shapeOf(kept.summary), given)) throw new Forbidden(UNAVAILABLE);
 }
 
 const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2, access: Access) => Promise<Response>> = {
@@ -236,6 +251,11 @@ const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2, access: 
     // Writer's scripts (bodies and their files) are read for the handoff, never written.
     const key = method !== "PUT" && writerReadable(body.key) ? body.key : needKey(body.key);
     if (!key.startsWith("writer/")) await mayTouch(access, method === "PUT" ? "write" : "read", key);
+    // A script's files, for the handoff: only a script the caller may see (writer_cloud.ts).
+    else {
+      const refused = await scriptKeyRefused(access.env, access.found, key, false);
+      if (refused !== null) return refused;
+    }
     let expires = DEFAULT_EXPIRES[method];
     if (body.expires !== undefined) {
       if (typeof body.expires !== "number" || !Number.isInteger(body.expires) || body.expires <= 0) throw new BadRequest("expires must be a whole number of seconds.");
@@ -479,6 +499,15 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     }
   }
   if (REVIEW_SHARE_CALLS.has(body.path) && !mayShareReviews(found)) return json(403, { error: "Your account can't delete review links: it needs “Share for review”. Ask an admin at accounts.spheceo.com." });
+  // An edit's review, by its project: only for who may work on that project (Nov 4: any review was anyone's by its project id).
+  if (REVIEWS_PATH.test(body.path) && isObject(body.args) && typeof body.args.sourceId === "string") {
+    try {
+      await mayOpen({ found, env }, body.args.sourceId);
+    } catch (error) {
+      if (error instanceof Forbidden) return json(403, { error: error.message });
+      return json(502, { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
   // A review is always Edit's from here, whatever the caller says.
   if (REVIEWS_PATH.test(body.path)) body.args = { ...(body.args as object | undefined), app: "edit" };
   // Who started a project comes from the token, never the caller.
@@ -515,9 +544,25 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
   if (isObject(parsed) && parsed.status === "success") {
     // Reads leave out what isn't the caller's kind of video.
     const given = grantedTo(found);
-    let value = parsed.value ?? null;
+    let value: unknown = parsed.value ?? null;
     if (given !== null && body.path === "edit:listProjects" && Array.isArray(value)) value = value.filter((card) => mayWork(shapeOf(isObject(card) ? card.summary : null), given));
     if (given !== null && body.path === "edit:getProject" && isObject(value) && !mayWork(shapeOf(value.summary), given)) return json(403, { error: UNAVAILABLE });
+    // The edits' reviews and notes: only those of projects the caller may work on.
+    if (given !== null && (body.path === "reviews:open" || body.path === "reviews:changes")) {
+      const cards = await convexValueOf(env, "query", "edit:listProjects", {});
+      if (!Array.isArray(cards)) return json(502, { error: "Convex couldn't list the projects to see whose reviews these are; Edit asks again." });
+      const shapes = new Map(cards.filter(isObject).map((card) => [String(card.projectId ?? ""), card.summary ?? {}]));
+      // A review whose project isn't in the cloud (local, or deleted since) stays, as a project not in the cloud is anyone's (mayOpen).
+      const seen = (item: unknown) => !isObject(item) || typeof item.sourceId !== "string" || !shapes.has(item.sourceId) || mayWork(shapeOf(shapes.get(item.sourceId)), given);
+      if (body.path === "reviews:open" && Array.isArray(value)) value = value.filter(seen);
+      if (body.path === "reviews:changes" && isObject(value) && Array.isArray(value.notes)) value = { ...value, notes: value.notes.filter(seen) };
+    }
+    // Writer's scripts (the handoff's reads): only those the caller may see.
+    if (WRITER_READS.has(body.path)) {
+      const left = await scriptReadable(body.path, value, env, found);
+      if (left instanceof Response) return left;
+      value = left;
+    }
     return json(200, { status: "success", value });
   }
   if (isObject(parsed) && parsed.status === "error") {
@@ -567,6 +612,21 @@ async function reviewOf(env: CloudEnv, projectId: string): Promise<unknown> {
   }
   if (!isObject(parsed) || parsed.status !== "success") throw new Upstream("Convex couldn't say whether that review is still there.");
   return parsed.value ?? null;
+}
+
+/** One Convex call's value as the relay itself (undefined when it failed). */
+async function convexValueOf(env: CloudEnv, kind: string, path: string, args: Record<string, unknown>): Promise<unknown> {
+  try {
+    const answer = await fetch(`${env.CONVEX_URL!.replace(/\/+$/, "")}/api/${kind}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: { ...args, token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
+    });
+    const parsed: unknown = await answer.json();
+    return isObject(parsed) && parsed.status === "success" ? (parsed.value ?? null) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** A project's Convex card (`edit:getProject`, with its summary), or null when it isn't in the cloud. */

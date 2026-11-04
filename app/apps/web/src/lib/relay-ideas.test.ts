@@ -121,11 +121,43 @@ describe("the ideas functions", () => {
     const committed = await ask("/v1/ideas/convex", { body: { kind: "mutation", path: "ideas:commit", args: { ideaId: "i1-abcd", workspace: "interrogation", baseRev: 0, body: {}, summary: {}, by: "Someone else", actor: { sub: "forged", name: "Forged" } } } });
     expect(committed.status).toBe(200);
     expect(await committed.json()).toEqual({ status: "success", value: { rev: 1 } });
-    const sent = JSON.parse(String(calls[0]!.init.body)) as { path: string; args: Record<string, unknown> };
+    const sent = JSON.parse(String(calls.at(-1)!.init.body)) as { path: string; args: Record<string, unknown> };
     expect(sent.path).toBe("ideas:commit");
     expect(sent.args).toMatchObject({ by: "Sphe", actor: { sub: "person-1", name: "Sphe", email: "sphe@gmail.com" }, token: "s".repeat(40) });
     expect((await ask("/v1/ideas/convex", { body: { kind: "mutation", path: "edit:deleteProject", args: {} } })).status).toBe(403);
     expect((await ask("/v1/ideas/convex", { body: { kind: "mutation", path: "ideas:list", args: {} } })).status).toBe(403);
+  });
+
+  it("keeps each workspace's ideas to who works in it (Nov 4: a bodycam person read and changed Interrogation's)", async () => {
+    const rows = [{ ideaId: "i1", workspace: "interrogation" }, { ideaId: "i2", workspace: "bodycam" }, { ideaId: "i3" }];
+    const calls = stand({
+      "POST convex.test/api/query": (_url, init) => {
+        const sent = JSON.parse(String(init.body)) as { path: string; args: { ideaId?: string } };
+        if (sent.path === "ideas:list") return { status: "success", value: rows };
+        const row = rows.find((one) => one.ideaId === sent.args.ideaId);
+        return { status: "success", value: row === undefined ? null : { body: { workspace: row.workspace }, rev: 1 } };
+      },
+      "POST convex.test/api/mutation": () => ({ status: "success", value: { rev: 2 } }),
+    });
+    const bodycam = { perms: ["use", "ideas.bodycam"] };
+    const convex = (path: string, kind: string, args: Record<string, unknown>, claims: Record<string, unknown> = bodycam) => ask("/v1/ideas/convex", { body: { kind, path, args }, claims });
+    // Listed: only bodycam's (an idea without a workspace is Interrogation's).
+    const listed = (await (await convex("ideas:list", "query", {})).json()) as { value: { ideaId: string }[] };
+    expect(listed.value.map((row) => row.ideaId)).toEqual(["i2"]);
+    // Opened, changed, moved into, or removed: refused outside bodycam, and nothing changes.
+    expect((await convex("ideas:get", "query", { ideaId: "i1" })).status).toBe(403);
+    expect((await convex("ideas:get", "query", { ideaId: "i3" })).status).toBe(403);
+    expect((await convex("ideas:get", "query", { ideaId: "i2" })).status).toBe(200);
+    expect((await convex("ideas:commit", "mutation", { ideaId: "i1", workspace: "bodycam", baseRev: 1, body: {} })).status).toBe(403);
+    expect((await convex("ideas:commit", "mutation", { ideaId: "i2", workspace: "interrogation", baseRev: 1, body: {} })).status).toBe(403);
+    expect((await convex("ideas:remove", "mutation", { ideaId: "i3" })).status).toBe(403);
+    expect(calls.filter((call) => call.url.pathname === "/api/mutation")).toHaveLength(0);
+    // Its own: changed, and a new one started there.
+    expect((await convex("ideas:commit", "mutation", { ideaId: "i2", workspace: "bodycam", baseRev: 1, body: {} })).status).toBe(200);
+    expect((await convex("ideas:commit", "mutation", { ideaId: "i9", workspace: "bodycam", baseRev: 0, body: {} })).status).toBe(200);
+    // An admin sees every workspace.
+    const all = (await (await convex("ideas:list", "query", {}, { perms: ["use"], admin: true })).json()) as { value: unknown[] };
+    expect(all.value).toHaveLength(3);
   });
 });
 

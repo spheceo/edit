@@ -115,9 +115,28 @@ export const WRITABLE = [
 /** What a non-admin may list: the analysis beside a source (cloud_media's fetchAnalysisOf). */
 export const LISTABLE = "edit/analysis/";
 
-/** The project a key belongs to: a review's files, a cover. Null for shared keys. */
+/**
+ * The project a key belongs to: its review's files, its cover, its chat, its
+ * exports and smooth-playback renders, its research. Null for shared keys
+ * (footage, named by what it holds). Nov 4 (Sphe: "if we've given someone X
+ * permissions, their account literally cannot access anything else"): a
+ * project's chat, exports and research were readable by anyone signed in who
+ * knew its id.
+ */
 export function projectOfKey(key: string): string | null {
-  return /^edit\/reviews\/([^/]+)\//.exec(key)?.[1] ?? /^edit\/covers\/([^/]+)\.jpg$/.exec(key)?.[1] ?? null;
+  const patterns = [
+    /^edit\/reviews\/([^/]+)\//,
+    /^edit\/covers\/([^/]+)\.jpg$/,
+    /^edit\/chats\/([^/]+)\.json$/,
+    /^edit\/exports\/playback\/([^/]+)\//,
+    /^edit\/exports\/(?!playback\/)([^/]+)\//,
+    /^edit\/research\/projects\/([^/]+)\//,
+  ];
+  for (const pattern of patterns) {
+    const found = pattern.exec(key)?.[1];
+    if (found !== undefined) return found;
+  }
+  return null;
 }
 
 const HOUR = 3600;

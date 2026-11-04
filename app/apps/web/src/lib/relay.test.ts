@@ -1,7 +1,8 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readCutOffsWith, useKeys } from "../../../relay/src/auth";
-import { presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
+import { forgetProjects, presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
+import { forgetScripts } from "../../../relay/src/writer_cloud";
 import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
 import { signed } from "../../../relay/src/transcribe_jobs";
 
@@ -121,7 +122,7 @@ describe("relay cloud endpoints", () => {
     const method = options.method ?? "POST";
     return relay.fetch(new Request(`https://relay.test/v1/cloud/${route}`, { method, headers, body: method === "GET" ? undefined : JSON.stringify(body) }), options.env ?? env);
   };
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => { vi.unstubAllGlobals(); forgetProjects(); forgetScripts(); });
 
   it("refuses every request without a signed-in person's token, the old shared one included", async () => {
     const upstream = vi.fn(); vi.stubGlobal("fetch", upstream);
@@ -169,7 +170,7 @@ describe("relay cloud endpoints", () => {
     }
   });
 
-  it("Script mode's cloud keeps Writer's rules: reads for anyone, writes for script work of the script's kind, reviews as Writer", async () => {
+  it("Script mode's cloud keeps Writer's rules: reads for who writes or edits the script's kind, writes for script work of the script's kind, reviews as Writer", async () => {
     const upstream = vi.fn(async (url: string, init?: RequestInit) => {
       const sent = init?.body ? JSON.parse(String(init.body)) : {};
       // The relay looking a script up before a delete: an interrogation script.
@@ -178,8 +179,11 @@ describe("relay cloud endpoints", () => {
     });
     vi.stubGlobal("fetch", upstream);
     const writer = (route: string, body: unknown, token: string) => call(`writer/${route}`, body, { token });
-    // Reading is open to anyone who may use Edit.
-    expect((await writer("r2/url", { key: "writer/scripts/a/body/1-ff.json" }, EDITOR)).status).toBe(200);
+    // Reading: the interrogation writer and an admin; a bodycam editor and a subtitler not (Nov 4: it was open to anyone).
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/1-ff.json" }, WRITER)).status).toBe(200);
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/1-ff.json" }, ADMIN)).status).toBe(200);
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/1-ff.json" }, EDITOR)).status).toBe(403);
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/1-ff.json" }, SUBS)).status).toBe(403);
     expect((await writer("convex", { kind: "query", path: "writer:listScripts" }, EDITOR)).status).toBe(200);
     // Writing needs script work: an Edit-only editor can't, a writer can.
     expect((await writer("r2/url", { key: "writer/scripts/a/body/2-ff.json", method: "PUT" }, EDITOR)).status).toBe(403);
@@ -187,19 +191,19 @@ describe("relay cloud endpoints", () => {
     // The shared lessons need review.lessons.
     expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, WRITER)).status).toBe(403);
     expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, ADMIN)).status).toBe(200);
-    // `use` with no capability is no one's admin: it reads, and writes nothing.
-    expect((await writer("convex", { kind: "query", path: "writer:listScripts" }, USE_ONLY)).status).toBe(200);
+    // `use` with no capability is no one's admin: it reads no script, and writes nothing.
+    expect((await writer("r2/url", { key: "writer/scripts/a/body/1-ff.json" }, USE_ONLY)).status).toBe(403);
     expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, USE_ONLY)).status).toBe(403);
     expect((await writer("r2/url", { key: "writer/lessons.json", method: "PUT" }, USE_ONLY)).status).toBe(403);
     // A commit of the writer's own kind goes through; another kind's doesn't.
-    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, WRITER)).status).toBe(200);
-    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "courtroom" } } }, WRITER)).status).toBe(403);
+    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { scriptId: "a", summary: { kind: "interrogation" } } }, WRITER)).status).toBe(200);
+    expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { scriptId: "a", summary: { kind: "courtroom" } } }, WRITER)).status).toBe(403);
     expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, EDITOR)).status).toBe(403);
     // A delete is judged by what the script is in the cloud.
     expect((await writer("convex", { kind: "mutation", path: "writer:deleteScript", args: { scriptId: "a" } }, WRITER)).status).toBe(200);
     // Reviews: shared by who may share, always as Writer.
-    expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit" } }, EDITOR)).status).toBe(403);
-    expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit" } }, WRITER)).status).toBe(200);
+    expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit", sourceId: "a" } }, EDITOR)).status).toBe(403);
+    expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit", sourceId: "a" } }, WRITER)).status).toBe(200);
     const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).args.app).toBe("writer");
     // A script's review link is deleted by who may share reviews, as Writer's.
@@ -214,10 +218,85 @@ describe("relay cloud endpoints", () => {
     expect((await writer("r2/url", { key: "edit/originals/youtube/x/a.mp4", method: "PUT" }, WRITER)).status).toBe(200);
     expect((await writer("r2/delete", { keys: ["edit/originals/youtube/x/a.mp4"] }, WRITER)).status).toBe(400);
     expect((await writer("r2/list", { prefix: "edit/" }, ADMIN)).status).toBe(400);
+    // Listing is only of one script's own files (a deleted review link's), for who may see it.
+    expect((await writer("r2/list", { prefix: "writer/" }, WRITER)).status).toBe(403);
+    expect((await writer("r2/list", { prefix: "writer/reviews/a/" }, WRITER)).status).toBe(200);
+    expect((await writer("r2/list", { prefix: "writer/reviews/a/" }, EDITOR)).status).toBe(403);
     // Problem reports: anyone puts one, only an admin reads them.
     expect((await writer("r2/url", { key: "writer/reports/r1.json", method: "PUT" }, EDITOR)).status).toBe(200);
     expect((await writer("r2/url", { key: "writer/reports/r1.json" }, WRITER)).status).toBe(403);
     expect((await writer("r2/url", { key: "writer/reports/r1.json" }, ADMIN)).status).toBe(200);
+  });
+
+  it("a script is seen only by who writes its kind or edits its style, on either route (Nov 4)", async () => {
+    const scripts: Record<string, unknown> = {
+      i1: { scriptId: "i1", summary: { kind: "interrogation" } },
+      c1: { scriptId: "c1", summary: { kind: "courtroom" } },
+      f1: { scriptId: "f1", summary: { kind: "foia" } },
+    };
+    const upstream = vi.fn(async (_url: string, init?: RequestInit) => {
+      const sent = JSON.parse(String(init?.body ?? "{}")) as { path: string; args: Record<string, unknown> };
+      if (sent.path === "writer:listScripts") return Response.json({ status: "success", value: Object.values(scripts) });
+      if (sent.path === "writer:getScript") return Response.json({ status: "success", value: scripts[String(sent.args.scriptId)] ?? null });
+      if (sent.path === "reviews:open") return Response.json({ status: "success", value: ["i1", "c1", "f1", "gone"].map((sourceId) => ({ sourceId, reviewId: `r-${sourceId}` })) });
+      if (sent.path === "reviews:changes") return Response.json({ status: "success", value: { notes: [{ sourceId: "i1", id: "n1" }, { sourceId: "c1", id: "n2" }], cursor: 9 } });
+      return Response.json({ status: "success", value: { ok: 1 } });
+    });
+    vi.stubGlobal("fetch", upstream);
+    const listed = async (route: string, token: string) => ((await (await call(route, { kind: "query", path: "writer:listScripts" }, { token })).json()) as { value: { scriptId: string }[] }).value.map((row) => row.scriptId);
+    // The interrogation writer: their kind. The bodycam editor: foia scripts (made into bodycam edits). The subtitler: none.
+    expect(await listed("writer/convex", WRITER)).toEqual(["i1"]);
+    expect(await listed("convex", EDITOR)).toEqual(["f1"]);
+    expect(await listed("convex", SUBS)).toEqual([]);
+    expect(await listed("convex", ADMIN)).toEqual(["i1", "c1", "f1"]);
+    expect((await call("writer/convex", { kind: "query", path: "writer:getScript", args: { scriptId: "c1" } }, { token: WRITER })).status).toBe(403);
+    expect((await call("convex", { kind: "query", path: "writer:getScript", args: { scriptId: "i1" } }, { token: EDITOR })).status).toBe(403);
+    expect((await call("convex", { kind: "query", path: "writer:getScript", args: { scriptId: "f1" } }, { token: EDITOR })).status).toBe(200);
+    // Its files for the handoff, on Edit's route.
+    expect((await call("r2/url", { key: "writer/scripts/c1/body/1-ff.json" }, { token: EDITOR })).status).toBe(403);
+    expect((await call("r2/url", { key: "writer/scripts/f1/body/1-ff.json" }, { token: EDITOR })).status).toBe(200);
+    // Another kind's script isn't committed over, even as one's own kind.
+    expect((await call("writer/convex", { kind: "mutation", path: "writer:commitScript", args: { scriptId: "c1", summary: { kind: "interrogation" } } }, { token: WRITER })).status).toBe(403);
+    // Its reviews: listed, read and changed only for who may see the script.
+    const open = (await (await call("writer/convex", { kind: "query", path: "reviews:open" }, { token: WRITER })).json()) as { value: { sourceId: string }[] };
+    expect(open.value.map((row) => row.sourceId)).toEqual(["i1", "gone"]);
+    const changes = (await (await call("writer/convex", { kind: "query", path: "reviews:changes", args: { cursor: 0 } }, { token: WRITER })).json()) as { value: { notes: { id: string }[]; cursor: number } };
+    expect(changes.value).toEqual({ notes: [{ sourceId: "i1", id: "n1" }], cursor: 9 });
+    expect((await call("writer/convex", { kind: "query", path: "reviews:get", args: { sourceId: "c1" } }, { token: WRITER })).status).toBe(403);
+    expect((await call("writer/convex", { kind: "mutation", path: "reviews:approve", args: { sourceId: "c1" } }, { token: WRITER })).status).toBe(403);
+    expect((await call("writer/convex", { kind: "mutation", path: "reviews:approve", args: { sourceId: "i1" } }, { token: WRITER })).status).toBe(200);
+  });
+
+  it("a project's chat, exports, research and reviews are only for who may work on it (Nov 4)", async () => {
+    const projects = [{ projectId: "p1", summary: { style: "bodycam", subtitles: false, footageOnly: false } }, { projectId: "s1", summary: { style: "bodycam", subtitles: true } }];
+    const upstream = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("cloudflarestorage.com")) return new Response(null, { status: 204 });
+      const sent = JSON.parse(String(init?.body ?? "{}")) as { path: string; args: Record<string, unknown> };
+      if (sent.path === "edit:getProject") return Response.json({ status: "success", value: projects.find((one) => one.projectId === sent.args.projectId) ?? null });
+      if (sent.path === "edit:listProjects") return Response.json({ status: "success", value: projects });
+      if (sent.path === "reviews:open") return Response.json({ status: "success", value: [{ sourceId: "p1" }, { sourceId: "s1" }, { sourceId: "local" }] });
+      if (sent.path === "reviews:changes") return Response.json({ status: "success", value: { notes: [{ sourceId: "p1" }, { sourceId: "s1" }] } });
+      return Response.json({ status: "success", value: { ok: 1 } });
+    });
+    vi.stubGlobal("fetch", upstream);
+    for (const key of ["edit/chats/p1.json", "edit/exports/p1/final.mp4", "edit/exports/playback/p1/abc.mp4", "edit/research/projects/p1/report.md"]) {
+      expect((await call("r2/url", { key }, { token: SUBS })).status).toBe(403);
+      expect((await call("r2/url", { key }, { token: EDITOR })).status).toBe(200);
+    }
+    expect((await call("r2/url", { key: "edit/chats/p1.json", method: "PUT" }, { token: SUBS })).status).toBe(403);
+    // The subtitler's own project's, and a project not in the cloud (anyone's to start).
+    expect((await call("r2/url", { key: "edit/chats/s1.json" }, { token: SUBS })).status).toBe(200);
+    expect((await call("r2/url", { key: "edit/chats/new.json", method: "PUT" }, { token: SUBS })).status).toBe(200);
+    // Reviews by project, and the lists of them.
+    expect((await call("convex", { kind: "query", path: "reviews:get", args: { sourceId: "p1" } }, { token: SUBS })).status).toBe(403);
+    expect((await call("convex", { kind: "mutation", path: "reviews:approve", args: { sourceId: "p1" } }, { token: SUBS })).status).toBe(403);
+    expect((await call("convex", { kind: "query", path: "reviews:get", args: { sourceId: "s1" } }, { token: SUBS })).status).toBe(200);
+    const open = (await (await call("convex", { kind: "query", path: "reviews:open" }, { token: SUBS })).json()) as { value: { sourceId: string }[] };
+    expect(open.value.map((row) => row.sourceId)).toEqual(["s1", "local"]);
+    const changes = (await (await call("convex", { kind: "query", path: "reviews:changes", args: { cursor: 0 } }, { token: SUBS })).json()) as { value: { notes: { sourceId: string }[] } };
+    expect(changes.value.notes.map((note) => note.sourceId)).toEqual(["s1"]);
+    const all = (await (await call("convex", { kind: "query", path: "reviews:open" }, { token: ADMIN })).json()) as { value: unknown[] };
+    expect(all.value).toHaveLength(3);
   });
 
   it("Script mode's cloud has its own limit, not the 4 a minute of maps and lookups", async () => {

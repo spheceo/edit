@@ -211,6 +211,15 @@ async function convex(body: Record<string, unknown>, env: IdeasEnv, found: Calle
   const paused = convexPaused(env);
   if (paused !== null) return paused;
   const { actor: _sent, ...args } = (body.args ?? {}) as Record<string, unknown>;
+  // An idea is its workspace's (Nov 4: an `ideas.bodycam` person could read and change Interrogation's ideas here):
+  // a commit names one the caller works in, and an idea already in the cloud is changed or removed only in its own.
+  if (!isAdmin(found) && (path === "ideas:commit" || path === "ideas:remove")) {
+    if (typeof args.ideaId !== "string") return json(400, { error: "args.ideaId must be a string." });
+    if (path === "ideas:commit" && !mayWorkspace(found, args.workspace)) return json(403, { error: NOT_THIS_WORKSPACE });
+    const existing = await convexValue(env, "ideas:get", { ideaId: args.ideaId });
+    if (existing === undefined) return json(502, { error: "Convex couldn't say whose idea that is; Edit asks again." });
+    if (existing !== null && !mayWorkspace(found, workspaceOfIdea(existing))) return json(403, { error: NOT_THIS_WORKSPACE });
+  }
   // Who started an idea, and who changed it, come from the token, never the caller.
   if (kind === "mutation") {
     const actor = actorOf(found);
@@ -230,11 +239,50 @@ async function convex(body: Record<string, unknown>, env: IdeasEnv, found: Calle
   const text = await answer.text();
   try {
     const parsed: unknown = JSON.parse(text);
+    if (isObject(parsed) && parsed.status === "success" && !isAdmin(found)) {
+      // Reads: only the workspaces the caller works in.
+      if (path === "ideas:list" && Array.isArray(parsed.value)) return json(200, { ...parsed, value: parsed.value.filter((row) => mayWorkspace(found, workspaceOfIdea(row))) });
+      if (path === "ideas:get" && parsed.value !== null && parsed.value !== undefined && !mayWorkspace(found, workspaceOfIdea(parsed.value))) return json(403, { error: NOT_THIS_WORKSPACE });
+    }
     if (isObject(parsed) && (parsed.status === "success" || parsed.status === "error")) return json(200, parsed);
   } catch {
     // Not Convex's own shape: said below.
   }
   return json(502, { error: `Convex answered ${answer.status}: ${text.slice(0, 300)}` });
+}
+
+const isAdmin = (found: Caller) => found.kind === "person" && found.admin;
+
+export const NOT_THIS_WORKSPACE = "This idea isn't available to your account: an admin can give you its workspace's ideas at accounts.spheceo.com.";
+
+/** Whether the caller works on ideas in `workspace` (none named: Interrogation, as Edit reads an idea without one). */
+function mayWorkspace(found: Caller, workspace: unknown): boolean {
+  if (found.kind !== "person") return false;
+  if (found.admin) return true;
+  const named = workspace === undefined || workspace === null || workspace === "" ? "interrogation" : workspace;
+  return typeof named === "string" && Object.hasOwn(BOARDS, named) && found.perms.includes(`ideas.${named}`);
+}
+
+/** The workspace an idea's row or body says it's in (a list row's own, else its body's). */
+function workspaceOfIdea(row: unknown): unknown {
+  if (!isObject(row)) return undefined;
+  if (row.workspace !== undefined && row.workspace !== null) return row.workspace;
+  return isObject(row.body) ? row.body.workspace : undefined;
+}
+
+/** One Convex call's value as the relay itself (undefined when it failed). */
+async function convexValue(env: IdeasEnv, path: string, args: Record<string, unknown>): Promise<unknown> {
+  try {
+    const answer = await fetch(`${env.CONVEX_URL!.replace(/\/+$/, "")}/api/query`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, args: { ...args, token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
+    });
+    const parsed: unknown = await answer.json();
+    return isObject(parsed) && parsed.status === "success" ? (parsed.value ?? null) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------------------------------------------------------------- YouTube

@@ -2,10 +2,14 @@
  * Script mode's cloud (Writer's, merged into Edit on Oct 29 2026), as Writer's
  * relay kept it: every script's body and files on R2 under `writer/`, and its
  * index in Convex (Repack's deployment, the `writer` module). The rules are
- * Writer's, read from the Edit sign-in: reading is open to anyone who may
- * use Edit; writing needs script work (a `scripts.*` capability: a commit or
- * delete the script's own kind), the shared lessons `review.lessons`, and
- * reviews `review.share` (Edit's manifest lists them, ids unchanged).
+ * Writer's, read from the Edit sign-in: a script is seen only by who writes
+ * its kind (`scripts.*`) or edits its style (`edit.*`, the handoff), as
+ * Script mode and Edit's script list already hide the rest on the Mac (Nov 4,
+ * Sphe: "if we've given someone X permissions, their account literally cannot
+ * access anything else"; reading had been open to anyone who may use Edit).
+ * Writing needs script work of the script's own kind, the shared lessons
+ * `review.lessons`, and reviews `review.share` (Edit's manifest lists them,
+ * ids unchanged).
  *
  *   /v1/cloud/writer/r2/url | multipart/create | multipart/urls | multipart/complete | multipart/abort | head | delete | list
  *   /v1/cloud/writer/convex   {kind, path: "writer:…" | "reviews:…" | "edit:getMedia|putMedia", args?}
@@ -88,6 +92,89 @@ export function workOf(summary: unknown): string | null {
 
 const refuse = (what: string) => json(403, { error: `Your account can't ${what}. Ask an admin at accounts.spheceo.com.` });
 
+export const SCRIPT_UNAVAILABLE = "This script isn't available to your account: an admin can give you its kind of script at accounts.spheceo.com.";
+
+/** The work a script is, exactly as Script mode's can.ts reads it (no kind, or one it doesn't know: an interrogation). */
+export function scriptWork(summary: unknown): string {
+  const given = isObject(summary) ? summary : {};
+  if (given.sourceKind === "commentary") return "scripts.commentary";
+  const kind = typeof given.kind === "string" ? given.kind : "interrogation";
+  if (given.compilation === true) return kind === "courtroom" ? "scripts.courtroom-compilation" : kind === "foia" ? "scripts.foia-compilation" : "scripts.interrogation-compilation";
+  return kind === "foia" ? "scripts.foia" : kind === "courtroom" ? "scripts.courtroom" : "scripts.interrogation";
+}
+
+/** The Edit style a script is made into, as Edit's script list reads it (writer_handoff.ts); null before Writer gives it a kind. */
+export function scriptEditStyle(summary: unknown): string | null {
+  const given = isObject(summary) ? summary : {};
+  if (given.sourceKind === "commentary") return "commentary";
+  if (typeof given.kind !== "string" || given.kind === "") return null;
+  return given.kind === "commentary" ? "commentary" : given.kind === "courtroom" ? "courtroom" : given.kind === "foia" ? "bodycam" : "interrogation";
+}
+
+const editsAny = (grants: Grants) => [...grants.perms].some((perm) => perm.startsWith("edit."));
+
+/**
+ * Whether the caller may see a script with this summary: who writes its kind,
+ * or who edits its style (Edit's list offers it to them to start the edit).
+ * `undefined`: a script the cloud doesn't list yet (its first upload), seen by
+ * anyone who writes or edits at all.
+ */
+export function mayReadScript(summary: unknown, found: Caller): boolean {
+  const grants = grantsOf(found);
+  if (found.kind !== "person") return false;
+  if (grants.admin) return true;
+  if (summary === undefined) return anyWork(grants) || editsAny(grants);
+  if (grants.perms.has(scriptWork(summary))) return true;
+  const style = scriptEditStyle(summary);
+  return style === null ? editsAny(grants) : grants.perms.has(`edit.${style}`);
+}
+
+/** Whether the caller may change a script with this summary (`undefined`: not in the cloud yet, anyone who writes scripts). */
+export function mayWriteScript(summary: unknown, grants: Grants): boolean {
+  if (grants.admin) return true;
+  return summary === undefined ? anyWork(grants) : grants.perms.has(scriptWork(summary));
+}
+
+/** The script a key belongs to: its body and files, or its review's. Null for Script mode's shared keys (the lessons, reports). */
+export function scriptOfKey(key: string): string | null {
+  return /^writer\/(?:scripts|reviews)\/([^/]+)\//.exec(key)?.[1] ?? null;
+}
+
+/** Scripts' summaries as the cloud last said, briefly: Script mode presigns a script's files many times a minute. */
+const scriptRows = new Map<string, { summary: unknown; at: number }>();
+const SCRIPT_ROW_MS = 30_000;
+
+/** A script's summary in the cloud (`undefined`: no such script yet), or null when the cloud couldn't say (refused, never guessed). */
+export async function scriptSummary(env: CloudEnv, scriptId: string): Promise<{ summary: unknown } | null> {
+  const id = `${env.CONVEX_URL ?? ""}\n${scriptId}`;
+  const kept = scriptRows.get(id);
+  if (kept !== undefined && Date.now() - kept.at < SCRIPT_ROW_MS) return { summary: kept.summary };
+  if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) return null;
+  const row = await convexValue(env, "query", "writer:getScript", { scriptId });
+  if (row === undefined) return null;
+  const summary = row === null || (isObject(row) && row.deletedAt !== undefined && row.deletedAt !== null) ? undefined : isObject(row) ? (row.summary ?? {}) : undefined;
+  if (scriptRows.size > 5000) scriptRows.clear();
+  scriptRows.set(id, { summary, at: Date.now() });
+  return { summary };
+}
+
+/** Tests: forget the summaries kept. */
+export function forgetScripts(): void {
+  scriptRows.clear();
+}
+
+/** Why the caller may not read (or write) the script `key` belongs to, as a response; null when they may. */
+export async function scriptKeyRefused(env: CloudEnv, found: Caller, key: string, write: boolean): Promise<Response | null> {
+  const scriptId = scriptOfKey(key);
+  if (scriptId === null) return null;
+  const grants = grantsOf(found);
+  if (grants.admin) return null;
+  const known = await scriptSummary(env, scriptId);
+  if (known === null) return json(502, { error: "Convex couldn't say whose script that is; Edit asks again." });
+  const allowed = write ? mayWriteScript(known.summary, grants) : mayReadScript(known.summary, found);
+  return allowed ? null : json(403, { error: SCRIPT_UNAVAILABLE });
+}
+
 function wellFormed(key: string): boolean {
   if (key.length > 1024 || /[\u0000-\u001f\u007f\\]/.test(key)) return false;
   return key.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
@@ -149,6 +236,16 @@ export async function writerCloud(request: Request, url: URL, env: CloudEnv, fou
   } else if (writes) {
     if (touched.includes(LESSONS_KEY) && !has(grants, "review.lessons")) return refuse("change the shared lessons");
     if (!anyWork(grants)) return refuse("write scripts");
+  }
+  // A script's own files (its body, its review's): only for who may see it, and written only by who writes its kind.
+  if (route === "r2/list" && !grants.admin) {
+    const prefix = typeof body.prefix === "string" ? body.prefix : "";
+    if (scriptOfKey(prefix) === null) return refuse("list Script mode's files");
+    touched.push(prefix);
+  }
+  for (const key of new Set(touched.filter((one): one is string => typeof one === "string"))) {
+    const refused = await scriptKeyRefused(env, found, key, writes);
+    if (refused !== null) return refused;
   }
   const r2 = r2Config(env);
   if (!r2) return json(503, { error: "Cloud storage is not configured on the relay yet." });
@@ -281,7 +378,22 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     const work = summary === undefined ? null : workOf(summary);
     if (summary !== undefined && !(work ? has(grants, work) : anyWork(grants))) return refuse("change scripts of that kind");
     if (summary === undefined && !anyWork(grants)) return refuse("write scripts");
+    // A commit over a script already in the cloud: only one of the writer's own kind (never another kind's, retitled as theirs).
+    if (body.path === "writer:commitScript") {
+      if (typeof args.scriptId !== "string") return json(400, { error: "args.scriptId must be a string." });
+      const known = await scriptSummary(env, args.scriptId);
+      if (known === null) return json(502, { error: "Convex: couldn't look the script up." });
+      if (!mayWriteScript(known.summary, grants)) return refuse("change scripts of that kind");
+    }
   }
+  // A script's review, by its script: seen by who may see the script, shared and fixed by who writes it.
+  if (body.path.startsWith("reviews:") && !grants.admin && typeof args.sourceId === "string") {
+    const known = await scriptSummary(env, args.sourceId);
+    if (known === null) return json(502, { error: "Convex: couldn't look the script up." });
+    const allowed = needs === "read" ? mayReadScript(known.summary, found) : mayWriteScript(known.summary, grants);
+    if (!allowed) return json(403, { error: SCRIPT_UNAVAILABLE });
+  }
+  if (body.path === "writer:getScript" && typeof args.scriptId !== "string") return json(400, { error: "args.scriptId must be a string." });
   // A script's review is always Writer's from here, whatever the caller says.
   if (body.path.startsWith("reviews:")) args.app = "writer";
   // Who started a script comes from the verified sign-in, never from the caller (commitScript keeps it on create only).
@@ -308,10 +420,36 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     parsed = undefined;
   }
   // Convex answered: its own shape, as 200 ({status: "success", value} | {status: "error", errorMessage, errorData}).
-  if (isObject(parsed) && parsed.status === "success") return json(200, { status: "success", value: parsed.value ?? null });
+  if (isObject(parsed) && parsed.status === "success") {
+    const value = await readable(body.path, parsed.value ?? null, env, found);
+    return value instanceof Response ? value : json(200, { status: "success", value });
+  }
   if (isObject(parsed) && parsed.status === "error") return json(200, { status: "error", errorMessage: String(parsed.errorMessage ?? "unknown error").trim(), errorData: parsed.errorData });
   const message = isObject(parsed) && parsed.code ? `${parsed.code}: ${parsed.message ?? ""}` : text.slice(0, 500) || `HTTP ${answer.status}`;
   return json(answer.ok ? 502 : answer.status, { error: `Convex: ${message}` });
+}
+
+/**
+ * What a read gives back, left to what the caller may see: the scripts list
+ * without other kinds' scripts, a script of another kind refused, and the
+ * script reviews' lists (`reviews:open`, `reviews:changes`) without other
+ * kinds' reviews and notes. An admin sees everything. Also Edit's route's
+ * (cloud.ts: the handoff's script reads).
+ */
+export async function readable(path: string, value: unknown, env: CloudEnv, found: Caller): Promise<unknown> {
+  if (grantsOf(found).admin) return value;
+  if (path === "writer:listScripts") return Array.isArray(value) ? value.filter((row) => isObject(row) && mayReadScript(row.summary ?? {}, found)) : value;
+  if (path === "writer:getScript") return isObject(value) && !mayReadScript(value.summary ?? {}, found) ? json(403, { error: SCRIPT_UNAVAILABLE }) : value;
+  if (path === "reviews:open" || path === "reviews:changes") {
+    const rows = await convexValue(env, "query", "writer:listScripts", {});
+    if (!Array.isArray(rows)) return json(502, { error: "Convex couldn't list the scripts to see whose reviews these are; Edit asks again." });
+    const summaries = new Map(rows.filter(isObject).map((row) => [String(row.scriptId ?? ""), row.summary ?? {}]));
+    // A review whose script isn't listed (deleted since) stays: there's nothing of another kind to keep from anyone.
+    const seen = (item: unknown) => !isObject(item) || typeof item.sourceId !== "string" || !summaries.has(item.sourceId) || mayReadScript(summaries.get(item.sourceId), found);
+    if (path === "reviews:open") return Array.isArray(value) ? value.filter(seen) : value;
+    return isObject(value) && Array.isArray(value.notes) ? { ...value, notes: value.notes.filter(seen) } : value;
+  }
+  return value;
 }
 
 /** One Convex call's value as the relay itself (undefined when it failed). */

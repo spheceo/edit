@@ -462,10 +462,10 @@ export async function soundOf(context: Pick<Context, "originalUrl">, layout: Lay
 const sounding = new Semaphore(2);
 
 /** Makes piece `n`'s sound into its fragment file. */
-async function makeAudio(context: Context, base: string, layout: Layout, n: number, from?: { url: string; out: string }): Promise<string> {
+async function makeAudio(context: Context, base: string, layout: Layout, n: number, from?: { url: string; out: string }, signal?: AbortSignal): Promise<string> {
   if (layout.audio === null) throw new Error("no sound to make");
   const began = performance.now();
-  const own = await sounding.with(() => soundOf(context, layout, n, undefined, from?.url));
+  const own = await sounding.with(() => soundOf(context, layout, n, signal, from?.url));
   const [first] = audioFramesOf(layout, n);
   const out = from?.out ?? context.local(audioKey(base, n));
   fs.mkdirSync(parent(out)!, { recursive: true });
@@ -660,20 +660,24 @@ export interface FirstPiece {
  */
 export function startFirst(context: Context, path: string, probe: Probe): FirstPiece {
   const layout = plan("", "", probe.duration, probe.fps, probe.width, probe.height, probe.has_audio);
-  const picture = making.with(() => makeVideo(context, "(first piece)", layout, 0, null, undefined, { url: path, out: scratch(context, "m4s") }), true);
-  const sound = layout.audio === null ? Promise.resolve(null) : makeAudio(context, "(first piece)", layout, 0, { url: path, out: scratch(context, "m4s") });
+  // Not wanted after all: its FFmpeg stopped, the encoder free at once (a Drive import's ran 12 s for nothing).
+  const stop = new AbortController();
+  const picture = making.with(() => makeVideo(context, "(first piece)", layout, 0, null, stop.signal, { url: path, out: scratch(context, "m4s") }), true);
+  const sound = layout.audio === null ? Promise.resolve(null) : makeAudio(context, "(first piece)", layout, 0, { url: path, out: scratch(context, "m4s") }, stop.signal);
   const made = Promise.all([picture, sound]).then(([picture, sound]) => ({ picture, sound }));
   made.catch(() => {});
   return {
     made,
-    discard: () =>
+    discard: () => {
+      stop.abort(new Error("the first piece isn't wanted"));
       void made.then(
         ({ picture, sound }) => {
           fs.rmSync(picture.file, { force: true });
           if (sound !== null) fs.rmSync(sound, { force: true });
         },
         () => {},
-      ),
+      );
+    },
   };
 }
 

@@ -12,6 +12,7 @@ import * as diag from "../diag.ts";
 import { inArea, runPromise } from "../effect/runtime.ts";
 import * as service from "../effect/service.ts";
 import * as endpoints from "../endpoints.ts";
+import * as ranged from "../ranged_download.ts";
 
 const API = "https://www.googleapis.com/drive/v3";
 const MAX_ENTRIES = 1_000;
@@ -246,6 +247,24 @@ const sizeOf = (path: string) => (fs.existsSync(path) ? fs.statSync(path).size :
 const downloadTry = (token: string, recording: Recording, dest: string, onBytes: (bytes: number) => void) =>
   Effect.gen(function* () {
     const have = sizeOf(dest);
+    // A big one in parts at once (ranged_download.ts: 70 MB/s from Drive, one connection 12-16): begun so, or begun now.
+    if (recording.size >= ranged.ranged.from && (ranged.partlyDone(dest) || have === 0)) {
+      return yield* Effect.tryPromise({
+        try: (signal) =>
+          ranged.download({
+            url: endpoints.google(`${API}/files/${recording.id}?alt=media&supportsAllDrives=true`),
+            size: recording.size,
+            dest,
+            fetch: (url, init) => fetch(url, { ...init, headers: { ...(init.headers as Record<string, string>), authorization: `Bearer ${token}` } }),
+            onBytes,
+            signal,
+          }),
+        catch: (error) =>
+          error instanceof ranged.Refused
+            ? new DriveNotShared({ message: `Drive won't let Repack's account download ${recording.name}.` })
+            : new service.ServiceUnreachable({ service: SERVICE, message: diag.messageOf(error) }),
+      });
+    }
     if (recording.size > 0 && have >= recording.size) return;
     let heard = Date.now();
     const pull = Effect.tryPromise({
@@ -322,7 +341,8 @@ export const downloading = Effect.fn("drive.download")(function* (token: string,
     Effect.catchIf(service.isTemporary, () => Effect.void),
   );
   const size = sizeOf(dest);
-  if (recording.size > 0 && size < recording.size) {
+  // In parts, the file reaches its size before every part is in: the parts noted say it isn't done.
+  if (recording.size > 0 && (size < recording.size || ranged.partlyDone(dest))) {
     return yield* new DownloadShort({
       message: `${recording.name} came down short (${Math.floor(size / 1_000_000)} of ${Math.floor(recording.size / 1_000_000)} MB).${problem === "" ? "" : ` Last problem: ${problem}.`}`,
     });

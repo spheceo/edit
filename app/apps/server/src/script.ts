@@ -26,6 +26,7 @@ import { NARRATION } from "./model.ts";
 import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freeTrack, freshId, insertTime, marksCut, mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL, REUSED_SCRIPT_NOTE, reusedScriptBlock } from "./project.ts";
 import { fileName, fileStem, extension as pathExtension, join, parent } from "./paths.ts";
 import { byteLength, charCount, display, f32, isAlphanumeric, isWhitespace, parseHex, round, splitWhitespace, takeChars, trim } from "./rust.ts";
+import * as ranged from "./ranged_download.ts";
 import * as seams from "./seams.ts";
 import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
@@ -1407,10 +1408,20 @@ export function download(
         return 0;
       }
     };
-    const failure = await fetchResuming(url, part, () => progress(sizeOf(), head.total, name));
+    // A big one in parts at once (ranged_download.ts: 70 MB/s from Drive here, one connection 12-16), begun so or begun now.
+    let failure: string | null;
+    if (head.total !== null && head.total >= ranged.ranged.from && (ranged.partlyDone(part) || sizeOf() === 0)) {
+      const total = head.total;
+      failure = await ranged.download({ url, size: total, dest: part, fetch: googleFetch, onBytes: (bytes) => progress(bytes, total, name) }).then(
+        () => null,
+        (error: unknown) => diag.messageOf(error),
+      );
+    } else {
+      failure = await fetchResuming(url, part, () => progress(sizeOf(), head.total, name));
+    }
     const size = sizeOf();
     if (failure !== null) throw new Error(`Download stopped (${failure}). It resumes where it left off when you retry.`);
-    if (head.total !== null && head.total !== size) throw new Error("The download ended early. Retry to resume it.");
+    if ((head.total !== null && head.total !== size) || ranged.partlyDone(part)) throw new Error("The download ended early. Retry to resume it.");
     progress(size, head.total, name);
     const path = join(dir, name);
     fs.renameSync(part, path);

@@ -2,11 +2,13 @@
 // something else, dropping a download half-way, going quiet, and coming up short.
 
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 
 import { kindOf } from "../../src/effect/service.ts";
+import { ranged } from "../../src/ranged_download.ts";
 import * as drive from "../../src/writer/drive.ts";
 
 const VIDEO = Buffer.alloc(200_000, 7);
@@ -169,4 +171,35 @@ test("a copy already here of the right size is used only if it's Drive's file; D
   expect(seen.length).toBe(0);
   // Drive keeping no MD5: the size is all there is.
   expect(await drive.intact("token", recording, join(dir, "missing.mp4"))).toBe(false);
+});
+
+test("a big recording comes down in parts at once, a failed part asked again, and is checked against Drive's MD5", async () => {
+  const was = { ...ranged };
+  Object.assign(ranged, { from: 100_000, part: 30_000, parallel: 3, sleep: async () => {} });
+  try {
+    const md5 = createHash("md5").update(VIDEO).digest("base64");
+    let failedOnce = false;
+    handler = (request) => {
+      const url = new URL(request.url);
+      // Drive's MD5, asked once it's all down.
+      if (!url.searchParams.has("alt")) return Response.json({ md5Checksum: Buffer.from(md5, "base64").toString("hex") });
+      const [, a, b] = /bytes=(\d+)-(\d+)/.exec(request.headers.get("range") ?? "")!;
+      if (Number(a) === 60_000 && !failedOnce) {
+        failedOnce = true;
+        return new Response("busy", { status: 503 });
+      }
+      const end = Math.min(Number(b), VIDEO.length - 1);
+      return new Response(VIDEO.subarray(Number(a), end + 1), { status: 206, headers: { "content-range": `bytes ${a}-${end}/${VIDEO.length}` } });
+    };
+    const dest = join(dir, "parted.mp4");
+    await drive.download("token", recording, dest);
+    expect(Buffer.compare(fs.readFileSync(dest), VIDEO)).toBe(0);
+    const parts = seen.filter((request) => new URL(request.url).searchParams.has("alt"));
+    // Seven parts of 30 kB, the one at 60 kB twice.
+    expect(parts.length).toBe(8);
+    expect(parts.every((request) => request.headers.get("authorization") === "Bearer token")).toBe(true);
+    expect(fs.existsSync(`${dest}.parts`)).toBe(false);
+  } finally {
+    Object.assign(ranged, was);
+  }
 });

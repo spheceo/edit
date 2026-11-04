@@ -32,6 +32,7 @@ import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
 import { importing } from "./drive_import.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
+import { memorySummary } from "./export_capacity.ts";
 import * as ideaRuns from "./ideas/run.ts";
 import * as thumbnailRuns from "./thumbnails/run.ts";
 import * as editTime from "./edit_time.ts";
@@ -285,7 +286,7 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
     ...(needs.length > 0 ? needs : ["nothing found"]),
     "",
     "Machine:",
-    `disk: ${free === null ? "?" : gb(free)} free · memory: ${gb(os.freemem())} free of ${gb(os.totalmem())} · load ${os.loadavg()[0]!.toFixed(2)} on ${os.availableParallelism()} cores`,
+    `disk: ${free === null ? "?" : gb(free)} free · memory: ${memorySummary()} · load ${os.loadavg()[0]!.toFixed(2)} on ${os.availableParallelism()} cores`,
     `signed in: ${account.person?.email ?? "nobody"}${account.admin ? " (admin)" : ""} · capabilities: ${(account.perms ?? []).join(", ") || "none"}`,
     `relay: ${relayOk ? `answers in ${relayMs} ms` : "doesn't answer"} (${relay.url()})`,
     ...setup.map((check) => `${check.ok ? "ok" : "NOT READY"}: ${check.title}`),

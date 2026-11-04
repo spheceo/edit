@@ -595,3 +595,9 @@ test("short of room, kept copies go older first: each project's newest stays whi
     expect(there()).toEqual(["a2", "c1", "d1"]);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test("a report's memory is the share macOS calls available, not the free pages", () => {
+  const given = { chip: "Apple M4 Pro", totalBytes: 25.8e9, cores: 12, availablePercent: () => 46, load: () => 1 };
+  expect(capacity.memorySummary(given)).toBe("46% available of 25.8 GB");
+  expect(capacity.memorySummary({ ...given, availablePercent: () => null })).toBe("? available of 25.8 GB");
+});

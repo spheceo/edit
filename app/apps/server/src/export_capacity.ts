@@ -51,6 +51,12 @@ export const machine: Machine = {
   load: () => os.loadavg()[0] ?? 0,
 };
 
+/** Memory as a teammate's report says it: macOS's own available share, never the free-pages count (it reads "0.1 GB free" on a Mac with half its memory to give: JJ's report, Nov 4). */
+export function memorySummary(given: Machine = machine): string {
+  const percent = given.availablePercent();
+  return `${percent === null ? "?" : `${percent}%`} available of ${(given.totalBytes / 1e9).toFixed(1)} GB`;
+}
+
 function chipName(): string {
   if (process.platform === "darwin") {
     const read = spawnSync("sysctl", ["-n", "machdep.cpu.brand_string"], { encoding: "utf8", timeout: 2000 });

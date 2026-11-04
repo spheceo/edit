@@ -24,11 +24,11 @@ import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { AsideStatus, BackMark, BY, Category, CATEGORY, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, LENGTH, LengthCell, layoutFor, NAME, PILL, ROW, RowButtons, StatusCell, TableShape, Updated, useAside, withAside } from "./HomeTable";
 import { HomeSidebar, nameOf, OpenSidebar, placeOf, placeOfSection, PLACES, useSidebarOpen, type Place as Spot, type Section, type Where } from "./HomeSidebar";
 import { ThumbnailGrid, useMakeThumbnail } from "../thumbnails/list";
-import { Tile } from "./Logo";
+import { Loader, Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
 import { UpdateButton } from "./UpdateButton";
-import { Button, ConfirmDialog, cx, Modal, Spinner, spring } from "./ui";
+import { Button, ConfirmDialog, cx, Modal, Pulse, spring } from "./ui";
 import { DevBadge, DevControl, promoteItem, useDevTools, useShowDev } from "./DevProjects";
 
 // Every project is 1080p at 30 fps.
@@ -474,8 +474,8 @@ export function Home() {
                   <Plus size={15} strokeWidth={2.2} /> New idea
                 </Button>
               ) : inThumbnails ? (
-                <Button variant="light" disabled={thumbnail.making} onClick={thumbnail.make}>
-                  {thumbnail.making ? <Spinner size={13} /> : <Plus size={15} strokeWidth={2.2} />} New thumbnail
+                <Button variant="light" busy={thumbnail.making} onClick={thumbnail.make}>
+                  <Plus size={15} strokeWidth={2.2} /> New thumbnail
                 </Button>
               ) : (
                 <Button variant="light" onClick={() => setCreating(true)}>
@@ -535,7 +535,7 @@ export function Home() {
             )}
             {loading || (inIdeas && ideasHome === null && ideasError === null) ? (
               <div className="mt-20 flex justify-center">
-                <Spinner size={20} />
+                <Loader size={32} />
               </div>
             ) : nothingAtAll ? (
               <FirstEdit cloudOn={Boolean(cloud?.on)} onNew={() => setCreating(true)} />
@@ -1026,7 +1026,7 @@ function StateChips({ state, projectId, onChanged, editor = null }: { state?: Pr
           title={state.importing.error ?? `Importing: ${state.importing.state}`}
           className={cx(CHIP, "tabular", importStuck(state.importing) ? "text-warning" : "text-info")}
         >
-          {importStuck(state.importing) ? <TriangleAlert size={12} className="shrink-0" /> : <Spinner size={12} />}
+          {importStuck(state.importing) ? <TriangleAlert size={12} className="shrink-0" /> : <Pulse size={12} />}
           <span className="truncate">{importStuck(state.importing) ? "Import stuck" : `Importing ${importShare(state.importing)}`}</span>
         </span>
       ),
@@ -1627,18 +1627,18 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
           </span>
         ) : importing ? (
           <span className={cx(CHIP, "tabular", importing.stopped ? "text-warning" : "text-info")}>
-            {importing.stopped ? <TriangleAlert size={12} className="shrink-0" /> : <Spinner size={12} />}
+            {importing.stopped ? <TriangleAlert size={12} className="shrink-0" /> : <Pulse size={12} />}
             <span className="truncate">{importing.word}</span>
           </span>
         ) : writing ? (
           <span className={cx(CHIP, "text-info")}>
-            <Spinner size={12} />
+            <Pulse size={12} />
             Writing
           </span>
         ) : sharing ? (
           // Shared for review on its own, as an edit's share is (JJ, Nov 1): other scripts can be shared meanwhile.
           <span className={cx(CHIP, "text-info")} title="Its footage is going up to the review link">
-            <Spinner size={12} />
+            <Pulse size={12} />
             Sharing
           </span>
         ) : failed !== null ? (

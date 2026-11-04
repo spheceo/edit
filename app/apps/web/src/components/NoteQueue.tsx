@@ -4,14 +4,14 @@
 // click goes there, × takes a queued one away. Notes with the agent say so
 // until it answers them; they go on the next message, whatever it says.
 
-import { Loader2, Square, X } from "lucide-react";
+import { Square, X } from "lucide-react";
 
 import type { AppNote } from "../lib/api";
 import { queued, removeNote, useNotes } from "../lib/notes";
 import { preview } from "../lib/playback";
 import { useEditor } from "../lib/store";
 import { rate } from "../lib/types";
-import { cx } from "./ui";
+import { cx, Pulse } from "./ui";
 
 /** m:ss of a frame. */
 export function clock(frame: number, fps: number): string {
@@ -50,7 +50,7 @@ function Chip({ note, fps }: { note: AppNote; fps: number }) {
         onClick={() => preview.seek(note.now)}
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
       >
-        {sent ? <Loader2 size={11} className="shrink-0 animate-spin text-faint" /> : <span className="size-1.5 shrink-0 rounded-full bg-warning" />}
+        {sent ? <Pulse size={11} className="text-faint" /> : <span className="size-1.5 shrink-0 rounded-full bg-warning" />}
         <span className="shrink-0 font-mono text-[11px] text-muted tabular">
           {clock(note.now, fps)}
           {note.nowEnd !== null && `–${clock(note.nowEnd, fps)}`}

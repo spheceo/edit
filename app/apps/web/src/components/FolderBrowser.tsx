@@ -7,7 +7,8 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { api, type FsEntry, type FsListing } from "../lib/api";
 import { formatBytes } from "../lib/time";
-import { Button, cx, DialogTitle, Modal, Spinner } from "./ui";
+import { Button, cx, DialogTitle, Modal } from "./ui";
+import { Loader } from "./Logo";
 
 const AUDIO = /\.(wav|mp3|m4a|aac|flac|aif|aiff|ogg|opus)$/i;
 
@@ -81,7 +82,7 @@ export function FolderBrowser({
           {problem && <p className="px-2 py-1.5 text-[12px] text-danger">{problem}</p>}
           {listing === null && !problem && (
             <div className="flex h-full items-center justify-center text-muted">
-              <Spinner />
+              <Loader size={28} />
             </div>
           )}
           {listing !== null && entries.length === 0 && <p className="p-6 text-center text-[13px] text-muted">{empty}</p>}
@@ -188,8 +189,7 @@ function Picking({ title, detail, start, confirm, cancel, onClose, onPick, aside
           <Button variant="ghost" disabled={busy} onClick={onClose}>
             {cancel}
           </Button>
-          <Button variant="primary" disabled={busy || here === ""} onClick={() => pick(here)}>
-            {busy && <Spinner size={13} />}
+          <Button variant="primary" busy={busy} disabled={here === ""} onClick={() => pick(here)}>
             {confirm}
           </Button>
         </div>

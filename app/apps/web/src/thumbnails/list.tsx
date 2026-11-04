@@ -9,10 +9,11 @@ import { useCallback, useEffect, useState } from "react";
 
 import { StartedBy } from "../components/StartedBy";
 import { openMenu, toggleMenu, type MenuItem } from "../components/ContextMenu";
-import { Button, ConfirmDialog, Spinner } from "../components/ui";
+import { Button, ConfirmDialog, Pulse } from "../components/ui";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { renderUrl, thumbnailsApi, type ThumbRow } from "../lib/thumbnails";
+import { Loader } from "../components/Logo";
 
 /** New thumbnail: makes one and opens it. */
 export function useMakeThumbnail(): { making: boolean; make: () => void } {
@@ -54,7 +55,7 @@ export function ThumbnailGrid({ making, onMake }: { making: boolean; onMake: () 
   const [deleting, setDeleting] = useState<ThumbRow | null>(null);
   const toastError = useEditor((state) => state.toastError);
   const menu = (row: ThumbRow): MenuItem[] => [{ label: "Delete thumbnail", danger: true, icon: <Trash2 size={14} />, onSelect: () => setDeleting(row) }];
-  if (rows === null) return <div className="flex h-full min-h-40 items-center justify-center text-[13px] text-muted">{problem ?? <Spinner size={20} />}</div>;
+  if (rows === null) return <div className="flex h-full min-h-40 items-center justify-center text-[13px] text-muted">{problem ?? <Loader size={32} />}</div>;
   if (rows.length === 0) {
     return (
       <div className="mt-[14vh] flex flex-col items-center text-center">
@@ -115,7 +116,7 @@ export function ThumbnailGrid({ making, onMake }: { making: boolean; onMake: () 
             </button>
             {(row.summary.run === "running" || row.summary.run === "queued") && (
               <span className="absolute top-2 left-2 flex max-w-[calc(100%-16px)] items-center gap-1.5 rounded-full bg-black/75 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm">
-                <Spinner size={10} /> <span className="truncate">{row.summary.step ?? "Working"}</span>
+                <Pulse size={10} /> <span className="truncate">{row.summary.step ?? "Working"}</span>
               </span>
             )}
           </div>

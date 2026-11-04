@@ -17,14 +17,25 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   /** primary: the one main action (red); light: a main action in white (Home's New project); subtle: secondary (an edge); ghost: none; danger: destructive among others (tinted); destructive: a dialog’s final destructive answer (solid red). */
   variant?: "primary" | "light" | "ghost" | "subtle" | "danger" | "destructive";
   size?: "sm" | "md" | "lg";
+  /**
+   * Working on what it was pressed for: its own background fills, again and
+   * again, until it's done (Sphe, Nov 4: no logo spinner in a button; "the
+   * background of the button filling up"). It can't be pressed meanwhile, and
+   * isn't greyed out as a disabled one is.
+   */
+  busy?: boolean;
 };
 
 // The spheceo kit’s buttons (design/kit/components.css .sp-btn).
-export function Button({ variant = "subtle", size = "md", className, ...props }: ButtonProps) {
+export function Button({ variant = "subtle", size = "md", busy = false, className, disabled, ...props }: ButtonProps) {
   return (
     <button
       {...props}
+      disabled={disabled && !busy}
+      aria-busy={busy || undefined}
+      aria-disabled={busy || undefined}
       className={cx(
+        busy && "button-busy pointer-events-none",
         "inline-flex items-center justify-center gap-1.5 border font-medium whitespace-nowrap transition-[background,border-color,color,opacity] duration-[120ms] ease-[cubic-bezier(.2,0,0,1)] disabled:pointer-events-none disabled:opacity-45",
         size === "sm" ? "h-7 rounded-md px-2.5 text-[12px]" : size === "lg" ? "h-10 rounded-lg px-4 text-[14px]" : "h-[34px] rounded-lg px-3.5 text-[13px]",
         variant === "primary" && "border-primary bg-primary text-white hover:border-primary-hover hover:bg-primary-hover",
@@ -353,17 +364,20 @@ export function Tabs<T extends string>({
   );
 }
 
-/** Something on its way, in a line or a button: Edit's loader at a small size (the user, Oct 30: "i like the spinner we have lets use that more"). */
-export function Spinner({ className, size = 14 }: { className?: string; size?: number }) {
+/**
+ * Something going on, in a line (a row's "Importing", "Loading frame…"): a dot
+ * in the text's colour that breathes, a ring going out from it. Edit's logo
+ * loader (Logo.tsx `Loader`) is for what fills a page or a panel; a button
+ * that's working fills (`busy`). Sphe, Nov 4: the logo "looks so off" small.
+ * `size` is the box it sits in, as the icon it stands in for.
+ */
+export function Pulse({ className, size = 14 }: { className?: string; size?: number }) {
+  const dot = Math.max(5, Math.round(size * 0.46));
   return (
-    <svg className={cx("edit-loader shrink-0 overflow-visible", className)} viewBox="0 0 64 64" width={size} height={size} aria-hidden>
-      <rect className="loader-clip" x="8" y="16" width="46" height="9.5" rx="3" fill="#5b8cff" />
-      <rect className="loader-clip loader-clip-2" x="8" y="29" width="30" height="9.5" rx="3" fill="#ff4f9a" />
-      <rect className="loader-clip loader-clip-3" x="8" y="42" width="46" height="9.5" rx="3" fill="#ffc23d" />
-      <g className="loader-head">
-        <path d="M41.5 8h7a.5.5 0 0 1 .5.5v3.4a1 1 0 0 1-.3.7L46 15.4V55a1 1 0 0 1-2 0V15.4l-2.7-2.8a1 1 0 0 1-.3-.7V8.5a.5.5 0 0 1 .5-.5z" fill="#fff" />
-      </g>
-    </svg>
+    <span role="status" aria-label="Working" className={cx("relative inline-flex shrink-0 items-center justify-center", className)} style={{ width: size, height: size }}>
+      <span className="pulse-ring absolute rounded-full bg-current" style={{ width: dot, height: dot }} />
+      <span className="pulse-dot relative rounded-full bg-current" style={{ width: dot, height: dot }} />
+    </span>
   );
 }
 
@@ -682,8 +696,7 @@ export function ConfirmDialog({
           <Button variant="subtle" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant={tone} disabled={busy} onClick={onConfirm}>
-            {busy && <Spinner size={13} />}
+          <Button variant={tone} busy={busy} onClick={onConfirm}>
             {confirm}
           </Button>
         </DialogActions>

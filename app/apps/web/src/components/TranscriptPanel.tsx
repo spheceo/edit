@@ -9,7 +9,7 @@ import type { Project, Transcript } from "../lib/types";
 import { toggleMenu } from "./ContextMenu";
 import { displayNames } from "./MediaPanel";
 import { ProblemView } from "./ProblemView";
-import { Button, cx, Spinner } from "./ui";
+import { Button, cx, Pulse } from "./ui";
 import { rate } from "../lib/types";
 
 /** Transcripts by `${project}/${media}`, loaded once each. */
@@ -315,7 +315,7 @@ export function TranscriptPanel() {
                   </span>
                   {stage === "working" ? (
                     <span className="flex items-center gap-1.5 text-[11px] text-muted">
-                      <Spinner /> Transcribing
+                      <Pulse /> Transcribing
                     </span>
                   ) : (
                     <Button size="sm" variant="ghost" onClick={() => void start(media.id)}>

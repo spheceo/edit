@@ -5,7 +5,7 @@
 import { ArrowUpRight, CircleAlert, ExternalLink, Eye, Lightbulb, MessageSquare, Send, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { Button, cx, DialogActions, DialogTitle, Field, Modal, Spinner, Switch, Tabs, TextArea, TextField } from "../components/ui";
+import { Button, cx, DialogActions, DialogTitle, Field, Modal, Pulse, Switch, Tabs, TextArea, TextField } from "../components/ui";
 import { AsideStatus, BackMark, Category, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LengthCell, NAME, ROW, RowButtons, StatusCell, Updated, useAside, withAside } from "../components/HomeTable";
 import { WORKSPACE_NAMES, type Workspace } from "@edit/types/ideas";
 import { ideasApi, NICHE, viewsLabel, type ChangeCard, type IdeaRow, type IdeasHome } from "../lib/ideas";
@@ -57,7 +57,7 @@ function Status({ row }: { row: IdeaRow }) {
   if (summary.run === "running" || summary.run === "queued")
     return (
       <span className={cx(CHIP, "max-w-full text-info")} title={summary.step ?? undefined}>
-        <Spinner size={12} /> <span className="truncate">{summary.run === "queued" ? "Waiting" : (summary.step ?? "Repackaging")}</span>
+        <Pulse size={12} /> <span className="truncate">{summary.run === "queued" ? "Waiting" : (summary.step ?? "Repackaging")}</span>
       </span>
     );
   if (summary.status === "sent")
@@ -161,7 +161,7 @@ export function CardTableRow({ card, onOpened }: { card: ChangeCard; onOpened?: 
           <AsideStatus entry={aside.entry} />
         ) : (
           <span className={cx(CHIP, "text-warning")} title={last ? `${last.author}: ${last.text}` : card.list}>
-            {opening ? <Spinner size={12} /> : <MessageSquare size={12} />} Changes requested
+            {opening ? <Pulse size={12} /> : <MessageSquare size={12} />} Changes requested
           </span>
         )}
       </StatusCell>
@@ -299,8 +299,7 @@ export function NewIdea({ open, onClose, onMade }: { open: boolean; onClose: () 
           <Button variant="subtle" onClick={close} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={make} disabled={busy || count === 0}>
-            {busy && <Spinner size={13} />}
+          <Button variant="primary" onClick={make} busy={busy} disabled={count === 0}>
             {count > 1 ? `Repackage ${count}` : "Repackage"}
           </Button>
         </DialogActions>

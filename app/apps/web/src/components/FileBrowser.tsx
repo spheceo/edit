@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { api, useMachine, type FsListing } from "../lib/api";
 import { useEditor, clientId } from "../lib/store";
 import { FolderBrowser } from "./FolderBrowser";
-import { Button, Modal, Spinner } from "./ui";
+import { Button, Modal } from "./ui";
 
 /** Picks files on the machine running Edit (works the same over Tailscale). */
 export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -99,8 +99,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
                 spellCheck={false}
                 className="h-7 w-full min-w-0 rounded-md bg-raised px-2 text-[12px] text-fg ring-1 ring-line outline-none focus:ring-line-strong"
               />
-              <Button size="sm" variant="subtle" disabled={!driveLink.trim() || busy} type="submit">
-                {busy ? <Spinner /> : null}
+              <Button size="sm" variant="subtle" busy={busy} disabled={!driveLink.trim()} type="submit">
                 Download and import
               </Button>
             </form>
@@ -115,8 +114,7 @@ export function FileBrowser({ open, onClose }: { open: boolean; onClose: () => v
             <Button variant="ghost" onClick={onClose}>
               Cancel
             </Button>
-            <Button variant="primary" disabled={!picked.length || busy} onClick={() => void importPaths(picked)}>
-              {busy ? <Spinner /> : null}
+            <Button variant="primary" busy={busy} disabled={!picked.length} onClick={() => void importPaths(picked)}>
               Import{picked.length > 1 ? ` ${picked.length}` : ""}
             </Button>
           </div>

@@ -17,7 +17,7 @@ import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { ProblemView } from "./ProblemView";
-import { cx, IconButton, Spinner } from "./ui";
+import { cx, IconButton, Pulse } from "./ui";
 import { Loader } from "./Logo";
 import { rate } from "../lib/types";
 
@@ -189,7 +189,7 @@ export function Viewer() {
         )}
         {!error && framed && buffering && (
           <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
-            <Spinner size={12} /> Loading frame…
+            <Pulse size={12} /> Loading frame…
           </div>
         )}
         {!error && buffering && stuck && (

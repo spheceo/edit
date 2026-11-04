@@ -7,7 +7,7 @@
 // the editor's own chat (AgentPanel's turns and composer, the same components). One main action: send the idea to the
 // board, or update its card once the reviewers' changes are made.
 
-import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, Loader, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
@@ -17,12 +17,13 @@ import { picturesOnly, postFile } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { StartedBy } from "../components/StartedBy";
 import { toggleMenu } from "../components/ContextMenu";
-import { Button, ConfirmDialog, cx, DialogActions, DialogTitle, IconButton, Modal, Spinner } from "../components/ui";
+import { Button, ConfirmDialog, cx, DialogActions, DialogTitle, IconButton, Modal, Pulse } from "../components/ui";
 import { conversationEntries } from "../lib/agentTurns";
 import { footageIn, footageLine, WORKSPACE_NAMES, type IdeaFootage, type IdeaImage } from "@edit/types/ideas";
 import { chatImageUrl, ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
+import { Loader as EditLoader } from "../components/Logo";
 
 /** Home, on its Ideas section. */
 export function backToIdeas(): void {
@@ -129,7 +130,7 @@ export function IdeaScreen({ id }: { id: string }) {
       <div className="flex min-h-0 flex-1 pb-2">
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-y-auto">
           {page === null ? (
-            <div className="flex h-full items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
+            <div className="flex h-full items-center justify-center text-[13px] text-white/40">{missing ?? <EditLoader size={32} />}</div>
           ) : (
             <>
               <Notices page={page} busy={busy} onRepackage={(options) => void act("repackage it", () => ideasApi.repackage(id, options))} />
@@ -194,7 +195,7 @@ function Header({
           <span className="shimmer">{idea?.run?.step ?? "Claude is working"}</span>
         ) : saving === "saving" ? (
           <>
-            <Loader size={12} strokeWidth={2} className="animate-spin" /> Saving
+            <Pulse size={12} /> Saving
           </>
         ) : saving === "error" ? (
           <span className="text-red-300/70">Not saved</span>
@@ -239,8 +240,8 @@ function Header({
       )}
       {idea !== null &&
         (sent ? (
-          <Button size="sm" variant={asked ? "primary" : "subtle"} disabled={busy !== null || active || missing.length > 0} onClick={() => void onAct("update the card", () => ideasApi.updateCard(idea.id).then(({ labelled }) => toast(labelled ? "The card is updated and labelled Changes Made." : "The card is updated.", "info")))}>
-            {busy === "update the card" ? <Spinner size={12} /> : <RotateCw size={13} />} Update the card
+          <Button size="sm" variant={asked ? "primary" : "subtle"} busy={busy === "update the card"} disabled={busy !== null || active || missing.length > 0} onClick={() => void onAct("update the card", () => ideasApi.updateCard(idea.id).then(({ labelled }) => toast(labelled ? "The card is updated and labelled Changes Made." : "The card is updated.", "info")))}>
+            <RotateCw size={13} /> Update the card
           </Button>
         ) : (
           <Button size="sm" variant="primary" disabled={busy !== null || active || missing.length > 0} title={missing.length > 0 ? `Still needs ${missing.join(", ")}` : undefined} onClick={onSend}>
@@ -974,8 +975,8 @@ function SendDialog({ open, idea, onClose, onSent }: { open: boolean; idea: Idea
           <Button variant="subtle" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={send} disabled={busy || lanes.length === 0 || (idea.duplicate !== null && !anyway)}>
-            {busy ? <Spinner size={13} /> : <Send size={14} />} Send
+          <Button variant="primary" onClick={send} busy={busy} disabled={lanes.length === 0 || (idea.duplicate !== null && !anyway)}>
+            <Send size={14} /> Send
           </Button>
         </DialogActions>
       </div>

@@ -12,7 +12,8 @@ import { api, type StoredExport } from "../lib/api";
 import { onThisMac, showInFinder } from "../lib/files";
 import { useEditor } from "../lib/store";
 import { ago, formatBytes } from "../lib/time";
-import { Badge, Button, ConfirmDialog, cx, DialogTitle, IconButton, Modal, Spinner } from "./ui";
+import { Badge, Button, ConfirmDialog, cx, DialogTitle, IconButton, Modal } from "./ui";
+import { Loader } from "./Logo";
 
 /** The Settings row: how much the exports take, and the way into the list. */
 export function StorageSettings() {
@@ -109,7 +110,7 @@ function ExportFiles({ onClose }: { onClose: () => void }) {
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
         {files === null ? (
           <div className="flex h-full items-center justify-center">
-            <Spinner size={18} />
+            <Loader size={28} />
           </div>
         ) : files.length === 0 ? (
           <p className="p-8 text-center text-[13px] text-muted">No exports on this Mac.</p>

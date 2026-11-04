@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, type FoundArticle, type FoundImage } from "../lib/api";
 import { clientId, useEditor } from "../lib/store";
-import { Button, cx, IconButton, Modal, Spinner } from "./ui";
+import { Button, cx, IconButton, Modal } from "./ui";
+import { Loader } from "./Logo";
 
 type Tab = "new" | "kept" | "rejected" | "articles";
 
@@ -54,7 +55,7 @@ export function ResearchTile({ onOpen }: { onOpen: () => void }) {
   return (
     <button onClick={onOpen} title="Review images found for this project" className="group block w-full text-left">
       <div className="relative flex aspect-video items-center justify-center rounded-lg bg-raised ring-1 ring-line transition-[box-shadow] group-hover:ring-line-strong">
-        {collecting ? <Spinner /> : <Images size={22} strokeWidth={1.6} className="text-danger transition-transform duration-150 group-hover:scale-105" />}
+        {collecting ? <Loader size={28} /> : <Images size={22} strokeWidth={1.6} className="text-danger transition-transform duration-150 group-hover:scale-105" />}
         {waiting > 0 && (
           <span className="absolute top-1.5 right-1.5 rounded-full bg-playhead px-1.5 text-[10px] leading-4 font-semibold text-white tabular-nums">{waiting}</span>
         )}
@@ -243,8 +244,8 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
                 className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-faint"
               />
             </div>
-            <Button size="sm" type="submit" disabled={collecting || !query.trim()}>
-              {collecting ? <Spinner /> : "Search"}
+            <Button size="sm" type="submit" busy={collecting} disabled={!query.trim()}>
+              Search
             </Button>
           </form>
           {(tab === "new" || tab === "rejected") && counts[tab] > 0 && (
@@ -267,7 +268,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
           <div ref={grid} className="h-full overflow-y-auto p-3">
             {shown.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-muted">
-                {collecting ? <Spinner /> : <Images size={22} className="text-faint" />}
+                {collecting ? <Loader size={32} /> : <Images size={22} className="text-faint" />}
                 {collecting
                   ? "Searching and downloading…"
                   : tab === "new"

@@ -16,7 +16,7 @@ import { ChatDock } from "../components/ChatDock";
 import { attachFiles, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { toggleMenu } from "../components/ContextMenu";
-import { Button, cx, IconButton, Spinner, spring } from "../components/ui";
+import { Button, cx, IconButton, spring } from "../components/ui";
 import { conversationEntries, thumbActivity } from "../lib/agentTurns";
 import { saveFile } from "../lib/files";
 import { navigate } from "../lib/route";
@@ -25,6 +25,7 @@ import { useEditor } from "../lib/store";
 import { sourceUrl, thumbnailsApi, working, type Design, type OpenArtAccount, type OpenArtState, type Thumbnail, type ThumbComment, type ThumbRun, type ThumbVersion } from "../lib/thumbnails";
 import { drawThumbnail, type Context as DrawContext } from "@edit/types/thumbnail_render";
 import { captionShadow, HEIGHT, WIDTH } from "@edit/types/thumbnails";
+import { Loader } from "../components/Logo";
 
 // The caption faces ship with Edit (the server has them); Helvetica Neue, Arial Black and Impact are the Mac's own.
 let fontsAdded = false;
@@ -308,7 +309,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
       <div className="flex min-h-0 flex-1 pb-2 pl-2">
         <main className="flex min-w-0 flex-1 flex-col items-center gap-3 px-4 pt-2 pb-2">
           {thumb === null || design === null ? (
-            <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
+            <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Loader size={32} />}</div>
           ) : (
             <>
               <Stage canvas={canvas} empty={design.layers.length === 0} run={thumb.run}>
@@ -767,8 +768,8 @@ function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number 
           className="block w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-snug text-fg outline-none placeholder:text-faint"
         />
         <div className="flex items-center justify-end gap-1.5 pt-1">
-          <Button variant="light" size="sm" disabled={text.trim() === "" || saving} onClick={save}>
-            {saving ? <Spinner size={12} /> : "Comment"}
+          <Button variant="light" size="sm" busy={saving} disabled={text.trim() === ""} onClick={save}>
+            Comment
           </Button>
         </div>
       </motion.div>

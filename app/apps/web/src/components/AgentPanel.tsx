@@ -47,7 +47,6 @@ import {
   watchClaudeSupport,
   type AgentEntry,
 } from "../lib/agent";
-import { parseQuoted } from "../lib/chatQuotes";
 import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, shortSpan, thinkingWord, type Turn } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
 import { api, mediaUrl } from "../lib/api";
@@ -55,7 +54,8 @@ import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
 import { projectUploader } from "../lib/upload";
 import { useEditor } from "../lib/store";
-import { ChatComposer, QuoteView, SentFiles } from "./ChatComposer";
+import { ChatComposer, SentFiles } from "./ChatComposer";
+import { UserWords } from "./Quotes";
 import { NoteQueue } from "./NoteQueue";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, Modal } from "./ui";
@@ -298,22 +298,6 @@ export function ChatTurns({ turns, known, thinking }: { turns: Turn[]; known: Se
         <TurnView key={index} turn={turn} known={known} thinking={thinking} />
       ))}
     </div>
-  );
-}
-
-/** What was sent: its quotes, as quotes, then the words about them. */
-function UserWords({ text }: { text: string }) {
-  const { quotes, words } = parseQuoted(text);
-  if (quotes.length === 0) return text;
-  return (
-    <>
-      <span className="mb-1.5 flex flex-col gap-1.5 last:mb-0">
-        {quotes.map((one, index) => (
-          <QuoteView key={index} from={one.from} text={one.text} />
-        ))}
-      </span>
-      {words}
-    </>
   );
 }
 

@@ -13,7 +13,8 @@ import { AlertCircle, ArrowUp, FileText, Film, Image as ImageIcon, Music, Plus, 
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { create } from "zustand";
 
-import { parseQuoted, quotedMessage, quoteLabel, removeQuote, takeQuotes, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
+import { parseQuoted, quotedMessage, removeQuote, takeQuotes, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
+import { QuoteView } from "./Quotes";
 import { attachFiles, detachFile, takeFiles, uploading, useFilesOf, type Accept, type ChatFile, type FileKind, type Uploader } from "../lib/chatFiles";
 import { useSettled } from "../lib/settled";
 import { formatBytes } from "../lib/time";
@@ -287,16 +288,6 @@ export function ChatComposer({
         </div>
       </div>
     </form>
-  );
-}
-
-/** Quoted words with what they're from, in the composer and in the message sent. */
-export function QuoteView({ from, text, className }: { from: string; text: string; className?: string }) {
-  return (
-    <blockquote className={cx("min-w-0 flex-1 border-l-2 border-line-strong pl-2 text-[12px] leading-relaxed", className)}>
-      <span className="block text-[11px] text-faint">{quoteLabel(from)}</span>
-      <span className="block whitespace-pre-wrap text-muted">{text}</span>
-    </blockquote>
   );
 }
 

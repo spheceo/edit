@@ -779,7 +779,7 @@ async function reviewCopyFromChunks(cache: string, project: string, source: stri
   return true;
 }
 
-/** The review copy made whole from `source` (720p, its sound): picture and sound only. Also scripts/repair-review-copies.ts's. */
+/** The review copy made whole from `source` (720p, its sound): picture and sound only. */
 export async function reviewCopy(source: string, dest: string): Promise<void> {
   const partial = `${dest}.partial.mp4`;
   const common = ["-v", "error", "-nostdin", "-y", "-i", source, "-map_chapters", "-1", "-vf", "scale=-2:720", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"];

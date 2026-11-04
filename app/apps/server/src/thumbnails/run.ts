@@ -19,7 +19,7 @@ import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { checkStacked, describe, designOf, layerOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
+import { canonical, checkStacked, describe, designOf, layerOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import { sizeOf } from "./size.ts";
@@ -229,13 +229,6 @@ async function fileOf(session: Session, image: ThumbImage): Promise<string> {
   const path = join(session.folder, `${image.id}.${extension}`);
   if (!fs.existsSync(path)) fs.copyFileSync(await assets.localPath(session.context.cacheDir, image.key), path);
   return path;
-}
-
-/** A value as JSON with its keys in order: Convex keeps an object's keys sorted, so a design read back isn't written as it was saved. */
-export function canonical(value: unknown): string {
-  return JSON.stringify(value, (_key, inner: unknown) =>
-    inner !== null && typeof inner === "object" && !Array.isArray(inner) ? Object.fromEntries(Object.entries(inner as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) : inner,
-  );
 }
 
 /** The design drawn into the turn's folder (and, without the grid, kept as the thumbnail's render). */
@@ -526,15 +519,21 @@ export async function chat(context: Context, id: string, text: string, images: s
   if (asked === "" && images.length === 0) throw new Error("Write what you'd like.");
   if ([...asked].length > 4000) throw new Error("Keep the message under 4,000 characters.");
   if (runs.has(id)) throw new Error("Claude is already working on this thumbnail: wait for it, or stop it.");
-  await cloud.change(id, context.by, (thumb) => {
-    const other = thumb.run;
-    if (other !== null && (other.state === "running" || other.state === "queued") && other.holder !== context.holder && Date.now() - other.startedAt < 20 * 60_000) {
-      throw new Error(`Claude is working on this thumbnail on ${other.holder}: wait for it there.`);
-    }
-    thumb.run = { state: "queued", holder: context.holder, by: context.by, startedAt: Date.now(), step: "Waiting for a turn" };
-    thumb.chat = [...thumb.chat, { role: "you" as const, text: asked, at: Date.now(), by: context.by, ...(images.length > 0 ? { images } : {}) }].slice(-KEPT_TURNS);
-  });
+  // Taken before the cloud is written, so a second message sent at once finds it taken.
   runs.set(id, { turn: { text: "", trace: [], startedAt: Date.now() }, abort: new AbortController(), step: "Waiting for a turn" });
+  try {
+    await cloud.change(id, context.by, (thumb) => {
+      const other = thumb.run;
+      if (other !== null && (other.state === "running" || other.state === "queued") && other.holder !== context.holder && Date.now() - other.startedAt < 20 * 60_000) {
+        throw new Error(`Claude is working on this thumbnail on ${other.holder}: wait for it there.`);
+      }
+      thumb.run = { state: "queued", holder: context.holder, by: context.by, startedAt: Date.now(), step: "Waiting for a turn" };
+      thumb.chat = [...thumb.chat, { role: "you" as const, text: asked, at: Date.now(), by: context.by, ...(images.length > 0 ? { images } : {}) }].slice(-KEPT_TURNS);
+    });
+  } catch (error) {
+    runs.delete(id);
+    throw error;
+  }
   void work(context, id, asked || "Here are pictures for the thumbnail.", images);
 }
 

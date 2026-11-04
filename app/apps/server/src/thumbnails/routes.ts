@@ -14,11 +14,10 @@ import { readBytes, readJson, type RouteContext, type Router } from "../http/rou
 import { mayIdeas } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { designOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
+import { canonical, designOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
-import { canonical } from "./run.ts";
 import { sizeOf } from "./size.ts";
 
 type Context = RouteContext<App>;
@@ -186,11 +185,18 @@ export function routes(router: Router<App>): void {
         const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
           if (typeof body.title === "string") thumb.title = body.title.trim().slice(0, 120);
           if (typeof body.brief === "string") thumb.brief = body.brief.trim().slice(0, 600);
-          if (body.design !== undefined && sources !== null) record(thumb, designOf(body.design, thumb.design, sources), by());
+          if (body.design === undefined || sources === null) return;
+          // A layout that doesn't check out is the request's fault; the cloud failing isn't.
+          let next;
+          try {
+            next = designOf(body.design, thumb.design, sources);
+          } catch (error) {
+            throw bad(diag.messageOf(error));
+          }
+          record(thumb, next, by());
         });
         return json({ thumb, rev });
       } catch (error) {
-        if (error instanceof Error && !(error instanceof cloud.Missing) && !(error instanceof cloud.Conflict) && !(error instanceof ApiError) && body.design !== undefined) throw bad(error.message);
         failed(error);
       }
     })

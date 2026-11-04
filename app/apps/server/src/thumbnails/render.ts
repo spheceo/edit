@@ -34,7 +34,7 @@ html, body { margin: 0; background: #000; }
 ${rendererScript()}
 const pictures = new Map();
 function picture(url) {
-  if (!pictures.has(url)) pictures.set(url, new Promise((resolve) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => resolve(null); image.src = url; }));
+  if (!pictures.has(url)) pictures.set(url, new Promise((resolve) => { const image = new Image(); image.onload = () => resolve(image); image.onerror = () => { pictures.delete(url); resolve(null); }; image.src = url; }));
   return pictures.get(url);
 }
 const sourceUrl = (id, source) => source.startsWith("asset:") ? "/api/thumbnails/assets/" + encodeURIComponent(source.slice(6)) + "/file" : "/api/thumbnails/" + encodeURIComponent(id) + "/images/" + encodeURIComponent(source);
@@ -62,25 +62,69 @@ window.ready = true;
 </script></body></html>`;
 }
 
-type Browser = { child: ReturnType<typeof Bun.spawn>; socket: WebSocket; profile: string; call: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>; origin: string };
+type Browser = { child: ReturnType<typeof Bun.spawn>; socket: WebSocket; profile: string; call: (method: string, params?: Record<string, unknown>) => Promise<Record<string, unknown>>; origin: string; closed: boolean };
 
 let browser: Promise<Browser> | null = null;
 let idle: ReturnType<typeof setTimeout> | null = null;
 let queue: Promise<unknown> = Promise.resolve();
 
+/** The profiles' folder name: each Chrome drawing thumbnails runs in one of its own under the temp folder. */
+const PROFILE = "edit-thumbnail-";
+let swept = false;
+
+/**
+ * Chromes an Edit before this one left drawing (a restart that couldn't say
+ * goodbye: a crash, `bun --watch`, an update's exec): whatever runs on a
+ * thumbnail profile with nobody left to answer to is closed, its profile gone.
+ */
+function sweepOrphans(): void {
+  if (swept) return;
+  swept = true;
+  try {
+    const listed = Bun.spawnSync(["ps", "-axo", "pid=,ppid=,command="]).stdout.toString();
+    for (const line of listed.split("\n")) {
+      const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      if (match === null || match[2] !== "1" || !match[3]!.includes(`--user-data-dir=${join(os.tmpdir(), PROFILE)}`)) continue;
+      process.kill(Number(match[1]));
+      const dir = /--user-data-dir=(\S+)/.exec(match[3]!)?.[1];
+      if (dir !== undefined) fs.rmSync(dir, { recursive: true, force: true });
+      diag.info("thumbnails", `closed a drawing Chrome an earlier Edit left running (pid ${match[1]})`);
+    }
+  } catch (error) {
+    diag.warn("thumbnails", `looking for Chromes left running: ${diag.messageOf(error)}`);
+  }
+}
+
+/** The Chromes this Edit started and hasn't closed: leaving closes them (an exit handler can't wait on a promise). */
+const started = new Set<Browser["child"]>();
+process.on("exit", () => {
+  for (const child of started) child.kill();
+});
+
 async function launch(origin: string): Promise<Browser> {
   const binary = seams.broll.chrome();
   if (binary === null) throw new Error("Drawing a thumbnail needs Chrome installed.");
-  const profile = fs.mkdtempSync(join(os.tmpdir(), "edit-thumbnail-"));
+  sweepOrphans();
+  const profile = fs.mkdtempSync(join(os.tmpdir(), PROFILE));
   const child = Bun.spawn([binary, "--headless=new", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--mute-audio", "--hide-scrollbars", "--window-size=1400,900", "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+  started.add(child);
+  void child.exited.then(() => started.delete(child));
+  try {
+    return await connect(child, profile, origin);
+  } catch (error) {
+    // A Chrome that never got as far as drawing goes, with its profile: none is left running.
+    child.kill();
+    fs.rmSync(profile, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function connect(child: Browser["child"], profile: string, origin: string): Promise<Browser> {
   const until = Date.now() + 15_000;
   const portFile = join(profile, "DevToolsActivePort");
   while (!fs.existsSync(portFile) && Date.now() < until) await Bun.sleep(100);
   const port = Number(fs.existsSync(portFile) ? fs.readFileSync(portFile, "utf8").split("\n")[0] : 0);
-  if (!Number.isInteger(port) || port <= 0) {
-    child.kill();
-    throw new Error("Chrome didn't start for the thumbnail.");
-  }
+  if (!Number.isInteger(port) || port <= 0) throw new Error("Chrome didn't start for the thumbnail.");
   const tabs = (await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) })).json()) as { type: string; webSocketDebuggerUrl: string }[];
   const target = tabs.find((one) => one.type === "page");
   if (target === undefined) throw new Error("Chrome has no page for the thumbnail.");
@@ -113,10 +157,12 @@ async function launch(origin: string): Promise<Browser> {
     if (message.error) own.reject(new Error(message.error.message ?? "Chrome refused"));
     else own.resolve(message.result ?? {});
   };
+  // Its own: an older Chrome closing never forgets the one that replaced it.
+  const self = { closed: false };
   socket.onclose = () => {
+    self.closed = true;
     for (const one of pending.values()) one.reject(new Error("Chrome closed"));
     pending.clear();
-    browser = null;
   };
   const call = (method: string, params: Record<string, unknown> = {}) =>
     new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -137,7 +183,7 @@ async function launch(origin: string): Promise<Browser> {
     if (Date.now() > ready) throw new Error("The thumbnail page didn't load in Chrome.");
     await Bun.sleep(100);
   }
-  return { child, socket, profile, call, origin };
+  return Object.assign(self, { child, socket, profile, call, origin });
 }
 
 function close(): void {
@@ -160,12 +206,13 @@ export function draw(origin: string, id: string, design: Design, options: { grid
   const work = queue.then(async () => {
     if (idle !== null) clearTimeout(idle);
     for (let attempt = 0; ; attempt++) {
-      if (browser === null || (await browser.catch(() => null))?.origin !== origin) {
+      const warm = browser === null ? null : await browser.catch(() => null);
+      if (warm === null || warm.closed || warm.origin !== origin) {
         close();
         browser = launch(origin);
       }
       try {
-        const open = await browser;
+        const open = await browser!;
         const started = Date.now();
         const answer = await open.call("Runtime.evaluate", { expression: `window.render(${JSON.stringify(design)}, ${JSON.stringify(id)}, ${options.grid === true}, ${JSON.stringify(options.type ?? "image/png")})`, awaitPromise: true, returnByValue: true });
         const value = (answer.result as { value?: { data?: string; missing?: string[] } } | undefined)?.value;

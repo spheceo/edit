@@ -1,13 +1,12 @@
 import { expect, test } from "bun:test";
 
-import { designOf, labelOf, layerOf, makeVersion, record, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
-import { baseBrief, fresh, pickModel } from "../src/thumbnails/run.ts";
+import { canonical, designOf, labelOf, layerOf, makeVersion, record, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
+import { baseBrief, changed, fresh, pickModel } from "../src/thumbnails/run.ts";
 import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
 import { withStops } from "../src/thumbnails/cloud.ts";
 import { HOUSE_SHADOW, NO_ADJUST } from "@edit/types/thumbnails";
 import { adjustPixels, captionShadow, shadowMetrics, shownText, type Context } from "@edit/types/thumbnail_render";
-import { canonical, changed } from "../src/thumbnails/run.ts";
 import { sizeOf } from "../src/thumbnails/size.ts";
 
 const sources = new Set(["img1", "asset:bodycam-rec"]);

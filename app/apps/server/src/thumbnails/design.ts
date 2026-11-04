@@ -238,7 +238,7 @@ export function labelOf(before: Design, after: Design): string {
   const now = new Map(after.layers.map((one) => [one.id, one]));
   const added = after.layers.filter((one) => !was.has(one.id));
   const removed = before.layers.filter((one) => !now.has(one.id));
-  const changed = after.layers.filter((one) => was.has(one.id) && JSON.stringify(sorted(was.get(one.id))) !== JSON.stringify(sorted(one)));
+  const changed = after.layers.filter((one) => was.has(one.id) && canonical(was.get(one.id)) !== canonical(one));
   const parts = [
     ...added.map((one) => `added ${name(one)}`),
     ...removed.map((one) => `removed ${name(one)}`),
@@ -248,8 +248,12 @@ export function labelOf(before: Design, after: Design): string {
   return parts.length > 3 ? `${parts.slice(0, 2).join(", ")} and ${parts.length - 2} more` : parts.join(", ");
 }
 
-const sorted = (value: unknown): unknown =>
-  Array.isArray(value) ? value.map(sorted) : value !== null && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, inner]) => [key, sorted(inner)])) : value;
+/** A value as JSON with its keys in order: Convex keeps an object's keys sorted, so a design read back isn't written as it was saved. */
+export function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === "object" && !Array.isArray(inner) ? Object.fromEntries(Object.entries(inner as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) : inner,
+  );
+}
 
 /** How many steps back undo can go. */
 export const KEPT_STEPS = 40;
@@ -259,7 +263,7 @@ export const KEPT_STEPS = 40;
  * steps dropped, as any editor does). False when nothing changed.
  */
 export function record(thumb: Thumbnail, next: Design, by: string): boolean {
-  if (JSON.stringify(sorted(thumb.design)) === JSON.stringify(sorted(next))) return false;
+  if (canonical(thumb.design) === canonical(next)) return false;
   thumb.history = [...(thumb.history ?? []), { design: thumb.design, by, at: Date.now(), label: labelOf(thumb.design, next) }].slice(-KEPT_STEPS);
   thumb.future = [];
   thumb.design = next;

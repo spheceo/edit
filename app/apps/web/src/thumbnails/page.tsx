@@ -348,8 +348,7 @@ function Header({ thumb, running, commenting, onCommenting, onTitle, onDownload 
     setTitleWidth(Math.min(480, Math.max(56, text + 20)));
   }, [title]);
   return (
-    <header className="relative flex h-12 shrink-0 items-center gap-1.5 px-3">
-      <AnimatePresence>{running && <motion.div key="line" initial={{ opacity: 0 }} animate={{ opacity: 0.9 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }} className="working-line pointer-events-none absolute inset-x-0 bottom-0 h-px" />}</AnimatePresence>
+    <header className="flex h-12 shrink-0 items-center gap-1.5 px-3">
       <IconButton label="Thumbnails" onClick={() => navigate("/thumbnails")}>
         <ArrowLeft size={16} />
       </IconButton>
@@ -545,7 +544,9 @@ function Stage({ canvas, empty, run, children }: { canvas: React.RefObject<HTMLC
     const node = area.current;
     if (node === null) return;
     const observer = new ResizeObserver(() => {
-      const width = Math.min(node.clientWidth, (node.clientHeight * WIDTH) / HEIGHT);
+      // Inside the room kept under it for the working pill.
+      const height = node.clientHeight - parseFloat(getComputedStyle(node).paddingBottom || "0");
+      const width = Math.min(node.clientWidth, (height * WIDTH) / HEIGHT);
       setSize({ width, height: (width * HEIGHT) / WIDTH });
     });
     observer.observe(node);
@@ -554,7 +555,7 @@ function Stage({ canvas, empty, run, children }: { canvas: React.RefObject<HTMLC
   const doing = thumbActivity(run);
   const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0.5, ease: [0.2, 0, 0, 1] } } as const;
   return (
-    <div ref={area} className="relative flex min-h-0 w-full flex-1 items-center justify-center">
+    <div ref={area} className="relative flex min-h-0 w-full flex-1 items-center justify-center pb-4">
       {/* While Claude works: the page breathes behind the thumbnail. */}
       <AnimatePresence>{running && <motion.div key="aura" {...fade} className="pointer-events-none absolute -inset-x-4 -inset-y-2"><div className="working-aura" /></motion.div>}</AnimatePresence>
       <div style={{ width: size.width, height: size.height }} className="relative isolate shrink-0 rounded-xl select-none">
@@ -577,13 +578,16 @@ function Stage({ canvas, empty, run, children }: { canvas: React.RefObject<HTMLC
             <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-xl">
               <div className="working-sheen" />
               <div className="working-ring" />
-              {/* What it's doing, at the foot of the picture over a soft shade. */}
-              <div className="absolute inset-x-0 bottom-0 flex h-20 items-end justify-center rounded-b-xl bg-gradient-to-t from-black/65 to-transparent pb-3.5">
-                <AnimatePresence mode="wait" initial={false}>
-                  <motion.span key={doing} initial={{ opacity: 0, y: 6, filter: "blur(4px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -6, filter: "blur(4px)" }} transition={{ duration: 0.28, ease: [0.2, 0, 0, 1] }} className="working-text text-[13px] font-medium tracking-[-0.01em] drop-shadow-[0_1px_6px_#000c]">
-                    {doing}
-                  </motion.span>
-                </AnimatePresence>
+              {/* What it's doing, on a dark pill sitting on the lit edge, an orb turning in the edge's light (Sphe, Nov 4: the words over the picture were "very difficult to see"). */}
+              <div className="absolute inset-x-0 -bottom-3.5 flex justify-center">
+                <motion.div layout transition={spring} className="flex h-7 items-center gap-2 rounded-full bg-[#0b0b0b] pr-3.5 pl-2 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_8px_24px_#000c]">
+                  <span className="working-orb" />
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.span key={doing} initial={{ opacity: 0, y: 6, filter: "blur(3px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -6, filter: "blur(3px)" }} transition={{ duration: 0.26, ease: [0.2, 0, 0, 1] }} className="text-[12.5px] font-medium whitespace-nowrap text-white">
+                      {doing}
+                    </motion.span>
+                  </AnimatePresence>
+                </motion.div>
               </div>
             </motion.div>
           )}

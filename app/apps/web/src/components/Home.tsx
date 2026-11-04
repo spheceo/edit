@@ -27,6 +27,7 @@ import { ThumbnailGrid, useMakeThumbnail } from "../thumbnails/list";
 import { Loader, Tile } from "./Logo";
 import { SetupCard } from "./SetupCard";
 import { StartedBy } from "./StartedBy";
+import { MemoryChip } from "./MemoryChip";
 import { UpdateButton } from "./UpdateButton";
 import { Button, ConfirmDialog, cx, Modal, Pulse, spring } from "./ui";
 import { DevBadge, DevControl, promoteItem, useDevTools, useShowDev } from "./DevProjects";
@@ -467,6 +468,7 @@ export function Home() {
               {!loading && !inThumbnails && <span className="ml-1 text-[13px] font-normal text-faint tabular">{total}</span>}
             </h1>
             <div className="ml-auto flex items-center gap-1.5">
+              <MemoryChip />
               <UpdateButton />
               {/* One main action a screen, in white (the user, Oct 30). */}
               {inIdeas ? (

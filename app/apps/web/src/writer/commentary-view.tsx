@@ -21,6 +21,7 @@ import { DocsDialog } from "./docs-dialog";
 import { COMMENTARY_SHORTCUTS, Shortcuts } from "./shortcuts";
 import { type Band, BandTip, bandProps, bandsOf, pieceBands, pieceOffset, ReviewButton, ReviewDialog, useReview, ArchivedBanner } from "./review";
 import { Avatar } from "./avatar";
+import { MemoryChip } from "../components/MemoryChip";
 import { UpdateButton } from "./update";
 import { CAN, useGrants } from "./can";
 import { Dialog, Icon, Menu, Select, Tabs } from "./ui";
@@ -507,6 +508,7 @@ export function CommentaryEditor({
           {saving && <span className={saving === "saved" ? "save-state ok" : "save-state"}>{saving === "saved" ? "Saved" : "Saving…"}</span>}
         </div>
         <div className="top-actions">
+          <MemoryChip />
           <UpdateButton />
           {working && (
             <span className="agent-working">

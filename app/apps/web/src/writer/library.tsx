@@ -29,6 +29,7 @@ import { CAN, useGrants } from "./can";
 import { useReviewCounts } from "./review";
 import type { Brief, BriefLink, BriefRole, Choice, ClaudeStatus, ImportProgress, Kind, Script, Summary, TrelloCard, TrelloCards, TrelloList, VideoCheck } from "./types";
 import { Dialog, Icon, Menu, Select, Tabs, type ToastMessage, Toasts } from "./ui";
+import { MemoryChip } from "../components/MemoryChip";
 import { UpdateButton } from "./update";
 
 /** The New script dialog's tabs: one case's video (YouTube, Drive or a file on this Mac), a compilation, a commentary. */
@@ -270,6 +271,7 @@ export function Library({
               Claude needs signing in
             </button>
           )}
+          <MemoryChip />
           <UpdateButton />
           <button type="button" className="primary" onClick={() => setCreating(true)}>
             <Icon name="plus" size={15} />

@@ -2016,7 +2016,13 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
         navigate(`/p/${project.id}`);
         return;
       }
-      await api.attachScript(project.id, input);
+      try {
+        await api.attachScript(project.id, input);
+      } catch (refused) {
+        // A script refused leaves no empty project behind (each try had made one more).
+        await api.deleteProject(project.id).catch(() => undefined);
+        throw refused;
+      }
       // The edit workflow starts once the import is in, with what was added to it.
       await api.firstPrompt(project.id, `Start the editing workflow.${extra ? `\n\n${extra}` : ""}`);
       onClose();

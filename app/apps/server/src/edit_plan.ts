@@ -3,6 +3,7 @@
 // invalid plans save nothing. Its `audit` is the mechanical review the agent
 // gets back instead of rendering for everything.
 
+import * as horrorLook from "./horror_look.ts";
 import { clipFrom, keyframesFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
 import * as screen from "./desktop_screen.ts";
@@ -19,6 +20,7 @@ import * as markBlurs from "./mark_blurs.ts";
 import * as typing from "./typing_sounds.ts";
 import * as markers from "./markers.ts";
 import type { Clip, Keyframe, Media, Project } from "./model.ts";
+import { isEssay } from "./model.ts";
 import { native } from "./native/index.ts";
 import {
   addTrack,
@@ -81,6 +83,8 @@ export interface Assets {
   screen?: screen.Art | null;
   /** What a map's render measured, by its media (place_label given no track): its JSON is kept by the render's file name, which a cloud copy's path no longer is. */
   mapMeasured?: (mediaId: string) => graphics.Measured | null;
+  /** Horror: each screenshot's retro copy, by the original's media id (horror_look.ts). */
+  retro?: Record<string, string>;
 }
 
 export interface Shutter {
@@ -182,6 +186,8 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
     }
     results.push(result);
   });
+  // Horror: every tall reel shown full frame stands over its own blurred copy (horror_look.ts).
+  horrorLook.fillReels(project);
   // Text placed or relabelled (a quote, a caption's speaker): one colour per
   // person across the video, as add_subtitles leaves it.
   if (
@@ -479,7 +485,7 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
     case "commentary_text":
       return commentaryGraphics.text(project, args);
     case "commentary_card":
-      return commentaryGraphics.card(project, args);
+      return commentaryGraphics.card(project, args, assets.retro);
     case "commentary_chapter":
       return commentaryGraphics.chapter(project, args);
     case "commentary_look":
@@ -1306,7 +1312,7 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       issues.push({ kind: "source_exhausted", clip: clip.id });
     }
   }
-  if (project.style === "commentary") {
+  if (isEssay(project.style)) {
     return { issues: sortIssues([...issues, ...commentaryAudit.issues(project)]), frames: total, clips: project.clips.length };
   }
   // A Short has its own checks: no teaser, map, intro or outro to flag.

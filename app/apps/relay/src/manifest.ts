@@ -28,6 +28,7 @@ export const CAPABILITIES = {
   interrogation: "edit.interrogation",
   courtroom: "edit.courtroom",
   commentary: "edit.commentary",
+  horror: "edit.horror",
   shorts: "edit.shorts",
 } as const;
 
@@ -67,13 +68,14 @@ export function manifest() {
       { id: CAPABILITIES.interrogation, label: "Interrogation edits", description: "Full edits in the interrogation style, voice-overs included.", group: "Kinds of video" },
       { id: CAPABILITIES.courtroom, label: "Courtroom edits", description: "Full edits in the courtroom style, voice-overs included.", group: "Kinds of video" },
       { id: CAPABILITIES.commentary, label: "Commentary edits", description: "Narrated video essays, source clips, researched B-roll and motion graphics, voice-overs included.", group: "Kinds of video" },
+      { id: CAPABILITIES.horror, label: "Horror edits", description: "Narrated internet-mystery and disturbing-internet documentaries in the analog horror look, voice-overs included.", group: "Kinds of video" },
       { id: CAPABILITIES.shorts, label: "Shorts", description: "9:16 YouTube Shorts: a video's highlights cut to 45–60 seconds, reframed, subtitled and scored.", group: "Kinds of video" },
       ...SCRIPT_CAPABILITIES,
       ...IDEA_CAPABILITIES,
     ],
     presets: [
       { id: "subtitles", label: "Subtitles only", capabilities: [CAPABILITIES.subtitles] },
-      { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.commentary, CAPABILITIES.shorts, CAPABILITIES.subtitles] },
+      { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.commentary, CAPABILITIES.horror, CAPABILITIES.shorts, CAPABILITIES.subtitles] },
       { id: "writer", label: "Script writer", capabilities: ["scripts.interrogation", "scripts.interrogation-compilation", "review.share"] },
       { id: "ideas", label: "Repackager", capabilities: IDEA_CAPABILITIES.map((one) => one.id) },
       { id: "full", label: "Everything", capabilities: [...Object.values(CAPABILITIES), ...SCRIPT_CAPABILITIES.map((one) => one.id), ...IDEA_CAPABILITIES.map((one) => one.id)] },

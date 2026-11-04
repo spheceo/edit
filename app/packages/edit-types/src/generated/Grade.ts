@@ -70,4 +70,13 @@ scanlines?: number,
 /**
  * A faded print, 0..1: blacks lifted and whites dimmed.
  */
-fade?: number, };
+fade?: number, 
+/**
+ * Chromatic aberration, 0..1: red and blue pulled apart, nothing in the
+ * middle and most at the edges, like a cheap old lens (horror's analog look).
+ */
+chromatic?: number, 
+/**
+ * An unsharp mask, 0..1: edges and faces crisper (horror's look on people).
+ */
+sharpen?: number, };

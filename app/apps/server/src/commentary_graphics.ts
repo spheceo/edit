@@ -4,6 +4,7 @@ import { clipFrom } from "./clips.ts";
 import type { Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { addTrack, clipEnd, freshId, mediaOf } from "./project.ts";
+import { GRADE as HORROR_GRADE, LOOK_NAME as HORROR_LOOK } from "./horror_look.ts";
 
 type Args = Record<string, unknown>;
 const number = (a: Args, key: string, fallback: number) => typeof a[key] === "number" ? a[key] as number : fallback;
@@ -100,9 +101,10 @@ export function text(p: Project, a: Args): Args {
 
 /** A source still/video in a white frame, sharp over a blurred copy or brand
  * wallpaper. Source audio is deliberately not added under the narrator. */
-export function card(p: Project, a: Args): Args {
+export function card(p: Project, a: Args, retro: Record<string, string> = {}): Args {
   const [start, end] = span(a); const d = end - start; const h = p.settings.height; const w = p.settings.width;
   if (typeof a.media !== "string") throw new Error("commentary_card needs media");
+  if (p.style === "horror") return horrorCard(p, a, retro);
   const m = mediaOf(p, a.media); if (m === undefined || m.kind === "audio") throw new Error("commentary_card needs picture media");
   const source = number(a, "source_in", 0);
   const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
@@ -128,6 +130,42 @@ export function card(p: Project, a: Args): Args {
   return { photo, clips: made };
 }
 
+/**
+ * Horror's card (its guide's Animations 5 and 12): a screenshot as its retro
+ * copy (planAssets swaps it in: softened, a faint grid, roughened edges) with
+ * a drop shadow, or with `photo: true` a picture in a white outline with a
+ * glow and drop shadow. It slides up slowly with a Gaussian blur that clears
+ * as it settles; the footage running behind it is darkened, not replaced
+ * ("When a screenshot is shown over B-roll, darken the B-roll behind it").
+ */
+function horrorCard(p: Project, a: Args, retro: Record<string, string>): Args {
+  const [start, end] = span(a); const d = end - start; const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
+  const given = mediaOf(p, a.media as string); if (given === undefined || given.kind === "audio") throw new Error("commentary_card needs picture media");
+  const photo = a.photo === true || given.kind !== "image";
+  const m = !photo && retro[given.id] !== undefined ? mediaOf(p, retro[given.id]!) ?? given : given;
+  const source = number(a, "source_in", 0);
+  const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+  const scale = Math.min(number(a, "width", 0.8) * w / (m.width * fit), number(a, "height", 0.8) * h / (m.height * fit));
+  const made: string[] = [];
+  if (a.backdrop !== false) made.push(push(p, { type: "adjustment", name: "Horror · card backdrop", start, duration: d,
+    blur: { radius: 5 * k }, grade: { exposure: -1.05, vignette: 0.45 }, fade_in: 8, fade_out: 8 }));
+  // Slower than commentary's: the guide's "very slow and deliberate" slide up.
+  const settle = Math.min(34, Math.floor(d / 3)); const y = number(a, "y", 0); const x = number(a, "x", 0);
+  const frame = photo ? { color: [1, 1, 1, 1], width: 5 * k, shadow: 0.85, radius: 0, glow: 0.55 } : { color: [1, 1, 1, 1], width: 0, shadow: 0.85, radius: 0 };
+  const card = push(p, { type: "video", media: m.id, source_in: source, start, duration: d, name: photo ? "Horror · picture" : "Horror · screenshot", fade_in: 6, fade_out: 8,
+    frame, transform: { scale, x, y },
+    keyframes: { y: [...arrival(y + h * 0.5, y, settle), key(d - 1, y - 6 * k)], scale: [key(0, scale), key(d - 1, scale * Math.min(Math.max(number(a, "push", 1.04), 1), 1.4))] } });
+  made.push(card);
+  // The blur on the move: a region over the card, carried with it, clearing as it lands.
+  made.push(push(p, { type: "adjustment", name: "Horror · card motion blur", start, duration: Math.min(d, settle + 2), parent: card,
+    blur: { radius: 0, x, y, width: m.width * fit * scale * 1.04, height: m.height * fit * scale * 1.04, shape: "rect", feather: 12 * k },
+    keyframes: { blur: [{ ...key(0, 26 * k), handle_out: { speed: 0, influence: 0.2 } }, { ...key(settle, 0), handle_in: { speed: 0, influence: 0.7 } }] } }));
+  if (typeof a.label === "string" && a.label.trim()) made.push(push(p, { type: "text", name: "Horror · source credit", text: a.label,
+    start, duration: d, fade_in: 8, fade_out: 6, style: { ...textStyle(h, 27), glow: { enabled: false }, align: "left", max_width: w * 0.87 },
+    transform: { x: -w * 0.025, y: h * 0.43 } }));
+  return { photo: card, clips: made, ...(m.id !== given.id ? { shown: m.id, note: "the screenshot's retro copy (same size: highlight rects stay in its original pixels)" } : {}) };
+}
+
 /** Clean chapter slate: no baked-in name from a reference episode. */
 export function chapter(p: Project, a: Args): Args {
   const [start, end] = span(a); const h = p.settings.height; const d = end - start;
@@ -142,6 +180,7 @@ export function chapter(p: Project, a: Args): Args {
 
 export function narrationLook(p: Project, a: Args): Args {
   const [start, end] = span(a);
+  if (p.style === "horror") return horrorLook(p, start, end);
   const voices = new Set((p.script?.blocks ?? []).flatMap((b) => b.kind === "narration" && b.voiceover ? [b.voiceover] : []));
   let ranges: [number, number][] = p.clips.filter((c) => voices.has(c.id) && c.start < end && clipEnd(c) > start).map((c) => [Math.max(start, c.start), Math.min(end, clipEnd(c))]);
   if (!ranges.length) throw new Error("commentary_look needs placed narration in this span");
@@ -153,6 +192,21 @@ export function narrationLook(p: Project, a: Args): Args {
   const clips = ranges.filter(([from, to]) => to > from).map(([from, to]) => push(p, { type: "adjustment", name: "Janitor · narration look", start: from, duration: to - from,
     grade: { grain: 0.1, vignette: 0.25, saturation: -0.04 }, fade_in: 4, fade_out: 4 }));
   return { clips, clip: clips[0] ?? null };
+}
+
+/**
+ * Horror's look on every frame of the span, narration and source clips
+ * alike (its guide: "on all footage"), over everything placed so far. The
+ * look it meets is taken up into one new look on top, so running it again
+ * after more footage went in covers that too.
+ */
+function horrorLook(p: Project, start: number, end: number): Args {
+  let [from, to] = [start, end];
+  const met = p.clips.filter((c) => c.name === HORROR_LOOK && c.start <= to && clipEnd(c) >= from);
+  for (const c of met) { from = Math.min(from, c.start); to = Math.max(to, clipEnd(c)); }
+  p.clips = p.clips.filter((c) => !met.includes(c));
+  const clip = push(p, { type: "adjustment", name: HORROR_LOOK, start: from, duration: to - from, grade: { ...HORROR_GRADE } });
+  return { clips: [clip], clip, replaced: met.map((c) => c.id) };
 }
 
 /** A portrait and genuinely left-aligned list. Lay out the complete final

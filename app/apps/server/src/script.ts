@@ -22,7 +22,7 @@ import { importMade, importPaths } from "./import.ts";
 import * as mediaModule from "./media.ts";
 import { cloudEnabled } from "./relay.ts";
 import type { ClipColor, Media, Project, Script, ScriptBlock, ScriptJob, Style, TextStyle, TrackKind } from "./model.ts";
-import { NARRATION } from "./model.ts";
+import { isEssay, NARRATION } from "./model.ts";
 import { addTrack, clipOf, duration as projectDuration, fps as fpsOf, freeTrack, freshId, insertTime, marksCut, mediaOf, REUSE_LABEL, WHOLE_SOURCE_LABEL, REUSED_SCRIPT_NOTE, reusedScriptBlock } from "./project.ts";
 import { fileName, fileStem, extension as pathExtension, join, parent } from "./paths.ts";
 import { byteLength, charCount, display, f32, isAlphanumeric, isWhitespace, parseHex, round, splitWhitespace, takeChars, trim } from "./rust.ts";
@@ -757,6 +757,7 @@ export function headerStyle(heading: string): Style | null {
   if (word === "INTERRO" || word === "INTERROGATION") return "interrogation";
   if (word === "FOIA" || word === "BODYCAM" || word === "BWC") return "bodycam";
   if (word === "COMMENTARY") return "commentary";
+  if (word === "HORROR") return "horror";
   if (word === "SHORT" || word === "SHORTS") return "shorts";
   return null;
 }
@@ -2055,7 +2056,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     // only its own footage (no maps, photos or articles to wait for).
     const home = app.store.home;
     const researched = seams.research.articles(home, id).length > 0 || seams.research.items(home, id).length > 0;
-    if (laidOut && !recut && !inserting && !researched && now?.project.style !== "commentary" && now?.project.style !== "shorts") {
+    if (laidOut && !recut && !inserting && !researched && !(now !== null && now !== undefined && isEssay(now.project.style)) && now?.project.style !== "shorts") {
       try {
         await seams.agentPanel(app).send(id, RESEARCH, null, null);
       } catch (error) {
@@ -2142,7 +2143,7 @@ async function footageToDisk(app: App, id: string, index: number, file: string):
 async function footageToCloud(app: App, id: string, index: number, file: string): Promise<Fetched> {
   const progress = fileProgress(app, id, index);
   const live = app.store.get(id);
-  if (live?.project.style === "commentary" && youtube.idOf(file) !== null) {
+  if (live !== null && live !== undefined && isEssay(live.project.style) && youtube.idOf(file) !== null) {
     const cut = await seams.cloudMedia.youtubeExcerpts(app.store.home, app.store.cacheDir(), file, fileRanges(live.project, file), progress);
     return [cut.reduce((n, one) => n + (one.cloud?.cloud?.size ?? 0), 0), cut[0]?.cloud?.name ?? file, cut];
   }

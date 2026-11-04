@@ -144,6 +144,8 @@ const GRADE = struct("Grade", [
   field("grain", "f32", 0, isZero),
   field("scanlines", "f32", 0, isZero),
   field("fade", "f32", 0, isZero),
+  field("chromatic", "f32", 0, isZero),
+  field("sharpen", "f32", 0, isZero),
 ]);
 
 const SHAKE = struct("Shake", [

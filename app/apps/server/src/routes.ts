@@ -459,7 +459,7 @@ function listProjects({ app }: Context): Response {
   return json({ projects: app.store.visible(), dev_build: app.store.marksDev });
 }
 
-const STYLES: Style[] = ["bodycam", "interrogation", "courtroom", "commentary", "shorts"];
+const STYLES: Style[] = ["bodycam", "interrogation", "courtroom", "commentary", "horror", "shorts"];
 
 async function createProject(context: Context): Promise<Response> {
   const given = await body(context);

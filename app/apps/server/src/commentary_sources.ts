@@ -31,8 +31,24 @@ registerTool("capture_evidence", async ({ app, args, projectId }) => {
   return text(stableStringify({ media, url: result.url, title: result.title, note: "Real page capture, not reconstructed content. Inspect it before use: a site may show a consent/login page or irrelevant UI. Add a commentary_card, then highlight_evidence on its returned photo clip." }));
 });
 export interface BrollRange { url: string; start: number; end: number; purpose: string; }
+/**
+ * A post on another site (an Instagram reel, an X or TikTok video, a Reddit
+ * clip): the story's own content, which horror's guide puts first ("Look for
+ * the original content first"). Any https link that isn't YouTube.
+ */
+export function isPost(url: string): boolean {
+  try { return new URL(url).protocol === "https:" && youtube.videoId(url) === null; } catch { return false; }
+}
+
 export function rangeOf(value: unknown): BrollRange {
   const one = value as Partial<BrollRange> | null;
+  if (one != null && typeof one.url === "string" && isPost(one.url)) {
+    // A post is short: the whole of it unless a range is given.
+    const start = typeof one.start === "number" && Number.isFinite(one.start) && one.start >= 0 ? one.start : 0;
+    const end = typeof one.end === "number" && Number.isFinite(one.end) && one.end > start ? one.end : Infinity;
+    if (typeof one.purpose !== "string" || one.purpose.trim() === "") throw new Error("each B-roll range needs its narration purpose");
+    return { url: one.url, start, end, purpose: one.purpose.trim() };
+  }
   if (one == null || typeof one.url !== "string" || youtube.videoId(one.url) === null ||
       typeof one.start !== "number" || !Number.isFinite(one.start) || one.start < 0 ||
       typeof one.end !== "number" || !Number.isFinite(one.end) || one.end <= one.start || one.end - one.start > 240 ||
@@ -131,10 +147,53 @@ registerTool("read_broll_source", async ({ app, args, projectId }) => {
   return text(stableStringify({ ...source, lines: lines.slice(0, 140), omitted: Math.max(0, lines.length - 140), note: "Automatic captions guide the search; they do not prove what is visible. Narrow by phrase/start/end, then inspect an imported range." }));
 });
 
+/**
+ * A post's video, downloaded whole once (posts are short) into the cache: an
+ * Instagram carousel's `img_index` picks its item. yt-dlp's own last error
+ * line comes back when it fails (an image-only post, a private account).
+ */
+async function postVideo(app: App, url: string): Promise<string> {
+  const dir = join(app.store.cacheDir(), "posts"); fs.mkdirSync(dir, { recursive: true });
+  const key = Bun.hash(url).toString(16);
+  const had = () => fs.readdirSync(dir).find((f) => f.startsWith(`${key}.`) && /\.(mp4|mov|webm|mkv)$/u.test(f));
+  const found = had(); if (found !== undefined) return join(dir, found);
+  const item = new URL(url).searchParams.get("img_index");
+  const binary = await youtube.ytdlp(app.store.home);
+  const child = Bun.spawn([binary, "--no-warnings", "--socket-timeout", "20", "-f", "bv*+ba/b", "--merge-output-format", "mp4", "--max-filesize", "800M",
+    ...(item !== null && /^\d+$/u.test(item) ? ["--playlist-items", item] : ["--no-playlist"]), "-o", join(dir, `${key}.%(ext)s`), url], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const timer = setTimeout(() => child.kill(), 300_000);
+  try {
+    const [, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    const got = had();
+    if (code !== 0 || got === undefined) {
+      const why = err.trim().split("\n").filter((l) => l.startsWith("ERROR")).pop()?.replace(/^ERROR:\s*/u, "").slice(0, 300) ?? "the download failed or timed out";
+      throw new Error(`${why}${/no video/iu.test(why) ? " (an image post: capture_evidence on its url, or collect_images)" : ""}`);
+    }
+    return join(dir, got);
+  } finally { clearTimeout(timer); }
+}
+
 registerTool("import_broll", async ({ app, args, projectId }) => {
   if (!Array.isArray(args.ranges) || args.ranges.length === 0 || args.ranges.length > 12) throw new Error("ranges must contain 1–12 source ranges");
   const ranges = args.ranges.map(rangeOf); // validate the entire batch before downloads
   const results: unknown[] = [];
+  // Posts (Instagram, X, TikTok…): each one's video whole, then the range asked of it.
+  const posts = ranges.filter((r) => isPost(r.url));
+  for (let i = 0; i < posts.length; i += 3) {
+    await Promise.all(posts.slice(i, i + 3).map(async (pick) => {
+      try {
+        const path = await postVideo(app, pick.url);
+        const [, ids, errors] = await importPaths(app, projectId, [path], false, "agent");
+        const media = ids[0]; if (media === undefined) throw new Error(errors.join("; ") || "the post's video didn't import");
+        const seconds = app.store.get(projectId)?.project.media.find((m) => m.id === media)?.duration ?? 0;
+        const end = Math.min(pick.end, seconds || pick.end);
+        const found = { ...pick, end, media, source_in: pick.start, source_offset: 0, duration: Math.max(0, end - pick.start), verified: false };
+        keep(app, projectId, `post:${pick.url}:${pick.start}`, found);
+        results.push(found);
+      } catch (error) { results.push({ url: pick.url, error: error instanceof Error ? error.message : String(error) }); }
+    }));
+  }
+  ranges.splice(0, ranges.length, ...ranges.filter((r) => !isPost(r.url)));
   // Reuse one original for all ranges from that video; no persistent preview download.
   const sources = [...new Set(ranges.map((r) => youtube.videoId(r.url)!))];
   for (let i = 0; i < sources.length; i += 2) {

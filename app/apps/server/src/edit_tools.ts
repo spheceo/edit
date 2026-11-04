@@ -31,10 +31,12 @@ import * as watermarks from "./watermarks.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { houseMedia, houseMediaSaved, importPaths } from "./import.ts";
+import * as horrorLook from "./horror_look.ts";
 import * as markers from "./markers.ts";
 import { call, ORIGIN } from "./mcp/index.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Marker, Media, Project } from "./model.ts";
+import { isEssay } from "./model.ts";
 import { native, withProject, withProjectAsync, type EncodedImage, type ProjectInput, type SheetSpec } from "./native/index.ts";
 import { dirname, resolve as resolvePath } from "node:path";
 
@@ -1427,7 +1429,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   const sections = onProject((input) => native().sections(input));
   const parts = sections.parts;
   const teasers = parts.filter((part) => part.kind === "intro").map((part): [number, number] => [part.start, part.end]);
-  const extra = project.style === "commentary" ? [
+  const extra = isEssay(project.style) ? [
     ...hooks.offScript(project, heard),
     ...hooks.cutMidWord(project, heard),
     ...soundEffectsLong(project),
@@ -1636,7 +1638,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
   const endGiven = num(args.end);
   const from = startGiven !== null ? asInt(round(startGiven * fps)) : (span?.[0] ?? null);
   const to = endGiven !== null ? asInt(round(endGiven * fps)) : (span?.[1] ?? null);
-  const overview = p.style === "commentary" && from === null && to === null && ids === null;
+  const overview = isEssay(p.style) && from === null && to === null && ids === null;
   const narrationIds = new Set((p.script?.blocks ?? []).flatMap((b) => b.kind === "narration" ? [b.clip, b.voiceover].filter((id): id is string => typeof id === "string") : []));
   const narrationLinks = new Set(p.clips.filter((c) => narrationIds.has(c.id)).flatMap((c) => c.link ? [c.link] : []));
   const inside = (start: number, end: number) => !(from !== null && end <= from) && !(to !== null && start >= to);
@@ -1753,7 +1755,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
       const added = uploads.forContext(app, p);
       return added.length === 0 ? {} : { uploads: added };
     })(),
-    ...(p.style === "commentary" ? { chapters: commentaryAudit.outline(p) } : {}),
+    ...(isEssay(p.style) ? { chapters: commentaryAudit.outline(p) } : {}),
     speaker_line_counts: speakers,
     subtitles_in_span: subtitles,
     footage_blocks: footage,
@@ -2336,6 +2338,11 @@ export async function planAssets(app: App, project: Project, operations: Json[])
       if (found !== null && found.length > 0) marks[media.id] = found;
     }
     assets.screen = { wallpaper: wall, frames: keyed, marks };
+  }
+  const [retro, aged] = await horrorLook.retroScreenshots(app, project, operations as Record<string, unknown>[]);
+  if (aged.length > 0 || Object.keys(retro).length > 0) {
+    assets.retro = retro;
+    made.push(...aged);
   }
   return [assets, made];
 }

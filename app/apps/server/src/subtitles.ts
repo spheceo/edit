@@ -103,9 +103,19 @@ export const HOUSE_TERMS = [
 export const HOUSE_MUTE_ONLY = ["kill", "shot", "shoot", "drug", "drugs", "dead", "marijuana"] as const;
 /** Internet Janitor's additional terms: precise silence, first-letter stars. */
 export const COMMENTARY_TERMS = ["robbed", "robbery", "die", "dying", "death", "dead", "kill", "drug", "drugs", "marijuana", "murder", "shoot", "shot", "cunt", "faggot", "torture", "armed", "gun", "pussy"] as const;
-const commentaryTerms = [...HOUSE_TERMS, ...COMMENTARY_TERMS].map((entry) => {
+/**
+ * Horror's ban list (its guide: "it doesn't matter whether it's on voice over
+ * or clips", cut to silence, never a beep): Internet Janitor's words and
+ * their other forms.
+ */
+export const HORROR_TERMS = [...COMMENTARY_TERMS, "died", "dies", "killed", "killing", "killer", "killers", "murdered", "murderer", "murders", "shooting", "shootings", "shooter", "tortured", "guns", "molest", "molested", "molester", "molestation", "raped", "raping", "sexually", "robber", "robbers"] as const;
+const starredTerm = (entry: string) => {
   const term = entry.split("=")[0]!.trim(); return `${term} = ${term[0]}${"*".repeat(Math.max(0, term.length - 1))}`;
-});
+};
+const commentaryTerms = [...HOUSE_TERMS, ...COMMENTARY_TERMS].map(starredTerm);
+const horrorTerms = [...HOUSE_TERMS, ...HORROR_TERMS].map(starredTerm);
+/** The style's own words on top of the house list (commentary, horror). */
+const styleTerms = (style: string): string[] => style === "commentary" ? commentaryTerms : style === "horror" ? horrorTerms : [];
 /** Muted and starred out too, only in a heavy neglect case. */
 export const NEGLECT_TERMS = [
   "endangerment",
@@ -1420,7 +1430,7 @@ export async function houseWords(
   neglect: boolean,
   extra: readonly string[] = [],
 ): Promise<HouseWords> {
-  if (project.style === "commentary") extra = [...commentaryTerms, ...extra];
+  extra = [...styleTerms(project.style), ...extra];
   const fps = fpsOf(project);
   const sound: [Clip, boolean][] = [
     ...footageSound(project, from, to).map((clip) => [clip, false] as [Clip, boolean]),
@@ -1500,7 +1510,7 @@ export async function muteHouseWords(
   if (to <= from) throw new Error("the span is empty");
   const live = app.store.get(projectId);
   if (live === null) throw new Error("no such project");
-  if (live.project.style === "commentary") extra = [...commentaryTerms, ...extra];
+  extra = [...styleTerms(live.project.style), ...extra];
   const fps = fpsOf(live.project);
   let house = await houseWords(app, live.project, from, to, neglect, extra);
   // Words to leave unmuted where they're said: a "not muted" marker on the

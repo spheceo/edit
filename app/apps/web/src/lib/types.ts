@@ -154,6 +154,7 @@ export const STYLES: { value: Style; label: string }[] = [
   { value: "interrogation", label: "Interrogation" },
   { value: "courtroom", label: "Courtroom" },
   { value: "commentary", label: "Commentary" },
+  { value: "horror", label: "Horror" },
   { value: "shorts", label: "Shorts" },
 ];
 
@@ -170,6 +171,7 @@ export const NARRATION: Record<Style, "house" | "recording" | "none"> = {
   interrogation: "recording",
   courtroom: "recording",
   commentary: "recording",
+  horror: "recording",
   // A Short is the footage's own sound: no narrator.
   shorts: "none",
 };

@@ -85,6 +85,10 @@ struct GradeUniforms {
     scanlines: f32,
     fade: f32,
     height: f32,
+    /// Chromatic aberration and an unsharp mask (0..1 each).
+    chromatic: f32,
+    sharpen: f32,
+    _pad2: [f32; 2],
 }
 
 #[repr(C)]
@@ -1374,6 +1378,9 @@ impl Renderer {
                         scanlines: grade.scanlines,
                         fade: grade.fade,
                         height: self.height as f32,
+                        chromatic: grade.chromatic,
+                        sharpen: grade.sharpen,
+                        _pad2: [0.0; 2],
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));

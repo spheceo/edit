@@ -258,6 +258,8 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         grain: grade.grain.clamp(0.0, 1.0),
                         scanlines: grade.scanlines.clamp(0.0, 1.0),
                         fade: grade.fade.clamp(0.0, 1.0),
+                        chromatic: grade.chromatic.clamp(0.0, 1.0),
+                        sharpen: grade.sharpen.clamp(0.0, 1.0),
                     },
                     glitch: GlitchFrame {
                         // Amounts are at 1080p.

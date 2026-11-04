@@ -176,16 +176,20 @@ pub enum Style {
     Interrogation,
     Courtroom,
     Commentary,
+    /// A narrated internet-mystery / disturbing-internet documentary: the
+    /// commentary essay's tools in an analog, slower horror look.
+    Horror,
     /// A 9:16 YouTube Short: 45–60 s of one video's highlights, reframed.
     Shorts,
 }
 
 impl Style {
-    pub const ALL: [Style; 5] = [
+    pub const ALL: [Style; 6] = [
         Style::Bodycam,
         Style::Interrogation,
         Style::Courtroom,
         Style::Commentary,
+        Style::Horror,
         Style::Shorts,
     ];
 
@@ -195,6 +199,7 @@ impl Style {
             Style::Interrogation => "interrogation",
             Style::Courtroom => "courtroom",
             Style::Commentary => "commentary",
+            Style::Horror => "horror",
             Style::Shorts => "shorts",
         }
     }
@@ -1526,6 +1531,13 @@ pub struct Grade {
     /// A faded print, 0..1: blacks lifted and whites dimmed.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub fade: f32,
+    /// Chromatic aberration, 0..1: red and blue pulled apart, nothing in the
+    /// middle and most at the edges, like a cheap old lens (horror's analog look).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub chromatic: f32,
+    /// An unsharp mask, 0..1: edges and faces crisper (horror's look on people).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub sharpen: f32,
 }
 
 impl Default for Grade {
@@ -1547,6 +1559,8 @@ impl Default for Grade {
             grain: 0.0,
             scanlines: 0.0,
             fade: 0.0,
+            chromatic: 0.0,
+            sharpen: 0.0,
         }
     }
 }

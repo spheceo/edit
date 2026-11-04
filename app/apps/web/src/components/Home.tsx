@@ -808,6 +808,7 @@ const STYLE_NOTES: Record<Style, string> = {
   interrogation: "16:9 · an interrogation edit, narrated by your recording",
   courtroom: "16:9 · a courtroom edit, narrated by your recording",
   commentary: "16:9 · a narrated video essay with researched B-roll",
+  horror: "16:9 · a narrated internet-mystery documentary in an analog horror look",
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 

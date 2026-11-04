@@ -35,6 +35,10 @@ struct Grade {
     scanlines: f32,
     fade: f32,
     height: f32,
+    // Chromatic aberration and an unsharp mask (0..1 each).
+    chromatic: f32,
+    sharpen: f32,
+    _q: vec2f,
 };
 
 // A hash in 0..1 per pixel and pattern (the grain's noise).
@@ -119,6 +123,24 @@ fn fs(in: VsOut) -> @location(0) vec4f {
         let split = vec2f(slide * g.rgb, 0.0);
         base.r = textureSampleLevel(src, samp, edge(shaken(start + split, g.shake, g.turn)), 0.0).r;
         base.b = textureSampleLevel(src, samp, edge(shaken(start - split, g.shake, g.turn)), 0.0).b;
+    }
+    // An unsharp mask: the picture less a soft copy of itself, added back.
+    if (g.sharpen > 0.0) {
+        let at = edge(shaken(start, g.shake, g.turn));
+        let px = vec2f(1.5 / (g.height * g.aspect), 1.5 / g.height);
+        let soft = (textureSampleLevel(src, samp, at + vec2f(px.x, 0.0), 0.0)
+            + textureSampleLevel(src, samp, at - vec2f(px.x, 0.0), 0.0)
+            + textureSampleLevel(src, samp, at + vec2f(0.0, px.y), 0.0)
+            + textureSampleLevel(src, samp, at - vec2f(0.0, px.y), 0.0)) * 0.25;
+        base = vec4f(max(base.rgb + (base.rgb - soft.rgb) * g.sharpen * 1.6, vec3f(0.0)), base.a);
+    }
+    // Chromatic aberration: red pushed out and blue pulled in from the
+    // centre, growing with the distance from it (none in the middle).
+    if (g.chromatic > 0.0) {
+        let at = edge(shaken(start, g.shake, g.turn));
+        let split = (at - 0.5) * vec2f(1.0, g.aspect) * g.chromatic * 0.014;
+        base.r = textureSampleLevel(src, samp, edge(at - split), 0.0).r;
+        base.b = textureSampleLevel(src, samp, edge(at + split), 0.0).b;
     }
     // The vignette: 0 in its clear area, 1 where it's fully dark.
     var d = (in.uv - 0.5) * vec2f(g.aspect, 1.0) - g.vignette_at;

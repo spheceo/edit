@@ -105,7 +105,7 @@ function sourceOf(p: Project, media: string): string {
 export function shots(p: Project, live: Clip[] = p.clips.filter((c) => !trackOf(p, c.track)?.hidden)): { id: string; from: number; to: number }[] {
   const index = new Map(p.tracks.map((t, i) => [t.id, i]));
   // A composition is one shot: its backdrop stands for it while its layers arrive (a list's rows one after another).
-  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve|^Janitor · (YouTube|post|bumper|profile|source card|channel|icon)/u.test(c.name ?? "")) || c.type === "solid");
+  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve|^Janitor · (YouTube|post|bumper|profile|source card|channel|icon)|^Horror · (screenshot|picture)/u.test(c.name ?? "")) || c.type === "solid");
   const cuts = [...new Set(pictures.flatMap((c) => [c.start, clipEnd(c)]))].sort((a, b) => a - b);
   const runs: { id: string; from: number; to: number }[] = [];
   for (let i = 0; i + 1 < cuts.length; i++) {
@@ -141,7 +141,7 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
     out.push({ kind: "commentary_flash", clip: run.id, start: run.from, frames: run.to - run.from, between: [runs[i - 1]!.id, runs[i + 1]!.id],
       fix: "butt the pictures either side together (or hold one of them over the gap): a picture flashing up for a few frames reads as a mistake" });
   }
-  const cards = live.filter((c) => c.name === "Janitor · source card" && c.duration < CARD_MIN_SECONDS * fps);
+  const cards = live.filter((c) => (c.name === "Janitor · source card" || c.name === "Horror · screenshot" || c.name === "Horror · picture") && c.duration < CARD_MIN_SECONDS * fps);
   for (const c of cards) out.push({ kind: "commentary_short_card", clip: c.id, start: c.start, seconds: Math.round((c.duration / fps) * 10) / 10,
     fix: `a card needs ${CARD_MIN_SECONDS}s or more to arrive and be read: hold it longer, or show the moment as footage instead` });
   // "We're using all of the same clips."
@@ -189,5 +189,23 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
   const plain = graphics.filter((c) => c.name === "Janitor · source card" || c.name === "Janitor · emphasis").length;
   if (graphics.length >= 10 && plain / graphics.length >= 0.85) out.push({ kind: "commentary_graphics_monotony", start: graphics[0]!.start, cards_and_text: plain, graphics: graphics.length, punch_ins: punches.length,
     fix: "nearly every graphic is a card or centred text: use the reference's other moves where they fit (commentary_youtube for a video talked about, highlight_evidence on a real post, commentary_punch on the words that land, commentary_label for a comic beat, commentary_leak on a turn), and show people in footage rather than cards" });
+  // Horror: "Always use grain and vignette on all footage" (its guide's first rule): every picture under the look.
+  if (p.style === "horror") {
+    // A picture is graded only where a look sits on a higher track than it.
+    const level = new Map(p.tracks.map((t, i) => [t.id, i]));
+    const looks = live.filter((c) => c.name === "Horror · analog look");
+    const bareSpans = union(live.filter((c) => c.type === "video" || c.type === "solid").flatMap((c): Span[] => {
+      const over = union(looks.filter((l) => (level.get(l.track) ?? 0) > (level.get(c.track) ?? 0)).map((l): Span => [l.start, clipEnd(l)]));
+      let spans: Span[] = [[c.start, clipEnd(c)]];
+      for (const [s, e] of over) spans = spans.flatMap(([a, b]): Span[] => e <= a || s >= b ? [[a, b]] : [...(s > a ? [[a, s] as Span] : []), ...(e < b ? [[e, b] as Span] : [])]);
+      return spans;
+    }));
+    const bare = bareSpans.reduce((n, [a, b]) => n + b - a, 0);
+    if (bare > p.settings.fps) {
+      const at = bareSpans[0]?.[0] ?? 0;
+      out.push({ kind: "horror_look_missing", start: at, seconds: Math.round(bare / p.settings.fps * 10) / 10,
+        fix: "the analog look goes on all footage: commentary_look over the whole video (start 0, end the last frame) once the pictures are placed, and again over anything added after it" });
+    }
+  }
   return out;
 }

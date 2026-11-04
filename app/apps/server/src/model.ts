@@ -79,6 +79,7 @@ export const STYLES: { value: Style; label: string }[] = [
   { value: "interrogation", label: "Interrogation" },
   { value: "courtroom", label: "Courtroom" },
   { value: "commentary", label: "Commentary" },
+  { value: "horror", label: "Horror" },
   { value: "shorts", label: "Shorts" },
 ];
 
@@ -90,11 +91,21 @@ export const STYLES: { value: Style; label: string }[] = [
  * be built, and says it's a stand-in. (JJ, Oct 28: "I selected the courtroom
  * edit option, but the voice was the one from bodycam".)
  */
+/**
+ * A narrated essay: one narrator over chosen footage, evidence and graphics
+ * (commentary, and horror in its analog look). They share the commentary_*
+ * tools, the essay audits and the chapter outline.
+ */
+export function isEssay(style: Style): boolean {
+  return style === "commentary" || style === "horror";
+}
+
 export const NARRATION: Record<Style, "house" | "recording" | "none"> = {
   bodycam: "house",
   interrogation: "recording",
   courtroom: "recording",
   commentary: "recording",
+  horror: "recording",
   // A Short is the footage's own sound: no narrator.
   shorts: "none",
 };

@@ -13,6 +13,7 @@ import * as build from "./build.ts";
 import * as cloud from "./cloud.ts";
 import * as reviews from "./reviews.ts";
 import * as drive from "./drive.ts";
+import * as handoff from "./handoff.ts";
 import { isFile, join, userHome } from "../paths.ts";
 import * as jobs from "./jobs.ts";
 import * as storage from "./storage.ts";
@@ -28,6 +29,10 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   const data = store.dataDir(app.store.home);
   drive.hooks.accessToken = () => app.library.accessToken();
   build.usePort(app.port);
+  // Every save names a Drive folder case's master in Edit's originals, so Start the edit finds it on any Mac;
+  // scripts saved before that (Nov 4) are named once now, before anything else writes them.
+  store.hooks.withSharedKeys = handoff.withSharedKeys;
+  handoff.stampAll(data);
   // A trial server (EDIT_TRIALS=1) writes and builds scripts as any Edit does, but takes
   // none of the team's work: no Writer folder adopted, no review notes fixed, no archives
   // acted on (Oct 31: with Script mode off there, a script's builds called the tools on :7700

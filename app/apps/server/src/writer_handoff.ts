@@ -25,6 +25,8 @@ import * as caseNames from "./names.ts";
 import { withDocuments } from "./writer/casefiles.ts";
 import * as writerResearch from "./writer/research.ts";
 import * as writerCloud from "./writer/cloud.ts";
+import * as drive from "./writer/drive.ts";
+import * as writerShare from "./writer/handoff.ts";
 import * as writerStore from "./writer/store.ts";
 import type { Router } from "./http/router.ts";
 import type { Creator, ScriptBlock, Style } from "./model.ts";
@@ -128,7 +130,11 @@ export function recordingFiles(given: WriterScript): { start: number; end: numbe
       const shared = part.mediaSource;
       if (shared !== undefined && (!/^sha256:[a-fA-F0-9]{64}$/u.test(shared) || !part.originalKey?.startsWith(`edit/originals/sha256/${shared.slice(7)}/`) || part.originalKey.includes(".."))) throw new Error(`"${part.title}" has an invalid shared folder master`);
       const file = shared ?? (part.url === undefined ? null : script.footageFile(part.url));
-      if (file === null) throw new Error(`"${part.title}" has no Drive or YouTube link: import it in Writer from Drive or YouTube to hand it over`);
+      if (file === null) {
+        // A Drive folder's recordings are joined into one master that goes up to Edit's originals after the import; until then only the Mac that imported it has them.
+        if (part.url !== undefined && drive.isDrive(part.url) && drive.parse(part.url).kind === "folder") throw new Error(`"${part.title}" is a Drive folder whose joined recordings aren't in Edit's cloud yet: Start the edit on the Mac that imported the script, which sends them up first`);
+        throw new Error(`"${part.title}" has no Drive or YouTube link: import it in Writer from Drive or YouTube to hand it over`);
+      }
       files.push({ start: part.startMs, end: part.startMs + part.durationMs, url: part.url ?? "", file, ...(shared ? { originalKey: part.originalKey } : {}) });
     }
   }
@@ -296,7 +302,9 @@ export async function list(
 export async function fetchScript(id: string, home: string | null = null): Promise<WriterScript> {
   if (home !== null && writerStore.idOk(id)) {
     try {
-      return writerStore.read(writerStore.scriptDir(writerStore.dataDir(home), id)) as unknown as WriterScript;
+      // With its folder cases' masters named from what this Mac shared, even if a pull from an older Edit dropped them.
+      const dir = writerStore.scriptDir(writerStore.dataDir(home), id);
+      return writerShare.withSharedKeys(dir, writerStore.read(dir)) as unknown as WriterScript;
     } catch {
       // Not on this Mac: the cloud's.
     }
@@ -340,7 +348,14 @@ export function carryResearch(app: App, scriptId: string, projectId: string): vo
 
 /** Makes an Edit project from a Writer script and starts its import (footage, transcripts, voice-over, layout). */
 export async function importScript(app: App, id: string): Promise<{ project: string }> {
-  const given = await fetchScript(id, app.store.home);
+  let given = await fetchScript(id, app.store.home);
+  // A Drive folder case not yet in Edit's originals: sent up now (or the send under way joined), so Start the edit goes on rather than stopping on it.
+  const data = writerStore.dataDir(app.store.home);
+  if (writerShare.unsharedFolder(given) && writerStore.idOk(id) && fs.existsSync(join(writerStore.scriptDir(data, id), "script.json"))) {
+    diag.info("script", `${given.title}: sending its Drive folder cases to Edit's cloud before the edit starts`);
+    await writerShare.shareNow(data, id);
+    given = await fetchScript(id, app.store.home);
+  }
   const style = scriptStyle(given);
   if (!kinds.mayEdit(style)) throw new Error(kinds.cantMake(`edit.${style}`));
   const parsed = toParsed(await resolveWriterCases(given));

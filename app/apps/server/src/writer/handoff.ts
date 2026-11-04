@@ -22,7 +22,7 @@ import * as drive from "./drive.ts";
 import * as hearing from "./hearing.ts";
 import { named } from "./jobs.ts";
 import * as media from "./media.ts";
-import { partSources } from "./parts.ts";
+import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
 import { recordings } from "./transcription.ts";
 
@@ -73,8 +73,7 @@ async function shared(dir: string, script: Script): Promise<Shared[]> {
       continue;
     }
     if (recording.span !== null || !isFile(recording.file)) continue;
-    const folderCase = script.sourceKind === "compilation" && drive.isDrive(script.parts?.[index]?.url ?? "") && drive.parse(script.parts![index]!.url!).kind === "folder";
-    if (found === null && (script.sourceKind === "file" || folderCase)) found = [`sha256:${await sha256Of(recording.file)}`, recording.file.split("/").pop() ?? "footage.mp4"];
+    if (found === null && (script.sourceKind === "file" || folderPart(script, index))) found = [`sha256:${await sha256Of(recording.file)}`, recording.file.split("/").pop() ?? "footage.mp4"];
     if (found === null) continue;
     out.push({ file: recording.file, source: found[0], name: found[1], offsetMs: recording.offsetMs, lengthMs: recording.lengthMs, tag: all.length > 1 ? String(index + 1) : null, key: recording.key });
   }
@@ -96,6 +95,59 @@ function transcriptOf(dir: string, script: Script, recording: Shared): Transcrip
   if (heard !== null && heard.words.length > 0 && !derived) return heard;
   const speakers = Object.fromEntries(Object.entries(script.speakers ?? {}).flatMap(([label, name]) => (strip(label) === null ? [] : [[strip(label)!, name]])));
   return { model: heard?.model || "scribe_v2", language: heard?.language ?? null, words, speakers, ...(heard?.keyterms ? { keyterms: heard.keyterms } : {}) };
+}
+
+/** The parts of a script `folderPart` reads: Script mode's own, or Writer's as the handoff has it. */
+type Cases = { sourceKind?: string; parts?: { url?: string; mediaSource?: string }[] };
+
+/** A compilation's case that is a Drive folder: its recordings joined into one master, its link the folder's (never a file Edit can fetch). */
+export function folderPart(script: Cases, index: number): boolean {
+  const url = script.parts?.[index]?.url ?? "";
+  return script.sourceKind === "compilation" && drive.isDrive(url) && drive.parse(url).kind === "folder";
+}
+
+/** Whether a folder case doesn't yet name its master in Edit's originals, so Start the edit can't find its footage. */
+export const unsharedFolder = (script: Cases): boolean =>
+  (script.parts ?? []).some((part, index) => part.mediaSource === undefined && folderPart(script, index));
+
+/**
+ * The script with each Drive folder case naming its master as Edit's
+ * originals have it (`mediaSource`, `originalKey`, from `edit-shared.json`),
+ * which Start the edit reads on any Mac (writer_handoff.recordingFiles).
+ * Every save applies it (store.hooks.withSharedKeys). Nothing wrote them
+ * before Nov 4, so a compilation with a folder case couldn't start its edit
+ * ("751) Predator Teacher Gets the Surprise of His Life" has no Drive or
+ * YouTube link).
+ */
+export function withSharedKeys(dir: string, script: Script): Script {
+  if (!unsharedFolder(script)) return script;
+  let kept: { source?: unknown; key?: unknown; file?: unknown }[];
+  try {
+    kept = JSON.parse(fs.readFileSync(join(dir, "edit-shared.json"), "utf8")) as typeof kept;
+  } catch {
+    return script;
+  }
+  const targets = partTargets(dir, script);
+  let changed = false;
+  const parts = (script.parts ?? []).map((part, index) => {
+    const target = targets[index];
+    if (part.mediaSource !== undefined || !folderPart(script, index) || target == null || !target.startsWith(`${dir}/`)) return part;
+    // Only a master the handoff takes: a sha256 source and its own key under Edit's originals.
+    const entry = kept.find((one) => one.file === target.slice(dir.length + 1) && typeof one.source === "string" && /^sha256:[a-fA-F0-9]{64}$/u.test(one.source) && typeof one.key === "string" && one.key.startsWith(`edit/originals/sha256/${one.source.slice(7)}/`) && !one.key.includes(".."));
+    if (entry === undefined) return part;
+    changed = true;
+    return { ...part, mediaSource: entry.source as string, originalKey: entry.key as string };
+  });
+  return changed ? { ...script, parts } : script;
+}
+
+/** Saves the script once if a folder case can name its master now; true if it did. */
+export function stampShared(dir: string): boolean {
+  const script = store.read(dir);
+  const stamped = withSharedKeys(dir, script);
+  if (stamped === script) return false;
+  store.write(dir, stamped);
+  return true;
 }
 
 /** The sources streamed to Edit's originals when imported: in `edit-shared.json` with no file here. */
@@ -153,6 +205,8 @@ export async function share(data: string, id: string): Promise<string> {
     await shareWords(dir, script, recording, done);
   }
   if (done.length > 0) diag.info("writer", `${name}: shared with Edit: ${done.join("; ")}`);
+  // A folder case's master named in the script itself, so it syncs and every Mac's Start the edit finds it.
+  if (stampShared(dir)) diag.info("writer", `${name}: its Drive folder cases name their masters in Edit's originals`);
   return list.length === 0 ? "no footage on this Mac to share" : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
 }
 
@@ -167,19 +221,42 @@ async function shareWords(dir: string, script: Script, recording: Shared, done: 
   }
 }
 
-const sharing = new Set<string>();
+const sharing = new Map<string, Promise<string>>();
 
-/** Shares the script with Edit in the background, once at a time; a failure is kept for the next try. */
+/** Shares the script with Edit, once at a time: a share under way is joined, not started twice. */
+export function shareNow(data: string, id: string): Promise<string> {
+  const running = sharing.get(id);
+  if (running !== undefined) return running;
+  const run = share(data, id).finally(() => sharing.delete(id));
+  sharing.set(id, run);
+  return run;
+}
+
+/** Shares the script with Edit in the background; a failure is kept for the next try. */
 export function shareSoon(data: string, id: string): void {
   if (sharing.has(id)) return;
-  sharing.add(id);
-  void share(data, id)
-    .catch((error: unknown) => {
-      try {
-        fs.writeFileSync(join(store.scriptDir(data, id), "edit-share-error.txt"), diag.messageOf(error));
-      } catch {
-        // The script's gone.
-      }
-    })
-    .finally(() => sharing.delete(id));
+  void shareNow(data, id).catch((error: unknown) => {
+    try {
+      fs.writeFileSync(join(store.scriptDir(data, id), "edit-share-error.txt"), diag.messageOf(error));
+    } catch {
+      // The script's gone.
+    }
+  });
+}
+
+/** Scripts saved before Nov 4 whose folder cases were shared but never named their masters: named once, at start. */
+export function stampAll(data: string): void {
+  let ids: string[];
+  try {
+    ids = store.ids(data);
+  } catch {
+    return;
+  }
+  for (const id of ids) {
+    try {
+      if (stampShared(store.scriptDir(data, id))) diag.info("writer", `${named(id, store.read(store.scriptDir(data, id)).title)}: its Drive folder cases name their masters in Edit's originals`);
+    } catch (error) {
+      diag.warn("writer", `${id}: its folder cases weren't named: ${diag.messageOf(error)}`);
+    }
+  }
 }

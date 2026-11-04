@@ -53,7 +53,8 @@ export async function get(id: string): Promise<{ thumb: Thumbnail; rev: number }
 
 export async function commit(thumb: Thumbnail, baseRev: number, by: string): Promise<number> {
   const body = { ...thumb, updatedAt: Date.now() };
-  const answer = (await call("mutation", "thumbnails:commit", { thumbId: thumb.id, baseRev, body, summary: summarize(body), by })) as { rev: number };
+  // Its workspace when it has one (the cloud keeps what it had otherwise; none is Interrogation's).
+  const answer = (await call("mutation", "thumbnails:commit", { thumbId: thumb.id, baseRev, body, summary: summarize(body), by, ...(thumb.workspace === undefined ? {} : { workspace: thumb.workspace }) })) as { rev: number };
   return answer.rev;
 }
 

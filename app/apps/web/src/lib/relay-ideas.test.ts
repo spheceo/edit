@@ -128,6 +128,15 @@ describe("the ideas functions", () => {
     expect((await ask("/v1/ideas/convex", { body: { kind: "mutation", path: "ideas:list", args: {} } })).status).toBe(403);
   });
 
+  it("a thumbnail's workspace goes to Convex only once it takes it, with who's asking", async () => {
+    const calls = stand({ "POST convex.test/api/(query|mutation)": () => ({ status: "success", value: { rev: 1 } }) });
+    const commit = { kind: "mutation", path: "thumbnails:commit", args: { thumbId: "t1", baseRev: 0, body: {}, summary: {}, by: "x", workspace: "bodycam" } };
+    await ask("/v1/ideas/convex", { body: commit });
+    expect(JSON.parse(String(calls.at(-1)!.init.body)).args.workspace).toBeUndefined();
+    await ask("/v1/ideas/convex", { body: commit }, env({ CONVEX_CALLER: "1" } as Partial<Env>));
+    expect(JSON.parse(String(calls.at(-1)!.init.body)).args).toMatchObject({ workspace: "bodycam", caller: { sub: "person-1", admin: false } });
+  });
+
   it("keeps each workspace's ideas to who works in it (Nov 4: a bodycam person read and changed Interrogation's)", async () => {
     const rows = [{ ideaId: "i1", workspace: "interrogation" }, { ideaId: "i2", workspace: "bodycam" }, { ideaId: "i3" }];
     const calls = stand({

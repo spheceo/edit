@@ -251,6 +251,8 @@ export type ThumbVersion = { id: string; name: string; design: Design; at: numbe
 export type Thumbnail = {
   id: string;
   title: string;
+  /** The ideas workspace it belongs to (Nov 4): only who works on that workspace's ideas sees it. None: Interrogation's, as before. */
+  workspace?: "interrogation" | "bodycam";
   /** What it's for, in a line (the video's title, the idea). */
   brief: string;
   images: ThumbImage[];
@@ -288,6 +290,8 @@ export type ThumbSummary = {
 export type ThumbRow = {
   id: string;
   rev: number;
+  /** Its ideas workspace, as the cloud keeps it (none from before Nov 4: Interrogation's). */
+  workspace?: "interrogation" | "bodycam";
   summary: ThumbSummary;
   updatedAt: number;
   updatedBy: string;

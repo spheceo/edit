@@ -35,6 +35,10 @@ ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
 # checked against this issuer's JWKS. The old shared token (CLOUD_TOKEN) was retired the same day.
 ACCOUNTS_ISSUER = "https://accounts.spheceo.com"
 OPEN_MAPS = "0"                    # "1" would let the maps answer with no token
+# Every forwarded Convex call says who's asking (`caller`, auth.ts withCaller), and Convex checks it itself
+# (accounts 6d2c2a2, convex/access.ts). "0" until prod Convex (unique-shrimp-228) has that module: its
+# validators refuse an argument they don't know. Deploy accounts' convex to prod first, then set "1" here.
+CONVEX_CALLER = "0"
 STAMP_CREATOR = "1"                # a project's first commit records who started it (`actor`, from the token); Repack's edit:commitProject takes it since 906b67a (Oct 23)
 # Daily audio per client IP and across everyone, in bytes of 32 kbps Opus
 # (~14.4 MB per hour). Transcription is needed about once per project.
@@ -150,6 +154,7 @@ routes = [{ pattern = "media-dev.spheceo.com", custom_domain = true }]
 
 [env.dev.vars]
 MEDIA_HOST = "media-dev.spheceo.com"
+CONVEX_CALLER = "1"  # dev Convex (determined-heron-867) has accounts 6d2c2a2's convex/access.ts
 # Thumbnails' OpenArt: the live relay holds the team's one sign-in (openart.ts); dev asks it.
 OPENART_UPSTREAM = "https://edit-relay.sphe-g-personal.workers.dev"
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"

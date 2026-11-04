@@ -24,7 +24,7 @@
  *   `/v1/google/…` now, google.ts, and the token never leaves the relay)
  *   /v1/cloud/writer/…              Script mode's scripts, their reviews and lessons, under Writer's rules (writer_cloud.ts)
  */
-import { allow, burstKey, type AuthEnv, type Caller, type Permission } from "./auth";
+import { allow, burstKey, forbiddenOf, withCaller, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, ideaRefused, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
 import { cancelJob, driveJob, jobStatus, type JobsEnv } from "./jobs";
 import { readable as scriptReadable, scriptKeyRefused, writerCloud } from "./writer_cloud";
@@ -45,6 +45,8 @@ export interface CloudEnv extends JobsEnv, MediaEnv {
   BUDGET?: { idFromName(name: string): unknown; get(id: unknown): { fetch(request: Request): Promise<Response> } };
   /** Script mode's cloud calls (1200 a minute per person, wrangler.toml). */
   CLOUD_BURST?: { limit(options: { key: string }): Promise<{ success: boolean }> };
+  /** "1": every forwarded Convex call says who's asking (`caller`), which Convex checks itself (auth.ts `withCaller`). */
+  CONVEX_CALLER?: string;
   /** "1": a project's first commit carries who started it (`actor`, from the token); Repack's `edit:commitProject` keeps it as `createdBy`. */
   STAMP_CREATOR?: string;
 }
@@ -521,7 +523,7 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     answer = await fetch(`${env.CONVEX_URL.replace(/\/+$/, "")}/api/${kind}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: body.path, args: { ...(body.args as object | undefined), token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
+      body: JSON.stringify({ path: body.path, args: { ...withCaller(env, found, body.path, (body.args ?? {}) as Record<string, unknown>), token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
     });
   } catch (error) {
     return json(502, { error: `Convex: ${error instanceof Error ? error.message : String(error)}` });
@@ -559,6 +561,8 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     }
     return json(200, { status: "success", value });
   }
+  const forbidden = forbiddenOf(parsed);
+  if (forbidden !== null) return forbidden;
   if (isObject(parsed) && parsed.status === "error") {
     return json(200, { status: "error", errorMessage: String(parsed.errorMessage ?? "unknown error").trim(), errorData: parsed.errorData });
   }

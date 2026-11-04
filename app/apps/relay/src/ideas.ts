@@ -20,7 +20,7 @@
 // Research did. The Trello key and token (Repack's root TRELLO_*: Sphe
 // Research's own token) and the YouTube key never leave the relay.
 
-import type { Caller } from "./auth";
+import { forbiddenOf, withCaller, type Caller } from "./auth";
 import { actorOf, convexPaused, isObject, r2Config, r2Fetch, Upstream, type CloudEnv } from "./cloud";
 
 export interface IdeasEnv extends CloudEnv {
@@ -231,7 +231,7 @@ async function convex(body: Record<string, unknown>, env: IdeasEnv, found: Calle
     answer = await fetch(`${env.CONVEX_URL.replace(/\/+$/, "")}/api/${kind}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path, args: { ...args, token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
+      body: JSON.stringify({ path, args: { ...withCaller(env, found, path, args), token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
     });
   } catch (error) {
     return json(502, { error: `Convex: ${error instanceof Error ? error.message : String(error)}` });
@@ -239,6 +239,8 @@ async function convex(body: Record<string, unknown>, env: IdeasEnv, found: Calle
   const text = await answer.text();
   try {
     const parsed: unknown = JSON.parse(text);
+    const forbidden = forbiddenOf(parsed);
+    if (forbidden !== null) return forbidden;
     if (isObject(parsed) && parsed.status === "success" && !isAdmin(found)) {
       // Reads: only the workspaces the caller works in.
       if (path === "ideas:list" && Array.isArray(parsed.value)) return json(200, { ...parsed, value: parsed.value.filter((row) => mayWorkspace(found, workspaceOfIdea(row))) });

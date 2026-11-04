@@ -244,3 +244,31 @@ export async function budgetKey(request: Request, found: Caller): Promise<string
 export function burstKey(request: Request, found: Caller): string {
   return found.kind === "person" ? `p:${found.sub}` : (request.headers.get("cf-connecting-ip") ?? "unknown");
 }
+
+/**
+ * What the database is told of who's asking (Nov 4: Convex checks each call's
+ * person itself, accounts' convex/access.ts, so the relay isn't the only
+ * gate): `caller` added to a forwarded call's args, from the verified token.
+ * Only with `CONVEX_CALLER` "1": Convex's validators refuse an argument they
+ * don't know, so a deployment without that module must not be sent one (and
+ * then not a thumbnail's `workspace` either, which came with it).
+ */
+export function withCaller(env: { CONVEX_CALLER?: string }, found: Caller, path: string, args: Record<string, unknown>): Record<string, unknown> {
+  const { caller: _sent, ...rest } = args;
+  if (env.CONVEX_CALLER !== "1") {
+    if (path === "thumbnails:commit") delete rest.workspace;
+    return rest;
+  }
+  const caller = found.kind === "person" ? { sub: found.sub, admin: found.admin, perms: found.perms } : { sub: "", admin: false, perms: [] };
+  return { ...rest, caller };
+}
+
+/** Convex's refusal of a call outside the caller's permissions (`ConvexError` with `{code: "forbidden"}`), as a 403; null for anything else. */
+export function forbiddenOf(parsed: unknown): Response | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const answer = parsed as { status?: unknown; errorData?: unknown; errorMessage?: unknown };
+  const data = answer.errorData as { code?: unknown; message?: unknown } | null | undefined;
+  if (answer.status !== "error" || data?.code !== "forbidden") return null;
+  const message = typeof data.message === "string" ? data.message : "That isn't available to your account.";
+  return new Response(JSON.stringify({ error: message }), { status: 403, headers: { "content-type": "application/json" } });
+}

@@ -11,7 +11,7 @@ import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { ApiError, bad, empty, json, notFound } from "../http/errors.ts";
 import { readBytes, readJson, type RouteContext, type Router } from "../http/router.ts";
-import { mayIdeas } from "../ideas/routes.ts";
+import { mayIdeas, mayWorkspace, workspacesOf } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
 import { addComment, canonical, switchVersion, takeFinal } from "./design.ts";
@@ -72,7 +72,8 @@ export function routes(router: Router<App>): void {
     .get("/api/thumbnails", async () => {
       guard();
       try {
-        return json({ thumbnails: await cloud.list() });
+        // Only the workspaces this person works on (the cloud refuses the rest too).
+        return json({ thumbnails: (await cloud.list()).filter((row) => mayWorkspace(row.workspace ?? "interrogation")) });
       } catch (error) {
         failed(error);
       }
@@ -90,6 +91,8 @@ export function routes(router: Router<App>): void {
         title = `Thumbnail ${next}`;
       }
       const thumb = run.fresh(newId("t"), who, title, typeof body.brief === "string" ? body.brief.trim().slice(0, 600) : "");
+      // Its workspace, chosen for them: the one they work on, or Interrogation's (Ideas' own default) for someone on both.
+      thumb.workspace = workspacesOf()[0] ?? "interrogation";
       try {
         await cloud.commit(thumb, 0, who);
         return json({ id: thumb.id });

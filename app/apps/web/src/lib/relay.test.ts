@@ -447,6 +447,28 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "query", path: "edit:addNote", args: { projectId: "p1" } }, { token: NAMED })).status).toBe(403);
   });
 
+  it("tells Convex who's asking once it checks them itself, and passes its refusal on as a 403 (Nov 4)", async () => {
+    const upstream = vi.fn(async (_url: string, init?: RequestInit) => {
+      const sent = JSON.parse(String(init?.body ?? "{}")) as { path: string };
+      if (sent.path === "edit:listLater") return Response.json({ status: "error", errorMessage: "forbidden", errorData: { code: "forbidden", message: "This project isn't available to your account." } });
+      return Response.json({ status: "success", value: [] });
+    });
+    vi.stubGlobal("fetch", upstream);
+    const argsOf = () => JSON.parse(String((upstream.mock.calls.at(-1) as unknown as [string, RequestInit])[1].body)).args as Record<string, unknown>;
+    // Off (prod until its Convex has the module): no caller, and a forged one is dropped.
+    await call("convex", { kind: "query", path: "edit:listMedia", args: { caller: { sub: "x", admin: true, perms: [] } } }, { token: SUBS });
+    expect(argsOf().caller).toBeUndefined();
+    // On: who the token says, never who the caller says.
+    const on = { ...env, CONVEX_CALLER: "1" } as Env;
+    await call("convex", { kind: "query", path: "edit:listMedia", args: { caller: { sub: "x", admin: true, perms: [] } } }, { token: SUBS, env: on });
+    expect(argsOf()).toMatchObject({ caller: { sub: "person-s", admin: false, perms: ["use", "video.subtitles"] }, token: "service-token" });
+    await call("writer/convex", { kind: "query", path: "writer:listScripts" }, { token: WRITER, env: on });
+    expect(argsOf().caller).toEqual({ sub: "person-w", admin: false, perms: ["use", "scripts.interrogation", "review.share"] });
+    const refused = await call("convex", { kind: "query", path: "edit:listLater", args: {} }, { token: SUBS, env: on });
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: "This project isn't available to your account." });
+  });
+
   it("passes Convex's errors on", async () => {
     // A function's error (or no such function): Convex's own shape, as 200.
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ status: "error", errorMessage: "Server Error\nCould not find public function for 'edit:listMedia'.\n" })));

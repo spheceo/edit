@@ -20,7 +20,7 @@
  * presigned URLs, multipart and head, never delete or list). Problem reports
  * under `writer/reports/` are put by anyone, read only by an admin.
  */
-import type { Caller } from "./auth";
+import { forbiddenOf, withCaller, type Caller } from "./auth";
 import { BadRequest, convexPaused, escapeXml, isObject, objectUrl, r2Config, r2Fetch, Upstream, unescapeXml, xmlValue, type CloudEnv, type R2 } from "./cloud";
 
 const HOUR = 3600;
@@ -407,7 +407,7 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     answer = await fetch(`${env.CONVEX_URL.replace(/\/+$/, "")}/api/${kind}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ path: body.path, args: { ...args, token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
+      body: JSON.stringify({ path: body.path, args: { ...withCaller(env, found, body.path, args), token: env.CONVEX_SERVICE_TOKEN }, format: "json" }),
     });
   } catch (error) {
     return json(502, { error: `Convex: ${error instanceof Error ? error.message : String(error)}` });
@@ -424,6 +424,8 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     const value = await readable(body.path, parsed.value ?? null, env, found);
     return value instanceof Response ? value : json(200, { status: "success", value });
   }
+  const forbidden = forbiddenOf(parsed);
+  if (forbidden !== null) return forbidden;
   if (isObject(parsed) && parsed.status === "error") return json(200, { status: "error", errorMessage: String(parsed.errorMessage ?? "unknown error").trim(), errorData: parsed.errorData });
   const message = isObject(parsed) && parsed.code ? `${parsed.code}: ${parsed.message ?? ""}` : text.slice(0, 500) || `HTTP ${answer.status}`;
   return json(answer.ok ? 502 : answer.status, { error: `Convex: ${message}` });

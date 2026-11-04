@@ -110,6 +110,7 @@ const THUMB_TOOLS: Record<string, [string, string]> = {
   new_version: ["Starting another version", "Started another version"],
   switch_version: ["Switching version", "Switched version"],
   take_final: ["Taking the final version", "Took the final version"],
+  remove_version: ["Removing a version", "Removed a version"],
   openart_models: ["Checking OpenArt's models", "Checked OpenArt's models"],
   model_options: ["Reading a model's options", "Read a model's options"],
   set_layers: ["Laying out the thumbnail", "Laid out the thumbnail"],

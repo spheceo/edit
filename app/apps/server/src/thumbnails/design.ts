@@ -300,6 +300,45 @@ export function makeVersion(thumb: Thumbnail, by: string): ThumbVersion {
   return made;
 }
 
+/**
+ * Remove a version (Sphe, Nov 4: "if version 1 is removed, version 2 becomes
+ * version 1, and version 3 becomes version 2"): the ones after it move down a
+ * number. If it was showing, the one after it shows (the one before, if it
+ * was last); if it was final, the one now showing is. Down to one, the
+ * thumbnail has no versions again: its layout is that one.
+ */
+export function removeVersion(thumb: Thumbnail, wanted: string): { removed: string; renamed: [string, string][]; showing: string | null; final: string | null } {
+  syncVersion(thumb);
+  const versions = thumb.versions ?? [];
+  const at = versions.findIndex((one) => one.id === wanted || one.name.toLowerCase() === wanted.trim().toLowerCase());
+  if (at < 0) throw new Error(`There's no version ${wanted}: ${versions.map((one) => one.name).join(", ") || "this thumbnail has one version"}.`);
+  const removed = versions[at]!;
+  const left = versions.filter((one) => one !== removed);
+  if (thumb.activeVersion === removed.id) {
+    const next = left[Math.min(at, left.length - 1)]!;
+    thumb.activeVersion = next.id;
+    thumb.design = structuredClone(next.design);
+    thumb.history = [];
+    thumb.future = [];
+    thumb.render = null;
+  }
+  if (thumb.finalVersion === removed.id) thumb.finalVersion = thumb.activeVersion;
+  const renamed: [string, string][] = [];
+  left.forEach((one, index) => {
+    const name = `V${index + 1}`;
+    if (one.name !== name) renamed.push([one.name, name]);
+    one.name = name;
+  });
+  const showing = left.find((one) => one.id === thumb.activeVersion)?.name ?? null;
+  const final = left.find((one) => one.id === thumb.finalVersion)?.name ?? null;
+  if (left.length <= 1) {
+    delete thumb.versions;
+    delete thumb.activeVersion;
+    delete thumb.finalVersion;
+  } else thumb.versions = left;
+  return { removed: removed.name, renamed, showing, final };
+}
+
 /** Take a version as the final one (what ships), whichever is showing. */
 export function takeFinal(thumb: Thumbnail, wanted: string): ThumbVersion | null {
   const target = (thumb.versions ?? []).find((one) => one.id === wanted || one.name.toLowerCase() === wanted.trim().toLowerCase());

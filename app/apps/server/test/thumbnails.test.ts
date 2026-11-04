@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { canonical, designOf, labelOf, layerOf, makeVersion, record, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
+import { canonical, designOf, labelOf, layerOf, makeVersion, record, removeVersion, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
 import { baseBrief, changed, fresh, pickModel } from "../src/thumbnails/run.ts";
 import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
@@ -218,4 +218,29 @@ test("the OpenArt account in use: the first until another of the team's is picke
   openart.useHome(home);
   expect(openart.current().id).toBe(openart.ACCOUNTS[0]!.id);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test("removing a version: the ones after it move down a number, and what showed or was final moves to a neighbour", () => {
+  const thumb = fresh("t9", "Sphe", "", "");
+  thumb.design = designOf([{ id: "base", kind: "image", source: "img1" }], thumb.design, sources);
+  makeVersion(thumb, "Sphe");
+  const v3 = makeVersion(thumb, "Sphe");
+  const v2 = thumb.versions![1]!;
+  takeFinal(thumb, "V2");
+  switchVersion(thumb, "V1");
+  // V1 goes while showing: V2 (now V1) shows; the final one keeps its place.
+  expect(removeVersion(thumb, "v1")).toEqual({ removed: "V1", renamed: [["V2", "V1"], ["V3", "V2"]], showing: "V1", final: "V1" });
+  expect(thumb.versions?.map((one) => [one.id, one.name])).toEqual([[v2.id, "V1"], [v3.id, "V2"]]);
+  expect(thumb.activeVersion).toBe(v2.id);
+  expect(thumb.render).toBeNull();
+  // The final one goes: the one showing is final. Down to one, no versions.
+  switchVersion(thumb, "V2");
+  expect(removeVersion(thumb, "V1")).toEqual({ removed: "V1", renamed: [["V2", "V1"]], showing: "V1", final: "V1" });
+  expect(thumb.versions).toBeUndefined();
+  expect(thumb.activeVersion).toBeUndefined();
+  expect(thumb.finalVersion).toBeUndefined();
+  expect(() => removeVersion(thumb, "V1")).toThrow("There's no version V1");
+  // Versions again start from V1.
+  expect(makeVersion(thumb, "Sphe").name).toBe("V2");
+  expect(thumb.versions?.map((one) => one.name)).toEqual(["V1", "V2"]);
 });

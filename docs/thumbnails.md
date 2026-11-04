@@ -52,7 +52,8 @@ person asks; Claude changes it through its tools:
 - `set_layers`, `change_layers`: the layout, drawn at once and named for Claude
   to look at; `look` (with a grid every 160×120 px for placing by eye).
 - `undo`, `redo`: back or forward on the layout's timeline (below).
-- `new_version`, `switch_version`, `take_final`: versions (below).
+- `new_version`, `switch_version`, `take_final`, `remove_version`: versions
+  (below).
 - `save_overlay`: a picture the person gave, into the team's library with a
   note on where it goes, when they ask to keep it.
 - `openart_models`, `model_options`, `rename`.
@@ -72,7 +73,10 @@ Versions: one until the person asks for another or for options (each draft is
 a version). Once there are two, they sit side by side under the canvas, each
 drawn as it stands: a click shows one (not while Claude works on the one
 showing; the list's picture is drawn again by the server), and the one that ships is marked Final on its tile ("Make final" on
-hover) or by asking Claude.
+hover) or by asking Claude. Claude removes one when asked: the ones after it
+move down a number (Sphe, Nov 4: "if version 1 is removed, version 2 becomes
+version 1"), what showed or was final passes to a neighbour, and down to one
+the thumbnail has no versions again.
 
 The header is the way back, the name, the OpenArt account and Download; a
 thumbnail is deleted from the list (its ⋯ on hover, or a right click).

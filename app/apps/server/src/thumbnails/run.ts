@@ -19,7 +19,7 @@ import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { canonical, checkStacked, describe, designOf, layerOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
+import { canonical, checkStacked, describe, designOf, layerOf, makeVersion, record, removeVersion, step, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import { sizeOf } from "./size.ts";
@@ -145,6 +145,11 @@ export const TOOLS = [
   {
     name: "switch_version",
     description: "Show another version of this thumbnail (its name, V1 / V2…). The one left keeps its layers. Draws it: Read it.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } }, required: ["version"] },
+  },
+  {
+    name: "remove_version",
+    description: "Remove a version when the person asks (its name, V1 / V2…). The ones after it move down a number (remove V1 and V2 becomes V1), so use the new names from then on. If it was showing, the one beside it shows; if it was final, the one showing becomes final. Draws what's showing: Read it.",
     inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } }, required: ["version"] },
   },
   {
@@ -358,6 +363,22 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       session.changed = true;
       const path = await drawn(session, design!, false);
       return `Showing ${name}.\n${describe(design!)}\nRead the drawing: ${path}`;
+    }
+    case "remove_version": {
+      if (typeof args.version !== "string") throw new Error("version is a version's name (V1, V2…).");
+      const taken: { result?: ReturnType<typeof removeVersion>; design?: Design } = {};
+      await cloud.change(session.id, session.by, (thumb) => {
+        if ((thumb.versions ?? []).length < 2) throw new Error("This thumbnail has one version: there's nothing to remove it in favour of.");
+        taken.result = removeVersion(thumb, args.version as string);
+        taken.design = thumb.design;
+      });
+      const result = taken.result!;
+      const design = taken.design!;
+      session.changed = true;
+      const path = await drawn(session, design, false);
+      const moved = result.renamed.map(([from, to]) => `${from} is now ${to}`).join(", ");
+      const left = result.showing === null ? "It has one version again." : `Showing ${result.showing}; ${result.final} is final.`;
+      return `Removed ${result.removed}.${moved ? ` ${moved}.` : ""} ${left}\nRead the drawing: ${path}`;
     }
     case "take_final": {
       if (typeof args.version !== "string") throw new Error("version is a version's name (V1, V2…).");

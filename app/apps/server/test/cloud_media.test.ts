@@ -187,6 +187,10 @@ test("sources_name_their_proxies", () => {
   expect(cloudMedia.proxyKey("drive:abc_D-1")).toBe("edit/proxies/drive/abc_D-1.mp4");
   expect(cloudMedia.proxyKey(cloudMedia.excerptSource("abc", 61.4994, 182.0))).toBe("edit/proxies/drive/abc/61499-182000.mp4");
   expect(cloudMedia.proxyKey("sha256:00ff")).toBe("edit/proxies/sha256/00ff.mp4");
+  // A post (posts.ts): its link in base64url, whole or an excerpt.
+  const post = "post:aHR0cHM6Ly93d3cuaW5zdGFncmFtLmNvbS9wL0RVNnE5V2VFalJYLw";
+  expect(cloudMedia.proxyKey(cloudMedia.excerptSource(post, 0, 12))).toBe("edit/proxies/post/aHR0cHM6Ly93d3cuaW5zdGFncmFtLmNvbS9wL0RVNnE5V2VFalJYLw/0-12000.mp4");
+  expect(cloudMedia.proxyKey("post:bm90LWEtbGluaw")).toBeNull();
   expect(cloudMedia.proxyKey("youtube:x")).toBeNull();
   expect(cloudMedia.proxyKey("youtube:MeT7tyZqfiw")).toBe("edit/proxies/youtube/MeT7tyZqfiw.mp4");
   expect(cloudMedia.proxyKey(cloudMedia.excerptSource("youtube:MeT7tyZqfiw", 42, 172.5))).toBe("edit/proxies/youtube/MeT7tyZqfiw/42000-172500.mp4");

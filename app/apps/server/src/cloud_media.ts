@@ -329,12 +329,14 @@ function sourcePath(source: string): string {
 /** The proxy's key for a source (see the notes at the top). */
 export function proxyKey(source: string): string | null {
   let key: string;
-  const kind = ["drive:", "youtube:"].find((prefix) => source.startsWith(prefix));
+  const kind = ["drive:", "youtube:", "post:"].find((prefix) => source.startsWith(prefix));
   if (kind !== undefined) {
     const rest = source.slice(kind.length);
     const hash = rest.indexOf("#");
     const id = hash >= 0 ? rest.slice(0, hash) : rest;
     if (kind === "youtube:" && youtube.idOf(`youtube:${id}`) === null) return null;
+    // A post's id is its link in base64url (posts.ts).
+    if (kind === "post:" && posts.urlOf(`post:${id}`) === null) return null;
     const dir = `edit/proxies/${kind.slice(0, -1)}`;
     key = hash >= 0 ? `${dir}/${id}/${rest.slice(hash + 1)}.mp4` : `${dir}/${id}.mp4`;
   } else if (source.startsWith("sha256:")) {

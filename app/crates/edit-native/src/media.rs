@@ -135,6 +135,36 @@ pub async fn make_light_preview(
     .await
 }
 
+/// A picture's subject lifted out as a transparent PNG at `output` (Vision's
+/// foreground instances, as Photos' "Copy Subject"): only the one under `point`
+/// (0..1 from the top left) when given, else every one. Its box comes back as
+/// x0, y0, x1, y1 (0..1 from the top left).
+#[napi(ts_return_type = "Promise<[number, number, number, number]>")]
+pub async fn subject_cutout(
+    input: String,
+    output: String,
+    point: Option<Vec<f64>>,
+) -> napi::Result<Vec<f64>> {
+    crate::blocking("lifting the subject", move || {
+        #[cfg(target_os = "macos")]
+        {
+            let point = match point.as_deref() {
+                Some([x, y]) => Some((*x, *y)),
+                Some(_) => return Err("point is [x, y]".to_owned()),
+                None => None,
+            };
+            edit_engine::mac_media::subject_cutout(Path::new(&input), Path::new(&output), point)
+                .map(|bounds| bounds.to_vec())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (input, output, point);
+            Err("Lifting a subject out needs a Mac.".to_owned())
+        }
+    })
+    .await
+}
+
 /// A still image's thumbnail (ImageIO on the Mac); resolves to the count (1).
 #[napi]
 pub async fn make_image_thumbs(source: String, paths: CachePaths) -> napi::Result<u32> {

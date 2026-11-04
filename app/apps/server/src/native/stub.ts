@@ -514,6 +514,9 @@ export function createStub(): Stub {
     async facesDetect() {
       notInStub("facesDetect");
     },
+    async subjectCutout() {
+      notInStub("subjectCutout");
+    },
     facesCached() {
       return null;
     },

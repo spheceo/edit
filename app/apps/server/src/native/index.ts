@@ -266,6 +266,8 @@ export interface Native {
   trackAnchors(request: TrackRequest): Promise<TrackResult>; // A
   facesDetect(source: string, size: [number, number], indexes: number[]): Promise<Record<number, Box[]>>; // A
   facesCached(source: string): Record<number, Box[]> | null; // S
+  /** A picture's subject lifted out as a transparent PNG at `output` (Vision, macOS): only the one under `point` (0..1 from the top left), else every one. Its box, x0, y0, x1, y1 (0..1 from the top left). */
+  subjectCutout(input: string, output: string, point?: [number, number] | null): Promise<[number, number, number, number]>; // A
   readonly FACES_RATE: number;
   screenTextDetect(source: string, size: [number, number], indexes: number[]): Promise<Record<number, ScreenText[]>>; // A
   screenTextCached(source: string): Record<number, ScreenText[]> | null; // S

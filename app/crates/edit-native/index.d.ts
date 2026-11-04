@@ -551,6 +551,14 @@ export interface Stretch {
 }
 
 /**
+ * A picture's subject lifted out as a transparent PNG at `output` (Vision's
+ * foreground instances, as Photos' "Copy Subject"): only the one under `point`
+ * (0..1 from the top left) when given, else every one. Its box comes back as
+ * x0, y0, x1, y1 (0..1 from the top left).
+ */
+export declare function subjectCutout(input: string, output: string, point?: Array<number> | undefined | null): Promise<[number, number, number, number]>
+
+/**
  * The laid-out size [width, height] of `text` in Geist at `px`, as the
  * renderer lays it out (the desktop profile's Notepad lines).
  */

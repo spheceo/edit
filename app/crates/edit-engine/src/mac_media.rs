@@ -37,6 +37,15 @@ unsafe extern "C" {
     ) -> i32;
     fn edit_keychain_delete(service: *const c_char, account: *const c_char) -> i32;
     fn edit_image_thumbnail(path: *const c_char, output: *const c_char) -> i32;
+    fn edit_subject_cutout(
+        input: *const c_char,
+        output: *const c_char,
+        x: f64,
+        y: f64,
+        bounds: *mut f64,
+        error: *mut c_char,
+        capacity: usize,
+    ) -> i32;
     fn edit_image_frame(
         path: *const c_char,
         width: u32,
@@ -181,6 +190,38 @@ pub fn image_thumbnail(path: &Path, output: &Path) -> Result<(), String> {
         Ok(())
     } else {
         Err("ImageIO couldn't make the thumbnail".to_owned())
+    }
+}
+
+/// A picture's subject lifted out (Vision's foreground instances): `input` at
+/// its own size with everything else transparent, as a PNG at `output`. With
+/// `point` (0..1 from the top left), only the subject under it; else every one.
+/// The subject's box comes back as x0, y0, x1, y1 (0..1 from the top left).
+pub fn subject_cutout(
+    input: &Path,
+    output: &Path,
+    point: Option<(f64, f64)>,
+) -> Result<[f64; 4], String> {
+    let (input, output) = (path_string(input)?, path_string(output)?);
+    let (x, y) = point.unwrap_or((-1.0, -1.0));
+    let mut bounds = [0.0_f64; 4];
+    let mut error = [0; 1024];
+    // Both paths are borrowed for this call only; the bridge writes four numbers into `bounds`.
+    let ok = unsafe {
+        edit_subject_cutout(
+            input.as_ptr(),
+            output.as_ptr(),
+            x,
+            y,
+            bounds.as_mut_ptr(),
+            error.as_mut_ptr(),
+            error.len(),
+        )
+    };
+    if ok == 1 {
+        Ok(bounds)
+    } else {
+        Err(message(&error))
     }
 }
 

@@ -92,6 +92,7 @@ fn main() {
             "Accelerate",
             "ImageIO",
             "CoreGraphics",
+            "CoreImage",
             "Vision",
             "VideoToolbox",
             "Security",

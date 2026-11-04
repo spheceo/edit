@@ -2,6 +2,7 @@
 // No decoded-frame array, raw-video pipe, or codec process lives behind it.
 #import <AVFoundation/AVFoundation.h>
 #import <Accelerate/Accelerate.h>
+#import <CoreImage/CoreImage.h>
 #import <ImageIO/ImageIO.h>
 #import <Vision/Vision.h>
 #import <VideoToolbox/VideoToolbox.h>
@@ -147,6 +148,62 @@ int edit_faces(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stri
         }
         return 1;
     }
+}
+
+// A picture's subject lifted out (Vision's foreground instances, what Photos'
+// "Copy Subject" does) for a thumbnail: the picture at its own size with
+// everything else transparent, written to `output` as a PNG. With x, y in
+// 0..1 from the top left, only the subject under that point; with x < 0,
+// every subject. `bounds` gets the subject's box (x0, y0, x1, y1, 0..1 from
+// the top left). 1 when written; 0 with `error` said.
+static int subject_cutout(const char *input, const char *output, double x, double y, double *bounds, char *error, size_t capacity) API_AVAILABLE(macos(14.0)) {
+    @autoreleasepool {
+        VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithURL:[NSURL fileURLWithPath:@(input)] options:@{}];
+        VNGenerateForegroundInstanceMaskRequest *request = [VNGenerateForegroundInstanceMaskRequest new];
+        NSError *problem = nil;
+        if (![handler performRequests:@[request] error:&problem]) { fail(error, capacity, problem.localizedDescription ?: @"Vision couldn't look at the picture"); return 0; }
+        VNInstanceMaskObservation *seen = request.results.firstObject;
+        if (!seen || seen.allInstances.count == 0) { fail(error, capacity, @"Vision found no subject in the picture"); return 0; }
+        // The label mask: which instance each pixel belongs to (0 is the background).
+        CVPixelBufferRef labels = seen.instanceMask;
+        CVPixelBufferLockBaseAddress(labels, kCVPixelBufferLock_ReadOnly);
+        size_t w = CVPixelBufferGetWidth(labels), h = CVPixelBufferGetHeight(labels), row = CVPixelBufferGetBytesPerRow(labels);
+        const uint8_t *base = CVPixelBufferGetBaseAddress(labels);
+        NSIndexSet *which = seen.allInstances;
+        if (x >= 0) {
+            size_t px = (size_t)(fmin(fmax(x, 0), 1) * (w - 1)), py = (size_t)(fmin(fmax(y, 0), 1) * (h - 1));
+            uint8_t label = base[py * row + px];
+            if (label == 0) {
+                CVPixelBufferUnlockBaseAddress(labels, kCVPixelBufferLock_ReadOnly);
+                fail(error, capacity, [NSString stringWithFormat:@"No subject under that point; the picture has %lu, pick one on it or take them all", (unsigned long)seen.allInstances.count]);
+                return 0;
+            }
+            which = [NSIndexSet indexSetWithIndex:label];
+        }
+        size_t left = w, top = h, right = 0, bottom = 0;
+        for (size_t j = 0; j < h; j++) for (size_t i = 0; i < w; i++) {
+            if (![which containsIndex:base[j * row + i]]) continue;
+            if (i < left) left = i;
+            if (i > right) right = i;
+            if (j < top) top = j;
+            if (j > bottom) bottom = j;
+        }
+        CVPixelBufferUnlockBaseAddress(labels, kCVPixelBufferLock_ReadOnly);
+        bounds[0] = (double)left / w; bounds[1] = (double)top / h; bounds[2] = (double)(right + 1) / w; bounds[3] = (double)(bottom + 1) / h;
+        CVPixelBufferRef masked = [seen generateMaskedImageOfInstances:which fromRequestHandler:handler croppedToInstancesExtent:NO error:&problem];
+        if (!masked) { fail(error, capacity, problem.localizedDescription ?: @"Vision couldn't lift the subject"); return 0; }
+        CGColorSpaceRef space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        BOOL written = [[CIContext context] writePNGRepresentationOfImage:[CIImage imageWithCVPixelBuffer:masked] toURL:[NSURL fileURLWithPath:@(output)] format:kCIFormatRGBA8 colorSpace:space options:@{} error:&problem];
+        CGColorSpaceRelease(space);
+        if (!written) { fail(error, capacity, problem.localizedDescription ?: @"the subject's picture couldn't be written"); return 0; }
+        return 1;
+    }
+}
+
+int edit_subject_cutout(const char *input, const char *output, double x, double y, double *bounds, char *error, size_t capacity) {
+    if (@available(macOS 14.0, *)) return subject_cutout(input, output, x, y, bounds, error, capacity);
+    fail(error, capacity, @"Lifting a subject out needs macOS 14 or later");
+    return 0;
 }
 
 // Words in a BGRA picture (Vision's text recognition, the fast level, no

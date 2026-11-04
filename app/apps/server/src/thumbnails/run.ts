@@ -14,6 +14,7 @@ import { assetRef, FONTS, HEIGHT, WIDTH, type Design, type Layer, type Thumbnail
 
 import { thumbnailsGuide } from "../agent_text.ts";
 import * as diag from "../diag.ts";
+import { native } from "../native/index.ts";
 import { join } from "../paths.ts";
 import * as claude from "../writer/claude.ts";
 import * as live from "../writer/live.ts";
@@ -42,6 +43,7 @@ export const hooks = {
   ask: (question: claude.Question): Promise<claude.Answer> => claude.askPatiently(question),
   draw: render.draw,
   make: openart.make,
+  cutout: (input: string, output: string, point: [number, number] | null) => native().subjectCutout(input, output, point),
 };
 
 let busy = 0;
@@ -240,6 +242,21 @@ export const TOOLS = [
     name: "settle_comment",
     description: "Settle a comment (#3) once what it asks is done and you've looked at it done: it's kept, and leaves the page. note: what you did, in a line.",
     inputSchema: { type: "object", additionalProperties: false, properties: { comment: { type: "string" }, note: { type: "string" } }, required: ["comment"] },
+  },
+  {
+    name: "cut_out",
+    description:
+      "Lift a picture's subject out exactly, its own pixels (Photos' \"Copy Subject\", on this Mac, no credits): the rest of the picture transparent, at the picture's own size, added to the thumbnail's images. point: [x, y] from 0 to 1 across and down the picture, on the subject you want (his face), else every subject in it. For \"bring him over from V2\", \"he's perfect there\": never ask OpenArt to redraw a subject the person likes — cut him out and lay him over the other base as an image layer. The same box as the layer of the picture he came from puts him where he was; move or size him to sit right. Grade him to the scene's light on his own layer, then compare close: his edges, and none of the old subject showing behind (size him a touch bigger to cover, or make the base clean of the old subject first with make_picture). Read the file it names.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        image: { type: "string", description: "The picture's image id (a version's base: its layers name it)." },
+        point: { type: "array", items: { type: "number" }, minItems: 2, maxItems: 2 },
+        name: { type: "string" },
+      },
+      required: ["image"],
+    },
   },
   {
     name: "save_overlay",
@@ -586,6 +603,35 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
         else return false;
       });
       return name === "reply_to_comment" ? `Answered #${n}; it stays open.` : `Settled #${n}.`;
+    }
+    case "cut_out": {
+      const found = await cloud.get(session.id);
+      if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      const source = found.thumb.images.find((one) => one.id === args.image);
+      if (source === undefined) throw new Error(`There's no image ${String(args.image)}: give one of the thumbnail's image ids.`);
+      const point = Array.isArray(args.point) && args.point.length === 2 && args.point.every((one) => typeof one === "number" && one >= 0 && one <= 1) ? ([args.point[0], args.point[1]] as [number, number]) : null;
+      if (args.point !== undefined && point === null) throw new Error("point is [x, y], each from 0 to 1 across and down the picture.");
+      const input = await fileOf(session, source);
+      const output = join(session.folder, `cutout-${Date.now()}.png`);
+      const box = await hooks.cutout(input, output, point);
+      const bytes = new Uint8Array(fs.readFileSync(output));
+      const key = await cloud.put(session.id, bytes, "image/png", "png");
+      const image: ThumbImage = {
+        id: newId(),
+        name: typeof args.name === "string" && args.name.trim() !== "" ? args.name.trim().slice(0, 80) : `${source.name.slice(0, 50)}, subject cut out`,
+        key,
+        from: "cutout",
+        cutFrom: source.id,
+        width: source.width,
+        height: source.height,
+        at: Date.now(),
+        by: session.by,
+      };
+      await cloud.change(session.id, session.by, (thumb) => {
+        thumb.images = [...thumb.images, image].slice(-60);
+      });
+      const shown = `${box.map((one) => one.toFixed(2)).join(", ")}`;
+      return `Cut out ${image.id} from ${source.id} (${source.width}×${source.height}, transparent but for the subject; the subject spans ${shown} of it, x0, y0, x1, y1 from the top left). Over the canvas as its picture's layer was (cover, 0, 0, 1280×720) he sits where he was. Read it: ${output}`;
     }
     case "save_overlay": {
       const found = await cloud.get(session.id);

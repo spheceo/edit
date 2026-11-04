@@ -17,7 +17,8 @@ export type ThumbImage = {
   name: string;
   /** Under `edit/thumbnails/<id>/`. */
   key: string;
-  from: "openart" | "upload" | "render";
+  /** cutout: a picture's subject lifted out of another of its pictures (`cutFrom`), the rest transparent. */
+  from: "openart" | "upload" | "render" | "cutout";
   width: number;
   height: number;
   /** What made it on OpenArt: the prompt, the model, the pictures it was given (by id). */
@@ -26,6 +27,7 @@ export type ThumbImage = {
   references?: string[];
   /** The person's own request in the turn that made it, kept with the prompt so it can be pulled again after the chat has moved on. */
   request?: string;
+  cutFrom?: string;
   /** What it cost on OpenArt, and on which of the team's accounts (pictures made from Nov 4 on). */
   credits?: number;
   account?: string;

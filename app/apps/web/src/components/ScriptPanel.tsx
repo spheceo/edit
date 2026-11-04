@@ -352,10 +352,8 @@ export function WaitingFiles({ project, job }: { project: Project; job: ScriptJo
     setBusy(true);
     setFailed(null);
     try {
-      for (const file of missing) {
-        const { job: next } = await api.answerFootage(project.id, file.file, { skip: true });
-        useEditor.setState({ scriptJob: next });
-      }
+      const { job: next } = await api.answerFootage(project.id, "*", { skip: true });
+      useEditor.setState({ scriptJob: next });
     } catch (error) {
       setFailed(error);
     } finally {

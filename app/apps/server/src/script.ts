@@ -104,12 +104,15 @@ export async function replaceFootage(app: App, id: string, file: string, url: st
 
 /** Goes on without footage file `file`: its ranges leave the script, the rest is laid out. The person's "proceed without it". */
 export async function skipFootage(app: App, id: string, file: string): Promise<void> {
-  const project = waitingFor(app, id, file);
-  if (!(project.script?.blocks ?? []).some((block) => block.kind === "footage" && block.file !== file)) {
+  // "*": every file it couldn't get, in one go (each skip starts the import again, so one at a time the second was refused).
+  const files = file === "*" ? (app.scripts.get(id)?.files ?? []).filter((one) => one.state === "failed").map((one) => one.file) : [file];
+  if (files.length === 0) throw new Error("Nothing is waiting to be skipped.");
+  const project = waitingFor(app, id, files[0]!);
+  if (!(project.script?.blocks ?? []).some((block) => block.kind === "footage" && !files.includes(block.file))) {
     throw new Error("That's the only footage in the script: give another link for it instead.");
   }
   await app.store.update(id, "script", (edited) => {
-    if (edited.script) edited.script.blocks = edited.script.blocks.filter((block) => block.kind !== "footage" || block.file !== file);
+    if (edited.script) edited.script.blocks = edited.script.blocks.filter((block) => block.kind !== "footage" || !files.includes(block.file));
   });
   void start(app, id, false);
 }

@@ -7,7 +7,7 @@ import { media, type EdgeCache } from "./media";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
 import { fromOtherRelay, openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
 import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
-import { google } from "./google";
+import { google, mayUseDrive } from "./google";
 
 export { DriveToR2 } from "./jobs";
 
@@ -142,6 +142,8 @@ export default {
     if (url.pathname === "/v1/proxy" && request.method === "GET") {
       const found = await allow(request, env, "use", "proxy");
       if (found instanceof Response) return found;
+      // Only to someone whose work downloads from YouTube (any kind of work: edits, scripts, subtitles and ideas all do), never `use` alone.
+      if (!mayUseDrive(found)) return json(403, { error: "Your account can't download from YouTube: an admin can give you a kind of work at accounts.spheceo.com." });
       return json(200, { proxyUrl: env.PROXY_URL || null });
     }
     // Today's transcription spend (bytes; ~14.4 MB an hour of audio), for Edit's log and the team.

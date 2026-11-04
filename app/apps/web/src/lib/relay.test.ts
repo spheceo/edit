@@ -713,6 +713,12 @@ describe("relay: the team's Google Drive, its token kept here (Nov 4)", () => {
     expect(old.status).toBe(410);
   });
 
+  it("gives the YouTube proxy only to someone with a kind of work", async () => {
+    const proxy = (token: string) => relay.fetch(new Request("https://relay.test/v1/proxy", { headers: { authorization: `Bearer ${token}` } }), { ...env, PROXY_URL: "http://login:pass@gw.example:823" } as Env);
+    expect((await proxy(USE_ONLY)).status).toBe(403);
+    expect(await (await proxy(SUBS)).json()).toEqual({ proxyUrl: "http://login:pass@gw.example:823" });
+  });
+
   it("refuses every other call: deletes, moves, other sharing, other APIs and hosts", async () => {
     const upstream = stand();
     for (const [method, path] of [

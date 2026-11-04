@@ -306,3 +306,56 @@ export function formatWorked(ms: number) {
   const minutes = Math.round(seconds / 60);
   return minutes < 60 ? `Worked for ${minutes}m` : `Worked for ${Math.round(minutes / 60)}h`;
 }
+
+/** A tool as an idea's or a thumbnail's conversation keeps it. */
+type KeptTool = { id?: string; name: string; state: "running" | "done" | "error"; detail?: string };
+
+/** A turn of an idea's or a thumbnail's conversation, kept on the team's record. */
+type KeptTurn = { role: "you" | "claude"; text: string; at: number; workedMs?: number; tools?: KeptTool[]; failed?: boolean };
+
+/** The turn still running on this Mac: its words, reasoning and tools in order when it has them (`trace`), else its tools and words so far. */
+type KeptRun = {
+  startedAt: number;
+  said?: string;
+  tools?: KeptTool[];
+  trace?: ({ kind: "thinking"; text: string; active: boolean } | { kind: "text"; text: string } | { kind: "tools"; calls: KeptTool[] })[];
+};
+
+const liveStatus = (state: KeptTool["state"]): AgentEntry["status"] => (state === "running" ? "running" : state === "error" ? "failed" : "done");
+
+/**
+ * An idea's or a thumbnail's conversation as the editor's chat entries: each
+ * request (with the pictures given with it), the tools Claude ran for it
+ * (folded behind "Worked for …" once it's done), its answer, a turn that
+ * failed as the chat's problem; then the turn still running, when there is one.
+ */
+export function conversationEntries<T extends KeptTurn>(chat: T[], createdAt: number, run: KeptRun | null, attachments: (turn: T) => NonNullable<AgentEntry["attachments"]>): AgentEntry[] {
+  const entries: AgentEntry[] = [];
+  let asked = createdAt;
+  chat.forEach((turn, index) => {
+    if (turn.role === "you") {
+      asked = turn.at;
+      const files = attachments(turn);
+      entries.push({ id: `turn-${index}`, kind: "user", text: turn.text, at: turn.at, ...(files.length > 0 ? { attachments: files } : {}) });
+      return;
+    }
+    const began = turn.workedMs !== undefined ? turn.at - turn.workedMs : asked;
+    (turn.tools ?? []).forEach((tool, at) =>
+      entries.push({ id: `turn-${index}-${at}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: tool.state === "error" ? "failed" : tool.state === "running" ? "stopped" : "done", at: began, updated: began }),
+    );
+    entries.push({ id: `turn-${index}`, kind: turn.failed ? "error" : "assistant", text: turn.text, at: turn.at, updated: turn.at });
+  });
+  if (run === null) return entries;
+  const at = run.startedAt;
+  if (run.trace !== undefined) {
+    run.trace.forEach((part, index) => {
+      if (part.kind === "text") entries.push({ id: `live-${at}-text-${index}`, kind: "assistant", text: part.text, at });
+      else if (part.kind === "thinking") entries.push({ id: `live-${at}-think-${index}`, kind: "thinking", text: part.text, status: part.active ? "running" : "done", at });
+      else part.calls.forEach((tool, call) => entries.push({ id: tool.id ? `live-${tool.id}` : `live-${at}-tool-${index}-${call}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", ...(tool.detail ? { detail: tool.detail } : {}), status: liveStatus(tool.state), at }));
+    });
+    return entries;
+  }
+  (run.tools ?? []).forEach((tool, index) => entries.push({ id: `live-${at}-${index}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: liveStatus(tool.state), at }));
+  if (run.said) entries.push({ id: `live-${at}-said`, kind: "assistant", text: run.said, at });
+  return entries;
+}

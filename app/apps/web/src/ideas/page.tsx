@@ -12,11 +12,13 @@ import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEff
 
 import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
+import { ChatDock } from "../components/ChatDock";
 import { picturesOnly, postFile } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { StartedBy } from "../components/StartedBy";
-import { Button, cx, Modal, Spinner } from "../components/ui";
-import type { AgentEntry } from "../lib/agent";
+import { toggleMenu } from "../components/ContextMenu";
+import { Button, ConfirmDialog, cx, DialogActions, DialogTitle, IconButton, Modal, Spinner } from "../components/ui";
+import { conversationEntries } from "../lib/agentTurns";
 import { footageIn, footageLine, WORKSPACE_NAMES, type IdeaFootage, type IdeaImage } from "@edit/types/ideas";
 import { chatImageUrl, ideasApi, imageUrl, NICHE, viewsLabel, working, type Idea, type IdeaChange, type IdeaPage as Page } from "../lib/ideas";
 import { navigate } from "../lib/route";
@@ -29,7 +31,8 @@ export function backToIdeas(): void {
 }
 
 // Sphe Research's own classes (thread-form.tsx), so the page reads as it did.
-const FIELD = "w-full rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 py-2 text-[14.5px] leading-relaxed text-white outline-none placeholder:text-white/20 focus:border-white/18";
+const FIELD_SHAPE = "w-full rounded-lg border bg-white/[0.02] px-3 py-2 text-[14.5px] leading-relaxed text-white outline-none placeholder:text-white/20";
+const FIELD = `${FIELD_SHAPE} border-white/[0.06] focus:border-white/18`;
 const LABEL = "text-[13px] font-medium tracking-[-0.01em] text-white/45";
 const QUIET_BUTTON = "rounded-lg px-2 py-1 text-[12px] text-white/35 transition-colors hover:bg-white/[0.05] hover:text-white/80 disabled:opacity-40";
 const WHITE_BUTTON = "inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-[12px] font-medium text-black transition-colors hover:bg-white/85 disabled:opacity-40";
@@ -143,7 +146,9 @@ export function IdeaScreen({ id }: { id: string }) {
             </>
           )}
         </main>
-        <aside className="w-[400px] shrink-0 pt-2 pr-2 pl-2">{page === null ? <ChatShell loading /> : <Chat id={id} idea={page.idea} onAsked={() => void load()} />}</aside>
+        <ChatDock working={active}>
+          <div className="flex min-h-0 flex-1 flex-col pt-2">{page === null ? <ChatShell loading /> : <Chat id={id} idea={page.idea} onAsked={() => void load()} />}</div>
+        </ChatDock>
       </div>
       {page !== null && <SendDialog open={sending} idea={page.idea} onClose={() => setSending(false)} onSent={() => void load()} />}
     </div>
@@ -171,16 +176,9 @@ function Header({
   onDeleted: () => void;
   toast: (text: string, tone?: "agent" | "error" | "info") => void;
 }) {
-  const [menu, setMenu] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const idea = page?.idea ?? null;
   const place = page?.place ?? null;
-  useEffect(() => {
-    if (!menu) return;
-    const dismiss = () => setMenu(false);
-    window.addEventListener("mousedown", dismiss);
-    return () => window.removeEventListener("mousedown", dismiss);
-  }, [menu]);
   const sent = idea !== null && idea.status === "sent" && idea.card !== null;
   const active = idea !== null && working(idea);
   const missing = idea === null ? [] : [idea.titles.length === 0 ? "a title" : "", idea.thumbnailGuide.trim() === "" ? "a thumbnail guide" : "", idea.sources.length === 0 ? "the case link" : ""].filter(Boolean);
@@ -250,83 +248,38 @@ function Header({
           </Button>
         ))}
       {idea !== null && (
-        <div className="relative">
-          <button type="button" aria-label="Idea options" onMouseDown={(event) => event.stopPropagation()} onClick={() => setMenu((open) => !open)} className="grid size-7 place-items-center rounded-lg text-white/35 transition-colors hover:bg-white/[0.05] hover:text-white/80">
-            <MoreHorizontal size={15} strokeWidth={1.9} />
-          </button>
-          {menu && (
-            <div onMouseDown={(event) => event.stopPropagation()} className="absolute top-9 right-0 z-30 w-52 rounded-xl border border-white/[0.08] bg-[#141414] p-1 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.95)]">
-              <MenuItem
-                icon={<Copy size={13} strokeWidth={1.9} />}
-                onClick={() => {
-                  setMenu(false);
-                  void navigator.clipboard?.writeText(cardMarkdown(idea)).then(() => toast("Copied as Markdown.", "info"));
-                }}
-              >
-                Copy as markdown
-              </MenuItem>
-              {idea.summary === "" && (
-                <MenuItem
-                  icon={<Plus size={13} strokeWidth={1.9} />}
-                  disabled={active}
-                  onClick={() => {
-                    setMenu(false);
-                    void onAct("ask for a summary", () => onChange({ wantsSummary: true }).then(() => ideasApi.chat(idea.id, "Write the summary: one factual sentence, 30 words at most.")));
-                  }}
-                >
-                  Ask Claude for a summary
-                </MenuItem>
-              )}
-              <MenuItem
-                danger
-                icon={<Trash2 size={13} strokeWidth={1.9} />}
-                onClick={() => {
-                  setMenu(false);
-                  setDeleting(true);
-                }}
-              >
-                Delete idea
-              </MenuItem>
-            </div>
-          )}
-        </div>
+        <IconButton
+          label="Idea options"
+          onClick={(event) =>
+            toggleMenu(
+              event.currentTarget,
+              [
+                { label: "Copy as markdown", icon: <Copy size={14} />, onSelect: () => void navigator.clipboard?.writeText(cardMarkdown(idea)).then(() => toast("Copied as Markdown.", "info")) },
+                ...(idea.summary === ""
+                  ? [{ label: "Ask Claude for a summary", icon: <Plus size={14} />, disabled: active, onSelect: () => void onAct("ask for a summary", () => onChange({ wantsSummary: true }).then(() => ideasApi.chat(idea.id, "Write the summary: one factual sentence, 30 words at most."))) }]
+                  : []),
+                { label: "Delete idea", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
+              ],
+              { width: 210 },
+            )
+          }
+        >
+          <MoreHorizontal size={15} />
+        </IconButton>
       )}
       <AppMenu />
       {idea !== null && (
-        <Modal open={deleting} onClose={() => setDeleting(false)} width={400}>
-          <div className="p-5">
-            <h2 className="text-[15px] font-semibold">Delete this idea?</h2>
-            <p className="mt-1 text-[13px] text-muted">{idea.main ?? idea.sources[0]?.title}</p>
-            <p className="mt-2 text-[12px] text-faint">{idea.card !== null ? "Its card stays on the board." : "It goes for the whole team."}</p>
-          </div>
-          <div className="flex justify-end gap-2 border-t border-line bg-bg/40 px-5 py-3">
-            <Button variant="ghost" onClick={() => setDeleting(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void onAct("delete the idea", () => ideasApi.remove(idea.id).then(onDeleted))}>
-              Delete
-            </Button>
-          </div>
-        </Modal>
+        <ConfirmDialog
+          open={deleting}
+          onClose={() => setDeleting(false)}
+          title="Delete this idea?"
+          detail={`${idea.main ?? idea.sources[0]?.title ?? "This idea"}. ${idea.card !== null ? "Its card stays on the board." : "It goes for the whole team."}`}
+          confirm="Delete"
+          busy={busy === "delete the idea"}
+          onConfirm={() => void onAct("delete the idea", () => ideasApi.remove(idea.id).then(onDeleted))}
+        />
       )}
     </div>
-  );
-}
-
-function MenuItem({ icon, children, onClick, danger, disabled }: { icon: ReactNode; children: ReactNode; onClick: () => void; danger?: boolean; disabled?: boolean }) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cx(
-        "flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors disabled:opacity-40",
-        danger ? "text-red-200/70 hover:bg-red-500/10 hover:text-red-200" : "text-white/60 hover:bg-white/[0.06] hover:text-white/90",
-      )}
-    >
-      {icon}
-      {children}
-    </button>
   );
 }
 
@@ -470,14 +423,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
   // What's being written in the section open for editing; saved on Done (or Enter).
   const [titles, setTitles] = useState<{ id?: string; text: string }[]>([]);
   const [text, setText] = useState("");
-  const [menuFor, setMenuFor] = useState<string | null>(null);
   const focus = useRef<number | null>(null);
-  useEffect(() => {
-    if (!menuFor) return;
-    const dismiss = () => setMenuFor(null);
-    window.addEventListener("mousedown", dismiss);
-    return () => window.removeEventListener("mousedown", dismiss);
-  }, [menuFor]);
   useEffect(() => {
     if (focus.current === null) return;
     document.querySelector<HTMLTextAreaElement>(`[data-idea-title="${focus.current}"]`)?.focus();
@@ -487,7 +433,6 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
   const value = (section: Section) => (section === "summary" ? idea.summary : section === "guide" ? idea.thumbnailGuide : section === "notes" ? idea.notes : "");
   /** Opens a section (saving the one open before), or closes it saving what was written. */
   const toggle = (next: Section | null) => {
-    setMenuFor(null);
     if (editing !== null) save(editing);
     if (next === "titles") setTitles(idea.titles.map((one) => ({ id: one.id, text: one.text })));
     else if (next !== null) setText(value(next));
@@ -556,7 +501,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
                         onKeyDown={(event) => saveOnEnter(event, done)}
                         placeholder="Title option"
                         rows={1}
-                        className={cx(FIELD, "resize-none overflow-hidden break-words whitespace-pre-wrap [field-sizing:content]", isMain && "border-amber-300/55")}
+                        className={cx(isMain ? `${FIELD_SHAPE} border-amber-300/55` : FIELD, "resize-none overflow-hidden break-words whitespace-pre-wrap [field-sizing:content]")}
                       />
                     ) : (
                       <p className={cx("text-[14.5px] leading-relaxed break-words", isMain ? "font-medium text-amber-200/90" : "text-white/85")}>{title.text}</p>
@@ -564,39 +509,33 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
                     {by !== undefined && by !== "claude" && <p className="mt-0.5 text-[11.5px] text-white/30">Written by {by}</p>}
                   </div>
                   {editing === "titles" && (
-                    <div className="relative shrink-0">
-                      <button type="button" aria-label={`Title ${index + 1} options`} onMouseDown={(event) => event.stopPropagation()} onClick={() => setMenuFor((last) => (last === key ? null : key))} className="mt-0.5 grid size-8 place-items-center rounded-lg text-white/25 transition-colors hover:bg-white/[0.05] hover:text-white/70">
-                        <MoreHorizontal size={15} strokeWidth={1.9} />
-                      </button>
-                      {menuFor === key && (
-                        <div onMouseDown={(event) => event.stopPropagation()} className="absolute top-9 right-0 z-30 w-44 rounded-xl border border-white/[0.08] bg-[#141414] p-1 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.95)]">
-                          <MenuItem
-                            disabled={isMain || title.text.trim() === ""}
-                            icon={<Check size={13} strokeWidth={1.9} className={isMain ? "text-emerald-200/90" : undefined} />}
-                            onClick={() => {
-                              setMenuFor(null);
-                              const chosen = title.text.trim();
-                              // The titles as written and the main one, in one change.
-                              const next = titles.filter((one) => one.text.trim() !== "").map((one) => (one.id !== undefined ? { id: one.id, text: one.text.trim() } : { text: one.text.trim() }));
-                              setEditing(null);
-                              void onChange({ titles: next, main: chosen });
-                            }}
-                          >
-                            {isMain ? "Main title" : "Use as main title"}
-                          </MenuItem>
-                          <MenuItem
-                            danger
-                            icon={<Trash2 size={13} strokeWidth={1.9} />}
-                            onClick={() => {
-                              setMenuFor(null);
-                              setTitles((last) => last.filter((_, at) => at !== index));
-                            }}
-                          >
-                            Delete
-                          </MenuItem>
-                        </div>
-                      )}
-                    </div>
+                    <IconButton
+                      label={`Title ${index + 1} options`}
+                      className="mt-1 size-8 shrink-0"
+                      onClick={(event) =>
+                        toggleMenu(
+                          event.currentTarget,
+                          [
+                            {
+                              label: isMain ? "Main title" : "Use as main title",
+                              icon: <Check size={14} />,
+                              disabled: isMain || title.text.trim() === "",
+                              onSelect: () => {
+                                // The titles as written and the main one, in one change.
+                                const chosen = title.text.trim();
+                                const next = titles.filter((one) => one.text.trim() !== "").map((one) => (one.id !== undefined ? { id: one.id, text: one.text.trim() } : { text: one.text.trim() }));
+                                setEditing(null);
+                                void onChange({ titles: next, main: chosen });
+                              },
+                            },
+                            { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => setTitles((last) => last.filter((_, at) => at !== index)) },
+                          ],
+                          { width: 190 },
+                        )
+                      }
+                    >
+                      <MoreHorizontal size={15} />
+                    </IconButton>
                   )}
                 </li>
               );
@@ -848,13 +787,6 @@ function Guide({
     if (image.from === "video") return video?.url ?? null;
     return null;
   };
-  const [menuFor, setMenuFor] = useState<string | null>(null);
-  useEffect(() => {
-    if (menuFor === null) return;
-    const dismiss = () => setMenuFor(null);
-    window.addEventListener("mousedown", dismiss);
-    return () => window.removeEventListener("mousedown", dismiss);
-  }, [menuFor]);
   return (
     <section>
       <SectionHeader label="Thumbnail guide" section="guide" editing={editing} onToggle={onToggle} />
@@ -871,70 +803,30 @@ function Guide({
         {idea.images.map((image, index) => {
           const label = caption(image);
           const link = linkOf(image);
-          const open = menuFor === image.id;
           return (
             <div key={image.id} className="group/image relative">
               <img src={imageUrl(idea.id, image.id)} alt={image.name} loading="lazy" className="max-h-[70vh] w-full rounded-xl border border-white/[0.06] object-contain" />
               {label !== null && <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] text-white/75 backdrop-blur">{label}</span>}
-              <div className={cx("absolute top-2 right-2 transition-opacity", open ? "opacity-100" : "opacity-0 group-hover/image:opacity-100")}>
-                <button
-                  type="button"
-                  aria-label="Picture options"
-                  title="Picture options"
-                  onMouseDown={(event) => event.stopPropagation()}
-                  onClick={() => setMenuFor((last) => (last === image.id ? null : image.id))}
-                  className="grid size-8 place-items-center rounded-lg bg-black/60 text-white/70 backdrop-blur transition-colors hover:text-white"
-                >
-                  <MoreHorizontal size={15} strokeWidth={1.9} />
-                </button>
-                {open && (
-                  <div onMouseDown={(event) => event.stopPropagation()} className="absolute top-9 right-0 z-30 w-44 rounded-xl border border-white/[0.08] bg-[#141414] p-1 shadow-[0_18px_40px_-16px_rgba(0,0,0,0.95)]">
-                    {link !== null && (
-                      <MenuItem
-                        icon={<ExternalLink size={13} strokeWidth={1.9} />}
-                        onClick={() => {
-                          setMenuFor(null);
-                          window.open(link, "_blank", "noopener,noreferrer");
-                        }}
-                      >
-                        Open link
-                      </MenuItem>
-                    )}
-                    {index > 0 && (
-                      <MenuItem
-                        icon={<ArrowUp size={13} strokeWidth={1.9} />}
-                        onClick={() => {
-                          setMenuFor(null);
-                          move(image.id, -1);
-                        }}
-                      >
-                        Move up
-                      </MenuItem>
-                    )}
-                    {index < idea.images.length - 1 && (
-                      <MenuItem
-                        icon={<ArrowDown size={13} strokeWidth={1.9} />}
-                        onClick={() => {
-                          setMenuFor(null);
-                          move(image.id, 1);
-                        }}
-                      >
-                        Move down
-                      </MenuItem>
-                    )}
-                    <MenuItem
-                      danger
-                      icon={<Trash2 size={13} strokeWidth={1.9} />}
-                      onClick={() => {
-                        setMenuFor(null);
-                        void onChange({ images: order.filter((one) => one !== image.id) });
-                      }}
-                    >
-                      Delete
-                    </MenuItem>
-                  </div>
-                )}
-              </div>
+              <button
+                type="button"
+                aria-label="Picture options"
+                title="Picture options"
+                onClick={(event) =>
+                  toggleMenu(
+                    event.currentTarget,
+                    [
+                      ...(link !== null ? [{ label: "Open link", icon: <ExternalLink size={14} />, onSelect: () => window.open(link, "_blank", "noopener,noreferrer") }] : []),
+                      ...(index > 0 ? [{ label: "Move up", icon: <ArrowUp size={14} />, onSelect: () => move(image.id, -1) }] : []),
+                      ...(index < idea.images.length - 1 ? [{ label: "Move down", icon: <ArrowDown size={14} />, onSelect: () => move(image.id, 1) }] : []),
+                      { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => void onChange({ images: order.filter((one) => one !== image.id) }) },
+                    ],
+                    { width: 180 },
+                  )
+                }
+                className="absolute top-2 right-2 grid size-8 place-items-center rounded-lg bg-black/60 text-white/70 opacity-0 backdrop-blur transition-[opacity,color] group-hover/image:opacity-100 hover:text-white focus-visible:opacity-100"
+              >
+                <MoreHorizontal size={15} />
+              </button>
             </div>
           );
         })}
@@ -977,40 +869,10 @@ function Guide({
 
 // ---------------------------------------------------------------- the chat (the editor's own)
 
-/**
- * The idea's conversation as the editor's chat entries: each request, the
- * tools Claude ran for it (folded behind "Worked for …" once it's done), its
- * answer; a turn that failed as the chat's problem. While Claude works on this
- * Mac, its tools and words so far.
- */
-export function entriesOf(idea: Idea): { entries: AgentEntry[]; running: boolean } {
-  const entries: AgentEntry[] = [];
-  let asked = idea.createdAt;
-  idea.chat.forEach((turn, index) => {
-    if (turn.role === "you") {
-      asked = turn.at;
-      const attachments = (turn.images ?? []).map((image) => ({ name: image.name, kind: "image" as const, url: chatImageUrl(idea.id, image.id) }));
-      entries.push({ id: `turn-${index}`, kind: "user", text: turn.text, at: turn.at, ...(attachments.length > 0 ? { attachments } : {}) });
-      return;
-    }
-    const began = turn.workedMs !== undefined ? turn.at - turn.workedMs : asked;
-    (turn.tools ?? []).forEach((tool, at) =>
-      entries.push({ id: `turn-${index}-${at}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: tool.state === "error" ? "failed" : tool.state === "running" ? "stopped" : "done", at: began, updated: began }),
-    );
-    entries.push({ id: `turn-${index}`, kind: turn.failed ? "error" : "assistant", text: turn.text, at: turn.at, updated: turn.at });
-  });
-  const run = idea.run;
-  const running = working(idea);
-  if (running && run !== null) {
-    (run.tools ?? []).forEach((tool, at) => entries.push({ id: `live-${run.startedAt}-${at}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: tool.state === "running" ? "running" : tool.state === "error" ? "failed" : "done", at: run.startedAt }));
-    if (run.said) entries.push({ id: `live-${run.startedAt}-said`, kind: "assistant", text: run.said, at: run.startedAt });
-  }
-  return { entries, running };
-}
-
 function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => void }) {
   const toastError = useEditor((state) => state.toastError);
-  const { entries, running } = entriesOf(idea);
+  const running = working(idea);
+  const entries = conversationEntries(idea.chat, idea.createdAt, running ? idea.run : null, (turn) => (turn.images ?? []).map((image) => ({ name: image.name, kind: "image" as const, url: chatImageUrl(idea.id, image.id) })));
   // What was there when the page opened doesn't animate in.
   const { turns, known } = useChatTurns(id, entries, running);
   const other = running && idea.run !== null && idea.run.tools === undefined && idea.run.said === undefined ? ` · on ${idea.run.holder}` : "";
@@ -1086,11 +948,11 @@ function SendDialog({ open, idea, onClose, onSent }: { open: boolean; idea: Idea
   };
   return (
     <Modal open={open} onClose={() => !busy && onClose()} width={460}>
-      <div className="p-5">
-        <h2 className="text-[15px] font-semibold">Send to Trello</h2>
-        <p className="mt-1 text-[12px] text-muted">
-          A card at the top of the lane on the {idea.workspace === "bodycam" ? "Raw Channels" : "Interrogation"} board, named “{idea.main ?? idea.titles[0]?.text}”: its titles, the thumbnail guide and {idea.images.length === 1 ? "its picture" : `its ${idea.images.length} pictures`} (the first is the cover), and the case.
-        </p>
+      <div className="p-6">
+        <DialogTitle
+          title="Send to Trello"
+          detail={`A card at the top of the lane on the ${idea.workspace === "bodycam" ? "Raw Channels" : "Interrogation"} board, named “${idea.main ?? idea.titles[0]?.text ?? ""}”: its titles, the thumbnail guide and ${idea.images.length === 1 ? "its picture" : `its ${idea.images.length} pictures`} (the first is the cover), and the case.`}
+        />
         <div className="mt-4 space-y-1.5">
           {(lanes.length > 0 ? lanes : [{ key: lane, name: "…" }]).map((one) => (
             <label key={one.key} className={cx("flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-[13px]", lane === one.key ? "border-muted bg-raised" : "border-line hover:bg-hover")}>
@@ -1108,14 +970,14 @@ function SendDialog({ open, idea, onClose, onSent }: { open: boolean; idea: Idea
           </label>
         )}
         {problem !== null && <p className="mt-3 text-[12px] text-danger">{problem}</p>}
-      </div>
-      <div className="flex justify-end gap-2 border-t border-line bg-bg/40 px-5 py-3">
-        <Button variant="ghost" onClick={onClose} disabled={busy}>
-          Cancel
-        </Button>
-        <Button variant="primary" onClick={send} disabled={busy || lanes.length === 0 || (idea.duplicate !== null && !anyway)}>
-          {busy ? <Spinner size={13} /> : <Send size={14} />} Send
-        </Button>
+        <DialogActions>
+          <Button variant="subtle" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={send} disabled={busy || lanes.length === 0 || (idea.duplicate !== null && !anyway)}>
+            {busy ? <Spinner size={13} /> : <Send size={14} />} Send
+          </Button>
+        </DialogActions>
       </div>
     </Modal>
   );

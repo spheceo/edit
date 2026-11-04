@@ -1,4 +1,3 @@
-import { motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 
 import { addElement, addMarker, clipEnd, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
@@ -15,12 +14,13 @@ import { ShareDialog } from "./ShareDialog";
 import { FileBrowser } from "./FileBrowser";
 import { Research } from "./Research";
 import { AgentPanel } from "./AgentPanel";
+import { ChatDock } from "./ChatDock";
 import { CloudBanner } from "./CloudBanner";
 import { MissingBanner } from "./MissingBanner";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
 import { ProblemView } from "./ProblemView";
-import { cx, spring } from "./ui";
+import { cx } from "./ui";
 import { Loader } from "./Logo";
 import { toggleFullscreen, Viewer } from "./Viewer";
 import { rate } from "../lib/types";
@@ -29,6 +29,7 @@ export function Editor({ id }: { id: string }) {
   const project = useEditor((state) => state.project);
   const timelineHeight = useEditor((state) => state.timelineHeight);
   const [resizing, setResizing] = useState(false);
+  const agentWorking = useEditor((state) => state.agentActive > 0);
   const [importing, setImporting] = useState(false);
   const [researching, setResearching] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -122,7 +123,9 @@ export function Editor({ id }: { id: string }) {
             <Timeline />
           </div>
         </div>
-        <AgentDock />
+        <ChatDock working={agentWorking}>
+          <AgentPanel />
+        </ChatDock>
       </div>
       <FileBrowser open={importing} onClose={() => setImporting(false)} />
       <Research open={researching} onClose={() => setResearching(false)} />
@@ -159,80 +162,6 @@ function useDropToChat() {
       window.removeEventListener("drop", drop);
     };
   }, []);
-}
-
-/**
- * The chat at the right, sized by its edge as the timeline is by its divider
- * (the user, Oct 30): drag the edge to make it wider or narrower, click it to
- * close the chat; closed, the edge stays at the window's very edge (the
- * cursor says so), and a click or a drag brings the chat back. No button: a
- * line, and violet while its agent works behind a closed chat.
- */
-function AgentDock() {
-  const show = useEditor((state) => state.showAgent);
-  const width = useEditor((state) => state.agentWidth);
-  const working = useEditor((state) => state.agentActive > 0);
-  const [dragging, setDragging] = useState(false);
-  const drag = useRef<{ x: number; width: number; open: boolean; moved: boolean } | null>(null);
-  const fit = (value: number) => Math.round(Math.min(Math.max(280, value), Math.max(280, Math.min(760, window.innerWidth - 640))));
-  const end = () => {
-    const was = drag.current;
-    drag.current = null;
-    setDragging(false);
-    // A click, not a drag: closes the chat, or brings it back.
-    if (was !== null && !was.moved) useEditor.getState().toggle("showAgent");
-  };
-  return (
-    <>
-      <div
-        title={show ? "Drag to resize · click to close the chat" : "Click to open the chat"}
-        className={cx(
-          "group relative z-10 flex w-2 shrink-0 cursor-col-resize touch-none items-center justify-center",
-          // A wider reach than the gap itself, so it's easy to catch.
-          "before:absolute before:inset-y-0 before:-left-[5px] before:-right-[3px] before:content-['']",
-        )}
-        onPointerDown={(event) => {
-          (event.target as HTMLElement).setPointerCapture(event.pointerId);
-          drag.current = { x: event.clientX, width, open: show, moved: false };
-        }}
-        onPointerMove={(event) => {
-          const at = drag.current;
-          if (at === null) return;
-          const pulled = at.x - event.clientX;
-          if (!at.moved && Math.abs(pulled) < 4) return;
-          if (!at.moved) {
-            at.moved = true;
-            setDragging(true);
-          }
-          // Closed, the chat comes out with the pointer once it's pulled far enough to read.
-          const next = at.open ? at.width + pulled : pulled;
-          if (!at.open && next < 160) return;
-          if (!useEditor.getState().showAgent) useEditor.getState().toggle("showAgent");
-          useEditor.getState().setAgentWidth(fit(next));
-        }}
-        onPointerUp={end}
-        onPointerCancel={end}
-      >
-        <div
-          className={cx(
-            "w-[3px] rounded-[3px] transition-[height,background-color] duration-200 ease-out",
-            dragging ? "h-[72px] bg-playhead" : !show && working ? "h-14 animate-pulse bg-agent" : "h-9 bg-transparent group-hover:h-14 group-hover:bg-[#5a5a5a]",
-          )}
-        />
-      </div>
-      <motion.aside
-        initial={false}
-        animate={{ width: show ? width + 8 : 0, opacity: show ? 1 : 0 }}
-        transition={dragging ? { duration: 0 } : spring}
-        className="flex min-h-0 shrink-0 flex-col self-stretch overflow-hidden"
-      >
-        {/* A flex column with a real height, so a long transcript scrolls and the composer stays at the bottom. */}
-        <div className="flex min-h-0 w-full flex-1 flex-col pr-2" style={{ width: width + 8 }}>
-          <AgentPanel />
-        </div>
-      </motion.aside>
-    </>
-  );
 }
 
 /** The divider above the timeline (as Repack’s panel gutters): a pill that grows when

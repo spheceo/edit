@@ -11,11 +11,12 @@ import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, us
 
 import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
+import { ChatDock } from "../components/ChatDock";
 import { attachFiles, attachLanded, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { toggleMenu } from "../components/ContextMenu";
 import { Badge, Button, Chip, ColorField, ConfirmDialog, cx, DialogTitle, DialogActions, Field, IconButton, Modal, Panel, Section, Select, Slider, Spinner, Switch, TextArea, TextField } from "../components/ui";
-import type { AgentEntry } from "../lib/agent";
+import { conversationEntries } from "../lib/agentTurns";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { sourceUrl, thumbnailsApi, working, type Adjust, type Asset, type Design, type ImageLayer, type Layer, type Shadow, type TextLayer, type Thumbnail } from "../lib/thumbnails";
@@ -375,8 +376,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
           )
         }
       />
-      <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
-        <aside className="flex w-[clamp(200px,17vw,244px)] shrink-0 flex-col gap-2 overflow-y-auto pt-2">
+      {/* No padding on the right: the chat's edge sits there. */}
+      <div className="flex min-h-0 flex-1 pb-2 pl-2">
+        <aside className="mr-2 flex w-[clamp(200px,17vw,244px)] shrink-0 flex-col gap-2 overflow-y-auto pt-2">
           {thumb !== null && design !== null && (
             <>
               <LayersPanel design={design} selected={selected} onSelect={setSelected} onOpen={setOpenLayer} onChange={change} onAddText={() => addLayer(newText())} />
@@ -462,18 +464,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
             </>
           )}
         </main>
-        <aside className="w-[clamp(300px,27vw,380px)] shrink-0 pt-2">
-          {thumb === null ? (
-            <ChatShell loading />
-          ) : (
-            <Chat
-              id={id}
-              thumb={thumb}
-              upload={chatUpload}
-              onAsked={() => void load()}
-            />
-          )}
-        </aside>
+        <ChatDock working={running}>
+          <div className="flex min-h-0 flex-1 flex-col pt-2">{thumb === null ? <ChatShell loading /> : <Chat id={id} thumb={thumb} upload={chatUpload} onAsked={() => void load()} />}</div>
+        </ChatDock>
       </div>
     </div>
   );
@@ -1252,50 +1245,10 @@ function TextSections({ layer, set }: { layer: TextLayer; set: (patch: Partial<T
 
 // ---------------------------------------------------------------- the conversation
 
-function entriesOf(thumb: Thumbnail): { entries: AgentEntry[]; running: boolean } {
-  const entries: AgentEntry[] = [];
-  let asked = thumb.createdAt;
-  thumb.chat.forEach((turn, index) => {
-    if (turn.role === "you") {
-      asked = turn.at;
-      const attachments = (turn.images ?? []).map((image) => ({ name: thumb.images.find((one) => one.id === image)?.name ?? "picture", kind: "image" as const, url: sourceUrl(thumb.id, image) }));
-      entries.push({ id: `turn-${index}`, kind: "user", text: turn.text, at: turn.at, ...(attachments.length > 0 ? { attachments } : {}) });
-      return;
-    }
-    const began = turn.workedMs !== undefined ? turn.at - turn.workedMs : asked;
-    (turn.tools ?? []).forEach((tool, at) =>
-      entries.push({ id: `turn-${index}-${at}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: tool.state === "error" ? "failed" : tool.state === "running" ? "stopped" : "done", at: began, updated: began }),
-    );
-    entries.push({ id: `turn-${index}`, kind: turn.failed ? "error" : "assistant", text: turn.text, at: turn.at, updated: turn.at });
-  });
-  const run = thumb.run;
-  const running = working(thumb);
-  if (running && run !== null) entries.push(...liveEntries(run));
-  return { entries, running };
-}
-
-/** The turn still running, in the order it happened: reasoning, words, tools. */
-function liveEntries(run: NonNullable<Thumbnail["run"]>): AgentEntry[] {
-  const at = run.startedAt;
-  const status = (state: "running" | "done" | "error"): AgentEntry["status"] => (state === "running" ? "running" : state === "error" ? "failed" : "done");
-  if (run.trace !== undefined) {
-    const entries: AgentEntry[] = [];
-    run.trace.forEach((part, index) => {
-      if (part.kind === "text") entries.push({ id: `live-${at}-text-${index}`, kind: "assistant", text: part.text, at });
-      else if (part.kind === "thinking") entries.push({ id: `live-${at}-think-${index}`, kind: "thinking", text: part.text, status: part.active ? "running" : "done", at });
-      else part.calls.forEach((tool, call) => entries.push({ id: tool.id ? `live-${tool.id}` : `live-${at}-tool-${index}-${call}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", ...(tool.detail ? { detail: tool.detail } : {}), status: status(tool.state), at }));
-    });
-    return entries;
-  }
-  const entries: AgentEntry[] = [];
-  (run.tools ?? []).forEach((tool, index) => entries.push({ id: `live-${at}-${index}`, kind: "tool", tool: tool.name, text: tool.detail ?? "", status: status(tool.state), at }));
-  if (run.said) entries.push({ id: `live-${at}-said`, kind: "assistant", text: run.said, at });
-  return entries;
-}
-
 function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; upload: Uploader; onAsked: () => void }) {
   const toastError = useEditor((state) => state.toastError);
-  const { entries, running } = entriesOf(thumb);
+  const running = working(thumb);
+  const entries = conversationEntries(thumb.chat, thumb.createdAt, running ? thumb.run : null, (turn) => (turn.images ?? []).map((image) => ({ name: thumb.images.find((one) => one.id === image)?.name ?? "picture", kind: "image" as const, url: sourceUrl(thumb.id, image) })));
   const { turns, known } = useChatTurns(id, entries, running);
   const quiet = running && thumb.run !== null && thumb.run.trace === undefined && thumb.run.tools === undefined && thumb.run.said === undefined;
   const other = quiet ? ` · on ${thumb.run?.holder}` : "";

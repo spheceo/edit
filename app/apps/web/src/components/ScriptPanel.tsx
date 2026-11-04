@@ -335,6 +335,52 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
 }
 
 /**
+ * An import waiting on the person: each file it couldn't get, with its two
+ * answers, and one to go on without them all. Said where the edit would be
+ * (the Viewer), since the Downloads tab that held them is gone: the first
+ * horror import (Nov 4) waited with nothing to press anywhere.
+ */
+export function WaitingFiles({ project, job }: { project: Project; job: ScriptJob }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<unknown>(null);
+  const missing = job.files.filter((file) => file.state === "failed");
+  const linkOf = (file: string) => {
+    const block = project.script?.blocks.find((one) => one.kind === "footage" && one.file === file);
+    return block?.kind === "footage" ? block.url : file;
+  };
+  const skipAll = async () => {
+    setBusy(true);
+    setFailed(null);
+    try {
+      for (const file of missing) {
+        const { job: next } = await api.answerFootage(project.id, file.file, { skip: true });
+        useEditor.setState({ scriptJob: next });
+      }
+    } catch (error) {
+      setFailed(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex max-h-[70%] w-[min(520px,90%)] flex-col gap-2 overflow-y-auto text-left">
+      {missing.length > 1 && (
+        <Button size="sm" variant="primary" className="self-center" disabled={busy} onClick={() => void skipAll()}>
+          {busy ? "Going on…" : "Go on without them"}
+        </Button>
+      )}
+      {failed !== null && <ProblemView error={failed} doing="go on without them" />}
+      {missing.map((file) => (
+        <div key={file.file}>
+          <div className="truncate text-[11px] text-muted" title={linkOf(file.file)}>{file.name ?? linkOf(file.file)}</div>
+          <MissingFile project={project} file={file.file} error={file.error ?? ""} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
  * Footage Edit couldn't fetch, even tried again: why, in plain words, and the
  * person's two answers (the team: "Do we just proceed without it? Do you have
  * a replacement?"). Try again only where something they did (shared it,

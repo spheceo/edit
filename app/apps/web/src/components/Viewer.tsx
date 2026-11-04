@@ -17,6 +17,7 @@ import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { ProblemView } from "./ProblemView";
+import { WaitingFiles } from "./ScriptPanel";
 import { cx, IconButton, Pulse } from "./ui";
 import { Loader } from "./Logo";
 import { rate } from "../lib/types";
@@ -200,14 +201,20 @@ export function Viewer() {
             Stuck? Report it
           </button>
         )}
-        {!error && empty && importing !== null && (
+        {!error && empty && importing !== null && job?.state === "waiting" && project && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-[13px]">
+            <span className="text-muted">{importing.line}</span>
+            <WaitingFiles project={project} job={job} />
+          </div>
+        )}
+        {!error && empty && importing !== null && job?.state !== "waiting" && (
           <button
             onClick={() => useEditor.getState().setMediaTab("downloads")}
             className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[13px]"
           >
-            <span className={cx("text-muted", job?.state !== "failed" && job?.state !== "waiting" && "shimmer")}>{importing.line}</span>
+            <span className={cx("text-muted", job?.state !== "failed" && "shimmer")}>{importing.line}</span>
             <span className="h-1 w-56 overflow-hidden rounded-full bg-white/10">
-              <span className={cx("block h-full rounded-full transition-[width] duration-500", job?.state === "failed" || job?.state === "waiting" ? "bg-danger" : "bg-white/70")} style={{ width: `${Math.max(2, Math.round(importing.fraction * 100))}%` }} />
+              <span className={cx("block h-full rounded-full transition-[width] duration-500", job?.state === "failed" ? "bg-danger" : "bg-white/70")} style={{ width: `${Math.max(2, Math.round(importing.fraction * 100))}%` }} />
             </span>
             <span className="text-[11px] text-faint tabular">{Math.round(importing.fraction * 100)}% · the edit appears here as soon as it’s laid out</span>
           </button>

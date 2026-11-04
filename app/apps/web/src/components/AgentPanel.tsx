@@ -792,7 +792,7 @@ function Markdown({ text }: { text: string }) {
 
 function Composer({ disabled, projectId }: { disabled: boolean; projectId: string | undefined }) {
   const running = useAgent((state) => state.running);
-  const modelName = useAgent((state) => state.modelName);
+  const modelName = useAgent((state) => state.chatModel ?? state.modelName);
   const notes = useNotes((state) => queued(state.notes).length);
   const resetAsked = useEditor((state) => state.resetAsked);
   const upload = useMemo(() => (projectId === undefined ? undefined : { upload: projectUploader(projectId) }), [projectId]);

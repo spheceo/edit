@@ -17,6 +17,7 @@ import * as cloudStorage from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
 import * as claude from "../writer/claude.ts";
+import { ideaModel } from "@edit/types/models";
 import * as live from "../writer/live.ts";
 import * as board from "./board.ts";
 import * as cloud from "./cloud.ts";
@@ -697,7 +698,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         .join("\n\n");
       try {
         const answer = await live.within(running.turn, () =>
-          asking.ask({ model: claude.OPUS, system: system(idea.workspace), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/ideas/${token}`, read: prepared.folder, maxTurns: 40, effort: "medium", timeoutMs: 20 * 60_000, label: `Ideas ${id}`, signal }),
+          asking.ask({ model: ideaModel(idea).id, system: system(idea.workspace), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/ideas/${token}`, read: prepared.folder, maxTurns: 40, effort: "medium", timeoutMs: 20 * 60_000, label: `Ideas ${id}`, signal }),
         );
         const said = await inlinePictures((answer.text ?? running.turn.text).trim(), (source) => placePicture(id, source, [prepared.folder]));
         if (session.skipped !== null) return { state: "done" as const, text: session.skipped };

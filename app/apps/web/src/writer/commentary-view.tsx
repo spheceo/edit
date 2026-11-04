@@ -1,4 +1,5 @@
 import { pickFile } from "./pick";
+import { modelFor } from "@edit/types/models";
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Elapsed, Said, Working, useChatDraft } from "./agent";
 import { ChatShell, ChatTurns, Empty, ResetAsk } from "../components/AgentPanel";
@@ -694,7 +695,7 @@ export function CommentaryEditor({
                     allowEmpty={!draft}
                     running={working}
                     disabled={busy || !ready}
-                    modelName="Opus 5.5"
+                    modelName={modelFor(draft !== null).name}
                     hint={!ready ? "Add a brief or evidence first" : undefined}
                     tray={
                       reset === "pending" && !working ? (

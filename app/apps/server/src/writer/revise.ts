@@ -461,7 +461,7 @@ function keepsLength(script: Script, format: Format, done: [Clip[], Record<strin
 }
 
 /**
- * Opus carries out one request on a built script: one answer with its edits,
+ * Sonnet (claude.REVISION) carries out one request on a built script: one answer with its edits,
  * then at most two repair turns on the same session for edits the app
  * refused. Nothing changes until every edit applies.
  */

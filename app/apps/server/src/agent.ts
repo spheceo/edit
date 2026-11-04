@@ -24,6 +24,8 @@ import { INSTRUCTIONS, toolReference } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
 import { compareStrings, takeChars, charCount } from "./rust.ts";
+import { BUILD_MODEL, REVISION_MODEL } from "@edit/types/models";
+
 import * as claudeUsage from "./claude_usage.ts";
 import * as planLimit from "./plan_limit.ts";
 import * as seams from "./seams.ts";
@@ -81,6 +83,8 @@ export interface Chat {
   authRecoveryUser: string | null;
   /** The tools the Claude session last saw (tool_changes.ts): a resumed one is told what changed since. */
   tools: toolChanges.ToolSchema | null;
+  /** When the whole edit was done (its follow-ups too): from then on its turns are revisions (`turnModel`). Kept through a new chat; synced with it. */
+  built: number | null;
 }
 
 export interface Model {
@@ -108,6 +112,7 @@ function freshChat(): Chat {
     dropped: false,
     authRecoveryUser: null,
     tools: null,
+    built: null,
   };
 }
 
@@ -247,6 +252,22 @@ export const FRESH_EYES =
   "Do the final pass on this edit with fresh eyes: watch it through as the team would (every cut, sound, subtitle and Windows screen), then fix everything you'd flag. " +
   "What the team catches most: narration or the room's voice starting before the picture changes; a glimpse or a half-second clip; a cover (an audio section, a pause, an overlay) fading to show what's under it; a zoom that jumps at a cut; the same photo in cut-in after cut-in; a picture before the words that name it; the date title (the date first) and the countdown (from the date to the tape); a click off its pop-up; music too loud under the intro or changing mid-line; the ending (the last page held and faded, nothing after it).";
 
+
+/** A model's name as the chat shows it ("Sonnet 5.5"). */
+const nameOf = (model: string): string => (model === REVISION_MODEL.id ? REVISION_MODEL.name : BUILD_MODEL.name);
+
+/** A message asking for the edit again from the start: a build, on Opus, even once the edit is built. */
+const REBUILD = /\b(re-?do|re-?build|restart|start over|start again)\b[^.?!]*\bedit\b|\bfrom scratch\b/iu;
+
+/** Whether the project was shared for review on this Mac (reviews.ts keeps it in `<home>/reviews.json`). */
+function sharedForReview(home: string, project: string): boolean {
+  try {
+    const raw = JSON.parse(fs.readFileSync(join(home, "reviews.json"), "utf8")) as { shared?: Record<string, unknown> };
+    return raw.shared?.[project] !== undefined;
+  } catch {
+    return false;
+  }
+}
 
 /** The turn that carries on one a restart cut short. */
 const RESUMED =
@@ -549,7 +570,7 @@ export class Agents implements seams.AgentPanel {
 
   private save(project: string): void {
     const chat = this.withChat(project);
-    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, ...(chat.tools === null ? {} : { tools: chat.tools }), entries: chat.entries.map(entryJson), savedAt: Date.now() };
+    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, ...(chat.tools === null ? {} : { tools: chat.tools }), ...(chat.built === null ? {} : { built: chat.built }), entries: chat.entries.map(entryJson), savedAt: Date.now() };
     try {
       writeAtomic(this.store.chatPath(project), JSON.stringify(snapshot));
       this.onChatSaved?.(project);
@@ -560,7 +581,7 @@ export class Agents implements seams.AgentPanel {
 
   chat(project: string): Json {
     const chat = this.withChat(project);
-    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, auth_retry: this.legacyClaudeRetry(project) });
+    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, model_name: this.modelName(project), auth_retry: this.legacyClaudeRetry(project) });
   }
 
   /** The agent's `new_chat` (the user asked for one): this chat goes when the turn now running ends. */
@@ -579,8 +600,11 @@ export class Agents implements seams.AgentPanel {
       chat.halted = true;
       this.abandon(project, "Stopped.");
     }
-    this.chats.set(project, freshChat());
+    // A new chat on a built edit is still a revision.
+    const built = chat.built;
+    this.chats.set(project, { ...freshChat(), built });
     fs.rmSync(this.store.chatPath(project), { force: true });
+    if (built !== null) this.save(project);
     this.emit(project, { event: "reset" });
   }
 
@@ -656,6 +680,8 @@ export class Agents implements seams.AgentPanel {
       this.watch();
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
+      // Who answers this turn, as the composer shows it (it rolls over from Opus to Sonnet once the edit is built).
+      this.emit(project, { event: "model", model_name: nameOf(chat.model ?? this.turnModel(project, text)) });
       try {
         await this.prepareTurn(project, text, model, effort, current, replay, context, attached);
       } catch (error) {
@@ -732,7 +758,7 @@ export class Agents implements seams.AgentPanel {
     fs.mkdirSync(workspace, { recursive: true });
     const options: claude.Options = {
       ...claude.baseOptions(binary, workspace),
-      model: chat.model ?? this.turnModel(project),
+      model: chat.model ?? this.turnModel(project, text),
       // No built-in tools; Edit's own run without asking, anything else is refused.
       tools: [],
       allowedTools: ["mcp__edit"],
@@ -1290,19 +1316,44 @@ export class Agents implements seams.AgentPanel {
 
   /**
    * Who answers a turn nobody named a model for: Opus builds the edit, and
-   * once it's built its revisions are Sonnet's (claude.REVISION_MODEL): the
-   * fresh-eyes pass, a review's fixes, and any message after a turn that did
-   * the whole edit. Edit's own follow-ups to a build stay part of it.
+   * once it's built its revisions are Sonnet's (claude.REVISION_MODEL). Built
+   * means the whole edit and Edit's follow-ups to it are done (`built`, kept
+   * through a new chat), the video was shared for review, or, for a chat from
+   * before that was kept, a turn before this message did the whole edit. The
+   * fresh-eyes pass and a review's fixes are revisions; asking for the edit
+   * again from scratch is a build.
    */
-  turnModel(project: string): string {
+  turnModel(project: string, text = ""): string {
     if (project.endsWith(`${SUB}review`) || reviewGuard.inReviewTurn(project)) return claude.REVISION_MODEL;
-    const entries = this.withChat(project).entries;
+    if (REBUILD.test(text)) return claude.DEFAULT_MODEL;
+    return this.isBuilt(project) ? claude.REVISION_MODEL : claude.DEFAULT_MODEL;
+  }
+
+  /** The chat shows who answers next ("Opus 5.5", then "Sonnet 5.5"). */
+  modelName(project: string): string {
+    return nameOf(this.withChat(project).model ?? this.turnModel(project));
+  }
+
+  /** Whether the project's edit is built (see `turnModel`). */
+  isBuilt(project: string): boolean {
+    const chat = this.withChat(project);
+    if (chat.built !== null) return true;
+    if (sharedForReview(this.store.home, projectOf(project))) return true;
     let asked = -1;
-    entries.forEach((item, index) => {
+    chat.entries.forEach((item, index) => {
       if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
     });
-    const built = entries.slice(0, Math.max(asked, 0)).some((item) => (item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text)) || (item.kind === "subagent" && item.text.startsWith("Fresh-eyes")));
-    return built ? claude.REVISION_MODEL : claude.DEFAULT_MODEL;
+    return chat.entries.slice(0, Math.max(asked, 0)).some((item) => (item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text)) || (item.kind === "subagent" && item.text.startsWith("Fresh-eyes")));
+  }
+
+  /** The whole edit and its follow-ups are done: the turns after it revise it. */
+  private markBuilt(project: string): void {
+    const chat = this.withChat(project);
+    if (chat.built !== null) return;
+    chat.built = Date.now();
+    this.save(project);
+    diag.info("agent", `${project}: the edit is built; its revisions are ${REVISION_MODEL.name}'s`);
+    this.emit(project, { event: "model", model_name: this.modelName(project) });
   }
 
   /**
@@ -1311,7 +1362,6 @@ export class Agents implements seams.AgentPanel {
    * shown in the main chat as a card that opens it. Once per message.
    */
   private freshEyes(project: string, generation: number): void {
-    if (agentHooks.freshEyes === false || this.reviewed.get(project) === generation) return;
     const chat = this.withChat(project);
     // Only after a whole edit or its final pass (as the follow-ups judge it).
     let asked = -1;
@@ -1320,6 +1370,9 @@ export class Agents implements seams.AgentPanel {
     });
     const whole = chat.entries.slice(asked + 1).some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
     if (!whole) return;
+    // The edit is done, follow-ups and all.
+    this.markBuilt(project);
+    if (agentHooks.freshEyes === false || this.reviewed.get(project) === generation) return;
     this.reviewed.set(project, generation);
     const key = subKey(project, "review");
     if (this.withChat(key).running) return;
@@ -1397,6 +1450,7 @@ export function readChat(text: string): Chat {
   chat.effort = option("effort");
   chat.authRecoveryUser = option("authRecoveryUser");
   chat.tools = toolChanges.read(given.tools);
+  chat.built = typeof given.built === "number" ? given.built : null;
   const entries = given.entries;
   if (entries !== undefined) {
     if (!Array.isArray(entries)) throw new Error("entries: invalid type, expected a sequence");

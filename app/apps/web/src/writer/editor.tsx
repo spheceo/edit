@@ -1,4 +1,5 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { scriptModel } from "@edit/types/models";
 import { useChatDraft } from "./agent";
 import { ChatShell, ChatTurns, Empty, ResetAsk } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
@@ -817,7 +818,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           allowEmpty={!cueCount}
           running={working}
           disabled={busy || !ready}
-          modelName="Opus 5.5"
+          modelName={scriptModel({ clips }).name}
           hint={!ready ? "Transcribe the footage first" : undefined}
           tray={
             resetTurn ? (

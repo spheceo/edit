@@ -9,6 +9,7 @@
 // A message sent while Claude works waits in the queue and goes when it's done.
 // Words quoted into the chat (chatQuotes.ts) sit in the island until sent.
 
+import { AnimatePresence, motion } from "motion/react";
 import { AlertCircle, ArrowUp, FileText, Film, Image as ImageIcon, Music, Plus, Square, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { create } from "zustand";
@@ -257,11 +258,7 @@ export function ChatComposer({
             </>
           )}
           {/* A grey pill, its words light enough to read (Sphe, Nov 3). */}
-          <span className="flex h-7 items-center gap-1.5 rounded-full bg-white/[0.08] px-2.5 text-[11.5px] font-medium text-secondary" title="Edit picks the model and how hard it thinks">
-            {/* Claude's orange mark before a Claude model (Sphe, Nov 2), in every chat that uses this composer. */}
-            {/^(Opus|Sonnet|Haiku|Fable|Claude)\b/u.test(modelName) && <ClaudeMark size={12} />}
-            {modelName}
-          </span>
+          <ModelPill name={modelName} />
           {hint !== undefined && hint !== "" && <span className="ml-auto truncate text-[11.5px] text-faint">{hint}</span>}
           {showStop ? (
             <button
@@ -446,5 +443,37 @@ export function SentFiles({ files }: { files: { name: string; kind: FileKind; ur
         );
       })}
     </div>
+  );
+}
+
+/**
+ * The model answering next, in a grey pill (Sphe, Nov 3), Claude's orange mark
+ * before a Claude model (Nov 2). When it changes (Opus built it, Sonnet now
+ * revises it: Sphe, Nov 4) the old name rolls up and out as the new one rolls
+ * in, and the pill eases to the new width.
+ */
+function ModelPill({ name }: { name: string }) {
+  const ease = [0.2, 0, 0, 1] as const;
+  return (
+    <motion.span
+      layout
+      transition={{ layout: { duration: 0.3, ease } }}
+      className="flex h-7 items-center gap-1.5 overflow-hidden rounded-full bg-white/[0.08] px-2.5 text-[11.5px] font-medium text-secondary"
+      title="Edit picks the model: Opus builds, Sonnet revises"
+    >
+      {/^(Opus|Sonnet|Haiku|Fable|Claude)\b/u.test(name) && <ClaudeMark size={12} />}
+      <AnimatePresence mode="popLayout" initial={false}>
+        <motion.span
+          key={name}
+          className="whitespace-nowrap"
+          initial={{ y: 12, opacity: 0, filter: "blur(3px)" }}
+          animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+          exit={{ y: -12, opacity: 0, filter: "blur(3px)" }}
+          transition={{ duration: 0.3, ease }}
+        >
+          {name}
+        </motion.span>
+      </AnimatePresence>
+    </motion.span>
   );
 }

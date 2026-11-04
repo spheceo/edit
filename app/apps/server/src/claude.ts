@@ -12,6 +12,8 @@
 import type * as Sdk from "@anthropic-ai/claude-agent-sdk";
 
 import type { Model } from "./agent.ts";
+import * as models from "@edit/types/models";
+
 import { join } from "./paths.ts";
 import * as claudeUsage from "./claude_usage.ts";
 import * as planLimit from "./plan_limit.ts";
@@ -39,7 +41,7 @@ export const DEFAULT_MODEL = "opus";
  * to sonnet 5.5 for revisons"): half Opus's price on the person's plan, where
  * the team's 5-hour limits ran out that week.
  */
-export const REVISION_MODEL = "claude-sonnet-5-5";
+export const REVISION_MODEL = models.REVISION_MODEL.id;
 
 /** Edit's own default thinking level: its edits are mostly the house style applied again and again, which medium does as well as high in far less time. */
 const DEFAULT_EFFORT = "medium";

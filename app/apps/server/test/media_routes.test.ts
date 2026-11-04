@@ -70,7 +70,7 @@ test("the agent panel's routes", async () => {
     const ask = asker(app);
     const project = app.store.create("p", { width: 1920, height: 1080, fps: 30 }).project.id;
     expect((await ask("GET", "/api/projects/nope/agent")).json()).toEqual({ error: "no such project" });
-    expect((await ask("GET", `/api/projects/${project}/agent`)).text).toBe('{"auth_retry":null,"effort":null,"entries":[],"model":null,"running":false}');
+    expect((await ask("GET", `/api/projects/${project}/agent`)).text).toBe('{"auth_retry":null,"effort":null,"entries":[],"model":null,"model_name":"Opus 5.5","running":false}');
     expect((await ask("POST", `/api/projects/${project}/agent/retry-claude`, { user: "not-a-failed-message" })).json()).toEqual({ ok: true, resumed: false });
     const empty = await ask("POST", `/api/projects/${project}/agent`, { text: "  " });
     expect(empty.status).toBe(400);

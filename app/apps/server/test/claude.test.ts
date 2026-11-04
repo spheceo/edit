@@ -6,7 +6,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { Agents, editToolsFailed, readChat, STALL_MS, timing } from "../src/agent.ts";
+import { agentHooks, Agents, editToolsFailed, readChat, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
 import * as toolChanges from "../src/tool_changes.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -707,26 +707,68 @@ test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in 
   }
 });
 
-test("opus builds the edit; once it's built, a revision is sonnet's (Sphe, Nov 4)", async () => {
+test("opus builds the edit; once it's built, a revision is sonnet's, through a new chat (Sphe, Nov 4)", async () => {
   const { home, project, agents, asked, queries } = claudeProject("claude-revision-model");
   try {
     await agents.send(project, "Start the edit", null, null);
     expect(asked[0]!.options.model).toBe("opus");
-    // The turn did the whole edit.
-    agents.withChat(project).entries.push({ id: "t1", kind: "tool", tool: "skill", text: "edit-workflow", status: "done", at: 0 } as never);
-    queries[0]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
-    queries[0]!.end();
-    await settle();
-    // Edit's own follow-up to the build is still the build.
-    expect(agents.turnModel(project)).toBe("opus");
-    agents.withChat(project).entries.push({ id: "f1", kind: "user", text: "(Edit, automatically) The edit left 3 flags.", at: 0 } as never);
-    expect(agents.turnModel(project)).toBe("opus");
-    // The team's next message revises it.
-    await agents.send(project, "Make the intro shorter", null, null);
-    expect(asked[1]!.options.model).toBe(claude.REVISION_MODEL);
+    expect(agents.chat(project)).toMatchObject({ model_name: "Opus 5.5" });
+    // The turn did the whole edit but left flags: Edit's follow-up to it is still the build, on Opus.
+    const chat = agents.withChat(project);
+    const before = agentHooks.unfinished;
+    const freshEyes = agentHooks.freshEyes;
+    agentHooks.unfinished = () => ({ note: "(Edit, automatically) The edit left 3 flags.", count: 3 });
+    agentHooks.freshEyes = false;
+    try {
+      chat.entries.push({ id: "t1", kind: "tool", tool: "skill", text: "edit-workflow", status: "done", at: 0, updated: 0 });
+      queries[0]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+      queries[0]!.end();
+      await Bun.sleep(1100);
+      await settle();
+      expect(asked[1]!.prompt).toBe("(Edit, automatically) The edit left 3 flags.");
+      expect(asked[1]!.options.model).toBe("opus");
+      expect(chat.built).toBeNull();
+      // Nothing left after it: the edit is built, kept in the chat's file.
+      agentHooks.unfinished = () => null;
+      queries[1]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+      queries[1]!.end();
+      await settle();
+    } finally {
+      agentHooks.unfinished = before;
+      agentHooks.freshEyes = freshEyes;
+    }
+    expect(chat.built).not.toBeNull();
+    expect(JSON.parse(fs.readFileSync(home.store.chatPath(project), "utf8")).built).toBe(chat.built);
+    expect(agents.chat(project)).toMatchObject({ model_name: "Sonnet 5.5" });
+    // A new chat on the built edit still revises it.
+    agents.reset(project);
+    expect(agents.withChat(project).entries).toEqual([]);
+    expect(agents.turnModel(project, "Make the intro shorter")).toBe(claude.REVISION_MODEL);
     expect(claude.REVISION_MODEL).toBe("claude-sonnet-5-5");
-    // The fresh-eyes pass is a revision too.
+    // Asking for it again from the start is a build.
+    expect(agents.turnModel(project, "Redo the whole edit from the top")).toBe("opus");
+    expect(agents.turnModel(project, "start over on this edit")).toBe("opus");
+    // The fresh-eyes pass is a revision.
     expect(agents.turnModel(`${project}~review`)).toBe(claude.REVISION_MODEL);
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("an edit shared for review is built, as is one a kept chat shows was done", () => {
+  const { home, project, agents } = claudeProject("claude-built-elsewhere");
+  try {
+    expect(agents.isBuilt(project)).toBe(false);
+    fs.writeFileSync(`${home.home}/reviews.json`, JSON.stringify({ cursor: 0, shared: { [project]: { reviewId: "r", url: "u", versions: [] } }, notes: {} }));
+    expect(agents.isBuilt(project)).toBe(true);
+    fs.rmSync(`${home.home}/reviews.json`);
+    // A chat from before the mark: a turn before the latest message did the whole edit.
+    agents.withChat(project).entries.push(
+      { id: "u1", kind: "user", text: "Start the edit", at: 0, updated: 0 },
+      { id: "t1", kind: "tool", tool: "skill", text: "edit-workflow", at: 0, updated: 0 },
+      { id: "u2", kind: "user", text: "Shorter intro", at: 0, updated: 0 },
+    );
+    expect(agents.isBuilt(project)).toBe(true);
   } finally {
     home.cleanup();
   }

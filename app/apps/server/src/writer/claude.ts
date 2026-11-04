@@ -8,6 +8,8 @@
 
 import type * as Sdk from "@anthropic-ai/claude-agent-sdk";
 
+import { REVISION_MODEL } from "@edit/types/models";
+
 import { baseOptions, findClaude, sdk } from "../claude.ts";
 import * as claudeUsage from "../claude_usage.ts";
 import * as diag from "../diag.ts";
@@ -25,7 +27,7 @@ export const HAIKU = "claude-haiku-5-5";
  * "initial script builds are on opus then when the script or edit is build we
  * switch to sonnet 5.5 for revisons"): the build stays Opus's.
  */
-export const REVISION = SONNET;
+export const REVISION = REVISION_MODEL.id;
 
 /** A failure, and whether asking again a minute later could help. */
 export class Trouble extends Error {

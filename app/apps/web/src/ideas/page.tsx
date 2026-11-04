@@ -7,6 +7,7 @@
 // the editor's own chat (AgentPanel's turns and composer, the same components). One main action: send the idea to the
 // board, or update its card once the reviewers' changes are made.
 
+import { ideaModel } from "@edit/types/models";
 import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -897,7 +898,7 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
         <ChatComposer
           running={running}
           disabled={false}
-          modelName="Opus 5.5"
+          modelName={ideaModel(idea).name}
           placeholder="Ask for another angle, or a change…"
           draft={`ideas.chat-draft.${id}`}
           chat={`idea:${id}`}

@@ -12,7 +12,8 @@
     "./later": "./src/later.ts",
     "./lessons": "./src/lessons.ts",
     "./thumbnails": "./src/thumbnails.ts",
-    "./thumbnail_render": "./src/thumbnail_render.ts"
+    "./thumbnail_render": "./src/thumbnail_render.ts",
+    "./models": "./src/models.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -115,7 +115,7 @@ export const TOOLS = [
   {
     name: "make_picture",
     description:
-      'Make a picture on OpenArt (the team\'s account in use; it costs credits, so make what you mean to use). From the prompt alone, or from pictures you give (references: the thumbnail\'s image ids or asset:<id>): an edit of one ("remove every overlay, caption, logo and bodycam text; keep everything else exactly as it is"), or a new picture using them. A small detail added to the scene already on the canvas ("add children in the background") takes that base image\'s id as the only reference and a prompt that adds the detail and keeps everything else exactly as it is. Left unnamed, the model is the house\'s: Nano Banana Pro for a new or complex picture, Nano Banana 2 for a touch-up of a picture given; name Seedream Pro (from openart_models) when Pro\'s look isn\'t wanted. It\'s added to the thumbnail\'s images; Read the file it names before you use it.',
+      'Make a picture on OpenArt (the team\'s account in use; it costs credits, so make what you mean to use). From the prompt alone, or from pictures you give (references: the thumbnail\'s image ids or asset:<id>): an edit of one ("remove every overlay, caption, logo and bodycam text; keep everything else exactly as it is"), or a new picture using them. A small detail added to the scene already on the canvas ("add children in the background") takes that base image\'s id as the only reference and a prompt that adds the detail and keeps everything else exactly as it is. Left unnamed, the model is the house\'s: Nano Banana Pro for a new or complex picture, Nano Banana 2 for a touch-up of a picture given; name Seedream Pro (from openart_models) when Pro\'s look isn\'t wanted. It\'s added to the thumbnail\'s images; Read the file it names before you use it. A main subject in it looks at us (into the eyes of the POV, about 15 cm above the lens) unless the person asked otherwise: say so in the prompt.',
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -373,7 +373,7 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
         thumb.images = [...thumb.images, image].slice(-60);
       });
       session.made++;
-      return `Made ${image.id} (${size.width}×${size.height}) on ${model}${made.credits !== null ? `, about ${made.credits} credits` : ""}. Read it: ${await fileOf(session, image)}`;
+      return `Made ${image.id} (${size.width}×${size.height}) on ${model}${made.credits !== null ? `, about ${made.credits} credits` : ""}. Read it: ${await fileOf(session, image)}\nCheck, close (compare on the face), that the main subject looks at us — just above the lens, not off into the distance — unless the person asked otherwise; and that what had to hold did.`;
     }
     case "openart_models": {
       const list = await openart.imageModels(session.signal);

@@ -2,14 +2,14 @@
 // can change it later. The folder is on the Mac running Edit, so the picker is
 // Edit's own file list (`/api/fs`), which works over Tailscale too.
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { create } from "zustand";
 
-import { api, type ExportFolder as FolderChoice, type FsListing } from "../lib/api";
+import { api, type ExportFolder as FolderChoice } from "../lib/api";
 import { closeDialog, openDialog } from "../lib/dialogs";
 import { folderDetail } from "../lib/export-face";
-import { FolderBrowser } from "./FolderBrowser";
-import { Button, DialogTitle, Modal } from "./ui";
+import { FolderPicker } from "./FolderBrowser";
+import { Button } from "./ui";
 
 const LATER = "edit.exportFolder.later";
 
@@ -125,79 +125,39 @@ export function ExportsSettings() {
 /** The picker. An export opens it when no folder is saved yet; Settings opens it to change one. */
 export function ExportFolderPrompt() {
   const open = useExportFolder((state) => state.open);
-  const from = useExportFolder((state) => state.from);
+  const ask = useExportFolder((state) => state.from) === "ask";
+  const folder = useExportFolder((state) => state.folder);
+  const use = async (path: string) => {
+    const saved = await api.setExportFolder(path);
+    forgetLater();
+    useExportFolder.setState({ folder: saved });
+    closeExportFolder();
+  };
   return (
-    <Modal open={open} onClose={dismiss} width={640}>
-      <Picker ask={from === "ask"} />
-    </Modal>
+    <FolderPicker
+      open={open}
+      onClose={dismiss}
+      title={ask ? "Where should exports go?" : "Exports folder"}
+      detail={ask ? "Pick a folder on this Mac. Exports go there from now on. You can change this in Settings." : "Exports on this Mac go in the folder you pick. One already exporting keeps the folder it started in."}
+      start={folder?.chosen ? folder.path : folder?.suggested}
+      confirm="Use this folder"
+      cancel={ask ? "Not now" : "Cancel"}
+      onPick={use}
+      aside={(here, pick, busy) =>
+        folder !== null &&
+        here !== "" &&
+        here !== folder.suggested &&
+        here !== folder.path && (
+          <button type="button" className="min-w-0 truncate text-left text-[12px] text-muted hover:text-fg hover:underline" title={folder.suggested} disabled={busy} onClick={() => pick(folder.suggested)}>
+            Use {folder.suggestedShown}
+          </button>
+        )
+      }
+    />
   );
 }
 
 function dismiss(): void {
   if (useExportFolder.getState().from === "ask") writeLater();
   closeExportFolder();
-}
-
-function Picker({ ask }: { ask: boolean }) {
-  const folder = useExportFolder((state) => state.folder);
-  const [listing, setListing] = useState<FsListing | null>(null);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const go = (path?: string) => {
-    setProblem(null);
-    api
-      .browse(path)
-      .then((next) => setListing(next))
-      .catch((error: Error) => {
-        if (path !== undefined) return go();
-        setProblem(error.message);
-      });
-  };
-  useEffect(() => {
-    const start = folder?.chosen ? folder.path : folder?.suggested;
-    go(start);
-    // The folder already loaded is the place to open. A later save closes this.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const use = async (path: string) => {
-    setBusy(true);
-    setProblem(null);
-    try {
-      const saved = await api.setExportFolder(path);
-      forgetLater();
-      useExportFolder.setState({ folder: saved });
-      closeExportFolder();
-    } catch (error) {
-      setProblem(error instanceof Error ? error.message : "Couldn't use that folder");
-      setBusy(false);
-    }
-  };
-  const here = listing?.path ?? "";
-  const elsewhere = folder !== null && here !== "" && here !== folder.suggested && here !== folder.path;
-  return (
-    <div className="flex h-[520px] flex-col">
-      <div className="border-b border-line px-6 pt-6 pb-4">
-        <DialogTitle
-          title={ask ? "Where should exports go?" : "Exports folder"}
-          detail={ask ? "Pick a folder on this Mac. Exports go there from now on. You can change this in Settings." : "Exports on this Mac go in the folder you pick. One already exporting keeps the folder it started in."}
-        />
-      </div>
-      <FolderBrowser listing={listing} problem={problem} onGo={go} foldersOnly empty="No folders in here. Exports can still go in this one." />
-      <div className="flex items-center gap-2 border-t border-line px-4 py-3">
-        {elsewhere && folder && (
-          <button type="button" className="min-w-0 truncate text-left text-[12px] text-muted hover:text-fg hover:underline" title={folder.suggested} disabled={busy} onClick={() => void use(folder.suggested)}>
-            Use {folder.suggestedShown}
-          </button>
-        )}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          <Button variant="ghost" disabled={busy} onClick={dismiss}>
-            {ask ? "Not now" : "Cancel"}
-          </Button>
-          <Button variant="primary" disabled={busy || here === ""} onClick={() => void use(here)}>
-            {busy ? "Saving…" : "Use this folder"}
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
 }

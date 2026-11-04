@@ -1,12 +1,14 @@
-import { Download, FileText, Film, X } from "lucide-react";
+import { Copy, Download, FileText, Film, FolderSearch, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, type ExportActivity as Activity } from "../lib/api";
-import { cardFace, exportLabel, exportWhere } from "../lib/export-face";
+import { cardFace, exportLabel } from "../lib/export-face";
+import { onThisMac, showInFinder } from "../lib/files";
 import { cancelScriptShare } from "../writer/api";
 import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
+import { FolderPicker } from "./FolderBrowser";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, DialogTitle, IconButton, Modal } from "./ui";
 
@@ -14,34 +16,54 @@ export const exportActive = (job: Activity) => job.state === "queued" || job.sta
 
 const jobKey = (job: Activity) => `${job.kind ?? "edit"}:${job.id}`;
 
-/** A finished edit: the file already on this Mac, and the download, which is a separate copy in Downloads. */
+/**
+ * A finished edit, and where it is. On the Mac running Edit (its window, or a
+ * browser there) the file is already here: shown in Finder, or copied to a
+ * folder picked; a "download" there was a second copy dropped out of sight
+ * (Sphe, Nov 4). From another device, it's that device's download.
+ */
 function Finished({ job }: { job: Activity }) {
-  const where = exportWhere(job);
-  const reveal = async () => {
-    try {
-      await api.revealExport(job.path);
-    } catch (error) {
-      useEditor.getState().toastError(error, "show the export");
-    }
-  };
-  return (
-    <div className="mt-1.5 ml-[22px] text-[12px] leading-snug text-muted">
-      {where.place && (
-        <div className="break-all" title={job.path}>
-          {where.place}
-          {" · "}
-          <button type="button" className="text-fg hover:underline" onClick={() => void reveal()}>
-            Show in Finder
-          </button>
-        </div>
-      )}
-      <div>
-        <a className="inline-flex items-center gap-1.5 text-fg hover:underline" href={`/api/exports/file?path=${encodeURIComponent(job.path)}`} download>
-          <Download size={12} /> Download a copy
+  const [copying, setCopying] = useState(false);
+  const here = job.onDisk === true && job.saved !== undefined;
+  const link = `/api/exports/file?path=${encodeURIComponent(job.path)}`;
+  if (!onThisMac()) {
+    return (
+      <div className="mt-2 ml-[22px] flex items-center gap-2">
+        <a className="inline-flex h-7 items-center gap-1.5 rounded-md border border-line-strong px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-hover" href={link} download>
+          <Download size={13} /> Download
         </a>
-        {where.place ? " — " : " "}
-        {where.download}
+        <span className="text-[12px] text-muted">to this device's Downloads folder</span>
       </div>
+    );
+  }
+  return (
+    <div className="mt-1 ml-[22px]">
+      <div className="text-[12px] leading-snug break-all text-muted" title={job.path}>
+        {here ? `Saved to ${job.saved}` : "Kept in the cloud, not on this Mac: a copy comes back down when you save one."}
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        {here && (
+          <Button size="sm" variant="subtle" onClick={() => showInFinder(job.path)}>
+            <FolderSearch size={13} /> Show in Finder
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={() => setCopying(true)}>
+          <Copy size={13} /> Save a copy to…
+        </Button>
+      </div>
+      <FolderPicker
+        open={copying}
+        onClose={() => setCopying(false)}
+        title="Save a copy"
+        detail={`A copy of ${job.name}'s export goes in the folder you pick. The one Edit keeps stays where it is.`}
+        start={job.path.slice(0, job.path.lastIndexOf("/"))}
+        confirm="Save here"
+        onPick={async (folder) => {
+          const { path } = await api.copyExport(job.path, folder);
+          setCopying(false);
+          useEditor.getState().toast(`Saved a copy to ${path.split("/").slice(-2).join("/")}`, "info", { label: "Show in Finder", run: () => showInFinder(path) });
+        }}
+      />
     </div>
   );
 }

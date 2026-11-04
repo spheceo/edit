@@ -98,6 +98,20 @@ export interface Live {
   project: Project;
 }
 
+/** An export file on the Mac running Edit (local_files.ts `StoredExport`). */
+export interface StoredExport {
+  path: string;
+  shown: string;
+  name: string;
+  bytes: number;
+  at: number;
+  project: string | null;
+  projectName: string | null;
+  newest: boolean;
+  inCloud: boolean;
+  busy: boolean;
+}
+
 export interface FsEntry {
   name: string;
   path: string;
@@ -251,7 +265,13 @@ export const api = {
   driveLink: (id: string) => request<{ drive: DriveFile | null }>("GET", `/api/projects/${id}/drive`),
   /** Uploads a finished export of a subtitled video to Drive again. */
   driveUpload: (id: string, path: string) => request<{ ok: boolean }>("POST", `/api/projects/${id}/drive`, { path }),
-  revealExport: (path: string) => request<{ ok: boolean }>("POST", "/api/exports/reveal", { path }),
+  /** Shows a file Edit made on this Mac (an export, a saved picture) in Finder. */
+  reveal: (path: string) => request<{ ok: boolean }>("POST", "/api/files/reveal", { path }),
+  /** Copies an export to a folder on this Mac; the copy's path. */
+  copyExport: (path: string, folder: string) => request<{ path: string }>("POST", "/api/exports/copy", { path, folder }),
+  /** Every export file Edit knows of on this Mac (Settings → Storage), largest first, and the disk's free bytes. */
+  storedExports: () => request<{ exports: StoredExport[]; free: number | null }>("GET", "/api/storage/exports"),
+  deleteStored: (paths: string[]) => request<{ files: number; bytes: number; refused: string[] }>("POST", "/api/storage/exports/delete", { paths }),
   /** The project's exports on the machine running Edit, newest first. */
   exports: (id: string) => request<ExportRecord[]>("GET", `/api/projects/${id}/exports`),
   exportActivity: () => request<ExportActivity[]>("GET", "/api/exports/activity"),

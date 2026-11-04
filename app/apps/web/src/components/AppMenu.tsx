@@ -12,6 +12,7 @@ import { api, type YoutubeSignIn } from "../lib/api";
 import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
 import { ExportFolderPrompt, ExportsSettings } from "./ExportFolder";
+import { StorageSettings } from "./StorageSettings";
 import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
 
 /** `row`: as Home's sidebar has it (the study portal's): the photo, the name and a chevron across the sidebar's top. */
@@ -368,6 +369,7 @@ function SettingsDialog() {
         {person && <p className="text-[13px] text-muted">Signed in as {person.email}</p>}
         <YoutubeGroup />
         <ExportsSettings />
+        <StorageSettings />
         <Group title="Updates">
           <Row name="Channel" detail={said} bad={error ?? undefined}>
             <Select

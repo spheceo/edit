@@ -54,6 +54,7 @@ import * as ideas from "./ideas/routes.ts";
 import * as thumbnails from "./thumbnails/routes.ts";
 import * as later from "./later.ts";
 import * as editNotes from "./edit_notes.ts";
+import * as localFiles from "./local_files.ts";
 import * as lessonInbox from "./lesson_inbox.ts";
 // The agent's report_problem tool (registered as it loads).
 import "./agent_reports.ts";
@@ -89,6 +90,7 @@ export function buildRouter(): Router<App> {
   // Before /api/projects/{id}: /api/projects/status is its own.
   reviews.routes(router);
   editNotes.routes(router);
+  localFiles.routes(router);
   playbackRender.routes(router);
   scrub.routes(router);
   firstPrompt.routes(router);
@@ -213,8 +215,7 @@ export function buildRouter(): Router<App> {
     })
     .get("/api/exports/folder", ({ app }) => json(readExportFolder(app.store.home)))
     .post("/api/exports/folder", setExportFolder)
-    .get("/api/exports/file", exportedFile)
-    .post("/api/exports/reveal", revealExport);
+    .get("/api/exports/file", exportedFile);
   seams.script.routes(router);
   router.get("/api/fs", browse);
   return router;
@@ -1211,22 +1212,6 @@ async function exportedFile(context: Context): Promise<Response> {
   const response = serveFile(context.request, path);
   response.headers.set("content-disposition", `attachment; filename="${name}"`);
   return response;
-}
-
-/** Shows a finished export in Finder (or the file manager) on the machine running Edit. */
-async function revealExport(context: Context): Promise<Response> {
-  const given = await body(context);
-  const path = field<string>(given, "path", "string", true);
-  if (!context.app.exports.exported(path)) throw notFound("not an export from this session");
-  const command = process.platform === "darwin" ? ["open", "-R", path] : ["xdg-open", parent(path) || path];
-  let opened = false;
-  try {
-    opened = (await Bun.spawn(command, { stdin: "ignore", stdout: "inherit", stderr: "inherit" }).exited) === 0;
-  } catch {
-    opened = false;
-  }
-  if (!opened) throw bad("couldn't open a file browser on this machine");
-  return json({ ok: true });
 }
 
 // ---------------------------------------------------------------------------

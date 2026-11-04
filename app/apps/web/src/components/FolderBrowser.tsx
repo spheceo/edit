@@ -3,11 +3,11 @@
 // exports go.
 
 import { AudioLines, ChevronRight, Film, Folder, HardDrive } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import type { FsEntry, FsListing } from "../lib/api";
+import { api, type FsEntry, type FsListing } from "../lib/api";
 import { formatBytes } from "../lib/time";
-import { cx, Spinner } from "./ui";
+import { Button, cx, DialogTitle, Modal, Spinner } from "./ui";
 
 const AUDIO = /\.(wav|mp3|m4a|aac|flac|aif|aiff|ogg|opus)$/i;
 
@@ -102,6 +102,96 @@ export function FolderBrowser({
               </button>
             );
           })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A dialog for choosing a folder on this Mac: where exports go, where a copy
+ * is saved. Opens at `start` (or home), says what went wrong in place, and
+ * stays open with the error when `onPick` fails. `aside` sits at the foot's
+ * left, given the folder shown and the way to pick a path.
+ */
+export function FolderPicker({
+  open,
+  onClose,
+  title,
+  detail,
+  start,
+  confirm,
+  cancel = "Cancel",
+  onPick,
+  aside,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  detail: string;
+  start?: string;
+  /** The answer's words ("Use this folder", "Copy here"). */
+  confirm: string;
+  cancel?: string;
+  onPick: (path: string) => Promise<void>;
+  aside?: (here: string, pick: (path: string) => void, busy: boolean) => ReactNode;
+}) {
+  return (
+    <Modal open={open} onClose={onClose} width={640}>
+      <Picking title={title} detail={detail} start={start} confirm={confirm} cancel={cancel} onClose={onClose} onPick={onPick} aside={aside} />
+    </Modal>
+  );
+}
+
+/** The picker's inside, mounted only while it's open: each opening starts fresh at `start`. */
+function Picking({ title, detail, start, confirm, cancel, onClose, onPick, aside }: { title: string; detail: string; start?: string; confirm: string; cancel: string; onClose: () => void; onPick: (path: string) => Promise<void>; aside?: (here: string, pick: (path: string) => void, busy: boolean) => ReactNode }) {
+  const [listing, setListing] = useState<FsListing | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const go = (path?: string) => {
+    setProblem(null);
+    api
+      .browse(path)
+      .then(setListing)
+      .catch((error: Error) => {
+        // A folder that's gone opens home instead.
+        if (path !== undefined) return go();
+        setProblem(error.message);
+      });
+  };
+  useEffect(() => {
+    go(start);
+    // Where it opens is decided as it opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const pick = (path: string) => {
+    setBusy(true);
+    setProblem(null);
+    onPick(path).then(
+      () => setBusy(false),
+      (error: unknown) => {
+        setProblem(error instanceof Error ? error.message : String(error));
+        setBusy(false);
+      },
+    );
+  };
+  const here = listing?.path ?? "";
+  return (
+    <div className="flex h-[520px] flex-col">
+      <div className="border-b border-line px-6 pt-6 pb-4">
+        <DialogTitle title={title} detail={detail} />
+      </div>
+      <FolderBrowser listing={listing} problem={problem} onGo={go} foldersOnly empty="No folders in here. You can still pick this one." />
+      <div className="flex items-center gap-2 border-t border-line px-4 py-3">
+        {aside?.(here, pick, busy)}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
+            {cancel}
+          </Button>
+          <Button variant="primary" disabled={busy || here === ""} onClick={() => pick(here)}>
+            {busy && <Spinner size={13} />}
+            {confirm}
+          </Button>
         </div>
       </div>
     </div>

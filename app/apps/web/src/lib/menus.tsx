@@ -34,6 +34,7 @@ import type { ReactNode } from "react";
 
 import type { MenuItem } from "../components/ContextMenu";
 import { api } from "./api";
+import { saveFile } from "./files";
 import {
   addElement,
   addMarker,
@@ -353,12 +354,14 @@ export function viewerMenu(): MenuItem[] {
     {
       label: "Save frame as PNG",
       icon: <ImageDown size={14} />,
-      onSelect: () => {
-        const link = document.createElement("a");
-        link.href = `/api/projects/${project.id}/frame/${frame}.png`;
-        link.download = `${project.name} – frame ${frame}.png`;
-        link.click();
-      },
+      onSelect: () =>
+        void fetch(`/api/projects/${project.id}/frame/${frame}.png`)
+          .then((answer) => {
+            if (!answer.ok) throw new Error(`the frame didn't draw (${answer.status})`);
+            return answer.blob();
+          })
+          .then((png) => saveFile(`${project.name} – frame ${frame}.png`, png))
+          .catch((error: unknown) => useEditor.getState().toastError(error, "save the frame")),
     },
   ];
 }

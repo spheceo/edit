@@ -17,6 +17,7 @@ import { AppMenu } from "../components/AppMenu";
 import { toggleMenu } from "../components/ContextMenu";
 import { Badge, Button, Chip, ColorField, ConfirmDialog, cx, DialogTitle, DialogActions, Field, IconButton, Modal, Panel, Section, Select, Slider, Spinner, Switch, TextArea, TextField } from "../components/ui";
 import { conversationEntries } from "../lib/agentTurns";
+import { saveFile } from "../lib/files";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { sourceUrl, thumbnailsApi, working, type Adjust, type Asset, type Design, type ImageLayer, type Layer, type Shadow, type TextLayer, type Thumbnail } from "../lib/thumbnails";
@@ -325,12 +326,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
   const download = (type: "image/png" | "image/jpeg") => {
     canvas.current?.toBlob(
       (blob) => {
-        if (blob === null) return;
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `${(thumb?.title || "thumbnail").replace(/[^\w -]+/g, "").trim() || "thumbnail"}.${type === "image/png" ? "png" : "jpg"}`;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+        if (blob !== null) void saveFile(`${(thumb?.title || "thumbnail").replace(/[^\w -]+/g, "").trim() || "thumbnail"}.${type === "image/png" ? "png" : "jpg"}`, blob);
       },
       type,
       0.92,

@@ -19,6 +19,7 @@ import { toggleMenu } from "../components/ContextMenu";
 import { Button, cx, IconButton, spring } from "../components/ui";
 import { conversationEntries, thumbActivity } from "../lib/agentTurns";
 import { saveFile } from "../lib/files";
+import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
 import { ago } from "../lib/time";
 import { useEditor } from "../lib/store";
@@ -143,7 +144,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
     shownRev.current = rev;
     setThumb({ ...next, design: settleCaptions(next.design) });
   }, []);
-  // Versions switched here and not yet answered for: a poll meanwhile would show the one before.
+  // Changes made here (a version shown, a comment) not yet answered for: a poll meanwhile would show what was before.
   const switching = useRef(0);
   const load = useCallback(
     () =>
@@ -215,12 +216,39 @@ export function ThumbnailScreen({ id }: { id: string }) {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const comment = (at: { x: number; y: number }, text: string) =>
-    thumbnailsApi.comment(id, at, text).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => {
-      toastError(error, "leave the comment");
-      throw error;
-    });
-  const removeComment = (comment: string) => void thumbnailsApi.removeComment(id, comment).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "remove the comment"));
+  /**
+   * A comment left, or taken back, at once (Sphe, Nov 4: "have the ui assume
+   * when you press enter or comment it just happens instantly"): the page shows
+   * it straight away and the server is told behind it. Its answer is shown
+   * once no other change from here is still on its way; a refusal undoes just
+   * that one.
+   */
+  const me = useAccount((state) => (state.account?.signed_in ? (state.account.person?.name ?? null) : null));
+  const behind = (call: Promise<{ thumb: Thumbnail; rev: number }>, undo: () => void, what: string) => {
+    switching.current++;
+    void call
+      .then(
+        ({ thumb, rev }) => {
+          if (switching.current === 1) show(thumb, rev);
+        },
+        (error: unknown) => {
+          undo();
+          toastError(error, what);
+        },
+      )
+      .finally(() => switching.current--);
+  };
+  const comment = (at: { x: number; y: number }, text: string) => {
+    const local: ThumbComment = { id: `local-${Math.random().toString(36).slice(2, 10)}`, n: (thumb?.comments ?? []).reduce((most, one) => Math.max(most, one.n), 0) + 1, x: Math.round(at.x), y: Math.round(at.y), text: text.trim(), by: me ?? "You", at: Date.now(), ...(thumb?.activeVersion !== undefined ? { version: thumb.activeVersion } : {}) };
+    setThumb((was) => (was === null ? was : { ...was, comments: [...(was.comments ?? []), local] }));
+    behind(thumbnailsApi.comment(id, at, text), () => setThumb((was) => (was === null ? was : { ...was, comments: (was.comments ?? []).filter((one) => one.id !== local.id) })), "leave the comment");
+  };
+  const removeComment = (comment: string) => {
+    const gone = thumb?.comments?.find((one) => one.id === comment);
+    if (gone === undefined) return;
+    setThumb((was) => (was === null ? was : { ...was, comments: (was.comments ?? []).filter((one) => one.id !== comment) }));
+    behind(thumbnailsApi.removeComment(id, comment), () => setThumb((was) => (was === null ? was : { ...was, comments: [...(was.comments ?? []), gone].sort((a, b) => a.n - b.n) })), "remove the comment");
+  };
   const takeFinal = (version: string) => {
     if (thumb === null) return;
     const before = thumb;
@@ -610,7 +638,7 @@ const PIN_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="ht
  * the comment with Claude's answers. Claude reads them every turn and settles
  * each once it's done (settled ones leave the page).
  */
-function Comments({ thumb, scale, commenting, onComment, onRemove }: { thumb: Thumbnail; scale: number; commenting: boolean; onComment: (at: { x: number; y: number }, text: string) => Promise<void>; onRemove: (id: string) => void }) {
+function Comments({ thumb, scale, commenting, onComment, onRemove }: { thumb: Thumbnail; scale: number; commenting: boolean; onComment: (at: { x: number; y: number }, text: string) => void; onRemove: (id: string) => void }) {
   const open = (thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === thumb.activeVersion);
   const [draft, setDraft] = useState<{ x: number; y: number } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
@@ -644,7 +672,7 @@ function Comments({ thumb, scale, commenting, onComment, onRemove }: { thumb: Th
     >
       <AnimatePresence>
         {open.map((one) => (
-          <Pin key={one.id} comment={one} scale={scale} opened={opened === one.id} onOpen={() => setOpened(opened === one.id ? null : one.id)} onRemove={() => onRemove(one.id)} />
+          <Pin key={one.n} comment={one} scale={scale} opened={opened === one.id} onOpen={() => setOpened(opened === one.id ? null : one.id)} onRemove={() => onRemove(one.id)} />
         ))}
         {draft !== null && (
           <Draft
@@ -653,7 +681,10 @@ function Comments({ thumb, scale, commenting, onComment, onRemove }: { thumb: Th
             scale={scale}
             n={(thumb.comments ?? []).reduce((most, one) => Math.max(most, one.n), 0) + 1}
             onCancel={() => setDraft(null)}
-            onSave={(text) => onComment(draft, text).then(() => setDraft(null))}
+            onSave={(text) => {
+              onComment(draft, text);
+              setDraft(null);
+            }}
           />
         )}
       </AnimatePresence>
@@ -733,13 +764,10 @@ function Pin({ comment, scale, opened, onOpen, onRemove }: { comment: ThumbComme
 }
 
 /** A new comment where the person clicked: its words, Enter to leave it, Escape to drop it. */
-function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number }; scale: number; n: number; onCancel: () => void; onSave: (text: string) => Promise<void> }) {
+function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number }; scale: number; n: number; onCancel: () => void; onSave: (text: string) => void }) {
   const [text, setText] = useState("");
-  const [saving, setSaving] = useState(false);
   const save = () => {
-    if (text.trim() === "" || saving) return;
-    setSaving(true);
-    onSave(text).catch(() => setSaving(false));
+    if (text.trim() !== "") onSave(text);
   };
   return (
     <motion.div
@@ -757,7 +785,6 @@ function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number 
           autoFocus
           rows={2}
           value={text}
-          disabled={saving}
           placeholder="What should change here?"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
@@ -772,7 +799,7 @@ function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number 
           className="block w-full resize-none bg-transparent px-1.5 py-1 text-[13px] leading-snug text-fg outline-none placeholder:text-faint"
         />
         <div className="flex items-center justify-end gap-1.5 pt-1">
-          <Button variant="light" size="sm" busy={saving} disabled={text.trim() === ""} onClick={save}>
+          <Button variant="light" size="sm" disabled={text.trim() === ""} onClick={save}>
             Comment
           </Button>
         </div>

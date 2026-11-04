@@ -54,7 +54,8 @@ person asks; Claude changes it through its tools:
 - `undo`, `redo`: back or forward on the layout's timeline (below).
 - `new_version`, `switch_version`, `take_final`, `remove_version`: versions
   (below).
-- `look_at_comment`, `reply_to_comment`, `settle_comment`: comments (below).
+- `comments`, `look_at_comment`, `reply_to_comment`, `settle_comment`:
+  comments (below).
 - `save_overlay`: a picture the person gave, into the team's library with a
   note on where it goes, when they ask to keep it.
 - `openart_models`, `model_options`, `rename`.
@@ -87,7 +88,10 @@ leaves a numbered comment on that spot of the version showing (`comments` on
 the thumbnail: where, words, who, which version). There's no queue and no
 special prompt: every turn's message lists the open ones with a drawing of
 their pins, and Claude does them with whatever is asked, `look_at_comment`
-showing it the area close. Done and looked at, it settles one (kept, off the
+showing it the area close. Comments pinned while it works reach it too: each
+layout change ends with the ones on that version it hasn't settled or
+answered, and it runs `comments` before it finishes a turn that changed
+anything. Done and looked at, it settles one (kept, off the
 page); one it can't quite do it answers under the comment and says so in the
 chat. A version's tile counts its open ones; a removed version's are settled
 with it.

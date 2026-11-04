@@ -202,6 +202,11 @@ export const TOOLS = [
     inputSchema: { type: "object", additionalProperties: false, properties: { grid: { type: "boolean" }, comments: { type: "boolean" } } },
   },
   {
+    name: "comments",
+    description: "The open comments on the thumbnail as they are now (the team may pin one while you work): each with its number, version, pin and replies, and the version showing drawn with their pins. Run it before you finish any turn that changed the thumbnail, for anything still to do.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
     name: "look_at_comment",
     description: "A close look at the area a comment is pinned to (#3): that part of its version blown up to the whole size, the pin marked. Read the file it names.",
     inputSchema: { type: "object", additionalProperties: false, properties: { comment: { type: "string" } }, required: ["comment"] },
@@ -276,6 +281,20 @@ async function drawn(session: Session, design: Design, grid: boolean): Promise<s
     });
   }
   return `${path}${missing.length > 0 ? `\n(Not drawn, missing: ${missing.join(", ")})` : ""}`;
+}
+
+/**
+ * After a change, the comments on the version showing that Claude hasn't
+ * settled or answered (Sphe, Nov 4: the agent "should probably quickly run the
+ * comments tool to see if there are some changes not listed in the prompt"),
+ * so one pinned while it works isn't left behind.
+ */
+async function stillOpen(id: string): Promise<string> {
+  const found = await cloud.get(id).catch(() => null);
+  if (found === null) return "";
+  const left = openComments(found.thumb).filter((one) => !(one.replies ?? []).some((reply) => reply.by === "claude"));
+  if (left.length === 0) return "";
+  return `\nOpen comments on this version not yet settled or answered: ${left.map((one) => `#${one.n} (${one.x}, ${one.y}) ${one.by}: ${one.text}`).join("; ")}. They're the team's asks too: do them, settle each one done, or answer why not.`;
 }
 
 /** The thumbnail drawn with the open comments' pins on it, for Claude to read. */
@@ -430,7 +449,7 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       if (same) return `Nothing changed: the layout is already that.\n${describe(design!)}`;
       session.changed = true;
       const path = await drawn(session, design!, false);
-      return `Laid out:\n${describe(design!)}\nRead the drawing: ${path}`;
+      return `Laid out:\n${describe(design!)}\nRead the drawing: ${path}${await stillOpen(session.id)}`;
     }
     case "undo":
     case "redo": {
@@ -458,6 +477,13 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       if (args.comments === true) return `Read it: ${await marked(session, found.thumb)}`;
       const path = await drawn(session, found.thumb.design, args.grid === true);
       return `Read it: ${path}`;
+    }
+    case "comments": {
+      const found = await cloud.get(session.id);
+      if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      const listed = describeComments(found.thumb);
+      if (listed === "") return "No open comments.";
+      return `${listed}${openComments(found.thumb).length > 0 ? `\nWith their pins (Read it): ${await marked(session, found.thumb)}` : ""}`;
     }
     case "look_at_comment": {
       const found = await cloud.get(session.id);

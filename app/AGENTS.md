@@ -8,6 +8,7 @@ Requirements: Rust, Bun, FFmpeg on `PATH`, `wasm-bindgen-cli` matching `crates/e
 
 ```sh
 just dev      # server on :7700 + Vite hot reload on :5173
+just dev-server  # the server alone, as `just dev` runs it (scripts/dev-server.ts: a fresh server on each change, started again if it exits or hangs)
 just native   # after a Rust change under `just dev`: builds the addon and swaps it in by rename (the server restarts onto it)
 just app      # build everything, open the desktop app
 just check    # fmt, clippy, tests, typecheck, lint

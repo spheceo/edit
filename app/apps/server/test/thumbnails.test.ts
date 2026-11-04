@@ -203,3 +203,19 @@ test("undo and redo walk one timeline, the person's changes and Claude's alike",
   expect(labelOf(base, changed(base, { add: [{ kind: "text", text: "“He abused me”" }] }, sources))).toBe("added “He abused me”");
   expect(labelOf(captioned, { layers: [...captioned.layers].reverse() })).toBe("reordered the layers");
 });
+
+test("the OpenArt account in use: the first until another of the team's is picked, kept on this Mac", async () => {
+  const openart = await import("../src/thumbnails/openart.ts");
+  const fs = await import("node:fs");
+  const home = fs.mkdtempSync(`${(await import("node:os")).tmpdir()}/openart-`);
+  openart.useHome(home);
+  expect(openart.current().id).toBe(openart.ACCOUNTS[0]!.id);
+  expect(() => openart.choose("someone-elses")).toThrow("There's no OpenArt account someone-elses");
+  openart.choose(openart.ACCOUNTS[0]!.id);
+  expect(JSON.parse(fs.readFileSync(`${home}/openart-account.json`, "utf8"))).toEqual({ account: openart.ACCOUNTS[0]!.id });
+  // A saved account the code no longer has falls back to the first.
+  fs.writeFileSync(`${home}/openart-account.json`, JSON.stringify({ account: "gone" }));
+  openart.useHome(home);
+  expect(openart.current().id).toBe(openart.ACCOUNTS[0]!.id);
+  fs.rmSync(home, { recursive: true, force: true });
+});

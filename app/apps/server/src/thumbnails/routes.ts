@@ -4,7 +4,7 @@
 // fonts and the page headless Chrome draws on. Claude's tools are served at
 // /mcp/thumbnails/<token> (run.ts), for the turns on this Mac only.
 
-import { assetRef, type Asset, type ThumbImage } from "@edit/types/thumbnails";
+import type { OpenArtAccount, OpenArtState, ThumbImage } from "@edit/types/thumbnails";
 
 import { creator } from "../accounts.ts";
 import type { App } from "../app.ts";
@@ -14,7 +14,7 @@ import { readBytes, readJson, type RouteContext, type Router } from "../http/rou
 import { mayIdeas } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { canonical, designOf, makeVersion, record, step, switchVersion, takeFinal } from "./design.ts";
+import { canonical, step, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
@@ -32,6 +32,23 @@ const by = (): string => creator()?.name || "Edit";
 const holderOf = (app: App): string => (process.env.EDIT_CLOUD_HOLDER ?? "").trim() || app.machine;
 
 export const contextOf = (app: App): run.Context => ({ origin: `http://127.0.0.1:${app.port}`, port: app.port, cacheDir: app.store.cacheDir(), holder: holderOf(app), by: by() });
+
+async function openartState(): Promise<Response> {
+  const accounts = await Promise.all(
+    openart.ACCOUNTS.map(async (one): Promise<OpenArtAccount> => {
+      const answer = await openart.account(undefined, one).catch((error: unknown) => {
+        diag.warn("thumbnails", `OpenArt ${one.id}: ${diag.messageOf(error)}`);
+        return { plan: null, credits: null };
+      });
+      return { id: one.id, name: one.name, ...answer };
+    }),
+  );
+  if (accounts.every((one) => one.credits === null && one.plan === null)) throw new ApiError(502, "OpenArt didn't answer.");
+  const list = await openart.imageModels().catch(() => []);
+  const model = list.find((one) => one.id === run.pickModel(list, false));
+  const state: OpenArtState = { accounts, current: openart.current().id, picture: model !== undefined && model.credits !== null ? { model: model.name, credits: model.credits } : null };
+  return json(state);
+}
 
 function failed(error: unknown): never {
   if (error instanceof ApiError) throw error;
@@ -88,73 +105,21 @@ export function routes(router: Router<App>): void {
       const type = (params.name ?? "").endsWith(".otf") ? "font/otf" : "font/ttf";
       return picture(new Uint8Array(await Bun.file(file).arrayBuffer()), type, "public, max-age=604800");
     })
-    .get("/api/thumbnails/openart", async () => {
+    // The team's OpenArt accounts with their credits, the one in use on this Mac, and what a picture costs on it.
+    .get("/api/thumbnails/openart", () => {
       guard();
-      try {
-        const [account, models] = await Promise.all([openart.account(), openart.imageModels()]);
-        return json({ ...account, models: models.length });
-      } catch (error) {
-        throw new ApiError(502, diag.messageOf(error));
-      }
+      return openartState();
     })
-    .get("/api/thumbnails/assets", async () => {
+    .put("/api/thumbnails/openart", async (context: Context) => {
       guard();
+      const body = await readJson<{ account?: unknown }>(context);
+      if (typeof body.account !== "string") throw bad("account is one of the team's OpenArt accounts.");
       try {
-        return json({ assets: await assets.all() });
+        openart.choose(body.account);
       } catch (error) {
-        failed(error);
+        throw bad(diag.messageOf(error));
       }
-    })
-    .post(
-      "/api/thumbnails/assets",
-      async (context: Context) => {
-        guard();
-        const type = (context.request.headers.get("content-type") ?? "").split(";")[0]!.trim();
-        const extension = IMAGE_TYPES[type];
-        if (extension === undefined) throw bad("Add a PNG (with transparency for an overlay), JPEG or WebP.");
-        const bytes = await readBytes(context.request, LIMIT);
-        const size = sizeOf(bytes);
-        if (size === null) throw bad("That picture can't be read.");
-        const who = by();
-        const name = cleanName(context.query.get("name") ?? "", "overlay");
-        const kind = context.query.get("kind") === "sticker" ? "sticker" : "overlay";
-        try {
-          const id = newId("a");
-          const key = await cloud.put("assets", bytes, type, extension);
-          const asset: Asset = { id, name, note: (context.query.get("note") ?? "").trim().slice(0, 400), kind, width: size.width, height: size.height, builtIn: false, key, by: who, at: Date.now() };
-          await cloud.putAsset(asset, who);
-          assets.forget();
-          return json({ asset });
-        } catch (error) {
-          failed(error);
-        }
-      },
-      { bodyLimit: LIMIT },
-    )
-    .put("/api/thumbnails/assets/{asset}", async (context: Context) => {
-      guard();
-      const body = await readJson<{ name?: unknown; note?: unknown; kind?: unknown }>(context);
-      const found = (await assets.all(true)).find((one) => one.id === context.params.asset);
-      if (found === undefined || found.builtIn) throw notFound("Only the team's own assets can be changed.");
-      const next: Asset = { ...found, ...(typeof body.name === "string" ? { name: cleanName(body.name, found.name) } : {}), ...(typeof body.note === "string" ? { note: body.note.trim().slice(0, 400) } : {}), ...(body.kind === "overlay" || body.kind === "sticker" ? { kind: body.kind } : {}) };
-      try {
-        await cloud.putAsset(next, by());
-        assets.forget();
-        return json({ asset: next });
-      } catch (error) {
-        failed(error);
-      }
-    })
-    .delete("/api/thumbnails/assets/{asset}", async ({ params }: Context) => {
-      guard();
-      if (assets.BUILT_IN.some((one) => one.id === params.asset)) throw bad("Edit's own overlays stay.");
-      try {
-        await cloud.removeAsset(params.asset!, by());
-        assets.forget();
-        return empty(204);
-      } catch (error) {
-        failed(error);
-      }
+      return openartState();
     })
     .get("/api/thumbnails/assets/{asset}/file", async ({ params, app }: Context) => {
       try {
@@ -176,24 +141,14 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
-    // The person's change: its title, brief or layers (only what's given).
+    // The person's change: its title or brief (only what's given). The layout is Claude's.
     .put("/api/thumbnails/{id}", async (context: Context) => {
       guard();
-      const body = await readJson<{ title?: unknown; brief?: unknown; design?: unknown }>(context);
+      const body = await readJson<{ title?: unknown; brief?: unknown }>(context);
       try {
-        const sources = body.design === undefined ? null : await sourcesFor(context.params.id!);
         const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
           if (typeof body.title === "string") thumb.title = body.title.trim().slice(0, 120);
           if (typeof body.brief === "string") thumb.brief = body.brief.trim().slice(0, 600);
-          if (body.design === undefined || sources === null) return;
-          // A layout that doesn't check out is the request's fault; the cloud failing isn't.
-          let next;
-          try {
-            next = designOf(body.design, thumb.design, sources);
-          } catch (error) {
-            throw bad(diag.messageOf(error));
-          }
-          record(thumb, next, by());
         });
         return json({ thumb, rev });
       } catch (error) {
@@ -222,19 +177,7 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
-    // Another version of the thumbnail (V2…), and showing one of them.
-    .post("/api/thumbnails/{id}/versions", async ({ params }: Context) => {
-      guard();
-      try {
-        let name = "";
-        const { thumb, rev } = await cloud.change(params.id!, by(), (thumb) => {
-          name = makeVersion(thumb, by()).name;
-        });
-        return json({ thumb, rev, version: name });
-      } catch (error) {
-        failed(error);
-      }
-    })
+    // The version that ships, and showing another.
     .post("/api/thumbnails/{id}/versions/final", async (context: Context) => {
       guard();
       const body = await readJson<{ version?: unknown }>(context);
@@ -290,20 +233,6 @@ export function routes(router: Router<App>): void {
       },
       { bodyLimit: LIMIT },
     )
-    .delete("/api/thumbnails/{id}/images/{image}", async ({ params }: Context) => {
-      guard();
-      try {
-        const { thumb } = await cloud.change(params.id!, by(), (thumb) => {
-          if (thumb.design.layers.some((one) => one.kind === "image" && one.source === params.image)) throw bad("That picture is on the thumbnail: take its layer off first.");
-          const before = thumb.images.length;
-          thumb.images = thumb.images.filter((one) => one.id !== params.image);
-          return thumb.images.length !== before;
-        });
-        return json({ thumb });
-      } catch (error) {
-        failed(error);
-      }
-    })
     .get("/api/thumbnails/{id}/images/{image}", async ({ params, app }: Context) => {
       try {
         const found = await cloud.get(params.id!);
@@ -375,11 +304,4 @@ async function stepped(id: string, back: boolean): Promise<Response> {
   } catch (error) {
     failed(error);
   }
-}
-
-async function sourcesFor(id: string): Promise<Set<string>> {
-  const found = await cloud.get(id);
-  if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
-  const library = await assets.all().catch(() => assets.BUILT_IN);
-  return new Set([...found.thumb.images.map((one) => one.id), ...library.map((one) => assetRef(one.id))]);
 }

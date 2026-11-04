@@ -115,7 +115,7 @@ export const TOOLS = [
   {
     name: "make_picture",
     description:
-      'Make a picture on OpenArt (the team\'s account, mamagi-openart-1; it costs credits, so make what you mean to use). From the prompt alone, or from pictures you give (references: the thumbnail\'s image ids or asset:<id>): an edit of one ("remove every overlay, caption, logo and bodycam text; keep everything else exactly as it is"), or a new picture using them. A small detail added to the scene already on the canvas ("add children in the background") takes that base image\'s id as the only reference and a prompt that adds the detail and keeps everything else exactly as it is. Left unnamed, the model is the house\'s: Nano Banana Pro for a new or complex picture, Nano Banana 2 for a touch-up of a picture given; name Seedream Pro (from openart_models) when Pro\'s look isn\'t wanted. It\'s added to the thumbnail\'s images; Read the file it names before you use it.',
+      'Make a picture on OpenArt (the team\'s account in use; it costs credits, so make what you mean to use). From the prompt alone, or from pictures you give (references: the thumbnail\'s image ids or asset:<id>): an edit of one ("remove every overlay, caption, logo and bodycam text; keep everything else exactly as it is"), or a new picture using them. A small detail added to the scene already on the canvas ("add children in the background") takes that base image\'s id as the only reference and a prompt that adds the detail and keeps everything else exactly as it is. Left unnamed, the model is the house\'s: Nano Banana Pro for a new or complex picture, Nano Banana 2 for a touch-up of a picture given; name Seedream Pro (from openart_models) when Pro\'s look isn\'t wanted. It\'s added to the thumbnail\'s images; Read the file it names before you use it.',
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -195,6 +195,17 @@ export const TOOLS = [
     name: "look",
     description: "The thumbnail drawn as it is now. grid: true adds a grid every 160 px across and 120 down, labelled, for placing things exactly. Read the file it names.",
     inputSchema: { type: "object", additionalProperties: false, properties: { grid: { type: "boolean" } } },
+  },
+  {
+    name: "save_overlay",
+    description:
+      "Add a picture to the team's overlay library, for every thumbnail from now on, when the person asks (\"save this as an overlay\", \"add this to our overlays\"): the image id of a picture they gave, a short name, a note you will read later on what it is and where it goes (\"a red arrow: beside the evidence it points at\"), and covers: true when it goes over the whole canvas (a viewfinder, a frame), false for a sticker placed somewhere. It needs transparency where the picture should show through: Read it first, and say so if it has none.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { image: { type: "string" }, name: { type: "string" }, note: { type: "string" }, covers: { type: "boolean" } },
+      required: ["image", "name", "note", "covers"],
+    },
   },
   {
     name: "rename",
@@ -285,6 +296,8 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
         model,
         ...(asked.length > 0 ? { references: asked } : {}),
         ...(session.asked.trim() !== "" ? { request: session.asked.trim().slice(0, 4000) } : {}),
+        ...(made.credits !== null ? { credits: made.credits } : {}),
+        account: made.account,
         at: Date.now(),
         by: session.by,
       };
@@ -399,6 +412,18 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
       const path = await drawn(session, found.thumb.design, args.grid === true);
       return `Read it: ${path}`;
+    }
+    case "save_overlay": {
+      const found = await cloud.get(session.id);
+      if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
+      const image = found.thumb.images.find((one) => one.id === args.image);
+      if (image === undefined) throw new Error(`There's no image ${String(args.image)}: give one of the thumbnail's image ids.`);
+      const name = typeof args.name === "string" ? args.name.trim().slice(0, 80) : "";
+      if (name === "") throw new Error("name is a few words.");
+      const type = assets.typeOf(image.key);
+      const extension = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
+      const asset = await assets.add({ bytes: await assets.cached(session.context.cacheDir, image.key), type, extension, width: image.width, height: image.height }, name, typeof args.note === "string" ? args.note : "", args.covers === false ? "sticker" : "overlay", session.by);
+      return `Saved to the team's library as asset:${asset.id} “${asset.name}”.`;
     }
     case "rename": {
       const title = typeof args.title === "string" ? args.title.trim().slice(0, 120) : "";

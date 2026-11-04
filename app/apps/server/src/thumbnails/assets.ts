@@ -1,6 +1,7 @@
 // The overlays and pictures a thumbnail can put on: Edit's own (shipped in the
-// binary, assets/thumbnails/) and the team's (uploaded from the page, on R2
-// under edit/thumbnails/assets/, listed in mamagi). Sphe, Nov 2: "here are some
+// binary, assets/thumbnails/) and the team's (a picture given in the chat that
+// Claude saves when asked, on R2 under edit/thumbnails/assets/, listed in
+// mamagi). Sphe, Nov 2: "here are some
 // of the overlays we put on top after… we tend to lean towards the rec most";
 // "we should also be able to upload assets ourselves and the agent be able to
 // use vision to see where to place the item".
@@ -54,6 +55,15 @@ function builtIn(asset: Asset & { file: string }): Asset {
 
 export function forget(): void {
   team = null;
+}
+
+/** A picture added to the team's library: Claude reads its note to know where it goes. */
+export async function add(picture: { bytes: Uint8Array; type: string; extension: string; width: number; height: number }, name: string, note: string, kind: Asset["kind"], by: string): Promise<Asset> {
+  const key = await cloud.put("assets", picture.bytes, picture.type, picture.extension);
+  const asset: Asset = { id: `a${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, name, note: note.trim().slice(0, 400), kind, width: picture.width, height: picture.height, builtIn: false, key, by, at: Date.now() };
+  await cloud.putAsset(asset, by);
+  forget();
+  return asset;
 }
 
 /** A picture's bytes from R2, kept on this Mac (`<cache>/thumbnails/`) after the first time. */

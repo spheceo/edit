@@ -22,7 +22,7 @@ sidebar), `/thumbnails` and `/thumbnails/<id>`.
 | --- | --- |
 | The thumbnails | mamagi's Convex, `thumbnails` module (`accounts/convex/thumbnails.ts`): one row a thumbnail, its whole body, rev by rev as ideas are; the team's overlays are `thumbnailAssets` |
 | Their pictures | R2 under `edit/thumbnails/<id>/`; the team's overlays under `edit/thumbnails/assets/`; kept on the Mac in `<cache>/thumbnails/` after the first look |
-| OpenArt | the team's account (`mamagi-openart-1`), only through the relay: `POST /v1/openart/mcp` forwards OpenArt's MCP server with the team's token (`apps/relay/src/openart.ts`); the sign-in is `OPENART_CLIENT_ID` / `OPENART_REFRESH_TOKEN` / `OPENART_ACCOUNT` in Infisical `/edit-relay` (put there by `apps/relay/scripts/openart-connect.ts`, then `push-secrets.ts --only …`), the live token pair in the BUDGET Durable Object's `openart` instance (OpenArt hands a new refresh token with each renewal and revokes the old; a new sign-in in Infisical starts it over). One sign-in for dev and prod (Sphe, Nov 2): only the live relay holds it; the dev relay forwards to it (`OPENART_UPSTREAM` in wrangler's `[env.dev.vars]`, `OPENART_RELAY_TOKEN` the same in both environments' Infisical) |
+| OpenArt | the team's accounts, listed in code (`ACCOUNTS` in `app/apps/server/src/thumbnails/openart.ts`: id, name, relay route; never the person's own), the one in use per Mac in `<home>/openart-account.json` (the page's account menu; the first until another is picked). Today one, `mamagi-openart-1`, only through the relay: `POST /v1/openart/mcp` forwards OpenArt's MCP server with the team's token (`apps/relay/src/openart.ts`); the sign-in is `OPENART_CLIENT_ID` / `OPENART_REFRESH_TOKEN` / `OPENART_ACCOUNT` in Infisical `/edit-relay` (put there by `apps/relay/scripts/openart-connect.ts`, then `push-secrets.ts --only …`), the live token pair in the BUDGET Durable Object's `openart` instance (OpenArt hands a new refresh token with each renewal and revokes the old; a new sign-in in Infisical starts it over). One sign-in for dev and prod (Sphe, Nov 2): only the live relay holds it; the dev relay forwards to it (`OPENART_UPSTREAM` in wrangler's `[env.dev.vars]`, `OPENART_RELAY_TOKEN` the same in both environments' Infisical) |
 | Server | `app/apps/server/src/thumbnails/` (`/api/thumbnails`, Claude's tools at `/mcp/thumbnails/<token>`) |
 | Drawing | `app/packages/edit-types/src/thumbnail_render.ts`: Canvas 2D, the one drawing for the page and for Claude (the server hands it, transpiled, to a headless Chrome kept open five minutes: `thumbnails/render.ts`) |
 | UI | `app/apps/web/src/thumbnails/` (`list.tsx`, `page.tsx`) |
@@ -39,9 +39,10 @@ its font, weight, size, colour, a box behind it, a stroke when one is asked
 for; and a drop shadow on either, as Photoshop's (colour, opacity, angle,
 distance, spread, size). White and red is Arabic-font-2013 with no stroke and
 the house shadow (opacity 100, spread 36, size 32, angle 90). A black box is ITC Avant
-Garde Gothic Bold. The page edits them by hand (drag,
-the corner to resize, arrows, ⌘Z) and saves them; Claude edits them through
-its tools:
+Garde Gothic Bold. The page has no controls of its own (Sphe, Nov 4: "give
+more of that to the agents on the right and then have the user just chat with
+it"): no layers, pictures or overlays panels, no Camera Raw, no dragging. The
+person asks; Claude changes it through its tools:
 
 - `make_picture`: a picture on OpenArt from a prompt, or from pictures given
   (a base cleaned of its overlays: "sometimes our bases will have them so
@@ -51,19 +52,33 @@ its tools:
 - `set_layers`, `change_layers`: the layout, drawn at once and named for Claude
   to look at; `look` (with a grid every 160×120 px for placing by eye).
 - `undo`, `redo`: back or forward on the layout's timeline (below).
+- `new_version`, `switch_version`, `take_final`: versions (below).
+- `save_overlay`: a picture the person gave, into the team's library with a
+  note on where it goes, when they ask to keep it.
 - `openart_models`, `model_options`, `rename`.
 
 Undo is one timeline for both (Sphe, Nov 2: "we should have undo both for us
-and for the agent"): every change to the layout, the person's (a drag, a
-dialog's OK) or Claude's, keeps the layout before it on the thumbnail
+and for the agent"): every change to the layout keeps the layout before it on the thumbnail
 (`history`, the last 40, each with who and what: "changed “She smiled”"), so
 ⌘Z or the header's undo steps back through it whoever made the change, and
 Claude has `undo` / `redo` too, with the recent changes in its message ("undo
 the last change I made"). A new change drops what redo had.
 
 Pictures dropped or pasted anywhere on the page join the thumbnail and go to
-Claude with the next message. The team's own overlays are uploaded from the
-page's Overlays panel with a note Claude reads (what it is, where it goes).
+Claude with the next message.
+
+Versions: one until the person asks for another or for options (each draft is
+a version). Once there are two, they sit side by side under the canvas, each
+drawn as it stands: a click shows one (not while Claude works on the one
+showing), and the one that ships is marked Final on its tile ("Make final" on
+hover) or by asking Claude.
+
+Credits: the header's account pill shows the account in use and its credits
+(amber under twenty pictures' worth, red under one); its menu lists the
+team's accounts, what a picture costs on the house's model and about how many
+that leaves, and what this thumbnail has spent (each picture keeps its cost
+and account from Nov 4 on). A second account is a line in `ACCOUNTS` plus its
+sign-in on the relay at its own route.
 
 ## Not built yet
 

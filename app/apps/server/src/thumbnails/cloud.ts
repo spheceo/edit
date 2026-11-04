@@ -104,7 +104,3 @@ export async function teamAssets(): Promise<Asset[]> {
 export async function putAsset(asset: Asset, by: string): Promise<void> {
   await call("mutation", "thumbnails:putAsset", { assetId: asset.id, body: asset, by });
 }
-
-export async function removeAsset(id: string, by: string): Promise<void> {
-  await call("mutation", "thumbnails:removeAsset", { assetId: id, by });
-}

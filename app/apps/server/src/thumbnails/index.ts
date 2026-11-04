@@ -5,9 +5,11 @@ import * as accounts from "../accounts.ts";
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { mayIdeas } from "../ideas/routes.ts";
+import * as openart from "./openart.ts";
 import { markInterrupted } from "./run.ts";
 
 export function start(app: App): void {
+  openart.useHome(app.store.home);
   let done = false;
   const look = () => {
     if (done || accounts.creator() === null || !mayIdeas()) return;

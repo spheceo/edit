@@ -118,6 +118,7 @@ const THUMB_TOOLS: Record<string, [string, string]> = {
   redo: ["Redoing a change", "Redid a change"],
   look: ["Looking at the thumbnail", "Looked at the thumbnail"],
   rename: ["Renaming the thumbnail", "Renamed the thumbnail"],
+  save_overlay: ["Saving the overlay", "Saved the overlay to the library"],
   Read: ["Looking at a picture", "Looked at a picture"],
 };
 

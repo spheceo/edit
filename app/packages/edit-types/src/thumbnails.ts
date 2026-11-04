@@ -26,6 +26,9 @@ export type ThumbImage = {
   references?: string[];
   /** The person's own request in the turn that made it, kept with the prompt so it can be pulled again after the chat has moved on. */
   request?: string;
+  /** What it cost on OpenArt, and on which of the team's accounts (pictures made from Nov 4 on). */
+  credits?: number;
+  account?: string;
   at: number;
   by: string;
 };
@@ -286,3 +289,9 @@ export function summarize(thumb: Thumbnail): ThumbSummary {
     images: thumb.images.length,
   };
 }
+
+/** One of the team's OpenArt accounts as the page shows it: its plan and credits left (null when OpenArt didn't answer). */
+export type OpenArtAccount = { id: string; name: string; plan: string | null; credits: number | null };
+
+/** The page's account menu: the team's accounts, the one in use, and what a picture costs on the house's model. */
+export type OpenArtState = { accounts: OpenArtAccount[]; current: string; picture: { model: string; credits: number } | null };

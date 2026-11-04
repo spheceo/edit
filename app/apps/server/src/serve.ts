@@ -72,15 +72,20 @@ export function parseSocketAddr(text: string): Address | null {
   return null;
 }
 
-/** Where to listen: the address asked for, else 127.0.0.1 and this machine's Tailscale IP. */
-export function bindAddresses(host: string | null, port: number, tailscale: string | null = tailscaleIp()): Address[] {
+/**
+ * Where to listen: the address asked for, else 127.0.0.1 alone. Never this
+ * machine's Tailscale IP by itself (Nov 4, the security audit): the API has no
+ * sign-in of its own, so a listener there let any device on the tailnet run
+ * the agent (a shell on this Mac) and use this person's account. Another
+ * device reaches Edit through `tailscale serve --bg http://127.0.0.1:7700`,
+ * which the owner turns on and Tailscale's own access rules guard.
+ */
+export function bindAddresses(host: string | null, port: number): Address[] {
   if (host !== null) {
     const parsed = parseSocketAddr(`${host}:${port}`);
     return parsed === null ? [] : [parsed];
   }
-  const out: Address[] = [{ ip: "127.0.0.1", port, v6: false }];
-  if (tailscale !== null) out.push({ ip: tailscale, port, v6: tailscale.includes(":") });
-  return out;
+  return [{ ip: "127.0.0.1", port, v6: false }];
 }
 
 const TAILSCALE = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
@@ -286,7 +291,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   const router = buildRouter();
   remoteAsk.useRouter(router);
   const servers: Server<unknown>[] = [];
-  for (const address of bindAddresses(host, port, ip)) {
+  for (const address of bindAddresses(host, port)) {
     const shown = showAddress(address);
     try {
       servers.push(listen(app, router, address.ip, address.port) as Server<unknown>);

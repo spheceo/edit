@@ -24,7 +24,7 @@ USAGE
       Open the editor in its own window (the server below runs inside it; if
       an Edit is already serving on the port, the window opens onto that).
   edit serve [--port N] [--host ADDR] [--home DIR]
-      Serve the editor. Binds 127.0.0.1 and this machine's Tailscale IP.
+      Serve the editor. Binds 127.0.0.1 only.
       Open http://localhost:7700 (WebGPU needs localhost or HTTPS; for other
       devices use \`tailscale serve --bg http://127.0.0.1:7700\`).
   edit mcp

@@ -346,7 +346,8 @@ test("addresses parse as Rust's SocketAddr and show the same", () => {
   expect(bindAddresses("[::1]", 7700).map(showAddress)).toEqual(["[::1]:7700"]);
   // A host name isn't an address: nothing to listen on.
   expect(bindAddresses("localhost", 7700)).toEqual([]);
-  expect(bindAddresses(null, 7799, "100.64.0.1").map(showAddress)).toEqual(["127.0.0.1:7799", "100.64.0.1:7799"]);
+  // Never the Tailscale IP by itself: other devices come in through `tailscale serve` (Nov 4).
+  expect(bindAddresses(null, 7799).map(showAddress)).toEqual(["127.0.0.1:7799"]);
   expect(parseSocketAddr("256.1.1.1:80")).toBeNull();
   expect(parseSocketAddr("::1:80")).toBeNull();
 });

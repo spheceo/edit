@@ -4,6 +4,8 @@ import { type Player, clipStarts, editedPosition, type Playhead, usePlayheadValu
 import { captionAt, captionCues } from "./captions";
 import type { Clip, Word } from "./types";
 import { Icon } from "./ui";
+import { Loader } from "../components/Logo";
+import { Pulse } from "../components/ui";
 
 /** A timecode as an editor reads one: hours, minutes, seconds and frames at 30 fps. */
 export function timecode(ms: number) {
@@ -130,6 +132,17 @@ export function Monitor({
           <div className="none">{empty ?? "No preview yet."}</div>
         )}
         {player?.error && <div className="none">{player.error}</div>}
+        {/* Its first picture on the way: said in the middle, as Edit's viewer says it, not a black screen with the clock running. */}
+        {player !== null && (multi || src) && !player.framed && !player.error && !card && (
+          <div className="screen-loading">
+            <Loader size={32} />
+          </div>
+        )}
+        {player?.framed && player.buffering && !player.error && (
+          <span className="screen-wait">
+            <Pulse size={12} />
+          </span>
+        )}
         {card && describe?.(card) ? (
           <div className="cut-in-card described">
             <strong>{describe(card)?.title}</strong>

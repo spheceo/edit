@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import { isCutIn } from "./clips";
 import { Decoder, videoTime } from "../lib/decoder";
 import { AUDIO_CHUNK_SECONDS } from "../lib/decoder.protocol";
+import { note } from "../lib/diagnostics";
 import type { Clip } from "./types";
 
 /**
@@ -84,6 +85,10 @@ export interface Player {
   readonly error: string | null;
   /** The picture's shape, once a frame has been drawn (the captions' frame). */
   readonly frameRatio?: number;
+  /** A picture of this footage is on the screen (before it, the monitor says it's loading). */
+  readonly framed: boolean;
+  /** Playing, but held where it is until its picture arrives (as a <video> waits for data). */
+  readonly buffering: boolean;
   onStatus(listener: () => void): () => void;
   attach(element: HTMLCanvasElement | null): void;
   /** The recording footage clips play from when an item names none (the script's proxy) and how long it is. */
@@ -116,8 +121,14 @@ const SETTLE_MS = 300;
 const ROUGH_REACH = 0.55;
 /** How far ahead of the playhead (edited ms) the coming clips are warmed. */
 const WARM_MS = 1500;
-/** Starting play waits on picture and sound no longer than this before going without the sound. */
+/** Starting play waits on the sound no longer than this, then goes on without it; the picture it always waits for. */
 const START_WAIT_MS = 1500;
+/** The position's picture missing this long while playing: the clock holds until it's in. */
+const STALL_MS = 300;
+/** A hold shorter than this isn't shown (most are a frame or two). */
+const SHOW_WAIT_MS = 300;
+/** A wait this long for the picture goes in the log (Report a problem shows it). */
+const SLOW_WAIT_MS = 3000;
 /** After a decoding failure, try again this soon. */
 const DECODE_RETRY_MS = 4_000;
 
@@ -133,6 +144,8 @@ export class ScriptPlayer implements Player {
   error: string | null = null;
   /** The drawn picture's shape (the captions' frame); set on the first frame. */
   frameRatio: number | undefined;
+  framed = false;
+  buffering = false;
 
   private clips: Item[];
   private starts: number[];
@@ -159,6 +172,8 @@ export class ScriptPlayer implements Player {
   private clockStart = 0;
   private runningClock = false;
   private waitingToStart = 0;
+  /** When the position's picture went missing while the clock ran (0: it's there). */
+  private missingSince = 0;
   private rate = 1;
   private dragging = false;
   private settled = true;
@@ -219,6 +234,10 @@ export class ScriptPlayer implements Player {
   }
 
   setSource(url: string, durationMs = 0) {
+    if (url !== this.src && this.framed) {
+      this.framed = false;
+      this.emit();
+    }
     this.src = url;
     this.mediaMs = durationMs;
     this.invalidate();
@@ -324,10 +343,20 @@ export class ScriptPlayer implements Player {
     this.decoder.retain(lanes);
   }
 
+  /** Whether the position has a picture to show (a card or nothing to show counts: there's nothing to wait for). */
   private pictureReady(pos: number) {
     const wanted = this.wanted(pos);
-    if (wanted === null) return true;
-    return Boolean(this.decoder.picture(wanted.url, videoTime(wanted.sec, PROXY_FPS, wanted.hi)));
+    return wanted === null || this.frameFor(wanted) !== null;
+  }
+
+  /** The decoded picture for `wanted`: its own frame, or one close enough (further mid-drag). */
+  private frameFor(wanted: { url: string; sec: number; lo: number; hi: number }) {
+    const time = videoTime(wanted.sec, PROXY_FPS, wanted.hi);
+    return (
+      this.decoder.picture(wanted.url, time) ??
+      this.decoder.nearbyPicture(wanted.url, time, this.dragging && !this.settled ? ROUGH_REACH : 0.12, Math.max(0, wanted.lo - 0.5 / PROXY_FPS), wanted.hi) ??
+      null
+    );
   }
 
   /** Whether each span active at the position has its first PCM chunk. */
@@ -396,22 +425,35 @@ export class ScriptPlayer implements Player {
   private resetClock(from: number) {
     this.runningClock = false;
     this.waitingToStart = performance.now();
+    this.missingSince = 0;
     this.clockFrom = from;
     this.clockStart = (this.audio?.currentTime ?? 0) + 0.05;
   }
 
-  /** Draws the position's frame on the canvas; a card or an undecoded frame holds the last. */
-  private draw() {
+  /** Holds the running clock at `pos` (position domain) until its picture and sound are in again. */
+  private holdAt(pos: number) {
+    if (this.auditioning) this.offsetSource = pos;
+    else this.offset = Math.max(0, Math.min(this.duration, pos));
+    this.stopSounds();
+    this.resetClock(pos);
+  }
+
+  /** Says when the waiting shows or stops showing. */
+  private setBuffering(on: boolean) {
+    if (on === this.buffering) return;
+    this.buffering = on;
+    this.emit();
+  }
+
+  /** Draws the position's frame on the canvas; a card or an undecoded frame holds the last. False: its picture isn't here yet. */
+  private draw(): boolean {
     const ctx = this.ctx;
     const canvas = this.canvas;
-    if (!ctx || !canvas) return;
+    if (!ctx || !canvas) return true;
     const wanted = this.wanted();
-    if (wanted === null) return;
-    const time = videoTime(wanted.sec, PROXY_FPS, wanted.hi);
-    const frame =
-      this.decoder.picture(wanted.url, time) ??
-      this.decoder.nearbyPicture(wanted.url, time, this.dragging && !this.settled ? ROUGH_REACH : 0.12, Math.max(0, wanted.lo - 0.5 / PROXY_FPS), wanted.hi);
-    if (!frame) return;
+    if (wanted === null) return true;
+    const frame = this.frameFor(wanted);
+    if (!frame) return false;
     if (canvas.width !== frame.codedWidth || canvas.height !== frame.codedHeight) {
       canvas.width = frame.codedWidth;
       canvas.height = frame.codedHeight;
@@ -422,6 +464,11 @@ export class ScriptPlayer implements Player {
       }
     }
     ctx.drawImage(frame, 0, 0);
+    if (!this.framed) {
+      this.framed = true;
+      this.emit();
+    }
+    return true;
   }
 
   private invalidate() {
@@ -445,13 +492,20 @@ export class ScriptPlayer implements Player {
       }
       const pos = this.nowMs();
       if (!this.runningClock) {
-        // Held on the first frame until its picture and first sound are in
-        // (or the wait is long enough that the sound joins mid-stream).
-        if (performance.now() - this.waitingToStart < START_WAIT_MS && !(this.pictureReady(pos) && this.soundReady(pos))) {
+        // Held until the position's picture is in, however long that takes: the
+        // clock and captions never run over a black or stale screen (Nov 4, JJ's
+        // Mac: the cut played on over black while its cloud preview opened).
+        // The sound may join mid-stream after a short wait.
+        const waited = performance.now() - this.waitingToStart;
+        if (!this.pictureReady(pos) || (waited < START_WAIT_MS && !this.soundReady(pos))) {
+          this.setBuffering(waited >= SHOW_WAIT_MS);
           this.warm();
+          this.draw();
           this.frame = requestAnimationFrame(tick);
           return;
         }
+        if (waited >= SLOW_WAIT_MS) note("warn", "preview", `The script's preview waited ${(waited / 1000).toFixed(1)} s for its picture at ${Math.round(pos / 1000)} s`);
+        this.setBuffering(false);
         this.clockStart = audio.currentTime + 0.05;
         this.runningClock = true;
       }
@@ -468,7 +522,12 @@ export class ScriptPlayer implements Player {
       }
       this.warm();
       this.scheduleAudio(pos);
-      this.draw();
+      if (this.draw()) this.missingSince = 0;
+      else if (this.missingSince === 0) this.missingSince = performance.now();
+      else if (performance.now() - this.missingSince > STALL_MS) {
+        // Fallen behind the picture (a cut's footage not in yet, a slow read): hold here until it is.
+        this.holdAt(pos);
+      }
       this.report();
       this.frame = requestAnimationFrame(tick);
     };
@@ -479,9 +538,15 @@ export class ScriptPlayer implements Player {
     this.running = false;
     cancelAnimationFrame(this.frame);
     this.frame = 0;
+    this.setBuffering(false);
   }
 
   update(clips: Item[]) {
+    // The same cut again (the script read afresh every few seconds while it's saved): nothing to replay.
+    if (sameCut(clips, this.clips)) {
+      this.clips = clips;
+      return;
+    }
     const ms = this.position();
     const was = this.running;
     this.pause();
@@ -495,10 +560,7 @@ export class ScriptPlayer implements Player {
     if (rate === this.rate) return;
     const pos = this.nowMs();
     this.rate = rate;
-    if (this.running) {
-      this.stopSounds();
-      this.resetClock(pos);
-    }
+    if (this.running) this.holdAt(pos);
   }
 
   setVolume(level: number) {
@@ -616,4 +678,12 @@ export class ScriptPlayer implements Player {
     this.audio = null;
     this.master = null;
   }
+}
+
+/** Whether two cuts play alike: the same items, each over the same footage and stretch. */
+export function sameCut(a: Item[], b: Item[]) {
+  return a.length === b.length && a.every((one, at) => {
+    const other = b[at]!;
+    return one.id === other.id && one.startMs === other.startMs && one.endMs === other.endMs && isCutIn(one) === isCutIn(other) && one.src === other.src;
+  });
 }

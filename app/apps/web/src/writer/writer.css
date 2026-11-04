@@ -536,6 +536,8 @@
 .writer-root .cut-in-card strong span { color: var(--muted); }
 .writer-root .cut-in-card p { font-size: clamp(13px, 1.5vw, 18px); line-height: 1.55; color: var(--text); overflow: auto; }
 @keyframes writer-fade { from { opacity: 0; } }
+.writer-root .screen-loading { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.writer-root .screen-wait { position: absolute; right: 10px; bottom: 10px; display: flex; padding: 6px; border-radius: 999px; background: #000a; color: var(--text-2); pointer-events: none; }
 .writer-root .screen-badge { position: absolute; top: 10px; left: 10px; padding: 2px 8px; border-radius: 999px; background: #000a; color: var(--text-2); font-size: 11px; font-weight: 500; }
 .writer-root .seek-bar { flex-shrink: 0; padding: 8px 12px 2px; cursor: pointer; touch-action: none; }
 .writer-root .seek-track { position: relative; display: block; height: 4px; border-radius: 2px; background: #262626; }

@@ -32,6 +32,8 @@ import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
 import { importing } from "./drive_import.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
+import * as ideaRuns from "./ideas/run.ts";
+import * as thumbnailRuns from "./thumbnails/run.ts";
 import * as editTime from "./edit_time.ts";
 import { join } from "./paths.ts";
 import * as presence from "./presence.ts";
@@ -434,6 +436,8 @@ export function busyWith(app: App, agentTurns = true): string[] {
     writerImports.anyImporting() ? "a script's import" : "",
     writerJobs.runningList().length > 0 ? "Claude on a script" : "",
     agentTurns && ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() ?? turns(app).length > 0) ? "an agent turn" : "",
+    agentTurns && thumbnailRuns.anyRunning() ? "Claude on a thumbnail" : "",
+    agentTurns && ideaRuns.anyRunning() ? "Claude on an idea" : "",
   ].filter(Boolean);
 }
 

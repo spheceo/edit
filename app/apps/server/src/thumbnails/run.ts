@@ -70,6 +70,9 @@ export function liveOf(id: string): Pick<ThumbRun, "said" | "tools" | "step" | "
 
 export const isRunning = (id: string): boolean => runs.has(id);
 
+/** Whether Claude is on any thumbnail on this Mac (a restart or update would cut it off). */
+export const anyRunning = (): boolean => runs.size > 0;
+
 export function stop(id: string): boolean {
   const run = runs.get(id);
   if (run === undefined) return false;

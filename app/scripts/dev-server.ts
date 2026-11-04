@@ -7,8 +7,11 @@
 // alone, until someone killed it. A fresh process each time can't pile them
 // up, and the watch here is a handful of directory watchers.
 //
-// It's started again when it exits, and when it stops answering /api/health
-// for a minute (a hang). Ctrl-C (or the recipe ending) stops it.
+// A change while the server is in the middle of something (Claude on a
+// thumbnail, an export: /api/health's busy) waits for it, at most 20 minutes,
+// so other sessions' saves don't cut a turn off. It's started again when it
+// exits, and when it stops answering /api/health for a minute (a hang).
+// Ctrl-C (or the recipe ending) stops it.
 //
 //   bun scripts/dev-server.ts [serve's options]    (from app/, with the recipe's environment)
 
@@ -66,7 +69,49 @@ async function stop(): Promise<void> {
   }
 }
 
-/** A fresh server, once whatever asked for it has settled. */
+/** What the server is in the middle of (Claude on a thumbnail, an export…), by its /api/health; none when it doesn't answer. */
+async function busy(): Promise<string[]> {
+  try {
+    const answer = (await (await fetch(HEALTH, { signal: AbortSignal.timeout(3000) })).json()) as { busy?: unknown };
+    return Array.isArray(answer.busy) ? answer.busy.filter((one): one is string => typeof one === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Saved changes waiting for the server's work to finish (Nov 4: other sessions' saves stopped a thumbnail turn twice running). */
+let waiting: { since: number; why: string } | null = null;
+const HOLD_AT_MOST = 20 * 60_000;
+
+/**
+ * A fresh server for a change, once what it's in the middle of is done (a
+ * restart cuts a Claude turn or an export off): held while /api/health says
+ * it's busy, at most 20 minutes.
+ */
+function changed(why: string): void {
+  if (stopping) return;
+  if (waiting !== null) {
+    waiting.why = why;
+    return;
+  }
+  waiting = { since: Date.now(), why };
+  void (async () => {
+    let said = false;
+    for (;;) {
+      if (stopping || waiting === null) return;
+      const doing = await busy();
+      if (doing.length === 0 || Date.now() - waiting.since > HOLD_AT_MOST) break;
+      if (!said) say(`${waiting.why}; waiting for ${doing.join(", ")} to finish before starting a fresh server`);
+      said = true;
+      await Bun.sleep(5000);
+    }
+    const why = waiting?.why ?? "changed";
+    waiting = null;
+    restart(`${why}; starting a fresh server`);
+  })();
+}
+
+/** A fresh server now. */
 function restart(why: string): void {
   if (stopping) return;
   if (restarting !== null) return;
@@ -92,9 +137,9 @@ for (const one of WATCHED) {
         pending = {
           file: name,
           timer: setTimeout(() => {
-            const changed = pending?.file ?? name;
+            const file = pending?.file ?? name;
             pending = null;
-            restart(`${changed} changed; starting a fresh server`);
+            changed(`${file} changed`);
           }, 300),
         };
       }),

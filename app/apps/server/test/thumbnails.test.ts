@@ -5,7 +5,7 @@ import { baseBrief, changed, fresh, pickModel } from "../src/thumbnails/run.ts";
 import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
 import { withStops } from "../src/thumbnails/cloud.ts";
-import { HOUSE_SHADOW, NO_ADJUST } from "@edit/types/thumbnails";
+import { HOUSE_SHADOW, NO_ADJUST, type ImageLayer } from "@edit/types/thumbnails";
 import { adjustPixels, captionShadow, shadowMetrics, shownText, type Context } from "@edit/types/thumbnail_render";
 import { sizeOf } from "../src/thumbnails/size.ts";
 
@@ -281,7 +281,7 @@ test("a picture layer's oval mask: given, kept when left out, taken off with nul
   const masked = layerOf({ kind: "image", source: "img1", mask: { x: 0, y: 40, width: 520, height: 680, feather: 60 } }, undefined, sources);
   expect(masked).toMatchObject({ mask: { x: 0, y: 40, width: 520, height: 680, feather: 60 } });
   expect(layerOf({ kind: "image", source: "img1" }, masked, sources)).toMatchObject({ mask: { width: 520 } });
-  expect(layerOf({ kind: "image", source: "img1", mask: { width: 300 } }, masked, sources).mask).toEqual({ x: 0, y: 40, width: 300, height: 680, feather: 60 });
-  expect(layerOf({ kind: "image", source: "img1", mask: null }, masked, sources).mask).toBeUndefined();
+  expect((layerOf({ kind: "image", source: "img1", mask: { width: 300 } }, masked, sources) as ImageLayer).mask).toEqual({ x: 0, y: 40, width: 300, height: 680, feather: 60 });
+  expect((layerOf({ kind: "image", source: "img1", mask: null }, masked, sources) as ImageLayer).mask).toBeUndefined();
   expect(() => layerOf({ kind: "image", source: "img1", mask: "oval" }, undefined, sources)).toThrow("mask is");
 });

@@ -71,6 +71,9 @@ export function liveOf(id: string): Pick<IdeaRun, "said" | "tools" | "step"> | n
 
 export const isRunning = (id: string): boolean => runs.has(id);
 
+/** Whether Claude is on any idea on this Mac (a restart or update would cut it off). */
+export const anyRunning = (): boolean => runs.size > 0;
+
 /** Stops this Mac's run on an idea. */
 export function stop(id: string): boolean {
   const run = runs.get(id);

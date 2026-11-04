@@ -319,8 +319,15 @@ function liveOr404(app: App, id: string) {
 // ---------------------------------------------------------------------------
 // Server
 
+/** Who answers, and what it's in the middle of (the dev server's runner waits for that before a restart). */
 function health({ app }: Context): Response {
-  return json({ machine: app.machine, name: "edit", version: VERSION });
+  let busy: string[] = [];
+  try {
+    busy = remoteActions.busyWith(app);
+  } catch {
+    // A test's stubbed services: nothing of theirs is running.
+  }
+  return json({ machine: app.machine, name: "edit", version: VERSION, busy });
 }
 
 /** The first line `<tool> -version` prints, or null. */

@@ -393,8 +393,8 @@ export function openComments(thumb: Thumbnail): ThumbComment[] {
   return (thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === thumb.activeVersion);
 }
 
-/** A comment pinned where the person clicked, on the version showing. */
-export function addComment(thumb: Thumbnail, at: { x: number; y: number }, text: string, by: string): ThumbComment {
+/** A comment pinned where the person clicked, on the version they're looking at (else the one showing). */
+export function addComment(thumb: Thumbnail, at: { x: number; y: number }, text: string, by: string, version?: string): ThumbComment {
   const words = text.trim().slice(0, 2000);
   if (words === "") throw new Error("Write the comment.");
   if (!Number.isFinite(at.x) || !Number.isFinite(at.y)) throw new Error("Pin the comment somewhere on the thumbnail.");
@@ -407,7 +407,7 @@ export function addComment(thumb: Thumbnail, at: { x: number; y: number }, text:
     text: words,
     by,
     at: Date.now(),
-    ...(thumb.activeVersion !== undefined ? { version: thumb.activeVersion } : {}),
+    ...(thumb.activeVersion !== undefined ? { version: thumb.versions?.some((one) => one.id === version) ? version : thumb.activeVersion } : {}),
   };
   thumb.comments = [...comments, comment];
   return comment;

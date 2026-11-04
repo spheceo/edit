@@ -707,9 +707,7 @@ export function CommentaryEditor({
                     placeholder={
                       archived
                         ? "The footage is archived: restore it to change the script"
-                        : busy
-                          ? "Claude is writing\u2026"
-                          : !draft
+                        : !draft
                             ? "Notes for the first draft (optional), e.g. aim for 15 minutes\u2026"
                             : rewriting
                               ? "Ask for a rewrite. It replaces the whole script\u2026"

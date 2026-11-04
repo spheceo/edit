@@ -47,7 +47,7 @@ import {
   watchClaudeSupport,
   type AgentEntry,
 } from "../lib/agent";
-import { buildTurns, callTitle, formatWorked, formatWorking, groupSummary, isWorking, type Turn } from "../lib/agentTurns";
+import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, shortSpan, thinkingWord, type Turn } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
 import { api, mediaUrl } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
@@ -133,6 +133,28 @@ export function ChatShell({
 }
 
 /** A chat's entries as turns, plus the ids already there (they don't animate in). */
+/**
+ * A message shown the moment it's sent, before the server's chat has it (Sphe,
+ * Nov 4: "when you send a prompt it should show up instantly"): `hold` it as
+ * it's sent, `drop` it if the send was refused. It goes once the chat has one
+ * more message of the person's than when it was sent.
+ */
+export function useSentNow(entries: AgentEntry[]): { entries: AgentEntry[]; sending: boolean; hold: (text: string, attachments?: AgentEntry["attachments"]) => void; drop: () => void } {
+  const asked = entries.filter((entry) => entry.kind === "user").length;
+  const [pending, setPending] = useState<{ text: string; at: number; asked: number; attachments?: AgentEntry["attachments"] } | null>(null);
+  const landed = pending !== null && asked > pending.asked;
+  useEffect(() => {
+    if (landed) setPending(null);
+  }, [landed]);
+  const shown = pending !== null && !landed;
+  return {
+    entries: shown ? [...entries, { id: `pending-${pending.at}`, kind: "user", text: pending.text, at: pending.at, updated: pending.at, ...(pending.attachments !== undefined && pending.attachments.length > 0 ? { attachments: pending.attachments } : {}) }] : entries,
+    sending: shown,
+    hold: (text, attachments) => setPending({ text, at: Date.now(), asked, ...(attachments !== undefined ? { attachments } : {}) }),
+    drop: () => setPending(null),
+  };
+}
+
 export function useChatTurns(key: unknown, entries: AgentEntry[], running: boolean): { turns: Turn[]; known: Set<string> } {
   const turns = buildTurns(entries, running);
   const known = useRef<{ key: unknown; ids: Set<string> } | null>(null);
@@ -367,9 +389,20 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, transition: { duration: 0.08 } }}
-            className="shimmer h-7 px-1.5 text-[12px] leading-7"
+            className="h-7 px-1.5 text-[12px] leading-7"
           >
-            {said ?? (working ? formatWorking(elapsed) : "Thinking")}
+            {said !== undefined ? (
+              <span className="shimmer">{said}</span>
+            ) : (
+              <>
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.span key={thinkingWord(turn.startedAt, elapsed)} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }} className="shimmer inline-block">
+                    {thinkingWord(turn.startedAt, elapsed)}
+                  </motion.span>
+                </AnimatePresence>
+                {working && <span className="ml-1.5 text-faint tabular">{shortSpan(elapsed)}</span>}
+              </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -459,6 +492,20 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
 const toolIcon = (tool?: string) => TOOL_ICONS[tool ?? ""] ?? Wrench;
 
 /** A reasoning block. While it is being written the words stay open; afterwards it folds to the label (as in phi). */
+/** A thinking word that moves on every few seconds from when it appeared. */
+function ThinkingWord() {
+  const [since] = useState(() => Date.now());
+  const now = useNow(true);
+  const word = thinkingWord(since, now - since);
+  return (
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.span key={word} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }} className="shimmer inline-block">
+        {word}
+      </motion.span>
+    </AnimatePresence>
+  );
+}
+
 function ThinkingTrace({ text, active }: { text: string; active: boolean }) {
   const [open, setOpen] = useState(false);
   const body = text.trim();
@@ -473,7 +520,7 @@ function ThinkingTrace({ text, active }: { text: string; active: boolean }) {
         onClick={() => body !== "" && setOpen((value) => !value)}
         className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
       >
-        <span className={cx("min-w-0 flex-1 truncate", active && "shimmer")}>Thinking</span>
+        <span className="min-w-0 flex-1 truncate">{active ? <ThinkingWord /> : "Thinking"}</span>
       </button>
       {(active || open) && body !== "" && (
         <pre ref={ref} className="mx-1.5 mt-0.5 mb-1.5 max-h-40 overflow-auto rounded-md bg-black px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted ring-1 ring-line">
@@ -725,7 +772,7 @@ function Composer({ disabled, projectId }: { disabled: boolean; projectId: strin
       running={running}
       disabled={disabled}
       modelName={modelName ?? ""}
-      placeholder={running ? "Working… anything you send now waits its turn" : "Start the editing workflow, or ask for a change…"}
+      placeholder="Start the editing workflow, or ask for a change…"
       // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
       onSend={(message, files) => void sendToAgent(message, playhead.frame, files)}
       onStop={stopAgent}

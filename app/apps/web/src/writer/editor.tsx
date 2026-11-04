@@ -831,9 +831,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           placeholder={
             archived
               ? "The footage is archived: restore it to change the script"
-              : busy
-                ? "Claude is working…"
-                : quote
+              : quote
                   ? "What should we do with this passage?"
                   : cueCount
                     ? "Ask for a change, e.g. tighten the intro, rewrite cut-in 4 shorter, fix the edges…"

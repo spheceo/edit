@@ -107,7 +107,7 @@ const SCRIPT_TOOLS = new Set(["build_script", "plan_part", "read_timeline", "rea
 
 /** A thumbnail tool, as what it is doing and what it did. */
 const THUMB_TOOLS: Record<string, [string, string]> = {
-  make_picture: ["Making a picture", "Made a picture"],
+  make_picture: ["Making a picture on OpenArt", "Made a picture"],
   picture_prompt: ["Reading the picture's prompt", "Read the picture's prompt"],
   new_version: ["Starting another version", "Started another version"],
   switch_version: ["Switching version", "Switched version"],
@@ -128,17 +128,58 @@ const THUMB_TOOLS: Record<string, [string, string]> = {
   look: ["Looking at the thumbnail", "Looked at the thumbnail"],
   rename: ["Renaming the thumbnail", "Renamed the thumbnail"],
   save_overlay: ["Saving the overlay", "Saved the overlay to the library"],
-  Read: ["Looking at a picture", "Looked at a picture"],
+  Read: ["Looking closely at a picture", "Looked at a picture"],
 };
 
-/** What Claude is doing on a thumbnail right now, in a few words: the tool it's in, else thinking or writing. */
-export function thumbActivity(run: ThumbRun | null): string {
+/**
+ * Words for Claude between its steps, in place of the same "Thinking" over and
+ * over (Sphe, Nov 4: "have a bunch of other synonyms over just thinking… take
+ * inspiration from the claude synonyms"): short, and moving on every few
+ * seconds while it goes on.
+ */
+export const THINKING_WORDS = [
+  "Thinking",
+  "Considering",
+  "Mulling it over",
+  "Deliberating",
+  "Weighing it up",
+  "Pondering",
+  "Puzzling it out",
+  "Reasoning",
+  "Sizing it up",
+  "Chewing it over",
+  "Working it out",
+  "Reflecting",
+  "Piecing it together",
+  "Contemplating",
+  "Ruminating",
+  "Cogitating",
+  "Musing",
+  "Percolating",
+];
+
+/** The word for `elapsed` ms into a stretch of thinking that began at `since`: a fresh one every 3.5 s, each stretch starting somewhere of its own. */
+export function thinkingWord(since: number, elapsed: number): string {
+  const start = Math.abs(Math.floor(since / 1000)) % THINKING_WORDS.length;
+  return THINKING_WORDS[(start + Math.floor(Math.max(0, elapsed) / 3500)) % THINKING_WORDS.length]!;
+}
+
+/** How long, briefly: "8s", "1m 12s", "1h 4m". */
+export function shortSpan(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** What Claude is doing on a thumbnail right now, in a few words: the tool it's in, else writing, else a thinking word. */
+export function thumbActivity(run: ThumbRun | null, now = Date.now()): string {
   if (run === null || run.state === "queued") return "Waiting for a turn";
   const calls = run.trace?.flatMap((part) => (part.kind === "tools" ? part.calls : [])) ?? run.tools ?? [];
   const live = [...calls].reverse().find((call) => call.state === "running");
   if (live !== undefined) return THUMB_TOOLS[live.name]?.[0] ?? "Working";
-  const last = run.trace?.at(-1);
-  return last?.kind === "text" ? "Writing" : "Thinking";
+  if (run.trace?.at(-1)?.kind === "text") return "Writing";
+  return thinkingWord(run.startedAt, now - run.startedAt);
 }
 
 /** A short, human title for one call. */

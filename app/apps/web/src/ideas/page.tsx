@@ -10,7 +10,7 @@
 import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
+import { ChatShell, ChatTurns, Empty, useChatTurns, useSentNow } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatDock } from "../components/ChatDock";
 import { picturesOnly, postFile } from "../lib/chatFiles";
@@ -191,9 +191,7 @@ function Header({
         Ideas
       </button>
       <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[11.5px] text-white/25">
-        {active ? (
-          <span className="shimmer">{idea?.run?.step ?? "Claude is working"}</span>
-        ) : saving === "saving" ? (
+        {saving === "saving" ? (
           <>
             <Pulse size={12} /> Saving
           </>
@@ -874,9 +872,12 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
   const toastError = useEditor((state) => state.toastError);
   const running = working(idea);
   const entries = conversationEntries(idea.chat, idea.createdAt, running ? idea.run : null, (turn) => (turn.images ?? []).map((image) => ({ name: image.name, kind: "image" as const, url: chatImageUrl(idea.id, image.id) })));
-  // What was there when the page opened doesn't animate in.
-  const { turns, known } = useChatTurns(id, entries, running);
-  const other = running && idea.run !== null && idea.run.tools === undefined && idea.run.said === undefined ? ` · on ${idea.run.holder}` : "";
+  // A message shows the moment it's sent; what was there when the page opened doesn't animate in.
+  const sent = useSentNow(entries);
+  const { turns, known } = useChatTurns(id, sent.entries, running || sent.sending);
+  // Its own steps say what it's at ("Reading the captions"); a plain "Claude is working" is left to the chat's thinking words.
+  const step = idea.run?.step !== undefined && !/^(Claude is working|Waiting for a turn)$/.test(idea.run.step) ? idea.run.step : undefined;
+  const other = running && idea.run !== null && idea.run.tools === undefined && idea.run.said === undefined ? `On ${idea.run.holder}` : undefined;
   // Pictures attached to a message are kept beside the idea's own, not among its eight.
   const files = useMemo(
     () => ({
@@ -898,15 +899,21 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
           draft={`ideas.chat-draft.${id}`}
           chat={`idea:${id}`}
           files={files}
-          onSend={(message, attached) => void ideasApi.chat(id, message, attached.map((one) => one.landed as IdeaImage)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
+          onSend={(message, attached) => {
+            sent.hold(message, attached.map((one) => ({ name: one.name, kind: one.kind, url: one.preview })));
+            void ideasApi.chat(id, message, attached.map((one) => one.landed as IdeaImage)).then(onAsked, (error: unknown) => {
+              sent.drop();
+              toastError(error, "ask Claude");
+            });
+          }}
           onStop={() => void ideasApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
         />
       }
     >
-      {entries.length === 0 ? (
+      {sent.entries.length === 0 ? (
         <Empty title="Ask for a change" detail="Another angle, punchier titles, one more title, a different place in the thumbnail. Claude changes the idea as you watch." />
       ) : (
-        <ChatTurns turns={turns} known={known} thinking={running ? `${idea.run?.step ?? "Working"}${other}` : undefined} />
+        <ChatTurns turns={turns} known={known} thinking={running ? (step ?? other) : undefined} />
       )}
     </ChatShell>
   );

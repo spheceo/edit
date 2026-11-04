@@ -167,10 +167,10 @@ export function routes(router: Router<App>): void {
     })
     .post("/api/thumbnails/{id}/chat", async (context: Context) => {
       guard();
-      const body = await readJson<{ text?: unknown; images?: unknown }>(context);
+      const body = await readJson<{ text?: unknown; images?: unknown; version?: unknown }>(context);
       const images = Array.isArray(body.images) ? body.images.filter((one): one is string => typeof one === "string").slice(0, 8) : [];
       try {
-        await run.chat(contextOf(context.app), context.params.id!, typeof body.text === "string" ? body.text : "", images);
+        await run.chat(contextOf(context.app), context.params.id!, typeof body.text === "string" ? body.text : "", images, typeof body.version === "string" ? body.version : undefined);
         return json({ ok: true });
       } catch (error) {
         if (error instanceof Error && /^(Write what|Keep the message|Claude is)/.test(error.message)) throw bad(error.message);
@@ -180,11 +180,11 @@ export function routes(router: Router<App>): void {
     // A comment pinned where the person clicked, on the version showing; and one taken back by whoever left it.
     .post("/api/thumbnails/{id}/comments", async (context: Context) => {
       guard();
-      const body = await readJson<{ x?: unknown; y?: unknown; text?: unknown }>(context);
+      const body = await readJson<{ x?: unknown; y?: unknown; text?: unknown; version?: unknown }>(context);
       try {
         const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
           try {
-            addComment(thumb, { x: Number(body.x), y: Number(body.y) }, typeof body.text === "string" ? body.text : "", by());
+            addComment(thumb, { x: Number(body.x), y: Number(body.y) }, typeof body.text === "string" ? body.text : "", by(), typeof body.version === "string" ? body.version : undefined);
           } catch (error) {
             throw bad(diag.messageOf(error));
           }
@@ -225,7 +225,9 @@ export function routes(router: Router<App>): void {
       const body = await readJson<{ version?: unknown }>(context);
       try {
         const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
-          if (typeof body.version !== "string" || switchVersion(thumb, body.version) === null) throw bad(`No version ${String(body.version)} to show.`);
+          if (typeof body.version !== "string" || !(thumb.versions ?? []).some((one) => one.id === body.version || one.name === body.version)) throw bad(`No version ${String(body.version)} to show.`);
+          // The one showing already: nothing to change (the page may be a step behind Claude's own switching).
+          if (switchVersion(thumb, body.version) === null) return false;
         });
         return json({ thumb, rev });
       } catch (error) {

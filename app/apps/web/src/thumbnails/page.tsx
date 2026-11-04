@@ -10,7 +10,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { ArrowLeft, Check, ChevronDown, Download, Image as ImageIcon, MessageSquare, Trash2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
+import { ChatShell, ChatTurns, Empty, useChatTurns, useSentNow } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatDock } from "../components/ChatDock";
 import { attachFiles, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
@@ -167,9 +167,27 @@ export function ThumbnailScreen({ id }: { id: string }) {
     return () => clearInterval(timer);
   }, [load, running]);
 
-  const design = thumb?.design ?? null;
+  /**
+   * The version the person is looking at is theirs (Sphe, Nov 4: the agent
+   * "shouldn't have to switch my view as well, it can do it with tool calls in
+   * the background"): Claude works on the version it's on, shown lit on its
+   * tile, and the page stays where the person put it. Left alone, the page
+   * follows Claude (a draft it starts shows up); a click pins it, until the
+   * person's next message starts its turn on what they're looking at.
+   */
+  const [view, setView] = useState<string | null>(null);
   const versions = thumb?.versions ?? [];
-  const [picture, tick] = usePictures(id, [...(design ? [design] : []), ...versions.map((one) => one.design)]);
+  const viewing = view !== null && versions.some((one) => one.id === view) ? view : thumb?.activeVersion;
+  const viewed = viewing === thumb?.activeVersion ? undefined : versions.find((one) => one.id === viewing);
+  const viewedDesign = useMemo(() => (viewed === undefined ? null : settleCaptions(viewed.design)), [viewed]);
+  const design = thumb === null ? null : (viewedDesign ?? thumb.design);
+  const runningNow = useRef(false);
+  useEffect(() => {
+    // A turn starting on the version the person is looking at: from here the page follows it again.
+    if (running && !runningNow.current && view !== null && thumb?.activeVersion === view) setView(null);
+    runningNow.current = running;
+  }, [running, view, thumb?.activeVersion]);
+  const [picture, tick] = usePictures(id, [...(thumb ? [thumb.design] : []), ...versions.map((one) => one.design)]);
   useEffect(() => {
     if (canvas.current === null || design === null) return;
     const frame = requestAnimationFrame(() => draw(canvas.current!, design, picture));
@@ -186,6 +204,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
     if (thumb === null) return;
     const target = thumb.versions?.find((one) => one.id === version);
     if (target === undefined) return;
+    setView(version);
+    // While Claude works the view is the person's alone; otherwise the thumbnail shows it too (the list, teammates, Claude's next turn).
+    if (running || version === thumb.activeVersion) return;
     const before = thumb;
     const versions = (thumb.versions ?? []).map((one) => (one.id === thumb.activeVersion ? { ...one, design: thumb.design } : one));
     setThumb({ ...thumb, versions, activeVersion: version, design: settleCaptions(target.design), history: [], future: [] });
@@ -198,7 +219,10 @@ export function ThumbnailScreen({ id }: { id: string }) {
           if (mine === asked.current) show(thumb, rev);
         },
         (error: unknown) => {
-          if (mine === asked.current) setThumb(before);
+          if (mine === asked.current) {
+            setThumb(before);
+            setView(null);
+          }
           toastError(error, "show that version");
         },
       )
@@ -239,9 +263,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
       .finally(() => switching.current--);
   };
   const comment = (at: { x: number; y: number }, text: string) => {
-    const local: ThumbComment = { id: `local-${Math.random().toString(36).slice(2, 10)}`, n: (thumb?.comments ?? []).reduce((most, one) => Math.max(most, one.n), 0) + 1, x: Math.round(at.x), y: Math.round(at.y), text: text.trim(), by: me ?? "You", at: Date.now(), ...(thumb?.activeVersion !== undefined ? { version: thumb.activeVersion } : {}) };
+    const local: ThumbComment = { id: `local-${Math.random().toString(36).slice(2, 10)}`, n: (thumb?.comments ?? []).reduce((most, one) => Math.max(most, one.n), 0) + 1, x: Math.round(at.x), y: Math.round(at.y), text: text.trim(), by: me ?? "You", at: Date.now(), ...(viewing !== undefined ? { version: viewing } : {}) };
     setThumb((was) => (was === null ? was : { ...was, comments: [...(was.comments ?? []), local] }));
-    behind(thumbnailsApi.comment(id, at, text), () => setThumb((was) => (was === null ? was : { ...was, comments: (was.comments ?? []).filter((one) => one.id !== local.id) })), "leave the comment");
+    behind(thumbnailsApi.comment(id, at, text, viewing), () => setThumb((was) => (was === null ? was : { ...was, comments: (was.comments ?? []).filter((one) => one.id !== local.id) })), "leave the comment");
   };
   const removeComment = (comment: string) => {
     const gone = thumb?.comments?.find((one) => one.id === comment);
@@ -340,15 +364,15 @@ export function ThumbnailScreen({ id }: { id: string }) {
             <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Loader size={32} />}</div>
           ) : (
             <>
-              <Stage canvas={canvas} empty={design.layers.length === 0} run={thumb.run}>
-                {(scale) => <Comments thumb={thumb} scale={scale} commenting={commenting} onComment={comment} onRemove={removeComment} />}
+              <Stage canvas={canvas} empty={design.layers.length === 0} run={viewing === thumb.activeVersion ? thumb.run : null}>
+                {(scale) => <Comments thumb={thumb} viewing={viewing} scale={scale} commenting={commenting} onComment={comment} onRemove={removeComment} />}
               </Stage>
-              <Versions thumb={thumb} picture={picture} tick={tick} running={running} onShow={showVersion} onFinal={takeFinal} />
+              <Versions thumb={thumb} viewing={viewing} picture={picture} tick={tick} running={running} onShow={showVersion} onFinal={takeFinal} />
             </>
           )}
         </main>
         <ChatDock working={running}>
-          <div className="flex min-h-0 flex-1 flex-col pt-2">{thumb === null ? <ChatShell loading /> : <Chat id={id} thumb={thumb} upload={chatUpload} onAsked={() => void load()} />}</div>
+          <div className="flex min-h-0 flex-1 flex-col pt-2">{thumb === null ? <ChatShell loading /> : <Chat id={id} thumb={thumb} upload={chatUpload} viewing={viewing} onSending={() => viewing !== undefined && setView(viewing)} onAsked={() => void load()} />}</div>
         </ChatDock>
       </div>
     </div>
@@ -638,8 +662,8 @@ const PIN_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns="ht
  * the comment with Claude's answers. Claude reads them every turn and settles
  * each once it's done (settled ones leave the page).
  */
-function Comments({ thumb, scale, commenting, onComment, onRemove }: { thumb: Thumbnail; scale: number; commenting: boolean; onComment: (at: { x: number; y: number }, text: string) => void; onRemove: (id: string) => void }) {
-  const open = (thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === thumb.activeVersion);
+function Comments({ thumb, viewing, scale, commenting, onComment, onRemove }: { thumb: Thumbnail; viewing: string | undefined; scale: number; commenting: boolean; onComment: (at: { x: number; y: number }, text: string) => void; onRemove: (id: string) => void }) {
+  const open = (thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === viewing);
   const [draft, setDraft] = useState<{ x: number; y: number } | null>(null);
   const [opened, setOpened] = useState<string | null>(null);
   const layer = useRef<HTMLDivElement>(null);
@@ -830,7 +854,7 @@ function Draft({ at, scale, n, onCancel, onSave }: { at: { x: number; y: number 
  * than one (Sphe, Nov 4: the V1 / V2 pills "changed significantly"): a click
  * shows one, and the one that ships is marked Final, on its own tile.
  */
-function Versions({ thumb, picture, tick, running, onShow, onFinal }: { thumb: Thumbnail; picture: (source: string) => HTMLImageElement | null; tick: number; running: boolean; onShow: (version: string) => void; onFinal: (version: string) => void }) {
+function Versions({ thumb, viewing, picture, tick, running, onShow, onFinal }: { thumb: Thumbnail; viewing: string | undefined; picture: (source: string) => HTMLImageElement | null; tick: number; running: boolean; onShow: (version: string) => void; onFinal: (version: string) => void }) {
   const versions = thumb.versions ?? [];
   return (
     <AnimatePresence initial={false}>
@@ -851,10 +875,10 @@ function Versions({ thumb, picture, tick, running, onShow, onFinal }: { thumb: T
                   version={version}
                   // The one showing is drawn from the layout on the canvas, so it follows Claude's changes as they land.
                   design={version.id === thumb.activeVersion ? thumb.design : version.design}
-                  showing={version.id === thumb.activeVersion}
+                  showing={version.id === viewing}
+                  worked={running && version.id === thumb.activeVersion}
                   final={version.id === thumb.finalVersion}
                   comments={(thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === version.id).length}
-                  running={running}
                   picture={picture}
                   tick={tick}
                   onShow={() => onShow(version.id)}
@@ -869,7 +893,7 @@ function Versions({ thumb, picture, tick, running, onShow, onFinal }: { thumb: T
   );
 }
 
-function VersionTile({ version, design, showing, final, comments, running, picture, tick, onShow, onFinal }: { version: ThumbVersion; design: Design; showing: boolean; final: boolean; comments: number; running: boolean; picture: (source: string) => HTMLImageElement | null; tick: number; onShow: () => void; onFinal: () => void }) {
+function VersionTile({ version, design, showing, worked, final, comments, picture, tick, onShow, onFinal }: { version: ThumbVersion; design: Design; showing: boolean; worked: boolean; final: boolean; comments: number; picture: (source: string) => HTMLImageElement | null; tick: number; onShow: () => void; onFinal: () => void }) {
   const small = useRef<HTMLCanvasElement>(null);
   const shape = JSON.stringify(design);
   useEffect(() => {
@@ -881,23 +905,19 @@ function VersionTile({ version, design, showing, final, comments, running, pictu
     });
     return () => cancelAnimationFrame(frame);
   }, [shape, picture, tick]);
-  // While Claude works it changes the version showing: another isn't shown until it's done.
-  const locked = running && !showing;
   return (
     <motion.div layout initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }} transition={spring} className="group flex w-[clamp(84px,7vw,112px)] shrink-0 flex-col gap-1">
       <button
         type="button"
-        title={locked ? "Claude is working on the version showing" : showing ? `${version.name} is showing` : `Show ${version.name}`}
-        disabled={locked}
+        title={showing ? `${version.name} is showing` : `Show ${version.name}`}
         onClick={() => !showing && onShow()}
         className={cx(
           "relative aspect-video overflow-hidden rounded-md bg-panel ring-offset-2 ring-offset-black transition-[box-shadow,opacity] duration-200",
           showing ? "ring-2 ring-white" : "ring-1 ring-line hover:ring-line-strong",
-          locked && "opacity-50",
         )}
       >
         <canvas ref={small} width={224} height={126} className="block size-full" />
-        {running && showing && <span className="working-ring inset-0! rounded-md" />}
+        {worked && <span className="working-ring inset-0! rounded-md" />}
         {comments > 0 && (
           <span title={`${comments} open comment${comments === 1 ? "" : "s"}`} className="absolute top-1 right-1 flex h-4 items-center gap-0.5 rounded-full bg-black/80 px-1 text-[10px] font-medium text-white tabular">
             <MessageSquare size={9} /> {comments}
@@ -927,13 +947,14 @@ function VersionTile({ version, design, showing, final, comments, running, pictu
 
 // ---------------------------------------------------------------- the conversation
 
-function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; upload: Uploader; onAsked: () => void }) {
+function Chat({ id, thumb, upload, viewing, onSending, onAsked }: { id: string; thumb: Thumbnail; upload: Uploader; viewing: string | undefined; onSending: () => void; onAsked: () => void }) {
   const toastError = useEditor((state) => state.toastError);
   const running = working(thumb);
   const entries = conversationEntries(thumb.chat, thumb.createdAt, running ? thumb.run : null, (turn) => (turn.images ?? []).map((image) => ({ name: thumb.images.find((one) => one.id === image)?.name ?? "picture", kind: "image" as const, url: sourceUrl(thumb.id, image) })));
-  const { turns, known } = useChatTurns(id, entries, running);
+  // A message shows the moment it's sent.
+  const sent = useSentNow(entries);
+  const { turns, known } = useChatTurns(id, sent.entries, running || sent.sending);
   const quiet = running && thumb.run !== null && thumb.run.trace === undefined && thumb.run.tools === undefined && thumb.run.said === undefined;
-  const other = quiet ? ` · on ${thumb.run?.holder}` : "";
   return (
     <ChatShell
       resetKey={id}
@@ -946,15 +967,22 @@ function Chat({ id, thumb, upload, onAsked }: { id: string; thumb: Thumbnail; up
           draft={`thumbnails.chat-draft.${id}`}
           chat={`thumb:${id}`}
           files={{ upload, accept: picturesOnly }}
-          onSend={(message, files) => void thumbnailsApi.chat(id, message, files.map((one) => one.landed as string)).then(onAsked, (error: unknown) => toastError(error, "ask Claude"))}
+          onSend={(message, files) => {
+            sent.hold(message, files.map((one) => ({ name: one.name, kind: one.kind, url: one.preview })));
+            onSending();
+            void thumbnailsApi.chat(id, message, files.map((one) => one.landed as string), viewing).then(onAsked, (error: unknown) => {
+              sent.drop();
+              toastError(error, "ask Claude");
+            });
+          }}
           onStop={() => void thumbnailsApi.stop(id).then(onAsked, (error: unknown) => toastError(error, "stop it"))}
         />
       }
     >
-      {entries.length === 0 ? (
+      {sent.entries.length === 0 ? (
         <Empty title="Make a thumbnail with Claude" detail="Drop in a frame or a thumbnail and say what you want: “clean this base and put the REC overlay on”, “three versions of the mom at the door”, “add ‘he abused me’ in a black box”, “a touch brighter”." />
       ) : (
-        <ChatTurns turns={turns} known={known} thinking={running ? `Thinking${other}` : undefined} />
+        <ChatTurns turns={turns} known={known} thinking={quiet ? `On ${thumb.run?.holder}` : undefined} />
       )}
     </ChatShell>
   );

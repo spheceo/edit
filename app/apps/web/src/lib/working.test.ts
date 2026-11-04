@@ -3,7 +3,7 @@
 import { expect, test } from "vitest";
 
 import type { AgentEntry } from "./agent";
-import { buildTurns, callTitle, editWorked, formatSpan, formatWorking, groupSummary, isWorking, shownText } from "./agentTurns";
+import { buildTurns, callTitle, editWorked, formatSpan, formatWorking, groupSummary, isWorking, shortSpan, shownText, thinkingWord } from "./agentTurns";
 
 test("a turn is working once it calls a tool or a few seconds in", () => {
   expect(isWorking(1200, false)).toBe(false);
@@ -30,7 +30,7 @@ test("a live thumbnail turn shows reasoning between the words and the tool still
   expect(turn.parts.map((part) => part.kind)).toEqual(["thinking", "entry", "group", "thinking"]);
   const running = turn.parts.find((part) => part.kind === "group");
   expect(running?.kind === "group" && running.calls[0]?.status).toBe("running");
-  expect(callTitle({ id: "tool", kind: "tool", tool: "make_picture", text: "", status: "running" })).toBe("Making a picture");
+  expect(callTitle({ id: "tool", kind: "tool", tool: "make_picture", text: "", status: "running" })).toBe("Making a picture on OpenArt");
   expect(callTitle({ id: "tool", kind: "tool", tool: "Read", text: "", status: "done" })).toBe("Looked at a picture");
   expect(groupSummary([
     { id: "a", kind: "tool", tool: "Read", text: "" },
@@ -61,4 +61,12 @@ test("an edit's agent time adds up every turn, the live one to now, and none of 
   expect(formatSpan(45 * 60_000)).toBe("45m");
   expect(formatSpan(72 * 60_000)).toBe("1h 12m");
   expect(formatSpan(8_000)).toBe("8s");
+});
+
+test("between its steps Claude's word moves on every few seconds, not the same Thinking", () => {
+  const first = thinkingWord(0, 0);
+  expect(thinkingWord(0, 3000)).toBe(first);
+  expect(thinkingWord(0, 3600)).not.toBe(first);
+  expect(new Set(Array.from({ length: 30 }, (_, step) => thinkingWord(0, step * 3500))).size).toBeGreaterThan(10);
+  expect(shortSpan(72_000)).toBe("1m 12s");
 });

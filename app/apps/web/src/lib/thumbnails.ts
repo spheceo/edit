@@ -34,11 +34,12 @@ export const thumbnailsApi = {
   get: (id: string) => call<{ thumb: Thumbnail; rev: number }>("GET", base(id)),
   change: (id: string, change: { title?: string; brief?: string }) => call<{ thumb: Thumbnail; rev: number }>("PUT", base(id), change),
   remove: (id: string) => call<void>("DELETE", base(id)),
-  chat: (id: string, text: string, images: string[]) => call<{ ok: true }>("POST", `${base(id)}/chat`, { text, images }),
+  /** A message, with the version the person is looking at (the one the turn works on). */
+  chat: (id: string, text: string, images: string[], version?: string) => call<{ ok: true }>("POST", `${base(id)}/chat`, { text, images, ...(version !== undefined ? { version } : {}) }),
   stop: (id: string) => call<{ stopped: boolean }>("POST", `${base(id)}/stop`),
   switchVersion: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/switch`, { version }),
   /** A comment pinned at a spot on the canvas (canvas px), on the version showing; and one taken back. */
-  comment: (id: string, at: { x: number; y: number }, text: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/comments`, { ...at, text }),
+  comment: (id: string, at: { x: number; y: number }, text: string, version?: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/comments`, { ...at, text, ...(version !== undefined ? { version } : {}) }),
   removeComment: (id: string, comment: string) => call<{ thumb: Thumbnail; rev: number }>("DELETE", `${base(id)}/comments/${encodeURIComponent(comment)}`),
   takeFinal: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/final`, { version }),
   /** The team's OpenArt accounts with their credits, and the one in use on this Mac. */

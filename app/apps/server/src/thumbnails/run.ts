@@ -144,7 +144,7 @@ export const TOOLS = [
   },
   {
     name: "switch_version",
-    description: "Show another version of this thumbnail (its name, V1 / V2…). The one left keeps its layers. Draws it: Read it.",
+    description: "Work on another version of this thumbnail (its name, V1 / V2…): your tools change and draw that one from here. The person's own view doesn't move, so look at or compare other versions freely. The one left keeps its layers. Draws it: Read it.",
     inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" } }, required: ["version"] },
   },
   {
@@ -198,8 +198,8 @@ export const TOOLS = [
   },
   {
     name: "look",
-    description: "The thumbnail drawn as it is now. grid: true adds a grid every 160 px across and 120 down, labelled, for placing things exactly; comments: true marks the open comments' pins on it, numbered. Read the file it names.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { grid: { type: "boolean" }, comments: { type: "boolean" } } },
+    description: "The thumbnail drawn as it is now: the version you're working on, or another (version: V1…) without switching to it. grid: true adds a grid every 160 px across and 120 down, labelled, for placing things exactly; comments: true marks the open comments' pins on it, numbered. Read the file it names.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { version: { type: "string" }, grid: { type: "boolean" }, comments: { type: "boolean" } } },
   },
   {
     name: "compare",
@@ -494,8 +494,20 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
     case "look": {
       const found = await cloud.get(session.id);
       if (found === null) throw new cloud.Missing("This thumbnail was deleted.");
-      if (args.comments === true) return `Read it: ${await marked(session, found.thumb)}`;
-      const path = await drawn(session, found.thumb.design, args.grid === true);
+      const thumb = found.thumb;
+      if (typeof args.version === "string" && args.version.trim() !== "") {
+        const version = thumb.versions?.find((one) => one.name.toLowerCase() === (args.version as string).trim().toLowerCase());
+        if (version === undefined) throw new Error(`There's no version ${args.version}: ${(thumb.versions ?? []).map((one) => one.name).join(", ") || "it has one version"}.`);
+        if (version.id !== thumb.activeVersion) {
+          const marks = args.comments === true ? (thumb.comments ?? []).filter((one) => one.settled === undefined && one.version === version.id).map((one) => ({ x: one.x, y: one.y, n: one.n })) : [];
+          const { bytes } = await hooks.draw(session.context.origin, session.id, version.design, { grid: args.grid === true, marks });
+          const path = join(session.folder, `look-${version.name}-${Date.now()}.png`);
+          fs.writeFileSync(path, bytes);
+          return `${version.name}, as it stands (you're still working on ${thumb.versions?.find((one) => one.id === thumb.activeVersion)?.name}). Read it: ${path}`;
+        }
+      }
+      if (args.comments === true) return `Read it: ${await marked(session, thumb)}`;
+      const path = await drawn(session, thumb.design, args.grid === true);
       return `Read it: ${path}`;
     }
     case "compare": {
@@ -684,7 +696,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
     images.length > 0 ? `# Its images (Read the ones you use)\n${images.join("\n")}` : "# Its images\nNone yet.",
     `# The layers now, bottom first\n${describe(thumb.design)}`,
     baseBrief(thumb),
-    (thumb.versions ?? []).length > 1 ? `# Versions: ${(thumb.versions ?? []).map((one) => `${one.name}${one.id === thumb.activeVersion ? " (showing)" : ""}${one.id === thumb.finalVersion ? " (final)" : ""}`).join(", ")}` : "",
+    (thumb.versions ?? []).length > 1 ? `# Versions: ${(thumb.versions ?? []).map((one) => `${one.name}${one.id === thumb.activeVersion ? " (the person is looking at it: yours to work on)" : ""}${one.id === thumb.finalVersion ? " (final)" : ""}`).join(", ")}\nLook at or compare another with look / compare (version), without switching; switch_version only to change another. The person's view never moves with yours.` : "",
     current !== null ? `# As it looks now (Read it)\n${current}` : "",
     await commentsBrief(session, thumb),
     (thumb.history ?? []).length > 0 ? `# Recent changes to the layout (newest last; undo steps back through them)\n${(thumb.history ?? []).slice(-8).map((one) => `- ${one.by === "claude" ? "you" : one.by}: ${one.label}`).join("\n")}` : "",
@@ -714,8 +726,11 @@ async function commentsBrief(session: Session, thumb: Thumbnail): Promise<string
 
 type Ending = { state: ThumbRun["state"]; error?: string; text: string };
 
-/** A turn of the conversation: answers once it's queued. */
-export async function chat(context: Context, id: string, text: string, images: string[]): Promise<void> {
+/**
+ * A turn of the conversation: answers once it's queued. `version`: the one the
+ * person is looking at as they send, which the turn works on ("this one").
+ */
+export async function chat(context: Context, id: string, text: string, images: string[], version?: string): Promise<void> {
   const asked = text.trim();
   if (asked === "" && images.length === 0) throw new Error("Write what you'd like.");
   if ([...asked].length > 4000) throw new Error("Keep the message under 4,000 characters.");
@@ -728,6 +743,7 @@ export async function chat(context: Context, id: string, text: string, images: s
       if (other !== null && (other.state === "running" || other.state === "queued") && other.holder !== context.holder && Date.now() - other.startedAt < 20 * 60_000) {
         throw new Error(`Claude is working on this thumbnail on ${other.holder}: wait for it there.`);
       }
+      if (version !== undefined && version !== thumb.activeVersion && (thumb.versions ?? []).some((one) => one.id === version)) switchVersion(thumb, version);
       thumb.run = { state: "queued", holder: context.holder, by: context.by, startedAt: Date.now(), step: "Waiting for a turn" };
       thumb.chat = [...thumb.chat, { role: "you" as const, text: asked, at: Date.now(), by: context.by, ...(images.length > 0 ? { images } : {}) }].slice(-KEPT_TURNS);
     });

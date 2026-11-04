@@ -79,8 +79,12 @@ Claude with the next message.
 Versions: one until the person asks for another or for options (each draft is
 a version). Once there are two, they sit side by side under the canvas, each
 drawn as it stands: a click shows one at once, from the layouts and drawings
-the page already has, the server told behind it (not while Claude works on the
-one showing; the list's picture is drawn again by the server), and the one that ships is marked Final on its tile ("Make final" on
+the page already has, the server told behind it (the list's picture is drawn
+again by the server). The view is the person's: while Claude works, a click
+moves only their page, the version Claude is on lit on its tile (the canvas lit
+only when it's the one shown); left alone the page follows Claude, and a
+message carries the version being looked at, which its turn starts on. Claude
+looks at or compares other versions without switching. And the one that ships is marked Final on its tile ("Make final" on
 hover) or by asking Claude. Claude removes one when asked: the ones after it
 move down a number (Sphe, Nov 4: "if version 1 is removed, version 2 becomes
 version 1"), what showed or was final passes to a neighbour, and down to one

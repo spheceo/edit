@@ -3,7 +3,7 @@
 
 import { exportJWK, generateKeyPair, SignJWT, createLocalJWKSet, type JWK } from "jose";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { allow, budgetKey, caller, readCutOffsWith, useKeys } from "../../../relay/src/auth";
+import { allow, budgetKey, caller, CHECK_MS, forgetKeys, readCutOffsWith, useKeys } from "../../../relay/src/auth";
 import { cloud } from "../../../relay/src/cloud";
 import { reportRefused, WRITABLE } from "../../../relay/src/authz";
 import relay, { type Env } from "../../../relay/src/index";
@@ -178,6 +178,46 @@ describe("relay sign-in gate", () => {
     vi.spyOn(Date, "now").mockReturnValue(now + 6_000);
     expect(await caller(asked(await token({}, { kid: "k2", key: other })), { ACCOUNTS_ISSUER: issuer })).toMatchObject({ kind: "person" });
     expect(calls).toBe(2);
+  });
+
+  it("never waits on a read another request began: one that never comes back holds up nobody else", async () => {
+    // Nov 4: on Workers a cancelled request's read never settles, and every request after it that awaited it hung.
+    useKeys(createLocalJWKSet({ keys: [jwk] }));
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const made = await token();
+    let reader: (url: string) => Promise<Response> = async () => Response.json({ at: Date.now(), revoked: [] });
+    readCutOffsWith((url) => reader(url));
+    expect(await caller(asked(made), env())).not.toBeNull();
+    // A minute on, the list is old, and the next read never comes back.
+    const reads = vi.fn(() => new Promise<Response>(() => {}));
+    reader = reads;
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
+    void caller(asked(made), env());
+    await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+    // The next request is answered from the list held, not left waiting on that read.
+    const next = await Promise.race([caller(asked(made), env()), new Promise<"waited">((resolve) => setTimeout(() => resolve("waited"), 200))]);
+    expect(next).toMatchObject({ kind: "person" });
+    expect(reads).toHaveBeenCalledTimes(1);
+    readCutOffsWith(async () => Response.json({ at: Date.now(), revoked: [] }));
+  });
+
+  it("answers 503 (Edit asks again) when the sign-in can't be checked in time, instead of hanging", async () => {
+    forgetKeys();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // The accounts site's keys never come back.
+      vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
+      const answer = allow(asked(await token()), env(), "use", "convex");
+      await vi.advanceTimersByTimeAsync(CHECK_MS + 1);
+      const found = await answer;
+      expect(found).toBeInstanceOf(Response);
+      expect((found as Response).status).toBe(503);
+      expect((found as Response).headers.get("retry-after")).toBe("1");
+    } finally {
+      vi.useRealTimers();
+      forgetKeys();
+    }
   });
 
   it("keeps each person's budget apart, and connections apart for anyone else", async () => {

@@ -481,12 +481,16 @@ describe("relay cloud endpoints", () => {
 
   it("writes keys only where Edit writes them; deletes and lists beyond the analysis only for an admin", async () => {
     cloudWith(null);
-    for (const key of ["edit/projects/p1.json", "edit/exports/results/x.mp4", "edit/test/a.mp4"]) {
+    for (const key of ["edit/projects/p1.json", "edit/elsewhere/x.mp4", "edit/test/a.mp4"]) {
       expect((await call("r2/url", { key, method: "PUT" })).status).toBe(403);
       expect((await call("r2/multipart/create", { key })).status).toBe(403);
     }
-    expect((await call("r2/url", { key: "edit/exports/results/x.mp4" })).status).toBe(200);
-    expect((await call("r2/multipart/abort", { key: "edit/exports/results/x.mp4", uploadId: "u1" })).status).toBe(403);
+    // Where Edit writes, anyone signed in writes (a non-admin's pieced proxies and export archives were refused before Nov 4).
+    for (const key of ["edit/pieces/v3/sha256/ab/video/0.m4s", "edit/exports/p1/edit.mp4", "edit/chats/p1.json"]) {
+      expect((await call("r2/url", { key, method: "PUT" })).status).toBe(200);
+    }
+    expect((await call("r2/url", { key: "edit/elsewhere/x.mp4" })).status).toBe(200);
+    expect((await call("r2/multipart/abort", { key: "edit/elsewhere/x.mp4", uploadId: "u1" })).status).toBe(403);
     expect((await call("r2/url", { key: "edit/test/a.mp4", method: "PUT" }, { token: ADMIN })).status).toBe(200);
     expect((await call("r2/delete", { keys: ["edit/originals/drive/f/a.mp4"] })).status).toBe(403);
     expect((await call("r2/delete", { keys: ["edit/originals/drive/f/a.mp4"] }, { token: ADMIN })).status).toBe(200);

@@ -12,7 +12,7 @@
 // their id, everyone else by connection, as before. The log says who made
 // each request (the person's id), never their token.
 
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JSONWebKeySet, type JWTVerifyGetKey } from "jose";
 
 import { isEditing } from "./manifest";
 
@@ -38,8 +38,23 @@ const ISSUER = "https://accounts.spheceo.com";
 /** Allowed clock skew between the accounts site and here (the contract's 60 s). */
 const SKEW_SECONDS = 60;
 
-/** The accounts site's keys, cached about ten minutes and fetched again at once for a `kid` not seen (jose's remote set). */
-const remote = new Map<string, JWTVerifyGetKey>();
+/**
+ * What this copy of the relay last read of the accounts site: kept as data,
+ * never as a read in flight. On Workers, a request awaiting a read another
+ * request started waits forever when that one is cancelled (its I/O goes
+ * with it), and so does every request after it in that copy (Nov 4: runs of
+ * requests hanging 20 to 120 s with nothing logged, Marc's Mac 187 of them in
+ * a day). jose's remote key set shares its read like that, and so did the
+ * cut-offs here: now each request that needs a fresh one reads it itself.
+ */
+const keySets = new Map<string, { jwks: JSONWebKeySet; read: number; tried: number }>();
+/** The keys are read again after this, or at once (after 5 s since the last try) for a `kid` they lack. */
+const KEYS_EVERY_MS = 10 * 60_000;
+const KEYS_RETRY_MS = 5_000;
+/** How long a read of the accounts site may take. */
+const READ_MS = 5_000;
+/** The longest the sign-in check may take before the request is answered 503 (Edit asks again) instead of hanging. */
+export const CHECK_MS = 10_000;
 /** Tests verify against keys of their own. */
 let given: JWTVerifyGetKey | null = null;
 export function useKeys(keys: JWTVerifyGetKey | null): void {
@@ -50,15 +65,32 @@ function issuer(env: AuthEnv): string {
   return (env.ACCOUNTS_ISSUER ?? ISSUER).replace(/\/+$/, "");
 }
 
-function keysOf(env: AuthEnv): JWTVerifyGetKey {
+/** The keys to check a token signed with `kid` against: those last read, read again (by this request) when old or lacking it. */
+async function keysOf(env: AuthEnv, kid: string | undefined): Promise<JWTVerifyGetKey> {
   if (given !== null) return given;
   const url = `${issuer(env)}/.well-known/jwks.json`;
-  let keys = remote.get(url);
-  if (keys === undefined) {
-    keys = createRemoteJWKSet(new URL(url), { cacheMaxAge: 10 * 60_000, cooldownDuration: 5_000, timeoutDuration: 5_000 });
-    remote.set(url, keys);
+  const known = keySets.get(url);
+  const now = Date.now();
+  const lacking = known === undefined || (kid !== undefined && !known.jwks.keys.some((key) => key.kid === kid));
+  const old = known === undefined || now - known.read > KEYS_EVERY_MS;
+  if ((lacking || old) && (known === undefined || now - known.tried > KEYS_RETRY_MS)) {
+    if (known !== undefined) known.tried = now;
+    try {
+      const answer = await fetch(url, { signal: AbortSignal.timeout(READ_MS) });
+      const jwks = answer.ok ? ((await answer.json()) as JSONWebKeySet) : null;
+      if (jwks !== null && Array.isArray(jwks.keys)) keySets.set(url, { jwks, read: now, tried: now });
+    } catch (error) {
+      console.log(JSON.stringify({ route: "keys", unread: String(error) }));
+    }
   }
-  return keys;
+  const set = keySets.get(url);
+  if (set === undefined) throw new Error("the accounts site's keys couldn't be read");
+  return createLocalJWKSet(set.jwks);
+}
+
+/** Tests: forget the keys read, so the next request reads them again. */
+export function forgetKeys(): void {
+  keySets.clear();
 }
 
 async function sha256(text: string): Promise<Uint8Array> {
@@ -70,7 +102,8 @@ const CUT_OFFS_EVERY_MS = 60_000;
 
 /** People whose sign-ins an admin ended (removed, signed out everywhere, an app taken away): when, by person, and for which app (`*`: every app). */
 let cutOffs: { read: number; at: Map<string, Map<string, number>> } | null = null;
-let reading: Promise<void> | null = null;
+/** When this copy last began reading them: one request reads while the rest use the list held; one not back in `READ_MS` is let be. */
+let readingSince = 0;
 
 /** How the list is fetched (tests give their own). */
 let fetchCutOffs = (url: string): Promise<Response> => fetch(url, { signal: AbortSignal.timeout(3_000) });
@@ -79,7 +112,7 @@ let fetchCutOffs = (url: string): Promise<Response> => fetch(url, { signal: Abor
 export function readCutOffsWith(read: ((url: string) => Promise<Response>) | null): void {
   fetchCutOffs = read ?? ((url) => fetch(url, { signal: AbortSignal.timeout(3_000) }));
   cutOffs = null;
-  reading = null;
+  readingSince = 0;
 }
 
 /** The accounts site's cut-offs (`/app/revoked`, the last two hours): one read a minute, the last list kept when it can't be read. */
@@ -109,11 +142,11 @@ async function readCutOffs(env: AuthEnv): Promise<void> {
  * runs out an hour later (the user, Oct 30: a lost laptop's sign-in).
  */
 async function cutOff(env: AuthEnv, sub: string, issuedAt: number, audience: string): Promise<boolean> {
-  if (cutOffs === null || Date.now() - cutOffs.read > CUT_OFFS_EVERY_MS) {
-    reading ??= readCutOffs(env).finally(() => {
-      reading = null;
-    });
-    await reading;
+  // Never read at all here: this request reads them (it can't go on without). Old: one request reads, the others use what's held.
+  const now = Date.now();
+  if (cutOffs === null || (now - cutOffs.read > CUT_OFFS_EVERY_MS && now - readingSince > READ_MS)) {
+    readingSince = now;
+    await readCutOffs(env);
   }
   // Cut off from every app, or from this one (another app's access taken away isn't this one's).
   const apps = cutOffs?.at.get(sub);
@@ -128,7 +161,7 @@ export async function caller(request: Request, env: AuthEnv, audience = "edit"):
   const token = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(sent)?.[1];
   if (token === undefined) return null;
   try {
-    const { payload } = await jwtVerify(token, keysOf(env), { issuer: issuer(env), audience, clockTolerance: SKEW_SECONDS, algorithms: ["RS256"] });
+    const { payload } = await jwtVerify(token, await keysOf(env, decodeProtectedHeader(token).kid), { issuer: issuer(env), audience, clockTolerance: SKEW_SECONDS, algorithms: ["RS256"] });
     if (typeof payload.sub !== "string" || payload.sub === "" || typeof payload.exp !== "number") return null;
     // Signed out by an admin since this token was made: as good as no token (they sign in again, if they still may).
     if (await cutOff(env, payload.sub, typeof payload.iat === "number" ? payload.iat : 0, audience)) return null;
@@ -172,7 +205,14 @@ export function who(found: Caller): string {
  * shared token set, as `wrangler dev` runs).
  */
 export async function allow(request: Request, env: AuthEnv, permission: Permission, route: string, open = false, log = true): Promise<Caller | Response> {
-  const found = await caller(request, env);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<"late">((resolve) => (timer = setTimeout(() => resolve("late"), CHECK_MS)));
+  const checked = await Promise.race([caller(request, env), late]).finally(() => clearTimeout(timer));
+  if (checked === "late") {
+    console.log(JSON.stringify({ route, late: CHECK_MS }));
+    return new Response(JSON.stringify({ error: "The relay couldn't check your sign-in in time; Edit asks again." }), { status: 503, headers: { "content-type": "application/json; charset=utf-8", "retry-after": "1" } });
+  }
+  const found = checked;
   const sent = request.headers.get("authorization") ?? "";
   // A bearer that isn't a person's token: an Edit from before signing in (the shared token).
   const stale = sent !== "" && !/^Bearer [A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(sent);

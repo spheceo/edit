@@ -777,7 +777,7 @@ export async function revise(dir: string, script: Script, request: string, lesso
   const corpus = new Corpus(sources);
   const ask = async (text: string, resume: string | null) => {
     try {
-      return await claude.askPatiently({ model: claude.OPUS, system, prompt: text, schema: REVISE_SCHEMA, label: `Claude opus revising a commentary${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
+      return await claude.askPatiently({ model: claude.REVISION, system, prompt: text, schema: REVISE_SCHEMA, label: `Claude sonnet revising a commentary${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
     } catch (error) {
       throw tooLong(error);
     }

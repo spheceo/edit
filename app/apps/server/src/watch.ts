@@ -36,6 +36,7 @@ import { compareKeys, stableStringify } from "./stable.ts";
 import { isSubtitled } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as aiClaude from "./ai_claude.ts";
+import * as planLimit from "./plan_limit.ts";
 import * as claudeAsk from "./writer/claude.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 import * as progress from "./progress.ts";
@@ -734,8 +735,11 @@ export async function watchWindow(
   const text = prompt(title, window, lines, names);
   let spent = 0.0;
   let last = "";
+  let limitWaits = 0;
   for (let attempt = 1; attempt <= TRIES; attempt++) {
     try {
+      // The plan used up: wait for its reset here, outside the try's own time limit (plan_limit.ts).
+      await planLimit.room();
       const [answer, cost] = aiClaude.standIn.post !== null
         ? await within(timing.askLimitMs, () => askStandIn(clip, text, lines.length, join(dir, `${key}.request.json`)))
         : [await within(timing.askLimitMs, (signal) => askClaude(clip, text, lines.length, MODEL, "Claude opus watching footage", signal)), 0.0];
@@ -752,6 +756,12 @@ export async function watchWindow(
       if (isBug(error)) throw error;
       last = diag.messageOf(error);
       diag.warn("watch", `${what}, try ${attempt}: ${last}`);
+      // A used-up plan isn't this window's fault: wait for the reset and ask again (twice at most).
+      if (planLimit.isLimit(last) && planLimit.until() !== null && limitWaits < 2) {
+        limitWaits++;
+        attempt--;
+        continue;
+      }
       if (attempt < TRIES && castOf.busy(last)) await Bun.sleep(castOf.busyTiming.waitMs * attempt);
     }
   }

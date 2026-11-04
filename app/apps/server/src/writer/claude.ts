@@ -9,21 +9,31 @@
 import type * as Sdk from "@anthropic-ai/claude-agent-sdk";
 
 import { baseOptions, findClaude, sdk } from "../claude.ts";
+import * as claudeUsage from "../claude_usage.ts";
 import * as diag from "../diag.ts";
 import { claudeTurn } from "../memory.ts";
 import { join } from "../paths.ts";
+import * as planLimit from "../plan_limit.ts";
 import * as live from "./live.ts";
 
-/** The model every build, revision and check that reads the whole script uses: Opus 5.5, pinned. */
+/** The model every build and check that reads the whole script uses: Opus 5.5, pinned (revisions are `REVISION`). */
 export const OPUS = "claude-opus-5-5";
 export const SONNET = "claude-sonnet-5-5";
 export const HAIKU = "claude-haiku-5-5";
+/**
+ * A built script's revisions, its fresh-eyes pass included (Sphe, Nov 4:
+ * "initial script builds are on opus then when the script or edit is build we
+ * switch to sonnet 5.5 for revisons"): the build stays Opus's.
+ */
+export const REVISION = SONNET;
 
 /** A failure, and whether asking again a minute later could help. */
 export class Trouble extends Error {
   constructor(
     message: string,
     readonly again = false,
+    /** The plan is used up (plan_limit.ts): asking again waits for its reset. */
+    readonly limit = false,
   ) {
     super(message);
   }
@@ -92,7 +102,7 @@ export function explain(said: string, status: number | null = null): Trouble {
   if (lower.includes("not logged in") || lower.includes("/login") || lower.includes("invalid api key") || lower.includes("authentication") || status === 401) {
     return new Trouble("Claude Code on this Mac is signed out. Run claude in a terminal and sign in, then build again.");
   }
-  if (lower.includes("usage limit") || lower.includes("limit reached") || lower.includes("limit will reset")) return new Trouble(`Your Claude plan's usage limit is reached: "${quoted}" Build again once it resets.`);
+  if (planLimit.isLimit(said)) return new Trouble(`Your Claude plan's usage limit is reached: "${quoted}" Build again once it resets.`, false, true);
   // A reply cut off at its output limit: what a whole plan in one answer can run into.
   if (lower.includes("max_tokens") || lower.includes("output token") || lower.includes("output limit") || lower.includes("maximum output")) return new Trouble(CUT_OFF);
   if (lower.includes("error_max_turns") || lower.includes("maximum number of turns") || lower.includes("max turns")) return new Trouble("Claude used all its turns before the plan was finished. Build again; nothing was changed.");
@@ -116,6 +126,10 @@ const workspace = (): string => workspaceDir ?? join(process.env.HOME ?? "/tmp",
 
 /** One question through the Agent SDK, once there's room for another Claude Code (memory.ts `claudeTurn`: three at once while the Mac is short of memory). */
 export async function ask(question: Question): Promise<Answer> {
+  // The plan used up: wait for its reset rather than asking into it.
+  await planLimit.room(question.signal).catch((error: unknown) => {
+    throw new Trouble(question.signal?.aborted ? "Stopped by you. Completed work is saved." : diag.messageOf(error));
+  });
   const release = await claudeTurn(question.label, question.signal).catch(() => {
     throw new Trouble("Stopped by you. Completed work is saved.");
   });
@@ -205,7 +219,7 @@ async function askNow(question: Question): Promise<Answer> {
     if (question.signal?.aborted) throw new Trouble("Stopped by you. Completed work is saved.");
     if (late) throw new Trouble("Claude worked for over 40 minutes and was stopped. Build again; nothing was changed.");
     diag.error("writer", `${question.label}: failed after ${seconds(began)}: ${clipped(diag.messageOf(error), 300)}`);
-    throw explain(diag.messageOf(error));
+    throw noted(explain(diag.messageOf(error)), diag.messageOf(error));
   } finally {
     clearTimeout(timer);
     question.signal?.removeEventListener("abort", stop);
@@ -223,12 +237,13 @@ async function askNow(question: Question): Promise<Answer> {
     const errors = Array.isArray(result.errors) ? result.errors.filter((one): one is string => typeof one === "string").join("; ") : "";
     const said = typeof result.result === "string" && result.result !== "" ? result.result : errors;
     diag.error("writer", `${question.label}: stopped after ${seconds(began)} (${why}): ${clipped(said, 300)}`);
-    throw stoppedShort(answer.result) ?? explain(said, typeof result.api_error_status === "number" ? result.api_error_status : null);
+    throw stoppedShort(answer.result) ?? noted(explain(said, typeof result.api_error_status === "number" ? result.api_error_status : null), said);
   }
   answer.costUsd = typeof result.total_cost_usd === "number" ? result.total_cost_usd : 0;
   answer.session = typeof result.session_id === "string" ? result.session_id : null;
   answer.text = typeof result.result === "string" ? result.result : null;
   answer.structured = typeof result.structured_output === "object" && result.structured_output !== null ? (result.structured_output as Record<string, unknown>) : null;
+  claudeUsage.record(question.label, answer.costUsd);
   diag.info("writer", `${question.label}: answered in ${seconds(began)} ($${answer.costUsd.toFixed(2)} at API prices; ${why})`);
   return answer;
 }
@@ -265,21 +280,37 @@ function noteStream(message: { parent_tool_use_id?: unknown; event?: unknown }):
   }
 }
 
+/** A used-up plan, noted so every other call waits for its reset. */
+function noted(trouble: Trouble, said: string): Trouble {
+  if (trouble.limit) planLimit.note(said);
+  return trouble;
+}
+
 const seconds = (since: number) => `${Math.round((Date.now() - since) / 1000)} s`;
 
 /** Waits before another try (20 s, then 60 s). */
 const AGAIN_MS = [20_000, 60_000];
 
+/** A used-up plan is waited out this many times in one question (a 5-hour window, then another). */
+const LIMIT_WAITS = 2;
+
 /**
  * Claude busy or overloaded, or the connection to it lost for a moment (a
  * teammate's Wi-Fi dropped DNS for seconds at a time, Oct 30: "Claude Code
  * couldn't reach Anthropic"), gets two more tries before the build fails.
+ * The plan used up waits for its reset (plan_limit.ts) and asks again.
  */
 export async function askPatiently(question: Question): Promise<Answer> {
+  let waits = 0;
   for (let attempt = 0; ; attempt++) {
     try {
       return await ask(question);
     } catch (error) {
+      if (error instanceof Trouble && error.limit && waits < LIMIT_WAITS && planLimit.until() !== null) {
+        waits++;
+        attempt--;
+        continue;
+      }
       if (!(error instanceof Trouble) || !error.again || attempt >= AGAIN_MS.length) throw error;
       diag.warn("writer", `${question.label}: ${error.message} Trying again in ${AGAIN_MS[attempt]! / 1000} s.`);
       await new Promise<void>((resolve, reject) => {

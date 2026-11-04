@@ -13,6 +13,8 @@ import type * as Sdk from "@anthropic-ai/claude-agent-sdk";
 
 import type { Model } from "./agent.ts";
 import { join } from "./paths.ts";
+import * as claudeUsage from "./claude_usage.ts";
+import * as planLimit from "./plan_limit.ts";
 import { trim } from "./rust.ts";
 import { VERSION } from "./version.ts";
 
@@ -31,6 +33,13 @@ export function sdk(): Promise<typeof Sdk> {
 
 /** The model the agent starts on: Claude Code's `opus` (the newest Opus, 5.5 now). */
 export const DEFAULT_MODEL = "opus";
+/**
+ * The model for an edit's revisions once it's built (Sphe, Nov 4: "initial
+ * script builds are on opus then when the script or edit is build we switch
+ * to sonnet 5.5 for revisons"): half Opus's price on the person's plan, where
+ * the team's 5-hour limits ran out that week.
+ */
+export const REVISION_MODEL = "claude-sonnet-5-5";
 
 /** Edit's own default thinking level: its edits are mostly the house style applied again and again, which medium does as well as high in far less time. */
 const DEFAULT_EFFORT = "medium";
@@ -227,6 +236,8 @@ export async function ask(
   timeoutMs: number,
   images: { data: string; mime: string }[] = [],
 ): Promise<string> {
+  // The plan used up: wait for its reset rather than asking into it (plan_limit.ts).
+  await planLimit.room();
   const { query } = await sdk();
   const abort = new AbortController();
   const options: Options = {
@@ -258,7 +269,9 @@ export async function ask(
       if (message.type !== "result") continue;
       const result = message as unknown as Record<string, unknown>;
       const error = resultError(result);
+      if (error !== null && planLimit.isLimit(error)) planLimit.note(error);
       if (error !== null) throw new Error(signInProblem(error) ? SIGN_IN_AGAIN : error);
+      if (typeof result.total_cost_usd === "number") claudeUsage.record(`Claude ${model} answering the agent`, result.total_cost_usd);
       if (result.structured_output !== undefined) return JSON.stringify(result.structured_output);
       return typeof result.result === "string" ? result.result : "";
     }

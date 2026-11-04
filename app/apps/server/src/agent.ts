@@ -24,6 +24,8 @@ import { INSTRUCTIONS, toolReference } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
 import { compareStrings, takeChars, charCount } from "./rust.ts";
+import * as claudeUsage from "./claude_usage.ts";
+import * as planLimit from "./plan_limit.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
 import type { Project } from "./model.ts";
@@ -322,6 +324,7 @@ export class Agents implements seams.AgentPanel {
     private port: number,
   ) {
     this.dir = join(home, "agent");
+    claudeUsage.use(home);
     this.claudeSupport = new ClaudeSupport(home, () => this.resumeAfterClaudeLogin(), () => {
       this.ready = null;
       this.emit("", { event: "claude", support: this.claudeSupport.status() });
@@ -729,7 +732,7 @@ export class Agents implements seams.AgentPanel {
     fs.mkdirSync(workspace, { recursive: true });
     const options: claude.Options = {
       ...claude.baseOptions(binary, workspace),
-      model: chat.model ?? claude.DEFAULT_MODEL,
+      model: chat.model ?? this.turnModel(project),
       // No built-in tools; Edit's own run without asking, anything else is refused.
       tools: [],
       allowedTools: ["mcp__edit"],
@@ -835,7 +838,10 @@ export class Agents implements seams.AgentPanel {
     }
     if (result !== null) {
       error = claude.resultError(result);
+      // The chat's own turn ran the plan out: Edit's other Claude work waits for the reset too.
+      if (error !== null && planLimit.isLimit(error)) planLimit.note(error);
       const usage = (result.usage ?? {}) as Record<string, number | undefined>;
+      if (typeof result.total_cost_usd === "number") claudeUsage.record(`edit chat ${typeof result.model === "string" ? result.model : (this.withChat(project).model ?? this.turnModel(project))}`, result.total_cost_usd);
       const cost = typeof result.total_cost_usd === "number" ? `; $${result.total_cost_usd.toFixed(2)} at API prices` : "";
       diag.info(
         "agent",
@@ -1280,6 +1286,23 @@ export class Agents implements seams.AgentPanel {
         diag.warn("agent", `following up ${project}: ${diag.messageOf(thrown)}`);
       }
     })();
+  }
+
+  /**
+   * Who answers a turn nobody named a model for: Opus builds the edit, and
+   * once it's built its revisions are Sonnet's (claude.REVISION_MODEL): the
+   * fresh-eyes pass, a review's fixes, and any message after a turn that did
+   * the whole edit. Edit's own follow-ups to a build stay part of it.
+   */
+  turnModel(project: string): string {
+    if (project.endsWith(`${SUB}review`) || reviewGuard.inReviewTurn(project)) return claude.REVISION_MODEL;
+    const entries = this.withChat(project).entries;
+    let asked = -1;
+    entries.forEach((item, index) => {
+      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
+    });
+    const built = entries.slice(0, Math.max(asked, 0)).some((item) => (item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text)) || (item.kind === "subagent" && item.text.startsWith("Fresh-eyes")));
+    return built ? claude.REVISION_MODEL : claude.DEFAULT_MODEL;
   }
 
   /**

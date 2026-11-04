@@ -706,3 +706,28 @@ test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in 
     home.cleanup();
   }
 });
+
+test("opus builds the edit; once it's built, a revision is sonnet's (Sphe, Nov 4)", async () => {
+  const { home, project, agents, asked, queries } = claudeProject("claude-revision-model");
+  try {
+    await agents.send(project, "Start the edit", null, null);
+    expect(asked[0]!.options.model).toBe("opus");
+    // The turn did the whole edit.
+    agents.withChat(project).entries.push({ id: "t1", kind: "tool", tool: "skill", text: "edit-workflow", status: "done", at: 0 } as never);
+    queries[0]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    queries[0]!.end();
+    await settle();
+    // Edit's own follow-up to the build is still the build.
+    expect(agents.turnModel(project)).toBe("opus");
+    agents.withChat(project).entries.push({ id: "f1", kind: "user", text: "(Edit, automatically) The edit left 3 flags.", at: 0 } as never);
+    expect(agents.turnModel(project)).toBe("opus");
+    // The team's next message revises it.
+    await agents.send(project, "Make the intro shorter", null, null);
+    expect(asked[1]!.options.model).toBe(claude.REVISION_MODEL);
+    expect(claude.REVISION_MODEL).toBe("claude-sonnet-5-5");
+    // The fresh-eyes pass is a revision too.
+    expect(agents.turnModel(`${project}~review`)).toBe(claude.REVISION_MODEL);
+  } finally {
+    home.cleanup();
+  }
+});

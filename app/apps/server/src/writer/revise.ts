@@ -475,7 +475,7 @@ export async function revise(script: Script, request: string, focus: Focus, chat
   // A fixing or fresh-eyes pass writes rewrites of saved narration straight in: its report says what changed, never "proposed".
   const writes = direct ? "\n\nThis pass writes every edit straight into the script, rewrites of saved narration included (no proposals): say what you changed." : "";
   const prompt = `${evidence(script, research)}\n\n${current(script, format)}\n\n${earlier}${seen(script, focus)}The producer asks: ${asked}${writes}`;
-  const ask = (text: string, resume: string | null) => claude.askPatiently({ model: claude.OPUS, system, prompt: text, schema: SCHEMA, label: `Claude opus revising${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
+  const ask = (text: string, resume: string | null) => claude.askPatiently({ model: claude.REVISION, system, prompt: text, schema: SCHEMA, label: `Claude sonnet revising${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
   let turn = await ask(prompt, null);
   let cost = turn.costUsd;
   for (let repairs = 0; ; repairs++) {

@@ -36,6 +36,7 @@ import { memorySummary } from "./export_capacity.ts";
 import { useNow as memoryUse } from "./memory.ts";
 import * as ideaRuns from "./ideas/run.ts";
 import * as thumbnailRuns from "./thumbnails/run.ts";
+import * as claudeUsage from "./claude_usage.ts";
 import * as editTime from "./edit_time.ts";
 import { join } from "./paths.ts";
 import * as presence from "./presence.ts";
@@ -310,6 +311,13 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
     "Agent time (the last week's edits, every turn added up):",
     ...(() => {
       const lines = editTime.reportLines(app);
+      return lines.length > 0 ? lines : ["none"];
+    })(),
+    "",
+    // What the person's Claude plan paid for (Nov 4: Max plans used up in hours, the log too short to compare weeks).
+    "Claude usage (by day, at API prices; the biggest kinds of call):",
+    ...(() => {
+      const lines = claudeUsage.reportLines();
       return lines.length > 0 ? lines : ["none"];
     })(),
     "",

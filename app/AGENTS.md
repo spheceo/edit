@@ -92,7 +92,7 @@ Diagnostics (`apps/server/src/diag.ts`, `apps/web/src/lib/diagnostics.ts`): the 
 
 When the model changes, update `edit-core` and run `just types` (the server's `model.ts` and the UI's `types.ts` re-export the generated types from `@edit/types`), then the param tables in `apps/web/src/lib/edit.ts` and the model description in `agent/instructions.md` (at the repo's top).
 
-Edit asks no model through an API key of its own: the agent, the watcher and every small question go through the person's Claude Code (`ai_claude.ts`; the AI Gateway, Gemini and xAI were dropped Oct 31).
+Edit asks no model through an API key of its own: the agent, the watcher and every small question go through the person's Claude Code (`ai_claude.ts`; the AI Gateway, Gemini and xAI were dropped Oct 31). Opus builds a script or an edit; once built, its revisions are Sonnet 5.5's (`writer/claude.ts` `REVISION`, `claude.ts` `REVISION_MODEL`, `Agent.turnModel`). A used-up plan ("You've hit your 5-hour limit · resets …") is noted by `plan_limit.ts`, and every Claude call waits for the reset there instead of asking into it (a reset more than 6 h off fails the work instead).
 
 Tests can send the server's direct calls elsewhere: `EDIT_GOOGLE_API_URL` takes every Google host (`https://<host>/<path>` → `<base>/<host>/<path>`: Drive, Docs, the sign-in) as `apps/server/src/endpoints.ts` says (Claude's answers come from `test/mocks/model.ts`); with `EDIT_RELAY_URL` that's every outside service.
 

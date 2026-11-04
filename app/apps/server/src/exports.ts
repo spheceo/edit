@@ -792,7 +792,12 @@ export class ExportRegistry implements seams.Exports {
       },
     });
     this.localQueue.push({ running, start: () => {
-      void this.run(store, library, project, options, plan, path, running, upload, () => this.releaseOne());
+      void this.run(store, library, project, options, plan, path, running, upload, () => this.releaseOne()).catch((error: unknown) => {
+        // Whatever went wrong after the render, the project is free to export again.
+        diag.error("export", `${project.name}: ${diag.messageOf(error)}`);
+        if (this.jobs.get(project.id) === running) this.jobs.delete(project.id);
+        jobs.end(this.home, running.key);
+      });
     }, notify: () => {
       if (running.queued && !running.cancelled) this.publish(store, project, running, "queued", 0);
     } });
@@ -992,6 +997,9 @@ export class ExportRegistry implements seams.Exports {
         const archive = jobs.begin(this.home, "archive", id, { output, key, record });
         try {
           await archiveFinished(this.home ?? store.home, id, output, key, record);
+        } catch (error) {
+          // The export itself is done; a failed archive must never leave the project "exporting" until a restart.
+          diag.warn("export", `${id}: archiving ${output}: ${diag.messageOf(error)}`);
         } finally {
           jobs.end(this.home, archive);
         }

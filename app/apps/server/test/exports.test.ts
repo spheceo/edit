@@ -80,6 +80,33 @@ test("local exports queue across projects, preserve snapshots and advance after 
   }
 });
 
+test("an export whose archive fails is still over: the project can export again", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("archive-fails");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const archive = spyOn(exportCloud, "enabled").mockReturnValue(true);
+  // The render says done but its file is gone before the archive looks for it (a clean-up, the person deleting it).
+  const render = spyOn(native.ExportJob, "start").mockImplementation(() => ({ cancel: () => {}, wait: async () => ({ seconds: 1, bytes: 0 }) }));
+  try {
+    const id = store.create("gone", { width: 64, height: 36, fps: 30 }).project.id;
+    await store.update(id, "test", (p) => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+    const project = store.get(id)!.project;
+    await registry.start(store, app.library, project, native.exportDefaults(), `${dir}/gone.mp4`, { drive: false });
+    for (let tries = 0; registry.running() && tries < 200; tries++) await Bun.sleep(1);
+    expect(registry.running()).toBe(false);
+    expect(registry.activity().find((one) => one.id === id)?.state).toBe("done");
+    // Not "this project already has an export running" until a restart.
+    await registry.start(store, app.library, project, native.exportDefaults(), `${dir}/gone.mp4`, { drive: false });
+    for (let tries = 0; registry.running() && tries < 200; tries++) await Bun.sleep(1);
+  } finally {
+    render.mockRestore();
+    archive.mockRestore();
+    plan.mockRestore();
+    cleanup();
+  }
+});
+
 test("a project's exports stay listed across restarts and only a listed one is deleted", () => {
   const home = fs.mkdtempSync(`${os.tmpdir()}/edit-exports-`);
   try {

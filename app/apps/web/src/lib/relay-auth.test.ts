@@ -85,16 +85,17 @@ describe("relay sign-in gate", () => {
     expect(await allow(asked(null), env({ OPEN_MAPS: "1" }), "use", "maps", true)).toEqual({ kind: "open" });
   });
 
-  it("gives the YouTube proxy to signed-in people only", async () => {
+  it("gives the YouTube proxy to signed-in people with a kind of work only", async () => {
     useKeys(createLocalJWKSet({ keys: [jwk] }));
     vi.spyOn(console, "log").mockImplementation(() => {});
     const proxied = env({ PROXY_URL: "http://login:secret@gateway.test:823" });
     const none = await relay.fetch(asked(null, "https://relay/v1/proxy"), proxied);
     expect(none.status).toBe(401);
-    const given = await relay.fetch(asked(await token({ perms: ["use"] }), "https://relay/v1/proxy"), proxied);
+    expect((await relay.fetch(asked(await token({ perms: ["use"] }), "https://relay/v1/proxy"), proxied)).status).toBe(403);
+    const given = await relay.fetch(asked(await token({ perms: ["use", "edit.bodycam"] }), "https://relay/v1/proxy"), proxied);
     expect([given.status, await given.json()]).toEqual([200, { proxyUrl: "http://login:secret@gateway.test:823" }]);
     // Without one set: none, said plainly.
-    expect(await (await relay.fetch(asked(await token({ perms: ["use"] }), "https://relay/v1/proxy"), env())).json()).toEqual({ proxyUrl: null });
+    expect(await (await relay.fetch(asked(await token({ perms: ["use", "edit.bodycam"] }), "https://relay/v1/proxy"), env())).json()).toEqual({ proxyUrl: null });
   });
 
   it("refuses a token made before an admin cut its person off, within a minute, and only for Edit", async () => {

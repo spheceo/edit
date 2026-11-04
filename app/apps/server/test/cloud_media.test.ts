@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 
 import * as fs from "node:fs";
 
@@ -810,5 +810,29 @@ test("a proxy's blocks are read through the relay's edge cache, every other read
     expect(signs().slice(at).map((body) => [body.key, body.edge === true])).toEqual([[key, true], [key, false]]);
   } finally {
     fixture.cleanup();
+  }
+});
+
+test("a file is hashed once: imported again unchanged, it isn't read; changed, it is", async () => {
+  const { dir, cleanup } = fixtureHome("cloud-hash-kept");
+  try {
+    cloudMedia.keepHashesIn(`${dir}/hashes.json`);
+    const file = `${dir}/footage.mp4`;
+    fs.writeFileSync(file, "the footage");
+    const first = await cloudMedia.sha256File(file);
+    expect(first).toBe(new Bun.CryptoHasher("sha256").update("the footage").digest("hex"));
+    // Asked again: answered without opening the file.
+    const opens = spyOn(fs.promises, "open");
+    try {
+      expect(await cloudMedia.sha256File(file)).toBe(first);
+      expect(opens).not.toHaveBeenCalled();
+    } finally {
+      opens.mockRestore();
+    }
+    fs.writeFileSync(file, "other footage");
+    expect(await cloudMedia.sha256File(file)).toBe(new Bun.CryptoHasher("sha256").update("other footage").digest("hex"));
+  } finally {
+    cloudMedia.keepHashesIn(null);
+    cleanup();
   }
 });

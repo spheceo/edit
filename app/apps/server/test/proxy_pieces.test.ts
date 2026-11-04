@@ -434,3 +434,25 @@ test("the fill's piece someone joined is never stopped for another", async () =>
   await Promise.all([behind, joined, other]);
   expect(settled.some((one) => one.includes("gave way"))).toBe(false);
 }, 30_000);
+
+test("the first piece made while the file was hashed is taken into place as it is", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pieces-first-"));
+  const cloudFiles = new Map<string, Uint8Array>();
+  const context = fakeContext(root, cloudFiles);
+  const picture = path.join(root, "made-picture.m4s");
+  const sound = path.join(root, "made-sound.m4s");
+  fs.writeFileSync(picture, "picture piece 0");
+  fs.writeFileSync(sound, "sound piece 0");
+  let discarded = 0;
+  const first: pieces.FirstPiece = { made: Promise.resolve({ picture: { file: picture, entry: entry("avc1") }, sound }), discard: () => void discarded++ };
+  const layout = await pieces.create(context, "sha256:first", "edit/originals/sha256/first/a.mp4", { duration: 3600, fps: 30, width: 1920, height: 1080, has_audio: true }, first);
+  const base = pieces.baseKey("sha256:first");
+  expect(layout.pieces).toBe(60);
+  expect(fs.readFileSync(context.local(`${base}/video/0.m4s`), "utf8")).toBe("picture piece 0");
+  expect(fs.readFileSync(context.local(`${base}/audio/0.m4s`), "utf8")).toBe("sound piece 0");
+  expect(fs.existsSync(picture) || fs.existsSync(sound)).toBe(false);
+  expect(cloudFiles.has(`${base}/layout.json`) && cloudFiles.has(`${base}/head.mp4`)).toBe(true);
+  // Laid out already: another first piece isn't wanted.
+  await pieces.create(context, "sha256:first", "edit/originals/sha256/first/a.mp4", { duration: 3600, fps: 30, width: 1920, height: 1080, has_audio: true }, first);
+  expect(discarded).toBe(1);
+});

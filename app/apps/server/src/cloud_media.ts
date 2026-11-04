@@ -135,6 +135,7 @@ function piecesContext(cache: string): pieces.Context {
 }
 
 export function configurePlayback(app: App): void {
+  keepHashesIn(join(app.store.home, "hashes.json"));
   playbackPorts.set(app.store.cacheDir(), app.port);
   playbackBlocks = join(app.store.cacheDir(), "cloud", "blocks");
   const cache = app.store.cacheDir();
@@ -508,31 +509,89 @@ export function localOriginal(cache: string, key: string, use = false): string |
 }
 
 /** The SHA-256 of a file, in lowercase hex. */
+/**
+ * The SHA-256 of the file at `path` (its cloud identity), read whole: off
+ * this server's thread, the next 8 MB read while the last is hashed (1.7
+ * GB/s from the internal disk; an external drive's own speed, 120 MB/s for
+ * a USB disk, where blocking reads froze the server for the 8 minutes of a
+ * 54 GB file, Nov 4). One hashed before (same path, size, times and inode)
+ * isn't read again.
+ */
 export async function sha256File(path: string): Promise<string> {
-  const hasher = new Bun.CryptoHasher("sha256");
-  let fd: number;
+  let stat: fs.Stats;
   try {
-    fd = fs.openSync(path, "r");
+    stat = fs.statSync(path);
+  } catch (error) {
+    throw new Error(ioMessage(error));
+  }
+  const known = rememberedHash(path, stat);
+  if (known !== null) return known;
+  const hasher = new Bun.CryptoHasher("sha256");
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(path, "r");
   } catch (error) {
     throw new Error(ioMessage(error));
   }
   try {
-    const buffer = Buffer.allocUnsafe(1 << 20);
+    const size = 8 << 20;
+    const buffers = [Buffer.allocUnsafe(size), Buffer.allocUnsafe(size)];
     let position = 0;
+    let which = 0;
+    let reading = handle.read(buffers[0]!, 0, size, 0);
     for (;;) {
-      const read = fs.readSync(fd, buffer, 0, buffer.length, position);
-      if (read === 0) break;
-      hasher.update(buffer.subarray(0, read));
-      position += read;
-      // Big files: let other work run between megabytes.
-      if (position % (64 << 20) === 0) await Bun.sleep(0);
+      const { bytesRead } = await reading;
+      if (bytesRead === 0) break;
+      const got = buffers[which]!;
+      position += bytesRead;
+      which ^= 1;
+      reading = handle.read(buffers[which]!, 0, size, position);
+      hasher.update(got.subarray(0, bytesRead));
     }
   } catch (error) {
     throw new Error(ioMessage(error));
   } finally {
-    fs.closeSync(fd);
+    await handle.close();
   }
-  return hasher.digest("hex");
+  const hex = hasher.digest("hex");
+  rememberHash(path, stat, hex);
+  return hex;
+}
+
+/** Hashes made on this Mac, by path (`<home>/hashes.json`; configurePlayback says where): a re-import reads nothing. */
+let hashFile: string | null = null;
+const HASHES_KEPT = 2000;
+type Hashed = { size: number; mtimeMs: number; ctimeMs: number; ino: number; hex: string; at: number };
+
+function readHashes(): Record<string, Hashed> {
+  if (hashFile === null) return {};
+  try {
+    return JSON.parse(fs.readFileSync(hashFile, "utf8")) as Record<string, Hashed>;
+  } catch {
+    return {};
+  }
+}
+
+function rememberedHash(path: string, stat: fs.Stats): string | null {
+  const one = readHashes()[path];
+  return one !== undefined && one.size === stat.size && one.mtimeMs === stat.mtimeMs && one.ctimeMs === stat.ctimeMs && one.ino === stat.ino ? one.hex : null;
+}
+
+function rememberHash(path: string, stat: fs.Stats, hex: string): void {
+  if (hashFile === null) return;
+  const all = readHashes();
+  all[path] = { size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, ino: stat.ino, hex, at: Date.now() };
+  const kept = Object.entries(all).sort((a, b) => b[1].at - a[1].at).slice(0, HASHES_KEPT);
+  try {
+    writeAtomic(hashFile, JSON.stringify(Object.fromEntries(kept)));
+  } catch (error) {
+    diag.warn("cloud", `keeping the hash of ${path}: ${ioMessage(error)}`);
+  }
+}
+
+/** Where hashes are kept (null: nowhere, every file read again). */
+export function keepHashesIn(file: string | null): void {
+  hashFile = file;
 }
 
 function sizeOf(path: string): number {
@@ -757,6 +816,17 @@ export function importLocal(cache: string, path: string, probe: Probe, name: str
  * `later` (the data folder), footage's uploads finish in the background.
  */
 async function putLocal(cache: string, path: string, probe: Probe, name: string, own: boolean, later: string | null = null): Promise<Made> {
+  // A long video's first piece made while the file is read for its hash (proxy_pieces.ts): playable once it's known.
+  const first = !own && probe.kind === "video" && probe.duration >= PIECED_FROM ? pieces.startFirst(piecesContext(cache), path, probe) : null;
+  try {
+    return await putHashed(cache, path, probe, name, own, later, first);
+  } finally {
+    // Taken by the pieced proxy, or not wanted (a whole proxy was there already).
+    first?.discard();
+  }
+}
+
+async function putHashed(cache: string, path: string, probe: Probe, name: string, own: boolean, later: string | null, first: pieces.FirstPiece | null): Promise<Made> {
   const hex = await sha256File(path);
   const source = `sha256:${hex}`;
   const size = sizeOf(path);
@@ -780,7 +850,7 @@ async function putLocal(cache: string, path: string, probe: Probe, name: string,
   const ready = readyProxy(record);
   // A long file's proxy made a piece at a time (proxy_pieces.ts), read from this file while it's here; its upload goes on behind.
   if (ready === null && probe.kind === "video" && probe.duration >= PIECED_FROM) {
-    const layout = await pieces.tryCreate(piecesContext(cache), source, originalKey, probe);
+    const layout = await pieces.tryCreate(piecesContext(cache), source, originalKey, probe, first);
     if (layout !== null) {
       if (needOriginal && later !== null) {
         uploadLater(later, { file: path, source, size, duration: probe.duration, originalKey, uploadOriginal: true, proxy: null, local: null });

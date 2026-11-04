@@ -318,9 +318,9 @@ export function videoCommand(layout: Layout, n: number, url: string, out: string
  * Makes piece `n`'s picture from the original into its fragment file; its
  * sample entry (the decoder's setup: every piece's must be the head's).
  */
-export async function makeVideo(context: Context, base: string, layout: Layout, n: number, expected: Uint8Array | null, signal?: AbortSignal): Promise<{ file: string; entry: Uint8Array }> {
-  const url = await context.originalUrl(layout.original);
-  const out = context.local(videoKey(base, n));
+export async function makeVideo(context: Context, base: string, layout: Layout, n: number, expected: Uint8Array | null, signal?: AbortSignal, from?: { url: string; out: string }): Promise<{ file: string; entry: Uint8Array }> {
+  const url = from?.url ?? (await context.originalUrl(layout.original));
+  const out = from?.out ?? context.local(videoKey(base, n));
   let bitrate = layout.bitrate;
   for (let attempt = 0; ; attempt++) {
     const encoded = scratch(context, "mp4");
@@ -443,8 +443,8 @@ export function audioCommand(layout: Layout, n: number, url: string): { command:
 export const AUDIO_ENTRY = fmp4.aacEntry(AUDIO_RATE, 2, AUDIO_BITRATE);
 
 /** Piece `n`'s sound: its stretch's AAC frames, encoded from the original now (a minute's in about a second, wherever it is in the file). */
-export async function soundOf(context: Pick<Context, "originalUrl">, layout: Layout, n: number, signal?: AbortSignal): Promise<Uint8Array[]> {
-  const url = await context.originalUrl(layout.original);
+export async function soundOf(context: Pick<Context, "originalUrl">, layout: Layout, n: number, signal?: AbortSignal, given?: string): Promise<Uint8Array[]> {
+  const url = given ?? (await context.originalUrl(layout.original));
   const { command, skip } = audioCommand(layout, n, url);
   const [first, end] = audioFramesOf(layout, n);
   let out: Uint8Array;
@@ -462,12 +462,12 @@ export async function soundOf(context: Pick<Context, "originalUrl">, layout: Lay
 const sounding = new Semaphore(2);
 
 /** Makes piece `n`'s sound into its fragment file. */
-async function makeAudio(context: Context, base: string, layout: Layout, n: number): Promise<string> {
+async function makeAudio(context: Context, base: string, layout: Layout, n: number, from?: { url: string; out: string }): Promise<string> {
   if (layout.audio === null) throw new Error("no sound to make");
   const began = performance.now();
-  const own = await sounding.with(() => soundOf(context, layout, n));
+  const own = await sounding.with(() => soundOf(context, layout, n, undefined, from?.url));
   const [first] = audioFramesOf(layout, n);
-  const out = context.local(audioKey(base, n));
+  const out = from?.out ?? context.local(audioKey(base, n));
   fs.mkdirSync(parent(out)!, { recursive: true });
   const partial = `${out}.partial`;
   try {
@@ -643,25 +643,80 @@ export function videoEntryOf(head: Uint8Array): Uint8Array | null {
   return null;
 }
 
+type Probe = { duration: number; fps: number; width: number; height: number; has_audio: boolean };
+
+/** Piece 0's picture and sound, made from the file before the pieced proxy has a place (the import hashing it meanwhile). */
+export interface FirstPiece {
+  made: Promise<{ picture: { file: string; entry: Uint8Array }; sound: string | null }>;
+  /** Its files gone, when the import doesn't piece the file after all (a whole proxy was there already). */
+  discard(): void;
+}
+
 /**
- * A pieced proxy for `source`, made now: its sound (all of it) and its
- * first picture piece, together; its layout and head put in R2 before it's
- * answered, the pieces behind. One already in R2 is taken as it is.
+ * Starts piece 0 of the file at `path` (this Mac's, probed as `probe`) while
+ * the import reads it for its hash: the layout depends only on the probe,
+ * so `create` takes these as they are (the 10-hour trial's playable 13-18
+ * s after its 9-min hash would be about 0 s after it).
  */
-export async function create(context: Context, source: string, original: string, probe: { duration: number; fps: number; width: number; height: number; has_audio: boolean }): Promise<Layout> {
+export function startFirst(context: Context, path: string, probe: Probe): FirstPiece {
+  const layout = plan("", "", probe.duration, probe.fps, probe.width, probe.height, probe.has_audio);
+  const picture = making.with(() => makeVideo(context, "(first piece)", layout, 0, null, undefined, { url: path, out: scratch(context, "m4s") }), true);
+  const sound = layout.audio === null ? Promise.resolve(null) : makeAudio(context, "(first piece)", layout, 0, { url: path, out: scratch(context, "m4s") });
+  const made = Promise.all([picture, sound]).then(([picture, sound]) => ({ picture, sound }));
+  made.catch(() => {});
+  return {
+    made,
+    discard: () =>
+      void made.then(
+        ({ picture, sound }) => {
+          fs.rmSync(picture.file, { force: true });
+          if (sound !== null) fs.rmSync(sound, { force: true });
+        },
+        () => {},
+      ),
+  };
+}
+
+/**
+ * A pieced proxy for `source`, made now: its first piece's picture and
+ * sound (`first`'s when it was started while the file was read), its layout
+ * and head put in R2 before it's answered, the pieces behind. One already
+ * in R2 is taken as it is.
+ */
+export async function create(context: Context, source: string, original: string, probe: Probe, first: FirstPiece | null = null): Promise<Layout> {
   const base = baseKey(source);
   // One laid out already, here or by another Mac (asked of R2 first: a missing one isn't an error).
   if (layouts.has(base) || isFile(context.local(layoutKey(base))) || (await context.head(layoutKey(base)).catch(() => null)) !== null) {
     try {
-      return await layoutOf(context, base);
+      const known = await layoutOf(context, base);
+      first?.discard();
+      return known;
     } catch (error) {
       diag.warn("pieces", `${base}: its layout couldn't be read (${diag.messageOf(error)}); laid out again here`);
     }
   }
   const layout = plan(source, original, probe.duration, probe.fps, probe.width, probe.height, probe.has_audio);
   const began = performance.now();
-  // The first piece's picture and sound are all the import waits for.
-  const [picture, sound] = await Promise.all([making.with(() => makeVideo(context, base, layout, 0, null), true), layout.audio === null ? null : makeAudio(context, base, layout, 0)]);
+  const early = first === null ? null : await first.made.catch((error: unknown) => {
+    diag.warn("pieces", `${base}: the first piece made beside the hash failed (${diag.messageOf(error)}); made again`);
+    return null;
+  });
+  let picture: { file: string; entry: Uint8Array };
+  let sound: string | null;
+  if (early !== null) {
+    // Into place: made from this very file, the layout's own (it depends on the probe alone).
+    const into = (file: string, key: string) => {
+      const out = context.local(key);
+      fs.mkdirSync(parent(out)!, { recursive: true });
+      fs.renameSync(file, out);
+      return out;
+    };
+    picture = { file: into(early.picture.file, videoKey(base, 0)), entry: early.picture.entry };
+    sound = early.sound === null ? null : into(early.sound, audioKey(base, 0));
+  } else {
+    // The first piece's picture and sound are all the import waits for.
+    [picture, sound] = await Promise.all([making.with(() => makeVideo(context, base, layout, 0, null), true), layout.audio === null ? null : makeAudio(context, base, layout, 0)]);
+  }
   const head = headOf(layout, picture.entry, sound === null ? null : AUDIO_ENTRY);
   const headFile = context.local(headKey(base));
   fs.mkdirSync(parent(headFile)!, { recursive: true });
@@ -674,7 +729,7 @@ export async function create(context: Context, source: string, original: string,
   await context.upload(layoutFile, layoutKey(base));
   share(context, picture.file, videoKey(base, 0));
   if (sound !== null) share(context, sound, audioKey(base, 0));
-  diag.info("pieces", `${source}: a pieced proxy of ${layout.pieces} pieces (${Math.round(layout.duration / 60)} min) playable in ${diag.human(performance.now() - began)}`);
+  diag.info("pieces", `${source}: a pieced proxy of ${layout.pieces} pieces (${Math.round(layout.duration / 60)} min) playable in ${diag.human(performance.now() - began)}${early !== null ? " after its hash (its first piece made beside it)" : ""}`);
   return layout;
 }
 
@@ -714,9 +769,9 @@ export async function fill(context: Context, wants: { base: string; seconds: num
 }
 
 /** `create`, or null (said why) when it can't be made: the import makes the whole proxy instead. */
-export async function tryCreate(context: Context, source: string, original: string, probe: { duration: number; fps: number; width: number; height: number; has_audio: boolean }): Promise<Layout | null> {
+export async function tryCreate(context: Context, source: string, original: string, probe: Probe, first: FirstPiece | null = null): Promise<Layout | null> {
   try {
-    return await create(context, source, original, probe);
+    return await create(context, source, original, probe, first);
   } catch (error) {
     diag.warn("pieces", `${source}: a pieced proxy failed (${diag.scrub(diag.messageOf(error))}); making the whole proxy`);
     return null;

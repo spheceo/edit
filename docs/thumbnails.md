@@ -59,10 +59,11 @@ person asks; Claude changes it through its tools:
 
 Undo is one timeline for both (Sphe, Nov 2: "we should have undo both for us
 and for the agent"): every change to the layout keeps the layout before it on the thumbnail
-(`history`, the last 40, each with who and what: "changed “She smiled”"), so
-⌘Z or the header's undo steps back through it whoever made the change, and
-Claude has `undo` / `redo` too, with the recent changes in its message ("undo
-the last change I made"). A new change drops what redo had.
+(`history`, the last 40, each with who and what: "changed “She smiled”"), and
+Claude steps back and forward through it with `undo` / `redo`, the recent
+changes in its message ("undo the last change"). The page has no undo of its
+own (Sphe, Nov 4: "the agents can undo and redo on their own"). A new change
+drops what redo had.
 
 Pictures dropped or pasted anywhere on the page join the thumbnail and go to
 Claude with the next message.
@@ -70,11 +71,14 @@ Claude with the next message.
 Versions: one until the person asks for another or for options (each draft is
 a version). Once there are two, they sit side by side under the canvas, each
 drawn as it stands: a click shows one (not while Claude works on the one
-showing), and the one that ships is marked Final on its tile ("Make final" on
+showing; the list's picture is drawn again by the server), and the one that ships is marked Final on its tile ("Make final" on
 hover) or by asking Claude.
 
-Credits: the header's account pill shows the account in use and its credits
-(amber under twenty pictures' worth, red under one); its menu lists the
+The header is the way back, the name, the OpenArt account and Download; a
+thumbnail is deleted from the list (its ⋯ on hover, or a right click).
+
+Credits: the header's account button shows the account in use and its credits
+(amber under twenty pictures' worth, red under one); its panel lists the
 team's accounts, what a picture costs on the house's model and about how many
 that leaves, and what this thumbnail has spent (each picture keeps its cost
 and account from Nov 4 on). A second account is a line in `ACCOUNTS` plus its

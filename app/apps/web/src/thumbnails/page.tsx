@@ -7,7 +7,7 @@
 // anywhere go to Claude with the next message.
 
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowLeft, Check, ChevronDown, Download, Image as ImageIcon, MoreHorizontal, Redo2, Trash2, Undo2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Download, Image as ImageIcon } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
@@ -15,13 +15,13 @@ import { ChatComposer } from "../components/ChatComposer";
 import { ChatDock } from "../components/ChatDock";
 import { attachFiles, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
-import { toggleMenu, type MenuItem } from "../components/ContextMenu";
-import { Button, ConfirmDialog, cx, IconButton, Spinner, spring } from "../components/ui";
+import { toggleMenu } from "../components/ContextMenu";
+import { Button, cx, IconButton, Spinner, spring } from "../components/ui";
 import { conversationEntries } from "../lib/agentTurns";
 import { saveFile } from "../lib/files";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
-import { sourceUrl, thumbnailsApi, working, type Design, type OpenArtState, type Thumbnail, type ThumbVersion } from "../lib/thumbnails";
+import { sourceUrl, thumbnailsApi, working, type Design, type OpenArtAccount, type OpenArtState, type Thumbnail, type ThumbVersion } from "../lib/thumbnails";
 import { drawThumbnail, type Context as DrawContext } from "@edit/types/thumbnail_render";
 import { captionShadow, HEIGHT, WIDTH } from "@edit/types/thumbnails";
 
@@ -98,7 +98,6 @@ export function ThumbnailScreen({ id }: { id: string }) {
   const [thumb, setThumb] = useState<Thumbnail | null>(null);
   const [missing, setMissing] = useState<string | null>(null);
   const toastError = useEditor((state) => state.toastError);
-  const toast = useEditor((state) => state.toast);
   const canvas = useRef<HTMLCanvasElement>(null);
 
   // The last revision shown: a poll that brings the same one back changes nothing (and redraws nothing).
@@ -137,43 +136,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
     return () => cancelAnimationFrame(frame);
   }, [design, tick, picture]);
 
-  /** The thumbnail as drawn here kept as the list's picture (after an undo, or another version shown). */
-  const keepDrawing = () =>
-    requestAnimationFrame(() =>
-      canvas.current?.toBlob((png) => {
-        if (png !== null) void thumbnailsApi.saveRender(id, png).catch(() => {});
-      }, "image/png"),
-    );
-
-  /**
-   * Undo and redo walk the thumbnail's own timeline (Sphe, Nov 2: "we should have
-   * undo both for us and for the agent"): Claude's changes, newest first.
-   */
-  const [stepping, setStepping] = useState(false);
-  const walk = async (back: boolean) => {
-    if (stepping) return;
-    setStepping(true);
-    try {
-      const { thumb, rev, step } = await thumbnailsApi.step(id, back);
-      show(thumb, rev);
-      if (step === null) toast(back ? "Nothing to undo." : "Nothing to redo.");
-      else {
-        toast(`${back ? "Undid" : "Redid"}: ${step}`);
-        keepDrawing();
-      }
-    } catch (error) {
-      toastError(error, back ? "undo" : "redo");
-    } finally {
-      setStepping(false);
-    }
-  };
-  const undo = () => void walk(true);
-  const redo = () => void walk(false);
   const showVersion = (version: string) =>
-    void thumbnailsApi.switchVersion(id, version).then(({ thumb, rev }) => {
-      show(thumb, rev);
-      keepDrawing();
-    }, (error: unknown) => toastError(error, "show that version"));
+    // The list's picture is drawn again by the server (switching clears it), once its pictures have loaded.
+    void thumbnailsApi.switchVersion(id, version).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "show that version"));
   const takeFinal = (version: string) =>
     void thumbnailsApi.takeFinal(id, version).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "mark it final"));
 
@@ -190,7 +155,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
     const refused = attachFiles(chatKey, files, chatUpload, picturesOnly);
     if (refused.length > 0) toastError(new Error(refused.join(" · ")), "attach the files");
   };
-  // Pictures pasted anywhere on the page go to Claude with the next message; ⌘Z and ⇧⌘Z step through the changes.
+  // Pictures pasted anywhere on the page go to Claude with the next message.
   useEffect(() => {
     // Into a field (the chat's composer above all) is that field's own; with a dialog open, the dialog's.
     const elsewhere = (target: EventTarget | null) =>
@@ -202,17 +167,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
       event.preventDefault();
       attachToChat(files);
     };
-    const onKey = (event: KeyboardEvent) => {
-      if (elsewhere(event.target) || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "z") return;
-      event.preventDefault();
-      if (event.shiftKey) redo();
-      else undo();
-    };
     window.addEventListener("paste", onPaste);
-    window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("paste", onPaste);
-      window.removeEventListener("keydown", onKey);
     };
   });
 
@@ -242,8 +199,6 @@ export function ThumbnailScreen({ id }: { id: string }) {
       <Header
         thumb={thumb}
         running={running}
-        onUndo={undo}
-        onRedo={redo}
         onTitle={(title) =>
           void thumbnailsApi.change(id, { title }).then(
             ({ thumb, rev }) => show(thumb, rev),
@@ -251,12 +206,6 @@ export function ThumbnailScreen({ id }: { id: string }) {
           )
         }
         onDownload={download}
-        onDelete={() =>
-          void thumbnailsApi.remove(id).then(
-            () => navigate("/thumbnails"),
-            (error: unknown) => toastError(error, "delete it"),
-          )
-        }
       />
       {/* No padding on the right: the chat's edge sits there. */}
       <div className="flex min-h-0 flex-1 pb-2 pl-2">
@@ -282,12 +231,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
 
 let scratch: CanvasRenderingContext2D | null = null;
 
-function Header({ thumb, running, onUndo, onRedo, onTitle, onDownload, onDelete }: { thumb: Thumbnail | null; running: boolean; onUndo: () => void; onRedo: () => void; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void; onDelete: () => void }) {
-  const last = thumb?.history?.at(-1);
-  const next = thumb?.future?.at(-1);
-  const who = (by: string) => (by === "claude" ? "Claude" : by.split(" ")[0]);
+/** The way back, its name, its OpenArt account and Download: nothing else (Sphe, Nov 4: undo and redo are the agent's, the ⋯ went; delete is on the list). */
+function Header({ thumb, running, onTitle, onDownload }: { thumb: Thumbnail | null; running: boolean; onTitle: (title: string) => void; onDownload: (type: "image/png" | "image/jpeg") => void }) {
   const [title, setTitle] = useState(thumb?.title ?? "");
-  const [confirm, setConfirm] = useState(false);
   useEffect(() => setTitle(thumb?.title ?? ""), [thumb?.title]);
   // The title's box fits its words, as the edit page's name does: measured, capped.
   const titleInput = useRef<HTMLInputElement>(null);
@@ -321,16 +267,10 @@ function Header({ thumb, running, onUndo, onRedo, onTitle, onDownload, onDelete 
       />
       <div className="flex-1" />
       {thumb !== null && <OpenArtMenu thumb={thumb} running={running} />}
-      <IconButton label={last ? `Undo ${who(last.by)}'s change: ${last.label} (⌘Z)` : "Nothing to undo"} disabled={last === undefined || running} onClick={onUndo}>
-        <Undo2 size={15} />
-      </IconButton>
-      <IconButton label={next ? `Redo ${who(next.by)}'s change: ${next.label} (⇧⌘Z)` : "Nothing to redo"} disabled={next === undefined || running} onClick={onRedo}>
-        <Redo2 size={15} />
-      </IconButton>
       <Button
         variant="subtle"
         size="sm"
-        className="ml-1.5"
+        className="mr-1.5"
         disabled={thumb === null || thumb.design.layers.length === 0}
         onClick={(event) =>
           toggleMenu(event.currentTarget, [
@@ -341,79 +281,142 @@ function Header({ thumb, running, onUndo, onRedo, onTitle, onDownload, onDelete 
       >
         <Download size={14} /> Download
       </Button>
-      <IconButton label="More" onClick={(event) => toggleMenu(event.currentTarget, [{ label: "Delete thumbnail", danger: true, icon: <Trash2 size={14} />, onSelect: () => setConfirm(true) }], { width: 180 })}>
-        <MoreHorizontal size={16} />
-      </IconButton>
       <AppMenu />
-      <ConfirmDialog
-        open={confirm}
-        onClose={() => setConfirm(false)}
-        title="Delete this thumbnail?"
-        detail="It goes for everyone on the team, with its versions, pictures and conversation."
-        confirm="Delete"
-        onConfirm={() => {
-          setConfirm(false);
-          onDelete();
-        }}
-      />
     </header>
   );
 }
 
 const credits = (value: number) => `${value.toLocaleString()} credit${value === 1 ? "" : "s"}`;
 
+/** About how many pictures an account's credits make on the house's model, and whether that's running low (under twenty) or out. */
+function standing(account: OpenArtAccount, cost: number | null): { left: number | null; tone: "fine" | "low" | "out" } {
+  const left = account.credits !== null && cost !== null && cost > 0 ? Math.floor(account.credits / cost) : null;
+  return { left, tone: left === null ? "fine" : left < 1 ? "out" : left < 20 ? "low" : "fine" };
+}
+
+const toneText = { fine: "", low: "text-warning", out: "text-danger" } as const;
+
 /**
  * The team's OpenArt accounts (Sphe, Nov 4: "make things more clear in terms of
- * the credits and then maybe have an accounts switcher"): the one in use with
- * its credits and about how many pictures they make, the others a click away,
- * and what this thumbnail has spent. Read again after each of Claude's turns.
+ * the credits and then maybe have an accounts switcher"; then "a much nicer
+ * dropdown… animate it a bit better"): the one in use with its credits on the
+ * button; its panel lists each account with its plan, credits and about how
+ * many pictures they make, the others a click away, and what a picture costs
+ * and this thumbnail has spent. Read again after each of Claude's turns.
  */
 function OpenArtMenu({ thumb, running }: { thumb: Thumbnail; running: boolean }) {
   const [state, setState] = useState<OpenArtState | null>(null);
+  const [open, setOpen] = useState(false);
   const toastError = useEditor((store) => store.toastError);
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (running) return;
     void thumbnailsApi.openart().then(setState, () => setState(null));
   }, [running]);
+  // Closed by a click anywhere else, or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: PointerEvent) => {
+      if (!box.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const key = (event: KeyboardEvent) => event.key === "Escape" && setOpen(false);
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", key);
+    };
+  }, [open]);
   if (state === null) return null;
   const inUse = state.accounts.find((one) => one.id === state.current) ?? state.accounts[0];
   if (inUse === undefined) return null;
   const cost = state.picture?.credits ?? null;
-  const left = inUse.credits !== null && cost !== null && cost > 0 ? Math.floor(inUse.credits / cost) : null;
-  // Low: under twenty pictures' worth; out: not one.
-  const tone = left === null ? "neutral" : left < 1 ? "out" : left < 20 ? "low" : "neutral";
+  const shown = standing(inUse, cost);
   const spent = thumb.images.reduce((sum, one) => sum + (one.credits ?? 0), 0);
-  const items: MenuItem[] = [
-    { heading: "The team's OpenArt accounts" },
-    ...state.accounts.map(
-      (one): MenuItem => ({
-        label: one.name,
-        hint: one.plan ?? undefined,
-        detail: one.credits === null ? "Not answering" : credits(one.credits),
-        checked: one.id === inUse.id,
-        disabled: running && one.id !== inUse.id,
-        onSelect: () => {
-          if (one.id !== inUse.id) void thumbnailsApi.useOpenart(one.id).then(setState, (error: unknown) => toastError(error, "switch the account"));
-        },
-      }),
-    ),
-    { separator: true },
-    ...(state.picture !== null ? [{ heading: `${state.picture.model}: ${credits(state.picture.credits)} a picture${left !== null ? `, enough for about ${left.toLocaleString()}` : ""}` }] : []),
-    ...(spent > 0 ? [{ heading: `This thumbnail has used ${credits(spent)}` }] : []),
-  ];
+  const pick = (id: string) => {
+    if (id === inUse.id) return setOpen(false);
+    void thumbnailsApi.useOpenart(id).then(
+      (next) => {
+        setState(next);
+        setOpen(false);
+      },
+      (error: unknown) => toastError(error, "switch the account"),
+    );
+  };
   return (
-    <button
-      type="button"
-      title={state.accounts.length > 1 ? "Switch OpenArt account" : "The team's OpenArt account"}
-      onClick={(event) => toggleMenu(event.currentTarget, items, { width: 300 })}
-      className="mr-1.5 flex h-7 items-center gap-1.5 rounded-full border border-line px-2.5 text-[12px] text-secondary transition-colors hover:border-line-strong hover:text-fg"
-    >
-      <span className={cx("size-1.5 rounded-full", tone === "out" ? "bg-danger" : tone === "low" ? "bg-warning" : "bg-success")} />
-      <span className="max-w-[140px] truncate">{inUse.name}</span>
-      <span className="text-faint">·</span>
-      <span className={cx("tabular", tone === "out" ? "text-danger" : tone === "low" ? "text-warning" : "")}>{inUse.credits === null ? "–" : credits(inUse.credits)}</span>
-      <ChevronDown size={12} className="text-faint" />
-    </button>
+    <div ref={box} className="relative mr-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((was) => !was)}
+        className={cx("flex h-8 items-center gap-2 rounded-lg px-2.5 text-[12.5px] transition-colors", open ? "bg-active text-fg" : "text-secondary hover:bg-hover hover:text-fg")}
+      >
+        <span className="max-w-[140px] truncate text-muted">{inUse.name}</span>
+        <span className={cx("font-medium tabular", toneText[shown.tone])}>{inUse.credits === null ? "–" : credits(inUse.credits)}</span>
+        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={spring} className="flex text-faint">
+          <ChevronDown size={13} />
+        </motion.span>
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            role="menu"
+            initial={{ opacity: 0, y: -6, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.12 } }}
+            transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }}
+            style={{ transformOrigin: "top right" }}
+            className="absolute top-[calc(100%+6px)] right-0 z-[70] w-[300px] rounded-xl border border-line-strong bg-raised p-1.5 shadow-[0_16px_40px_#000a]"
+          >
+            <div className="px-2.5 pt-1.5 pb-2 text-[11px] font-medium text-faint">OpenArt accounts</div>
+            {state.accounts.map((one, index) => {
+              const each = standing(one, cost);
+              const chosen = one.id === inUse.id;
+              return (
+                <motion.button
+                  key={one.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={chosen}
+                  disabled={running && !chosen}
+                  onClick={() => pick(one.id)}
+                  initial={{ opacity: 0, y: -3 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ ...spring, delay: 0.03 * (index + 1) }}
+                  className={cx("flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors disabled:opacity-40", chosen ? "bg-active" : "hover:bg-menu-hover")}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-medium text-fg">{one.name}</div>
+                    <div className="truncate text-[11.5px] text-faint">{one.plan ?? "OpenArt"}</div>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className={cx("text-[13px] tabular", one.credits === null ? "text-faint" : toneText[each.tone] || "text-fg")}>{one.credits === null ? "Not answering" : credits(one.credits)}</span>
+                    {each.left !== null && <span className="text-[11.5px] text-faint tabular">about {each.left.toLocaleString()} pictures</span>}
+                  </div>
+                  <span className="flex w-4 justify-end">{chosen && <Check size={14} className="text-fg" />}</span>
+                </motion.button>
+              );
+            })}
+            {(state.picture !== null || spent > 0) && (
+              <div className="mt-1.5 flex flex-col gap-1 border-t border-line px-2.5 pt-2.5 pb-1.5 text-[12px]">
+                {state.picture !== null && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="truncate text-muted">A picture on {state.picture.model}</span>
+                    <span className="shrink-0 text-secondary tabular">{credits(state.picture.credits)}</span>
+                  </div>
+                )}
+                {spent > 0 && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-muted">This thumbnail so far</span>
+                    <span className="shrink-0 text-secondary tabular">{credits(spent)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 

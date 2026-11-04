@@ -1,13 +1,15 @@
 // The thumbnails (Nov 2 2026): the team's, newest change first, each its
 // last drawing; New thumbnail opens a fresh one, where the conversation with
-// Claude starts. Home shows the grid in its own panel (Sphe, Nov 2:
+// Claude starts. A thumbnail is deleted from here (its ⋯ on hover, or a right
+// click): its own page has no menu. Home shows the grid in its own panel (Sphe, Nov 2:
 // thumbnails "should sort of happen on that right hand side").
 
-import { Image as ImageIcon, Plus } from "lucide-react";
+import { Image as ImageIcon, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { StartedBy } from "../components/StartedBy";
-import { Button, Spinner } from "../components/ui";
+import { openMenu, toggleMenu, type MenuItem } from "../components/ContextMenu";
+import { Button, ConfirmDialog, Spinner } from "../components/ui";
 import { navigate } from "../lib/route";
 import { useEditor } from "../lib/store";
 import { renderUrl, thumbnailsApi, type ThumbRow } from "../lib/thumbnails";
@@ -49,6 +51,9 @@ export function ThumbnailGrid({ making, onMake }: { making: boolean; onMake: () 
     }, 10_000);
     return () => clearInterval(timer);
   }, [load]);
+  const [deleting, setDeleting] = useState<ThumbRow | null>(null);
+  const toastError = useEditor((state) => state.toastError);
+  const menu = (row: ThumbRow): MenuItem[] => [{ label: "Delete thumbnail", danger: true, icon: <Trash2 size={14} />, onSelect: () => setDeleting(row) }];
   if (rows === null) return <div className="flex h-full min-h-40 items-center justify-center text-[13px] text-muted">{problem ?? <Spinner size={20} />}</div>;
   if (rows.length === 0) {
     return (
@@ -64,14 +69,50 @@ export function ThumbnailGrid({ making, onMake }: { making: boolean; onMake: () 
   }
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 p-5">
+      <ConfirmDialog
+        open={deleting !== null}
+        onClose={() => setDeleting(null)}
+        title={`Delete “${deleting?.summary.title || "this thumbnail"}”?`}
+        detail="It goes for everyone on the team, with its versions, pictures and conversation."
+        confirm="Delete"
+        onConfirm={() => {
+          const row = deleting;
+          setDeleting(null);
+          if (row === null) return;
+          setRows((list) => list?.filter((one) => one.id !== row.id) ?? null);
+          void thumbnailsApi.remove(row.id).catch((error: unknown) => {
+            toastError(error, "delete it");
+            void load();
+          });
+        }}
+      />
       {rows.map((row) => (
-        <button key={row.id} onClick={() => navigate(`/thumbnails/${row.id}`)} className="group flex flex-col gap-2 rounded-xl p-1.5 text-left transition-colors hover:bg-hover">
+        <div
+          key={row.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => navigate(`/thumbnails/${row.id}`)}
+          onKeyDown={(event) => event.key === "Enter" && navigate(`/thumbnails/${row.id}`)}
+          onContextMenu={(event) => openMenu(event, menu(row), { width: 190 })}
+          className="group flex cursor-pointer flex-col gap-2 rounded-xl p-1.5 text-left transition-colors hover:bg-hover"
+        >
           <div className="relative aspect-video w-full overflow-hidden rounded-lg bg-black ring-1 ring-line">
             {row.summary.render !== null || (row.summary.layers ?? 1) > 0 ? (
               <Drawing id={row.id} at={row.updatedAt} />
             ) : (
               <div className="flex size-full items-center justify-center text-[12px] text-faint">Nothing drawn yet</div>
             )}
+            <button
+              type="button"
+              aria-label="More"
+              onClick={(event) => {
+                event.stopPropagation();
+                toggleMenu(event.currentTarget, menu(row), { width: 190 });
+              }}
+              className="absolute top-2 right-2 flex size-7 items-center justify-center rounded-md bg-black/70 text-white/85 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100 hover:text-white focus-visible:opacity-100"
+            >
+              <MoreHorizontal size={15} />
+            </button>
             {(row.summary.run === "running" || row.summary.run === "queued") && (
               <span className="absolute top-2 left-2 flex max-w-[calc(100%-16px)] items-center gap-1.5 rounded-full bg-black/75 px-2 py-0.5 text-[11px] text-white backdrop-blur-sm">
                 <Spinner size={10} /> <span className="truncate">{row.summary.step ?? "Working"}</span>
@@ -82,7 +123,7 @@ export function ThumbnailGrid({ making, onMake }: { making: boolean; onMake: () 
             <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{row.summary.title}</span>
             <StartedBy by={row.createdBy} size={20} />
           </div>
-        </button>
+        </div>
       ))}
     </div>
   );

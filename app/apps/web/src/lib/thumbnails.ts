@@ -35,12 +35,9 @@ export const thumbnailsApi = {
   change: (id: string, change: { title?: string; brief?: string }) => call<{ thumb: Thumbnail; rev: number }>("PUT", base(id), change),
   remove: (id: string) => call<void>("DELETE", base(id)),
   chat: (id: string, text: string, images: string[]) => call<{ ok: true }>("POST", `${base(id)}/chat`, { text, images }),
-  /** One step back (undo) or forward (redo) on the layout's timeline, the person's changes and Claude's alike: what it was, or null when there's none. */
-  step: (id: string, back: boolean) => call<{ thumb: Thumbnail; rev: number; step: string | null }>("POST", `${base(id)}/${back ? "undo" : "redo"}`),
   stop: (id: string) => call<{ stopped: boolean }>("POST", `${base(id)}/stop`),
   switchVersion: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/switch`, { version }),
   takeFinal: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/final`, { version }),
-  saveRender: (id: string, png: Blob) => call<{ key: string }>("PUT", `${base(id)}/render`, undefined, { bytes: png, type: "image/png" }),
   /** The team's OpenArt accounts with their credits, and the one in use on this Mac. */
   openart: () => call<OpenArtState>("GET", "/api/thumbnails/openart"),
   useOpenart: (account: string) => call<OpenArtState>("PUT", "/api/thumbnails/openart", { account }),

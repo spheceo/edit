@@ -14,7 +14,7 @@ import { readBytes, readJson, type RouteContext, type Router } from "../http/rou
 import { mayIdeas } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { canonical, step, switchVersion, takeFinal } from "./design.ts";
+import { canonical, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
@@ -202,9 +202,6 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
-    // One step back or forward on the layout's timeline (the person's changes and Claude's alike).
-    .post("/api/thumbnails/{id}/undo", ({ params }: Context) => stepped(params.id!, true))
-    .post("/api/thumbnails/{id}/redo", ({ params }: Context) => stepped(params.id!, false))
     .post("/api/thumbnails/{id}/stop", ({ params }: Context) => {
       guard();
       return json({ stopped: run.stop(params.id!) });
@@ -243,26 +240,6 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
-    // The browser's own drawing of the layers it just saved (the same drawing Claude's looks use): the list's picture.
-    .put(
-      "/api/thumbnails/{id}/render",
-      async (context: Context) => {
-        guard();
-        const bytes = await readBytes(context.request, LIMIT);
-        if (sizeOf(bytes) === null) throw bad("Send the drawing as a PNG or JPEG.");
-        const type = bytes[0] === 0x89 ? "image/png" : "image/jpeg";
-        try {
-          const key = await cloud.put(context.params.id!, bytes, type, type === "image/png" ? "png" : "jpg");
-          await cloud.change(context.params.id!, by(), (thumb) => {
-            thumb.render = { key, at: Date.now() };
-          });
-          return json({ key });
-        } catch (error) {
-          failed(error);
-        }
-      },
-      { bodyLimit: LIMIT },
-    )
     .get("/api/thumbnails/{id}/render", async ({ params, app }: Context) => {
       guard();
       try {
@@ -289,19 +266,4 @@ export function routes(router: Router<App>): void {
       if (answers.length === 0) return empty(202);
       return json(Array.isArray(body) ? answers : answers[0]);
     });
-}
-
-async function stepped(id: string, back: boolean): Promise<Response> {
-  guard();
-  try {
-    let taken: string | null = null;
-    const { thumb, rev } = await cloud.change(id, by(), (thumb) => {
-      const one = step(thumb, back);
-      taken = one === null ? null : one.label;
-      return one !== null;
-    });
-    return json({ thumb, rev, step: taken });
-  } catch (error) {
-    failed(error);
-  }
 }

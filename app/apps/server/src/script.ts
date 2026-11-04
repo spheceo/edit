@@ -1968,7 +1968,11 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     files: files.map((file) => ({ file, bytes: 0, state: "queued" })),
   };
   if (!app.scripts.claim(app, projectId, job)) return null;
-  const durable = inserting ? durableJobs.begin(app.store.home, "case", projectId, { request: inserting.id }) : null;
+  // Every import is kept until it ends, so one a restart cuts off (an update,
+  // a crash) carries on by itself when Edit is back: the first horror import
+  // (Nov 4) was cut off by a restart and left its project empty, its first
+  // message waiting for good.
+  const durable = durableJobs.begin(app.store.home, "case", projectId, inserting ? { request: inserting.id } : {});
   const id = projectId;
   const work = async () => {
     // As tokio::spawn: the job runs after the caller has answered with it (files still queued).

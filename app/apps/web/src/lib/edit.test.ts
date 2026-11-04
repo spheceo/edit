@@ -67,6 +67,20 @@ it("creates safe IDs even with an outdated counter and reserved links", () => {
   expect(validateProject(p)).toBeNull();
 });
 
+it("takes every script file edit-core takes: Drive, YouTube, a post, a finished video, a shared master", () => {
+  const files = ["1H9hY3w4LjzWlSAqY8hfp3I5Ft5PP0X9Y", "youtube:MeT7tyZqfiw", "post:aHR0cHM6Ly93d3cuaW5zdGFncmFtLmNvbS9wL0RVNnE5V2VFalJYLw", "feedback:9YYjQzHWrP9lh4nJWSs8DA", "review:p1793003918016-1/8", `sha256:${"a".repeat(64)}`];
+  for (const file of files) {
+    const p = project([]);
+    p.script = { source: null, blocks: [{ kind: "footage", url: "", file, start: 1, end: 2, label: "" }] } as unknown as Project["script"];
+    expect(validateProject(p), file).toBeNull();
+  }
+  for (const file of ["post:https://x.com/a", "post:", "../x", "youtube:short"]) {
+    const p = project([]);
+    p.script = { source: null, blocks: [{ kind: "footage", url: "", file, start: 1, end: 2, label: "" }] } as unknown as Project["script"];
+    expect(validateProject(p), file).not.toBeNull();
+  }
+});
+
 /** No two clips overlap on a track (edit-core's `validate` contract). */
 function assertNoOverlaps(p: Project) {
   for (const a of p.clips)

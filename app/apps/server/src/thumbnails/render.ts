@@ -8,8 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 
 import { HEIGHT, WIDTH, type Design } from "@edit/types/thumbnails";
-// @ts-expect-error: Bun gives the file's text (the import attribute), which TypeScript doesn't know.
-import rendererSource from "@edit/types/thumbnail_render" with { type: "text" };
+import { rendererSource } from "./renderer_source.ts" with { type: "macro" };
 
 import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
@@ -19,7 +18,7 @@ let transpiled: string | null = null;
 
 /** The drawing as plain JavaScript for the page (its imports are types only). */
 function rendererScript(): string {
-  transpiled ??= new Bun.Transpiler({ loader: "ts" }).transformSync(rendererSource as unknown as string).replace(/^import .*$/gm, "");
+  transpiled ??= new Bun.Transpiler({ loader: "ts" }).transformSync(rendererSource()).replace(/^import .*$/gm, "");
   return transpiled;
 }
 

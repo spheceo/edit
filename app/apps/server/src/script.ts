@@ -59,7 +59,7 @@ export const timing = {
  * they give another link, or go on without it).
  */
 export function passing(error: string): boolean {
-  return !/isn't shared|can't find this file|deleted, or in the trash|Private video|This video is private|confirm your age|age.restricted|members.only|Join this channel|not available in your country|blocked it in your country|Video unavailable|has been removed|has been terminated|no longer available|download limit for this file|isn't a Drive file|isn't a YouTube video|has no bytes|A shared folder master|is not uploaded yet/i.test(error);
+  return !/isn't shared|can't find this file|deleted, or in the trash|Private video|This video is private|confirm your age|age.restricted|members.only|Join this channel|not available in your country|blocked it in your country|Video unavailable|has been removed|has been terminated|no longer available|download limit for this file|isn't a Drive file|isn't a YouTube video|has no bytes|A shared folder master|is not uploaded yet|pictures only, with no video|only shown to someone signed in/i.test(error);
 }
 
 /** The footage files a script names, with what the person knows each by (its case, its file name). */

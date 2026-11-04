@@ -149,3 +149,10 @@ test("a post link never claims another script's unlinked ranges", async () => {
   expect(footage[0]).toMatchObject({ file: "abcdefghijklmnopqrstuvwxyz1", start: 10 });
   expect(footage.at(-1)!.url).toBe("https://www.instagram.com/p/DU6q9WeEjRX/");
 });
+
+test("a post that can't be had says why plainly and isn't tried again by itself", async () => {
+  const { passing } = await import("../src/script.ts");
+  expect(passing("That post is pictures only, with no video to play. Go on without it (the edit can show it as a screenshot), or give another link.")).toBe(false);
+  expect(passing("That post is only shown to someone signed in to instagram. Go on without it, or give another link to the same video.")).toBe(false);
+  expect(passing("instagram DU6q9WeEjRX: Read timed out")).toBe(true);
+});

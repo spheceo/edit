@@ -10,8 +10,12 @@ import { BUILD } from "./version.ts";
 
 /** Lines kept in memory for the report. */
 const KEEP = 2000;
-/** The log file is set aside (as edit.log.1) when it grows past this. */
-const ROTATE_BYTES = 8 << 20;
+/**
+ * The log file is set aside (as edit.log.1, the one before as .2…) when it
+ * grows past `bytes`; `kept` set aside are kept: about a week of a busy
+ * Mac's, for an admin asking from afar (remote_ask.ts). Tests make it small.
+ */
+export const rotation = { bytes: 8 << 20, kept: 5 };
 /** Durations kept per operation, for its median. */
 const RECENT = 64;
 /** Finished work slower than this is logged even when it went fine. */
@@ -114,7 +118,10 @@ function writeFile(line: Line): void {
   const level = line.level === "info" ? "INFO" : line.level === "warn" ? "WARN" : "ERROR";
   try {
     fs.writeSync(file.fd, `${stamp(line.at)} ${level} [${line.area}] ${line.message}\n`);
-    if (fs.fstatSync(file.fd).size > ROTATE_BYTES) {
+    if (fs.fstatSync(file.fd).size > rotation.bytes) {
+      for (let n = rotation.kept - 1; n >= 1; n--) {
+        if (fs.existsSync(`${file.path}.${n}`)) fs.renameSync(`${file.path}.${n}`, `${file.path}.${n + 1}`);
+      }
       fs.renameSync(file.path, `${file.path}.1`);
       const fresh = fs.openSync(file.path, "a");
       fs.closeSync(file.fd);

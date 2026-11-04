@@ -29,6 +29,7 @@ import * as archive from "./archive.ts";
 import * as firstPrompt from "./first_prompt.ts";
 import * as researchCloud from "./research_cloud.ts";
 import * as playbackRender from "./playback_render.ts";
+import * as remoteAsk from "./remote_ask.ts";
 import * as reviews from "./reviews.ts";
 import * as retryAfterUpdate from "./retry_after_update.ts";
 import { buildRouter } from "./routes.ts";
@@ -282,6 +283,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   // A promise nobody waited on that failed: said in the log, where it used to go unseen (the audit, Oct 23).
   process.on("unhandledRejection", (reason) => diag.error("server", `unhandled failure: ${diag.messageOf(reason)}${reason instanceof Error && reason.stack ? `\n${reason.stack}` : ""}`));
   const router = buildRouter();
+  remoteAsk.useRouter(router);
   const servers: Server<unknown>[] = [];
   for (const address of bindAddresses(host, port, ip)) {
     const shown = showAddress(address);

@@ -519,6 +519,11 @@ let background: { key: string; stop: AbortController } | null = null;
 /** Picture pieces someone is waiting on (a fill's piece one of them is, is never stopped), and how many wait on each. */
 const waitedOn = new Map<string, number>();
 
+/** What's being made now (an admin's `edit remote ask … work`): the fill's piece, those someone waits on, everything in flight. */
+export function status(): { background: string | null; waitedOn: string[]; inFlight: string[] } {
+  return { background: background?.key ?? null, waitedOn: [...waitedOn.keys()], inFlight: [...inFlight.keys()] };
+}
+
 /** Why a background piece stopped: someone needed the encoder first. */
 export class GaveWay extends Error {
   constructor() {

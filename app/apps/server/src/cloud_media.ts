@@ -584,6 +584,11 @@ const uploadSlot = new Semaphore(1);
  * there are none): true when they all went up, false when one failed (it's
  * tried again when Edit starts).
  */
+/** The imports' uploads going on now: the file, where it goes, and whether the original goes too. */
+export function uploadsNow(): { file: string; originalKey: string; uploadOriginal: boolean; proxy: string | null }[] {
+  return [...uploading.values()].map(({ upload }) => ({ file: upload.file, originalKey: upload.originalKey, uploadOriginal: upload.uploadOriginal, proxy: upload.proxy }));
+}
+
 /** Whether an upload of `file` is still going (cache_cleanup leaves its copy alone). */
 export function uploadingNow(file: string): boolean {
   return uploading.has(file);

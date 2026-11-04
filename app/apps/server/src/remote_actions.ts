@@ -16,6 +16,7 @@
 //   - update-when-idle: the update installs itself once nobody has used the
 //     window for 20 minutes and nothing's running (Sphe, Nov 1: "dont
 //     restart the app while mathias is using it, wait for idle");
+//   - ask-<question>: anything read-only an admin wants to know (remote_ask.ts);
 //   - probe-<project or script>: a report of one import's whole error, its
 //     source files' streams and a decode of their sound, so a damaged file
 //     is seen from here without fetching it (Nov 1: Mom Secretly's 5.3 GB).
@@ -160,7 +161,7 @@ export function problems(lines: string[], now = Date.now(), started = 0): string
 }
 
 /** The work under way: exports, imports, agent turns, Claude on scripts, the scripts' cloud. */
-function work(app: App): string[] {
+export function work(app: App): string[] {
   const out: string[] = [];
   out.push(`exports running: ${app.exports.running() ? "yes" : "no"}`);
   for (const summary of app.store.list()) {
@@ -324,6 +325,8 @@ export async function resume(app: App, projectId: string): Promise<string> {
   if (projectId === RESTART) return restart(app);
   if (projectId === IDLE_UPDATE) return updateWhenIdle(app);
   if (projectId.startsWith(PROBE)) return probe(app, projectId.slice(PROBE.length));
+  // An admin's question (remote_ask.ts): answered and sent up, nothing changed.
+  if (projectId.startsWith("ask-")) return (await import("./remote_ask.ts")).answer(app, projectId);
   const live = app.store.get(projectId);
   if (live === null && writerStore.idOk(projectId) && writerStore.ids(writerStore.dataDir(app.store.home)).includes(projectId)) return resumeScript(app, projectId);
   if (live === null) throw new Error(`There's no project or script ${projectId} on this Mac.`);

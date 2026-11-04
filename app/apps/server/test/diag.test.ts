@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { human, lines, open, scrub, timeAsync, timeOn, timings } from "../src/diag.ts";
+import { human, info, lines, open, rotation, scrub, timeAsync, timeOn, timings } from "../src/diag.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("records_failures_and_timings", () => {
@@ -57,4 +57,23 @@ test("presigned URLs never reach a log line", () => {
   expect(scrub("GET https://r2.example/edit/x?X-Amz-Signature=abc failed: 403")).toBe("GET <url> failed: 403");
   expect(scrub("'http://a/b' and \"https://c/d\"")).toBe("'<url>' and \"<url>\"");
   expect(scrub("nothing to hide")).toBe("nothing to hide");
+});
+
+test("the log is set aside as it grows, the last five kept", () => {
+  const { dir, cleanup } = scratch("diag-rotate");
+  const was = { ...rotation };
+  try {
+    rotation.bytes = 2000;
+    open(dir);
+    for (let n = 0; n < 200; n++) info("test", `line ${n} ${"x".repeat(100)}`);
+    const logs = fs.readdirSync(`${dir}/logs`).sort();
+    expect(logs).toEqual(["edit.log", "edit.log.1", "edit.log.2", "edit.log.3", "edit.log.4", "edit.log.5"]);
+    // Newest in edit.log, then .1, .2…: each set-aside file's lines come before the next newer one's.
+    const first = (name: string) => Number(/line (\d+)/.exec(fs.readFileSync(`${dir}/logs/${name}`, "utf8"))![1]);
+    expect(first("edit.log.5")).toBeLessThan(first("edit.log.4"));
+    expect(first("edit.log.1")).toBeLessThan(first("edit.log"));
+  } finally {
+    Object.assign(rotation, was);
+    cleanup();
+  }
 });

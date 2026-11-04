@@ -324,6 +324,23 @@ function readJournal(file: string): Journal | null {
   }
 }
 
+/** The resumable uploads under way or stopped on this Mac: their key, size and how much of it is up. */
+export function uploadJournals(): { key: string; size: number; up: number; parts: number }[] {
+  if (journals === null) return [];
+  let names: string[];
+  try {
+    names = fs.readdirSync(journals);
+  } catch {
+    return [];
+  }
+  return names.flatMap((name) => {
+    const saved = readJournal(join(journals!, name));
+    if (saved === null) return [];
+    const done = Object.keys(saved.parts).length;
+    return [{ key: saved.key, size: saved.size, up: Math.min(saved.size, done * saved.part), parts: done }];
+  });
+}
+
 /** Lets go of a resumable upload of `key` begun here (the object got there another way): its parts in R2 and its journal. */
 export function forgetUpload(key: string): void {
   const file = journalPath(key);

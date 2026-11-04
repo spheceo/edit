@@ -211,3 +211,23 @@ test("an import that never finished here is replaced by the cloud's script, not 
     expect(store.read(store.scriptDir(data, ID))).toMatchObject({ status: "ready", revision: 14 });
   }
 });
+
+// JJ's Mac, Nov 4: 12,032 folders among the scripts with no script.json, each
+// a clone of one: a script whose pull was cut short (its chat and files came
+// down, its body never) was deleted on another Mac, and each pull, every 30 s
+// for days, copied the folder to keep "this Mac's version", found no script in
+// the copy and gave up, leaving it. A folder with no body has no version here.
+test("a script deleted elsewhere whose folder here has no body is removed, never copied", async () => {
+  for (const syncedAt of [null, 3]) {
+    rows.clear();
+    rows.set(ID, { scriptId: ID, title: "Interrogation compilation", rev: 4, deletedAt: 1, files: [] });
+    const data = here(script({}), syncedAt);
+    const dir = store.scriptDir(data, ID);
+    fs.rmSync(join(dir, "script.json"));
+    fs.writeFileSync(join(dir, "chat.json"), "[]");
+
+    for (let round = 0; round < 3; round++) await cloud.syncOnceForTests(data);
+
+    expect(fs.readdirSync(store.scriptsRoot(data))).toEqual([]);
+  }
+});

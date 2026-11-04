@@ -658,14 +658,18 @@ const changedHere = (dir: string, known: Known | undefined): boolean => known ==
 
 /** This Mac's version of a script the cloud overtook, kept beside it under a new id. */
 function keepCopy(data: string, dir: string, label: string): void {
+  // Read first, and the copy gone again if it can't be made whole: a copy that
+  // failed was left behind, one more at every pull (Nov 4, JJ's Mac).
+  const script = store.read(dir);
   const id = crypto.randomUUID();
   const copy = store.scriptDir(data, id);
-  fs.cpSync(dir, copy, { recursive: true });
-  const script = store.read(copy);
-  script.id = id;
-  script.title = `${script.title} (${label})`;
-  script.updatedAt = Date.now();
-  store.write(copy, script);
+  try {
+    fs.cpSync(dir, copy, { recursive: true });
+    store.write(copy, { ...script, id, title: `${script.title} (${label})`, updatedAt: Date.now() });
+  } catch (error) {
+    fs.rmSync(copy, { recursive: true, force: true });
+    throw error;
+  }
   store.libraryChanged();
 }
 
@@ -889,7 +893,8 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
     deleted: row.deletedAt != null,
     knownRev: known === undefined ? null : known.rev,
     rev,
-    here: ours === null ? (fs.existsSync(dir) && row.deletedAt != null ? { same: false, changed: changedHere(dir, known), built: false, unfinished: false } : null) : { same: theirs != null && hash(ours) === hash(theirs), changed: changedHere(dir, known), built: builtIn(ours), unfinished: unfinished(ours) },
+    // A folder with no body (a pull cut short) has no version here to keep (Nov 4, JJ's Mac: 12,032 copies of one).
+    here: ours === null ? null : { same: theirs != null && hash(ours) === hash(theirs), changed: changedHere(dir, known), built: builtIn(ours), unfinished: unfinished(ours) },
     theirs: theirs === undefined ? undefined : theirs === null ? null : { built: builtIn(theirs) },
     copiedRev: ledger.copied?.[id] ?? null,
   });

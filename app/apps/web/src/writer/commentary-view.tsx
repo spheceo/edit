@@ -253,7 +253,7 @@ export function CommentaryEditor({
   });
   useEffect(() => () => player.dispose(), [player]);
   useEffect(() => player.update(cut.items), [player, cut.items]);
-  const onVideo = useCallback((element: HTMLVideoElement | HTMLCanvasElement | null) => player.attach(element), [player]);
+  const onVideo = useCallback((element: HTMLCanvasElement | null) => player.attach(element), [player]);
   const preview = (id: string) => {
     const index = cut.items.findIndex((item) => item.id === id);
     if (index < 0) return;

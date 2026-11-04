@@ -97,7 +97,7 @@ export function Monitor({
   seekBar: boolean;
   expanded?: boolean;
   onExpand?: (expanded: boolean) => void;
-  onVideo: (element: HTMLVideoElement | HTMLCanvasElement | null) => void;
+  onVideo: (element: HTMLCanvasElement | null) => void;
   empty?: ReactNode;
 }) {
   const cues = useMemo(() => captionCues(words ?? []), [words]);
@@ -107,11 +107,6 @@ export function Monitor({
   const showing = usePlayheadValue(playhead, (p) => (p.auditioning ? null : (editedPosition(clips, p.ms)?.clip ?? null)));
   const [volume, setVolume] = useState(() => Number(window.localStorage.getItem("writer.volume") ?? "1"));
   const [rate, setRate] = useState(1);
-  const [frameRatio, setFrameRatio] = useState(16 / 9);
-  const measureVideo = (event: React.SyntheticEvent<HTMLVideoElement>) => {
-    const video = event.currentTarget;
-    if (video.videoWidth && video.videoHeight) setFrameRatio(video.videoWidth / video.videoHeight);
-  };
   const before = useRef(1);
   const total = clipStarts(clips)[clips.length] ?? 0;
   const card = showing && isCutIn(showing) ? showing : null;
@@ -129,12 +124,8 @@ export function Monitor({
   return (
     <section className="panel monitor" aria-label="Program monitor">
       <div className="screen">
-        {player?.kind === "canvas" ? (
-          <canvas ref={onVideo} aria-label="Script preview" onClick={() => player?.toggle()} />
-        ) : multi ? (
-          <video onLoadedMetadata={measureVideo} ref={onVideo} playsInline preload="auto" aria-label="Script preview" onClick={() => player?.toggle()} />
-        ) : src ? (
-          <video onLoadedMetadata={measureVideo} ref={onVideo} src={src} playsInline preload="auto" aria-label="Edited video preview" onClick={() => player?.toggle()} />
+        {player !== null && (multi || src) ? (
+          <canvas ref={onVideo} aria-label="Script preview" onClick={() => player.toggle()} />
         ) : (
           <div className="none">{empty ?? "No preview yet."}</div>
         )}
@@ -153,7 +144,7 @@ export function Monitor({
             {card.narration?.trim() ? <p>{card.narration.trim()}</p> : <p className="faint">No narration yet.</p>}
           </div>
         )}
-        {captions && words && <Caption clips={clips} cues={cues} corrections={corrections ?? {}} playhead={playhead} frameRatio={player?.frameRatio ?? frameRatio} />}
+        {captions && words && <Caption clips={clips} cues={cues} corrections={corrections ?? {}} playhead={playhead} frameRatio={player?.frameRatio ?? 16 / 9} />}
         {auditioning && <span className="screen-badge">Source</span>}
       </div>
       {seekBar && <SeekBar clips={clips} playhead={playhead} player={player} />}

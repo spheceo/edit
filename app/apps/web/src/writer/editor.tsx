@@ -177,7 +177,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   useEffect(() => () => player.dispose(), [player]);
   useEffect(() => player.update(clips), [player, clips]);
   useEffect(() => player.setSource(src, script.durationMs), [player, src, script.durationMs]);
-  const onVideo = useCallback((element: HTMLVideoElement | HTMLCanvasElement | null) => player.attach(element), [player]);
+  const onVideo = useCallback((element: HTMLCanvasElement | null) => player.attach(element), [player]);
 
   useEffect(() => {
     void getResearch(script.id).then(setResearch).catch(() => {});

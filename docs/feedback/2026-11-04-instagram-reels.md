@@ -17,6 +17,17 @@ Sphe's test for the new horror style (the team's "Horror High Quality - Editing 
 7. **A refused script left an empty project behind** on every try. Now removed.
 8. **Posts reached R2, then failed cutting** with "no proxy key". `proxyKey` now knows `post:`.
 
+9. **A restart cut off the first import,** leaving an empty project whose first message would wait forever. Every import is now a durable job.
+10. **The page refused the project:** its copy of the script-file rule only knew Drive, YouTube and shared masters. It now matches edit-core.
+11. **The paused import had nothing to press anywhere.** The Downloads tab is gone. The Viewer now lists each missing file with its answers, plus "Go on without them" (one call; one at a time, the second skip was refused).
+12. **Unreachable posts were retried for 8 minutes.** Picture-only and sign-in-only posts now say so plainly and wait for the person at once.
+13. **Three cut-ins got the stand-in voice while 4 minutes of the recording went unused.** The narrator rewrote parts of the script, and read a last case the Doc doesn't have. Placement now:
+    - places unmatched cut-ins by order (the recording between their neighbours' readings, several split at pauses),
+    - runs the last cut-in to the end of the recording,
+    - and lets stand-ins step aside when the recording is there.
+14. **The agent called `commentary_look` as a tool**, and the look never went on. The teaching and the audit now name it as an `apply_edit_plan` operation.
+15. **`cover_cut_in` cropped the reels to fill** and added its own film look. In horror it now fits tall reels, which get the blurred backdrop, and adds no look.
+
 ## Not fixable here
 
 - **Five of the 22 posts can't be had without an Instagram sign-in:**

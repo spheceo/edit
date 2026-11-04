@@ -255,8 +255,9 @@ fn parse_rate(rate: Option<&str>) -> Option<f64> {
 /// proxy's original: reading the proxy would make every piece of it), by
 /// `media_key`; what they make is still kept as the media's own.
 fn read_instead() -> &'static parking_lot::Mutex<std::collections::HashMap<String, PathBuf>> {
-    static READ: std::sync::OnceLock<parking_lot::Mutex<std::collections::HashMap<String, PathBuf>>> =
-        std::sync::OnceLock::new();
+    static READ: std::sync::OnceLock<
+        parking_lot::Mutex<std::collections::HashMap<String, PathBuf>>,
+    > = std::sync::OnceLock::new();
     READ.get_or_init(Default::default)
 }
 

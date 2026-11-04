@@ -607,6 +607,7 @@ mod tests {
                 fade_out: 0,
                 keyframes: Default::default(),
                 person: None,
+                parent: None,
                 content,
             };
             project.clips.push(clip(

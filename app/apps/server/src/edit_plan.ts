@@ -22,6 +22,7 @@ import type { Clip, Keyframe, Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import {
   addTrack,
+  bindBlurs,
   clipEnd,
   clipMedia,
   clipOf,
@@ -64,6 +65,8 @@ export interface Applied {
   smooth: string[];
   /** Clips the plan left overlapping another on its track, moved onto a track of their own. */
   separated: string[];
+  /** Box blurs the plan put over a moving picture, now moving with it (`bindBlurs`). */
+  bound: string[];
 }
 
 /**
@@ -160,6 +163,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   const smooth: string[] = [];
   const placed = new Map(project.clips.map((clip) => [clip.id, `${clip.track}/${clip.start}/${clip.duration}`]));
   const played = new Map(project.clips.map((clip) => [clip.id, playKey(clip)]));
+  const adjusted = new Map(project.clips.filter((clip) => clip.type === "adjustment").map((clip) => [clip.id, stableStringify(clip)]));
   operations.forEach((original, index) => {
     let result: Json;
     try {
@@ -195,6 +199,11 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   // shot lengthened over its neighbour) refused the whole plan: the one the
   // plan placed goes onto a track of its own just above instead.
   const separated = separateOverlaps(project, placed);
+  // A box blur the plan placed over a card sliding in moves with the card.
+  const bound = bindBlurs(
+    project,
+    project.clips.filter((clip) => clip.type === "adjustment" && adjusted.get(clip.id) !== stableStringify(clip)).map((clip) => clip.id),
+  );
   // No words under a blur, whatever the plan added where.
   liftTextOverBlurs(project);
   // Typing sounds play exactly while their lines type (a desktop rebuilt moves its lines).
@@ -207,7 +216,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}; nothing saved`);
   const short = runsOut(project, played);
   if (short !== null) throw new Error(`final plan is invalid: ${short}; nothing saved`);
-  return { results, smooth, separated };
+  return { results, smooth, separated, bound };
 }
 
 /** What a clip plays of its media (which, from where, how fast, how long). */

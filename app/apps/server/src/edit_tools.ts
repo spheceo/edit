@@ -42,6 +42,7 @@ import { listExports } from "./exports.ts";
 import { expandHome, join } from "./paths.ts";
 import {
   addTrack,
+  bindBlurs,
   clipEnd,
   clipOf,
   cutTime,
@@ -398,6 +399,9 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
     ...(applied.separated.length > 0
       ? { moved_to_own_track: `${applied.separated.join(", ")} overlapped another clip on its track, so each went onto a track of its own just above` }
       : {}),
+    ...(applied.bound.length > 0
+      ? { moving_with_picture: `${applied.bound.join(", ")} blur part of a picture that moves, so each now moves with it (parent) and stops at its edges` }
+      : {}),
     audit,
     smoothing_started: smoothing,
     ...background(projectId),
@@ -524,9 +528,10 @@ async function addClip({ app, args, projectId }: ToolCall): Promise<Content[]> {
       fields.track = freeTrack(project, kind, start, start + number("duration", 1));
     }
     project.clips.push(serde("clip: ", () => clipFrom(fields)));
-    return id;
+    return [id, bindBlurs(project, [id]).length > 0] as const;
   });
-  return text(`added clip ${clipId}`);
+  const [id, bound] = clipId;
+  return text(`added clip ${id}${bound ? " (it blurs part of a picture that moves, so it moves with it and stops at its edges)" : ""}`);
 }
 
 async function updateClip({ app, args, projectId }: ToolCall): Promise<Content[]> {
@@ -543,6 +548,7 @@ async function updateClip({ app, args, projectId }: ToolCall): Promise<Content[]
     const short = editPlan.runsOut({ ...project, clips: [project.clips[index]!] }, before);
     if (short !== null) throw new Error(short);
     if (touchesPeople(objectOf(patch))) editPlan.hooks.oneColourPerPerson(project);
+    bindBlurs(project, [clipId]);
   });
   const clip = app.store.get(projectId)?.project.clips.find((own) => own.id === clipId) ?? null;
   // serde_json::to_string of the clip: its fields in their own order.

@@ -507,6 +507,14 @@ pub struct Clip {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub person: Option<String>,
+    /// The clip this one moves with (After Effects' parenting): the parent's
+    /// movement away from its own transform (its keyframes and shake: a card
+    /// sliding up, a push-in) carries this clip's transform, its blur's
+    /// region and its leader the same way. Place it as it sits over the
+    /// parent at rest. A parent that's gone, or not playing, holds where it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub parent: Option<String>,
     #[serde(flatten)]
     pub content: ClipContent,
 }
@@ -528,6 +536,16 @@ impl Clip {
             ClipContent::Adjustment { .. } | ClipContent::Solid { .. }
         ) && (self.end() == frame
             || (self.start < frame && self.start + self.duration / 2 == frame))
+    }
+
+    /// Its own transform (as set, unanimated), for a clip that has one.
+    pub fn transform(&self) -> Option<&Transform> {
+        match &self.content {
+            ClipContent::Video { transform, .. }
+            | ClipContent::Text { transform, .. }
+            | ClipContent::Waveform { transform, .. } => Some(transform),
+            _ => None,
+        }
     }
 
     pub fn media_id(&self) -> Option<&str> {
@@ -2064,6 +2082,31 @@ impl Project {
                     clip.id
                 ));
             }
+            if let Some(parent) = &clip.parent {
+                // A parent that's gone is no parent (a deleted card leaves
+                // its blur where it was); one that's there must move.
+                if let Some(found) = self.clips.iter().find(|one| &one.id == parent) {
+                    if found.transform().is_none() {
+                        return Err(format!(
+                            "clip {} can't move with {parent}: only a video, text or waveform clip has a transform to follow",
+                            clip.id
+                        ));
+                    }
+                }
+                let mut seen = vec![clip.id.as_str()];
+                let mut at = Some(parent.as_str());
+                while let Some(id) = at {
+                    if seen.contains(&id) {
+                        return Err(format!("clip {}'s parents go round in a circle", clip.id));
+                    }
+                    seen.push(id);
+                    at = self
+                        .clips
+                        .iter()
+                        .find(|one| one.id == id)
+                        .and_then(|one| one.parent.as_deref());
+                }
+            }
             if clip.fade_in < 0 || clip.fade_out < 0 {
                 return Err(format!("clip {} fades must be nonnegative", clip.id));
             }
@@ -2463,6 +2506,7 @@ mod validation_tests {
             fade_out: 0,
             keyframes: Default::default(),
             person: None,
+            parent: None,
             content: ClipContent::Solid {
                 fill: Rgba::BLACK,
                 opacity: 1.0,
@@ -2558,6 +2602,7 @@ mod validation_tests {
             fade_out: 0,
             keyframes: Default::default(),
             person: Some("p1".into()),
+            parent: None,
             content: ClipContent::Text {
                 text: "No.".into(),
                 style: TextStyle {
@@ -2634,6 +2679,7 @@ mod validation_tests {
             fade_out: 0,
             keyframes: Default::default(),
             person: Some("p1".into()),
+            parent: None,
             content: ClipContent::Text {
                 text: "No.".into(),
                 style: TextStyle {

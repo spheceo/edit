@@ -1835,6 +1835,9 @@ export async function followRegion(
     clip.keyframes ??= {};
     clip.keyframes[x] = xs;
     clip.keyframes[y] = ys;
+    // The path is where the box is on screen, its picture's movement and all:
+    // a parent would move it a second time.
+    delete clip.parent;
   });
   let summary = `${follow} now follows the box (${place}) with ${count} tracked positions from the footage of ${shot.id}`;
   if (tracked.cuts.length > 0) {

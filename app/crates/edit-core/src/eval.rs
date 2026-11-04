@@ -137,22 +137,10 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
         let fade = fade_factor(clip, local);
         let anim = |param: &str, base: f32| animated(clip, param, local, base);
         let seconds = frame as f32 / fps as f32;
-        let animated_transform = |transform: &Transform| {
-            let shake = anim("shake", transform.shake);
-            let [dx, dy, turn] = if shake > 0.0 {
-                wobble(&clip.id, seconds)
-            } else {
-                [0.0; 3]
-            };
-            Transform {
-                x: anim("x", transform.x) + dx * shake,
-                y: anim("y", transform.y) + dy * shake,
-                scale: anim("scale", transform.scale),
-                // A degree of tilt for every 40 px of shake: barely there.
-                rotation: anim("rotation", transform.rotation) + turn * shake / 40.0,
-                shake,
-            }
-        };
+        // What its parent's movement does to it this frame (nothing without one).
+        let follow = following(project, clip, frame, 0);
+        let animated_transform =
+            |transform: &Transform| follow.transform(moved(clip, transform, frame, fps));
         let layer = match &clip.content {
             ClipContent::Video {
                 media,
@@ -227,8 +215,8 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 style.glow.radius = anim("glow.radius", style.glow.radius);
                 style.glow.strength = anim("glow.strength", style.glow.strength);
                 if let Some(leader) = &mut style.leader {
-                    leader.x = anim("leader.x", leader.x);
-                    leader.y = anim("leader.y", leader.y);
+                    [leader.x, leader.y] =
+                        follow.point([anim("leader.x", leader.x), anim("leader.y", leader.y)]);
                 }
                 Layer::Text {
                     clip: clip.id.clone(),
@@ -280,7 +268,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         seed: ((seed_of(&clip.id) ^ (frame as u32).wrapping_mul(0x9E37_79B9)) % 997)
                             as f32,
                     },
-                    blur: Blur {
+                    blur: follow.blur(Blur {
                         radius: anim("blur", blur.radius).max(0.0),
                         x: anim("blur.x", blur.x),
                         y: anim("blur.y", blur.y),
@@ -288,7 +276,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         height: anim("blur.height", blur.height).max(0.0),
                         feather: blur.feather.max(0.0),
                         shape: blur.shape,
-                    },
+                    }),
                     shake: shake_offset(
                         &clip.id,
                         &ShakeSettings { amount, ..settings },
@@ -595,6 +583,140 @@ fn fade_factor(clip: &Clip, local: f32) -> f32 {
     factor
 }
 
+/// A clip's transform as it moves at timeline `frame`: its keyframes and
+/// its handheld shake on what's set.
+fn moved(clip: &Clip, transform: &Transform, frame: i64, fps: f64) -> Transform {
+    let local = (frame - clip.start) as f32;
+    let anim = |param: &str, base: f32| animated(clip, param, local, base);
+    let shake = anim("shake", transform.shake);
+    let [dx, dy, turn] = if shake > 0.0 {
+        wobble(&clip.id, frame as f32 / fps as f32)
+    } else {
+        [0.0; 3]
+    };
+    Transform {
+        x: anim("x", transform.x) + dx * shake,
+        y: anim("y", transform.y) + dy * shake,
+        scale: anim("scale", transform.scale),
+        // A degree of tilt for every 40 px of shake: barely there.
+        rotation: anim("rotation", transform.rotation) + turn * shake / 40.0,
+        shake,
+    }
+}
+
+/// A move of the frame's points (project px from the centre, y down): scaled
+/// and turned (degrees, clockwise) about the centre, then shifted. What a
+/// parent's movement does to the clips that follow it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Follow {
+    pub scale: f32,
+    pub turn: f32,
+    pub shift: [f32; 2],
+}
+
+impl Follow {
+    pub const STILL: Follow = Follow {
+        scale: 1.0,
+        turn: 0.0,
+        shift: [0.0, 0.0],
+    };
+
+    fn rotate(&self, [x, y]: [f32; 2]) -> [f32; 2] {
+        let (sin, cos) = self.turn.to_radians().sin_cos();
+        [x * cos - y * sin, x * sin + y * cos]
+    }
+
+    pub fn point(&self, point: [f32; 2]) -> [f32; 2] {
+        let [x, y] = self.rotate(point);
+        [
+            x * self.scale + self.shift[0],
+            y * self.scale + self.shift[1],
+        ]
+    }
+
+    /// This move, then `outer` (a grandparent's).
+    fn then(self, outer: Follow) -> Follow {
+        Follow {
+            scale: self.scale * outer.scale,
+            turn: self.turn + outer.turn,
+            shift: outer.point(self.shift),
+        }
+    }
+
+    pub fn transform(&self, transform: Transform) -> Transform {
+        if *self == Self::STILL {
+            return transform;
+        }
+        let [x, y] = self.point([transform.x, transform.y]);
+        Transform {
+            x,
+            y,
+            scale: transform.scale * self.scale,
+            rotation: transform.rotation + self.turn,
+            shake: transform.shake,
+        }
+    }
+
+    /// A blur's region goes where the picture under it went, as big as it
+    /// now is (a whole-frame blur stays whole). The region stays upright.
+    pub fn blur(&self, blur: Blur) -> Blur {
+        if *self == Self::STILL || blur.is_whole_frame() {
+            return blur;
+        }
+        let [x, y] = self.point([blur.x, blur.y]);
+        let scale = self.scale.abs();
+        Blur {
+            radius: blur.radius * scale,
+            x,
+            y,
+            width: blur.width * scale,
+            height: blur.height * scale,
+            feather: blur.feather * scale,
+            shape: blur.shape,
+        }
+    }
+}
+
+/// What `clip`'s parent's movement does to it at timeline `frame`: the
+/// parent's transform as it moves there against as it's set, then its own
+/// parent's, and so on. A parent that's gone or has no transform moves
+/// nothing; one that isn't playing holds its first or last frame.
+pub fn following(project: &Project, clip: &Clip, frame: i64, depth: u32) -> Follow {
+    let Some(id) = clip.parent.as_deref() else {
+        return Follow::STILL;
+    };
+    // Validation refuses a circle; this keeps a bad file from looping.
+    if depth > 16 {
+        return Follow::STILL;
+    }
+    let Some(parent) = project.clips.iter().find(|one| one.id == id) else {
+        return Follow::STILL;
+    };
+    let Some(set) = parent.transform() else {
+        return Follow::STILL;
+    };
+    let at = frame.clamp(parent.start, parent.end() - 1);
+    let now = moved(parent, set, at, project.fps());
+    let scale = if set.scale.abs() > 1e-6 {
+        now.scale / set.scale
+    } else {
+        1.0
+    };
+    // Each point of the parent at rest to where it is now: about its own
+    // centre, so q -> scale * turn(q - set) + now.
+    let own = Follow {
+        scale,
+        turn: now.rotation - set.rotation,
+        shift: [0.0, 0.0],
+    };
+    let [rx, ry] = own.point([set.x, set.y]);
+    let own = Follow {
+        shift: [now.x - rx, now.y - ry],
+        ..own
+    };
+    own.then(following(project, parent, frame, depth + 1))
+}
+
 fn animated(clip: &Clip, param: &str, local: f32, base: f32) -> f32 {
     clip.keyframes
         .get(param)
@@ -872,6 +994,121 @@ mod tests {
     }
     use super::*;
 
+    /// A card that slides up 200 px and grows 1.5× over 30 frames, with a
+    /// blur over a corner of it and a label beside it, both moving with it.
+    fn card_with_children() -> Project {
+        let mut project = project();
+        project.clips.retain(|clip| clip.id == "c1");
+        let [v1, v2, v3] = [0, 1, 2].map(|n| project.tracks[n].id.clone());
+        let clip = |value: serde_json::Value| -> Clip { serde_json::from_value(value).unwrap() };
+        project.clips[0].track = v1;
+        project.clips.push(clip(serde_json::json!({
+            "id": "card", "track": v2, "start": 0, "duration": 90, "type": "video", "media": "m1",
+            "transform": {"x": 100.0, "y": 0.0, "scale": 0.75},
+            "keyframes": {
+                "y": [{"frame": 0.0, "value": 200.0, "ease": "linear"}, {"frame": 30.0, "value": 0.0, "ease": "linear"}],
+                "scale": [{"frame": 0.0, "value": 0.5, "ease": "linear"}, {"frame": 30.0, "value": 0.75, "ease": "linear"}]
+            }
+        })));
+        project.clips.push(clip(serde_json::json!({
+            "id": "blur", "track": v3, "start": 0, "duration": 90, "type": "adjustment", "parent": "card",
+            "blur": {"radius": 30.0, "x": 50.0, "y": 40.0, "width": 100.0, "height": 60.0, "feather": 10.0, "shape": "rect"}
+        })));
+        project
+    }
+
+    #[test]
+    fn a_child_moves_with_its_parent() {
+        let project = card_with_children();
+        project.validate().unwrap();
+        let blur_at = |frame: i64| {
+            evaluate(&project, frame)
+                .layers
+                .into_iter()
+                .find_map(|layer| match layer {
+                    Layer::Adjustment { blur, .. } => Some(blur),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        // At rest (frame 30 on): where it was put.
+        let rest = blur_at(60);
+        assert_eq!(
+            (rest.x, rest.y, rest.width, rest.radius),
+            (50.0, 40.0, 100.0, 30.0)
+        );
+        // At frame 0 the card is 200 px lower and at 2/3 of its size: the blur's
+        // offset from the card's centre (100, 0) shrinks with it.
+        let start = blur_at(0);
+        let k = 0.5 / 0.75;
+        assert!(
+            (start.x - (100.0 + (50.0 - 100.0) * k)).abs() < 1e-3,
+            "{start:?}"
+        );
+        assert!((start.y - (200.0 + 40.0 * k)).abs() < 1e-3, "{start:?}");
+        assert!((start.width - 100.0 * k).abs() < 1e-3 && (start.radius - 30.0 * k).abs() < 1e-3);
+    }
+
+    #[test]
+    fn parents_chain_turn_and_refuse_circles() {
+        let mut project = card_with_children();
+        // The footage turns 90° about its centre and the card follows it.
+        project.clips[0].keyframes.insert(
+            "rotation".into(),
+            vec![Keyframe {
+                frame: 0.0,
+                value: 90.0,
+                ease: Ease::Linear,
+                handle_in: None,
+                handle_out: None,
+            }],
+        );
+        project.clips[1].parent = Some("c1".into());
+        project.validate().unwrap();
+        let card = evaluate(&project, 60)
+            .layers
+            .into_iter()
+            .find_map(|layer| match layer {
+                Layer::Video {
+                    clip, transform, ..
+                } if clip == "card" => Some(transform),
+                _ => None,
+            })
+            .unwrap();
+        // (100, 0) turned a quarter clockwise (y down) about the frame's centre.
+        assert!(
+            card.x.abs() < 1e-3
+                && (card.y - 100.0).abs() < 1e-3
+                && (card.rotation - 90.0).abs() < 1e-3,
+            "{card:?}"
+        );
+        let blur = evaluate(&project, 60)
+            .layers
+            .into_iter()
+            .find_map(|layer| match layer {
+                Layer::Adjustment { blur, .. } => Some(blur),
+                _ => None,
+            });
+        let blur = blur.unwrap();
+        assert!(
+            (blur.x + 40.0).abs() < 1e-3 && (blur.y - 50.0).abs() < 1e-3,
+            "{blur:?}"
+        );
+        // A parent that's gone holds the child where it was put.
+        project.clips.retain(|clip| clip.id != "card");
+        project.validate().unwrap();
+        // A circle, or a parent with nothing to follow, is refused.
+        let mut circle = card_with_children();
+        circle.clips[1].parent = Some("blur".into());
+        assert!(circle
+            .validate()
+            .unwrap_err()
+            .contains("only a video, text or waveform"));
+        circle.clips[1].parent = Some("c1".into());
+        circle.clips[0].parent = Some("card".into());
+        assert!(circle.validate().unwrap_err().contains("circle"));
+    }
+
     fn project() -> Project {
         let mut project = Project::new("p1".into(), "Test".into(), Settings::default());
         project.media.push(Media {
@@ -902,6 +1139,7 @@ mod tests {
             fade_out: 0,
             keyframes: Default::default(),
             person: None,
+            parent: None,
             content: ClipContent::Video {
                 media: "m1".into(),
                 source_in: 2.0,
@@ -944,6 +1182,7 @@ mod tests {
             )]
             .into(),
             person: None,
+            parent: None,
             content: ClipContent::Solid {
                 fill: Rgba::WHITE,
                 opacity: 1.0,
@@ -1137,6 +1376,7 @@ mod tests {
             )]
             .into(),
             person: None,
+            parent: None,
             content: ClipContent::Audio {
                 media: "m1".into(),
                 source_in: 1.0,

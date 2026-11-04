@@ -46,7 +46,15 @@ keyframes?: { [key in string]: Array<Keyframe> },
  * Whose words a text clip shows (a `Project::people` id): it's in their
  * colour, its label's when it has one, else its text's.
  */
-person?: string, } & ({ "type": "video", media: string, 
+person?: string, 
+/**
+ * The clip this one moves with (After Effects' parenting): the parent's
+ * movement away from its own transform (its keyframes and shake: a card
+ * sliding up, a push-in) carries this clip's transform, its blur's
+ * region and its leader the same way. Place it as it sits over the
+ * parent at rest. A parent that's gone, or not playing, holds where it is.
+ */
+parent?: string, } & ({ "type": "video", media: string, 
 /**
  * Seconds into the source at the clip's first frame.
  */

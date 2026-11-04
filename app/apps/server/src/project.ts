@@ -126,6 +126,61 @@ export function liftTextOverBlurs(project: Project): number {
   return moved;
 }
 
+const MOVES = ["x", "y", "scale", "rotation", "shake"];
+
+/**
+ * A blur over part of a picture that moves (a card sliding up and drifting,
+ * a push-in) moves with it: each box blur in `ids` with no parent and no
+ * tracked path of its own takes the topmost picture under its centre as it
+ * starts, when that picture moves, as its parent (N3on v3: the stream chat's
+ * blur sat still while its card slid up), and is cut to that picture's edges
+ * so it never blurs what's around it. Returns the blurs bound.
+ */
+export function bindBlurs(project: Project, ids: Iterable<string>): string[] {
+  const order = new Map(project.tracks.map((track, index) => [track.id, index]));
+  const hidden = new Set(project.tracks.filter((track) => track.hidden).map((track) => track.id));
+  const { width, height } = project.settings;
+  const bound: string[] = [];
+  for (const id of ids) {
+    const blur = clipOf(project, id);
+    if (blur === undefined || blur.type !== "adjustment" || blur.parent !== undefined) continue;
+    const region = blur.blur;
+    if (region === undefined || (region.radius ?? 0) <= 0 || !((region.width ?? 0) > 0 && (region.height ?? 0) > 0)) continue;
+    if (blur.keyframes?.["blur.x"] !== undefined || blur.keyframes?.["blur.y"] !== undefined) continue;
+    const [cx, cy] = [region.x ?? 0, region.y ?? 0];
+    const level = order.get(blur.track) ?? -1;
+    // The topmost picture beneath it there, as it's set (its rest).
+    let top: { clip: Clip; box: [number, number, number, number] } | null = null;
+    for (const clip of project.clips) {
+      if (clip.type !== "video" || hidden.has(clip.track) || (order.get(clip.track) ?? -1) >= level) continue;
+      if (!(clip.start <= blur.start && blur.start < clipEnd(clip)) || (clip.blend ?? "normal") !== "normal") continue;
+      const media = mediaOf(project, clip.media);
+      if (media === undefined) continue;
+      const [mw, mh] = [media.width || width, media.height || height];
+      const fit = Math.min(width / mw, height / mh) * clip.transform.scale;
+      const crop = clip.crop ?? { left: 0, right: 0, top: 0, bottom: 0 };
+      const box: [number, number, number, number] = [
+        clip.transform.x - mw * fit * (0.5 - (crop.left ?? 0)),
+        clip.transform.y - mh * fit * (0.5 - (crop.top ?? 0)),
+        clip.transform.x + mw * fit * (0.5 - (crop.right ?? 0)),
+        clip.transform.y + mh * fit * (0.5 - (crop.bottom ?? 0)),
+      ];
+      if (cx < box[0] || cx > box[2] || cy < box[1] || cy > box[3]) continue;
+      if (top === null || (order.get(clip.track) ?? -1) > (order.get(top.clip.track) ?? -1)) top = { clip, box };
+    }
+    if (top === null || top.clip.type !== "video") continue;
+    const moves = (top.clip.transform.shake ?? 0) > 0 || MOVES.some((name) => (top.clip.keyframes?.[name]?.length ?? 0) > 0);
+    if (!moves) continue;
+    blur.parent = top.clip.id;
+    // Cut to the picture: a box spilling past its edge blurred the wallpaper beside the card.
+    const [x0, y0] = [Math.max(cx - region.width! / 2, top.box[0]), Math.max(cy - region.height! / 2, top.box[1])];
+    const [x1, y1] = [Math.min(cx + region.width! / 2, top.box[2]), Math.min(cy + region.height! / 2, top.box[3])];
+    blur.blur = { ...region, x: Math.fround((x0 + x1) / 2), y: Math.fround((y0 + y1) / 2), width: Math.fround(x1 - x0), height: Math.fround(y1 - y0) };
+    bound.push(id);
+  }
+  return bound;
+}
+
 /** The subtitles' track, made (on top of every video track) if there isn't one. */
 export function subtitlesTrack(project: Project): string {
   const existing = project.tracks.find((track) => track.subtitles === true);

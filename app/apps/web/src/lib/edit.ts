@@ -153,6 +153,7 @@ export function deleteClips(project: Project, ids: Iterable<string>) {
 export function splitAt(project: Project, frame: number, only?: string[]) {
   const scope = only?.length ? withLinked(project, only) : null;
   const newLinks = new Map<string, string>();
+  const halves = new Map<string, string>();
   for (const clip of [...project.clips]) {
     if (scope && !scope.has(clip.id)) continue;
     const track = trackOf(project, clip.track);
@@ -162,7 +163,12 @@ export function splitAt(project: Project, frame: number, only?: string[]) {
       if (!newLinks.has(clip.link)) newLinks.set(clip.link, freshId(project, "l"));
       link = newLinks.get(clip.link);
     }
-    splitClip(project, clip, frame, link);
+    const right = splitClip(project, clip, frame, link);
+    if (right) halves.set(clip.id, right.id);
+  }
+  // What moves with a split clip after the cut moves with its right half.
+  for (const clip of project.clips) {
+    if (clip.parent && halves.has(clip.parent) && clip.start >= frame) clip.parent = halves.get(clip.parent);
   }
 }
 
@@ -707,6 +713,7 @@ export function duplicateClips(project: Project, ids: Iterable<string>): string[
   const to = Math.max(...originals.map(clipEnd));
   const shift = to - from;
   const links = new Map<string, string>();
+  const copies = new Map<string, string>();
   const created: Clip[] = [];
   for (const clip of originals) {
     const copy = copyClip(clip);
@@ -716,8 +723,11 @@ export function duplicateClips(project: Project, ids: Iterable<string>): string[
       if (!links.has(clip.link)) links.set(clip.link, freshId(project, "l"));
       copy.link = links.get(clip.link);
     }
+    copies.set(clip.id, copy.id);
     created.push(copy);
   }
+  // A copy of a clip and what moves with it moves with the copy.
+  for (const copy of created) if (copy.parent && copies.has(copy.parent)) copy.parent = copies.get(copy.parent);
   const keep = new Set(created.map((clip) => clip.id));
   for (const copy of created) clearRange(project, copy.track, copy.start, clipEnd(copy), keep);
   project.clips.push(...created);

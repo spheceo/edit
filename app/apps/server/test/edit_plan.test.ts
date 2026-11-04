@@ -929,3 +929,36 @@ test("a_tall_file_viewer_stays_on_screen", async () => {
   expect(Math.min(...ys) - size.h / 2).toBeGreaterThanOrEqual(-540);
   expect(Math.max(...ys) + size.h / 2).toBeLessThanOrEqual(540);
 });
+
+test("a_box_blur_over_a_card_sliding_in_moves_with_it_and_stops_at_its_edges", () => {
+  // N3on v3: the stream chat's blur sat still while its card slid up and drifted.
+  const p = project("plan");
+  p.media.push(media({ id: "m1", name: "stream", path: "/s.png", kind: "image", duration: 10, width: 1000, height: 1000, has_audio: false }));
+  apply(p, [
+    {
+      op: "add",
+      as: "card",
+      clip: {
+        type: "video", track: "v1", start: 0, duration: 120, media: "m1", transform: { x: 0, y: 0, scale: 0.5 },
+        keyframes: { y: [{ frame: 0, value: 700 }, { frame: 24, value: 0 }] },
+      },
+    },
+  ]);
+  const card = p.clips[0]!.id;
+  // 540 px square at rest (1080 tall × 0.5); the box hangs 80 px off its left side.
+  const result = apply(p, [
+    { op: "add", clip: { type: "adjustment", track: "new", start: 0, duration: 120, blur: { radius: 30, x: -250, y: 200, width: 200, height: 200, shape: "rect" } } },
+  ]);
+  const blur = p.clips.find((one) => one.type === "adjustment")!;
+  expect(result.bound).toEqual([blur.id]);
+  expect(blur.parent).toBe(card);
+  expect(blur.type === "adjustment" && blur.blur).toMatchObject({ x: -210, y: 185, width: 120, height: 170 });
+  valid(p);
+  // Over a picture that stays put, a blur stays as it was put.
+  const still = project("plan");
+  still.media.push(media({ id: "m1", name: "stream", path: "/s.png", kind: "image", duration: 10, width: 1000, height: 1000, has_audio: false }));
+  apply(still, [{ op: "add", clip: { type: "video", track: "v1", start: 0, duration: 120, media: "m1", transform: { x: 0, y: 0, scale: 0.5 } } }]);
+  const none = apply(still, [{ op: "add", clip: { type: "adjustment", track: "new", start: 0, duration: 120, blur: { radius: 30, x: -250, y: 200, width: 200, height: 200 } } }]);
+  expect(none.bound).toEqual([]);
+  expect(still.clips.find((one) => one.type === "adjustment")!.parent).toBeUndefined();
+});

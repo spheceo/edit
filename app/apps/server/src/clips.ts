@@ -210,6 +210,8 @@ const CLIP = struct("Clip", [
   field("fade_in", "i64", 0),
   field("fade_out", "i64", 0),
   field("keyframes", { map: { vec: { struct: KEYFRAME } } }, {}, isEmpty),
+  optional("person", "string"),
+  optional("parent", "string"),
 ]);
 
 const VARIANTS: Record<(typeof CLIP_TYPES)[number], Struct> = {

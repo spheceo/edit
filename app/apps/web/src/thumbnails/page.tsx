@@ -1014,8 +1014,15 @@ function PictureDialog({ thumbId, image, used, onClose, onUse, onAttach, onRemov
           <Button variant="subtle" onClick={onAttach}>
             Give to Claude
           </Button>
-          <Button variant="subtle" onClick={() => window.open(sourceUrl(thumbId, image.id), "_blank")}>
-            Open full size
+          <Button
+            variant="subtle"
+            onClick={() =>
+              void fetch(sourceUrl(thumbId, image.id))
+                .then((answer) => answer.blob())
+                .then((picture) => saveFile(`${image.name.replace(/[^\w -]+/g, "").trim() || "picture"}.${picture.type === "image/jpeg" ? "jpg" : picture.type === "image/webp" ? "webp" : "png"}`, picture))
+            }
+          >
+            <Download size={14} /> Save picture
           </Button>
           <div className="mt-3 flex flex-col gap-4">
             {image.request !== undefined && words("Your request", image.request)}

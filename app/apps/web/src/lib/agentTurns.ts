@@ -86,6 +86,8 @@ const args = (entry: AgentEntry): Record<string, unknown> => {
   }
 };
 
+/** A tool argument as words: a string or number as itself, anything else (missing, an object) as `fallback`. */
+const word = (value: unknown, fallback: string): string => (typeof value === "string" || typeof value === "number" ? String(value) : fallback);
 const plural = (count: number, one: string, many = `${one}s`) => `${count === 1 ? "a" : count} ${count === 1 ? one : many}`;
 
 /** What the idea page's tools did, when they said nothing of themselves. */
@@ -150,20 +152,20 @@ export function callTitle(entry: AgentEntry): string {
     }
     case "update_clip": {
       const keys = Object.keys((a.patch as object) ?? {});
-      return `Changed ${a.clip_id ?? "a clip"}${keys.length ? ` · ${keys.slice(0, 3).join(", ")}` : ""}`;
+      return `Changed ${word(a.clip_id, "a clip")}${keys.length ? ` · ${keys.slice(0, 3).join(", ")}` : ""}`;
     }
     case "delete_clips":
       return `Deleted ${plural(Array.isArray(a.clip_ids) ? a.clip_ids.length : 1, "clip")}`;
     case "set_keyframes":
-      return `Animated ${a.param ?? "a value"}${a.clip_id ? ` on ${a.clip_id}` : ""}`;
+      return `Animated ${word(a.param, "a value")}${a.clip_id ? ` on ${word(a.clip_id, "a clip")}` : ""}`;
     case "add_sound_effect":
-      return `Added ${plural(Array.isArray(a.times) ? a.times.length : 1, String(a.sound ?? "sound"))}`;
+      return `Added ${plural(Array.isArray(a.times) ? a.times.length : 1, word(a.sound, "sound"))}`;
     case "import_media":
       return `Imported ${plural(Array.isArray(a.paths) ? a.paths.length : 1, "file")}`;
     case "render_frame":
       return typeof a.time === "number" ? `Looked at ${a.time}s` : typeof a.frame === "number" ? `Looked at frame ${a.frame}` : "Looked at a frame";
     case "contact_sheet":
-      return `Looked at ${a.count ?? 12} frames${typeof a.start === "number" ? ` from ${a.start}s` : ""}`;
+      return `Looked at ${typeof a.count === "number" ? a.count : 12} frames${typeof a.start === "number" ? ` from ${a.start}s` : ""}`;
     case "export":
       return "Started an export";
     case "transcribe":

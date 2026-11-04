@@ -108,7 +108,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
         refresh();
       }
     },
-    [project.id, refresh, setItems, toast],
+    [project.id, refresh, setItems],
   );
 
   const collect = async () => {

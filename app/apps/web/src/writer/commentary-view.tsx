@@ -25,6 +25,9 @@ import { UpdateButton } from "./update";
 import { CAN, useGrants } from "./can";
 import { Dialog, Icon, Menu, Select, Tabs } from "./ui";
 
+/** No sources yet, the same list each render: a fresh [] rebuilt the cut and reloaded the player every render. */
+const NO_SOURCES: Source[] = [];
+
 const PACINGS: { value: Pacing; label: string; hint: string }[] = [
   { value: "channel", label: "Channel pacing", hint: "The channel's own videos: a line or two of setup, then the person talks. Clips run longer than the narration." },
   { value: "documentary", label: "Documentary pacing", hint: "Narration-led, like Turkey Tom: about three quarters narration, a short clip about every 30 to 40 seconds, and footage shown under the voice." },
@@ -169,7 +172,7 @@ export function CommentaryEditor({
   onChange: (script: Script) => void;
   onBack: () => void;
 }) {
-  const sources = script.commentary?.sources ?? [];
+  const sources = script.commentary?.sources ?? NO_SOURCES;
   const draft = script.commentary?.draft ?? null;
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<"saving" | "saved" | null>(null);

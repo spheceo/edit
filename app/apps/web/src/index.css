@@ -107,7 +107,9 @@
   }
   input,
   textarea,
-  select {
+  select,
+  [data-quote] {
+    /* What a page lets you quote into its chat (components/QuoteSelection.tsx) can be selected. */
     user-select: text;
   }
   /* No native scrollbars, ever (macOS can draw them with a track): a thin thumb shows only while something scrolls (lib/scrollbars.ts; Sphe, Nov 2: "only showing when we start to scroll"). */

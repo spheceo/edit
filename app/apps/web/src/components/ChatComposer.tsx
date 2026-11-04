@@ -7,11 +7,13 @@
 // notes, the agent asking to reset) sits in an island on its top edge, inset
 // from its sides and the same black (after Phi's composer and queue).
 // A message sent while Claude works waits in the queue and goes when it's done.
+// Words quoted into the chat (chatQuotes.ts) sit in the island until sent.
 
 import { AlertCircle, ArrowUp, FileText, Film, Image as ImageIcon, Music, Plus, Square, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { create } from "zustand";
 
+import { parseQuoted, quotedMessage, quoteLabel, removeQuote, takeQuotes, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
 import { attachFiles, detachFile, takeFiles, uploading, useFilesOf, type Accept, type ChatFile, type FileKind, type Uploader } from "../lib/chatFiles";
 import { useSettled } from "../lib/settled";
 import { formatBytes } from "../lib/time";
@@ -26,6 +28,7 @@ interface Queued {
   id: number;
   text: string;
   files: ChatFile[];
+  quotes: ChatQuote[];
 }
 
 /** Messages waiting for the turn to end, per chat. */
@@ -48,16 +51,14 @@ export function ChatComposer({
   value,
   onValueChange,
   allowEmpty = false,
-  quote,
-  onClearQuote,
   hint,
 }: {
   running: boolean;
   disabled: boolean;
   modelName: string;
   placeholder: string;
-  /** The words, and the files that made it in. */
-  onSend: (message: string, files: ChatFile[]) => void;
+  /** The words (the quotes in front of them), the files that made it in, and the quotes. */
+  onSend: (message: string, files: ChatFile[], quotes: ChatQuote[]) => void;
   onStop: () => void;
   /** Where an unsent message is kept (localStorage), if anywhere. */
   draft?: string;
@@ -72,9 +73,6 @@ export function ChatComposer({
   onValueChange?: (value: string) => void;
   /** This chat can send with no words (a script's first build takes notes or none). */
   allowEmpty?: boolean;
-  /** Words quoted from elsewhere, shown in the tray until cleared. */
-  quote?: string;
-  onClearQuote?: () => void;
   /** A quiet word at the footer's right, before Send. */
   hint?: string;
 }) {
@@ -85,6 +83,7 @@ export function ChatComposer({
     if (value === undefined) setOwn(next);
   };
   const attached = useFilesOf(chat);
+  const quotes = useQuotesOf(chat);
   const queue = useQueue((state) => state.chats[chat] ?? NO_QUEUE);
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
   const stoppable = useSettled(running);
@@ -98,6 +97,12 @@ export function ChatComposer({
     if (text) localStorage.setItem(draft, text);
     else localStorage.removeItem(draft);
   }, [draft, text]);
+  // Something quoted in: the words about it go here next.
+  const quoted = useRef(quotes.length);
+  useEffect(() => {
+    if (quotes.length > quoted.current) input.current?.focus();
+    quoted.current = quotes.length;
+  }, [quotes.length]);
 
   // The queue goes one message at a time, each once the turn before it has
   // ended. A chat that says it's running only once it's asked again (an idea,
@@ -120,7 +125,7 @@ export function ChatComposer({
     }
     sentAt.current = Date.now();
     useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: (chats[chat] ?? []).filter((one) => one.id !== first.id) } }));
-    sendNow.current(first.text, first.files);
+    sendNow.current(first.text, first.files, first.quotes);
   }, [running, queue, disabled, chat, tick]);
 
   const attach = (list: File[]) => {
@@ -135,27 +140,27 @@ export function ChatComposer({
     if (!canSend) return;
     const message = text.trim() || (ready ? "Here are the files I've attached." : "");
     const given = takeFiles(chat);
+    const said = takeQuotes(chat);
+    const sent = quotedMessage(said, message);
     setText("");
     if (running || queue.length > 0) {
-      useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: [...(chats[chat] ?? []), { id: ++queuedId, text: message, files: given }] } }));
+      useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: [...(chats[chat] ?? []), { id: ++queuedId, text: sent, files: given, quotes: said }] } }));
       return;
     }
-    onSend(message, given);
+    onSend(sent, given, said);
   };
   const hasFiles = (event: DragEvent) => files !== undefined && event.dataTransfer.types.includes("Files");
   const showStop = running && !canSend;
   const islands = [
     queue.length > 0 && <QueueIsland key="queue" chat={chat} queue={queue} />,
-    quote !== undefined && quote !== "" && (
-      <div key="quote" className="flex items-start gap-2 px-3 pt-2 pb-1.5">
-        <blockquote className="min-w-0 flex-1 border-l-2 border-line-strong pl-2 text-[12px] leading-relaxed whitespace-pre-wrap text-muted">{quote}</blockquote>
-        {onClearQuote && (
-          <button type="button" aria-label="Remove quoted text" title="Remove quoted text" onClick={onClearQuote} className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg">
-            <X size={12} />
-          </button>
-        )}
+    ...quotes.map((one) => (
+      <div key={`quote-${one.id}`} className="flex items-start gap-2 px-3 pt-2 pb-1.5">
+        <QuoteView from={one.from} text={one.text} className="max-h-24 overflow-y-auto" />
+        <button type="button" aria-label="Remove quoted text" title="Remove quoted text" onClick={() => removeQuote(chat, one.id)} className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg">
+          <X size={12} />
+        </button>
       </div>
-    ),
+    )),
     tray,
   ].filter((one) => one !== false && one !== null && one !== undefined);
 
@@ -285,6 +290,16 @@ export function ChatComposer({
   );
 }
 
+/** Quoted words with what they're from, in the composer and in the message sent. */
+export function QuoteView({ from, text, className }: { from: string; text: string; className?: string }) {
+  return (
+    <blockquote className={cx("min-w-0 flex-1 border-l-2 border-line-strong pl-2 text-[12px] leading-relaxed", className)}>
+      <span className="block text-[11px] text-faint">{quoteLabel(from)}</span>
+      <span className="block whitespace-pre-wrap text-muted">{text}</span>
+    </blockquote>
+  );
+}
+
 /** True while files from the Mac are dragged anywhere over the window (the composer shows it takes them). */
 function useFileDrag(on: boolean): boolean {
   const [active, setActive] = useState(false);
@@ -329,8 +344,9 @@ function QueueIsland({ chat, queue }: { chat: string; queue: Queued[] }) {
       {queue.map((one) => (
         <div key={one.id} role="listitem" className="group flex min-h-7 items-center gap-2">
           <span className="line-clamp-2 min-w-0 flex-1 text-[12.5px] leading-[18px] text-secondary" title={one.text}>
-            {one.text}
+            {parseQuoted(one.text).words}
           </span>
+          {one.quotes.length > 0 && <span className="shrink-0 text-[11px] text-faint">{one.quotes.length === 1 ? "1 quote" : `${one.quotes.length} quotes`}</span>}
           {one.files.length > 0 && <span className="shrink-0 text-[11px] text-faint">{one.files.length === 1 ? "1 file" : `${one.files.length} files`}</span>}
           <button
             type="button"

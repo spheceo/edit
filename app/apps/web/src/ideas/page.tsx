@@ -13,6 +13,7 @@ import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEff
 import { ChatShell, ChatTurns, Empty, useChatTurns, useSentNow } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatDock } from "../components/ChatDock";
+import { QuoteSelection } from "../components/QuoteSelection";
 import { picturesOnly, postFile } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { StartedBy } from "../components/StartedBy";
@@ -135,7 +136,7 @@ export function IdeaScreen({ id }: { id: string }) {
             <>
               <Notices page={page} busy={busy} onRepackage={(options) => void act("repackage it", () => ideasApi.repackage(id, options))} />
               <div className="mx-auto w-full max-w-[44rem] px-8 py-10 2xl:px-14 2xl:py-14">
-                <h1 aria-label="Main title" className="text-[27px] leading-[1.18] font-semibold tracking-[-0.03em] break-words text-white">
+                <h1 aria-label="Main title" data-quote="the main title" className="text-[27px] leading-[1.18] font-semibold tracking-[-0.03em] break-words text-white">
                   {page.idea.main ?? page.idea.titles[0]?.text ?? <span className="text-white/15">{active ? "Repackaging…" : "No title yet"}</span>}
                 </h1>
                 <Meta idea={page.idea} />
@@ -151,6 +152,8 @@ export function IdeaScreen({ id }: { id: string }) {
           <div className="flex min-h-0 flex-1 flex-col pt-2">{page === null ? <ChatShell loading /> : <Chat id={id} idea={page.idea} onAsked={() => void load()} />}</div>
         </ChatDock>
       </div>
+      {/* Words selected in the title, titles, summary or guide can be quoted into the chat. */}
+      <QuoteSelection chat={`idea:${id}`} />
       {page !== null && <SendDialog open={sending} idea={page.idea} onClose={() => setSending(false)} onSent={() => void load()} />}
     </div>
   );
@@ -462,7 +465,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
           {editing === "summary" ? (
             <textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => saveOnEnter(event, done)} rows={2} placeholder="One short factual sentence" aria-label="Summary" className={cx(FIELD, "mt-2 min-h-[3.25rem] resize-y")} />
           ) : (
-            <p className="mt-2 text-[14.5px] leading-relaxed text-white/80">{idea.summary}</p>
+            <p data-quote="the summary" className="mt-2 text-[14.5px] leading-relaxed text-white/80">{idea.summary}</p>
           )}
         </section>
       )}
@@ -479,7 +482,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
             </button>
           }
         />
-        <ul className={cx("mt-2 flex flex-col", editing === "titles" ? "gap-2" : "gap-1")}>
+        <ul data-quote="the titles" className={cx("mt-2 flex flex-col", editing === "titles" ? "gap-2" : "gap-1")}>
           {titleRows.length > 0 ? (
             titleRows.map((title, index) => {
               const isMain = main !== null && title.text.trim() === main;
@@ -487,7 +490,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
               const by = title.id === undefined ? undefined : byOf.get(title.id);
               return (
                 <li key={key} aria-label={`Title ${index + 1}`} className="flex items-start gap-2">
-                  <span className={cx("w-4 shrink-0 text-center text-[13px] leading-relaxed text-white/25", editing === "titles" && "mt-2.5")}>{index + 1}</span>
+                  <span className={cx("w-4 shrink-0 text-center text-[13px] leading-relaxed text-white/25 select-none", editing === "titles" && "mt-2.5")}>{index + 1}</span>
                   <div className="min-w-0 flex-1">
                     {editing === "titles" ? (
                       <textarea
@@ -503,7 +506,7 @@ function CaseForm({ page, onChange, busy, onRegenerate, onUploaded }: { page: Pa
                         className={cx(isMain ? `${FIELD_SHAPE} border-amber-300/55` : FIELD, "resize-none overflow-hidden break-words whitespace-pre-wrap [field-sizing:content]")}
                       />
                     ) : (
-                      <p className={cx("text-[14.5px] leading-relaxed break-words", isMain ? "font-medium text-amber-200/90" : "text-white/85")}>{title.text}</p>
+                      <p data-quote={`title ${index + 1}`} className={cx("text-[14.5px] leading-relaxed break-words", isMain ? "font-medium text-amber-200/90" : "text-white/85")}>{title.text}</p>
                     )}
                     {by !== undefined && by !== "claude" && <p className="mt-0.5 text-[11.5px] text-white/30">Written by {by}</p>}
                   </div>
@@ -792,7 +795,7 @@ function Guide({
       {editing === "guide" ? (
         <textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => saveOnEnter(event, done)} rows={1} placeholder="What the thumbnail should show" aria-label="Thumbnail guide" className={cx(FIELD, "mt-2 resize-none overflow-hidden [field-sizing:content]")} />
       ) : (
-        <p aria-label="Thumbnail guide" className="mt-2 text-[14.5px] leading-relaxed whitespace-pre-wrap text-white/80">
+        <p aria-label="Thumbnail guide" data-quote="the thumbnail guide" className="mt-2 text-[14.5px] leading-relaxed whitespace-pre-wrap text-white/80">
           {idea.thumbnailGuide.trim() || <span className="text-white/25">No thumbnail guide</span>}
         </p>
       )}

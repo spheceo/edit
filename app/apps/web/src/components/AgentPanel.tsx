@@ -47,6 +47,7 @@ import {
   watchClaudeSupport,
   type AgentEntry,
 } from "../lib/agent";
+import { parseQuoted } from "../lib/chatQuotes";
 import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, shortSpan, thinkingWord, type Turn } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
 import { api, mediaUrl } from "../lib/api";
@@ -54,7 +55,7 @@ import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
 import { projectUploader } from "../lib/upload";
 import { useEditor } from "../lib/store";
-import { ChatComposer, SentFiles } from "./ChatComposer";
+import { ChatComposer, QuoteView, SentFiles } from "./ChatComposer";
 import { NoteQueue } from "./NoteQueue";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, Modal } from "./ui";
@@ -300,6 +301,22 @@ export function ChatTurns({ turns, known, thinking }: { turns: Turn[]; known: Se
   );
 }
 
+/** What was sent: its quotes, as quotes, then the words about them. */
+function UserWords({ text }: { text: string }) {
+  const { quotes, words } = parseQuoted(text);
+  if (quotes.length === 0) return text;
+  return (
+    <>
+      <span className="mb-1.5 flex flex-col gap-1.5 last:mb-0">
+        {quotes.map((one, index) => (
+          <QuoteView key={index} from={one.from} text={one.text} />
+        ))}
+      </span>
+      {words}
+    </>
+  );
+}
+
 /** One exchange: your message, the work (folds away when done), the answer. */
 function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<string>; thinking?: string }) {
   const [open, setOpen] = useState(false);
@@ -328,7 +345,7 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
           {...appear(fresh(turn.user.id) && !turn.user.id.startsWith("user-"))}
           className="mb-1 ml-8 max-w-[calc(100%-2rem)] self-end rounded-2xl bg-raised px-3 py-2 text-[13px] whitespace-pre-wrap text-fg ring-1 ring-line [overflow-wrap:anywhere]"
         >
-          {turn.user.text}
+          <UserWords text={turn.user.text} />
         </motion.div>
       )}
       {turn.live ? (

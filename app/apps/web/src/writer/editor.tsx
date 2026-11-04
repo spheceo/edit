@@ -3,6 +3,7 @@ import { useChatDraft } from "./agent";
 import { ChatShell, ChatTurns, Empty, ResetAsk } from "../components/AgentPanel";
 import { ChatComposer } from "../components/ChatComposer";
 import { buildTurns } from "../lib/agentTurns";
+import { addQuote, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
 import { savedEntryIds, scriptEntries } from "./chat/editor-entries";
 import { buildStatus, completeTranscription, correctWord, editProject, getChat, getResearch, getScript, importReuses, message, previewSrc, resetScript, resolveProposals, restoreVersion, retrySpeakers, saveClips, setHeading, startBuild, startEdit, startRevision, stopJob } from "./api";
 import { navigate } from "../lib/route";
@@ -162,7 +163,8 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [research, setResearch] = useState<Research | null>(null);
   const [note, setNote] = useChatDraft(script.id);
-  const [quote, setQuote] = useState<{ id: string; quote: string; start: number; end: number; narrationNumber: number } | null>(null);
+  const chatKey = `script:${script.id}`;
+  const quoted = useQuotesOf(chatKey).length > 0;
   const [resolving, setResolving] = useState(false);
   const split = useSplit();
 
@@ -476,22 +478,21 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
 
   // Once the script is built, a message asks Opus for targeted edits, as
   // Repack's chat does, with what the producer has selected as "this".
-  const revise = async (given?: string, applyQuote = false) => {
-    const words = (given ?? note).trim();
-    // A quote across paragraphs (or the whole script) belongs to no one narration.
-    const request = quote && applyQuote ? (quote.id === "" ? `Quoted from the script:\n“${quote.quote}”\n\n${words}` : `Quoted from narration ${quote.narrationNumber} (clip ${quote.id}, characters ${quote.start}–${quote.end}):\n“${quote.quote}”\n\n${words}`) : words;
+  // What's quoted (in front of the words already) points it at those narrations.
+  const revise = async (given?: string, quotes: ChatQuote[] = []) => {
+    const request = (given ?? note).trim();
     if (!request) return;
+    const clips = quotes.flatMap((one) => (one.clip !== undefined ? [one.clip] : []));
     setError(null);
     setStage("Editing the script");
     try {
       const job = await startRevision(script.id, request, {
-        selected: quote && applyQuote && quote.id !== "" ? [quote.id] : selected,
+        selected: clips.length > 0 ? clips : selected,
         picked: picked ? [picked.startMs, picked.endMs] : null,
         playheadMs: Math.round(playhead.ms),
       });
       setSent(request);
       setNote("");
-      setQuote(null);
       follow(job.startedAt);
     } catch (cause) {
       setError(message(cause));
@@ -668,9 +669,9 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
             onHeading={(text) => void change(() => setHeading(script.id, revision.current, text))}
             onResolve={(ids, accept) => void reviewChanges(ids, accept)}
             onChat={(picked) => {
-              setQuote(picked);
+              // A stretch across paragraphs (or the whole script) belongs to no one narration.
+              addQuote(chatKey, picked.id === "" ? { from: "the script", text: picked.quote } : { from: `narration ${picked.narrationNumber}`, where: `clip ${picked.id}, characters ${picked.start}–${picked.end}`, clip: picked.id, text: picked.quote });
               setAgentShown(true);
-              window.setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 0);
             }}
             onNotes={(id, notes) => void persist(clips.map((item) => (item.id === id ? { ...item, notes: notes.length ? notes : undefined } : item)))}
             bands={bands}
@@ -808,15 +809,13 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
       label="Claude"
       footer={
         <ChatComposer
-          chat={`script:${script.id}`}
+          chat={chatKey}
           value={note}
           onValueChange={setNote}
           allowEmpty={!cueCount}
           running={working}
           disabled={busy || !ready}
           modelName="Opus 5.5"
-          quote={quote ? `Narration ${quote.narrationNumber}: “${quote.quote}”` : undefined}
-          onClearQuote={() => setQuote(null)}
           hint={!ready ? "Transcribe the footage first" : undefined}
           tray={
             resetTurn ? (
@@ -831,13 +830,13 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
           placeholder={
             archived
               ? "The footage is archived: restore it to change the script"
-              : quote
+              : quoted
                   ? "What should we do with this passage?"
                   : cueCount
                     ? "Ask for a change, e.g. tighten the intro, rewrite cut-in 4 shorter, fix the edges…"
                     : "Notes for the build (optional), e.g. aim for 30 minutes…"
           }
-          onSend={(text) => void (cueCount ? revise(text, true) : build(text))}
+          onSend={(text, _files, quotes) => void (cueCount ? revise(text, quotes) : build(text))}
           onStop={() => void stopJob(script.id).catch((cause) => setError(message(cause)))}
         />
       }

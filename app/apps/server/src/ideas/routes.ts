@@ -655,6 +655,18 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
+    // A picture Claude showed in the chat (a frame, a sheet), kept in the idea's folder.
+    .get("/api/ideas/{id}/files/{file}", async ({ params }: Context) => {
+      guard();
+      await guardId(params.id!);
+      const file = params.file ?? "";
+      if (!/^[a-f0-9]+\.(png|jpg|webp|gif)$/.test(file)) throw notFound("No such picture.");
+      try {
+        return await picture({ key: `edit/ideas/${params.id}/${file}` } as IdeaImage);
+      } catch (error) {
+        failed(error);
+      }
+    })
     .get("/api/ideas/{id}/images/{image}", async ({ params }: Context) => {
       guard();
       await guardId(params.id!);

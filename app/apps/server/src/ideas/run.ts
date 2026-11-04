@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import { NICHES, type Idea, type IdeaFrame, type IdeaImage, type IdeaRun, type IdeaTool, type IdeaTurn, type Niche, type Workspace } from "@edit/types/ideas";
 
 import { ideasGuide } from "../agent_text.ts";
+import { inlinePictures, pictureFile } from "../chat_pictures.ts";
 import * as cloudStorage from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
@@ -514,6 +515,25 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
   return { caseText: ["# The case", ...parts].join("\n"), examples: approvedText, style, folder, bases, caseThumbnail, pictures: pictureText };
 }
 
+/**
+ * Where a picture in Claude's answer is, for the page: one of the idea's
+ * pictures (by id), else a picture file it has on this Mac (a frame, a
+ * storyboard sheet, the case's thumbnail), kept in the idea's folder on R2 so
+ * it's there once the turn's folder is gone and on a teammate's Mac.
+ */
+async function placePicture(id: string, source: string, roots: string[]): Promise<string | null> {
+  const base = `/api/ideas/${encodeURIComponent(id)}`;
+  const found = await cloud.get(id);
+  const image = found?.idea.images.find((one) => one.id === source);
+  if (image !== undefined) return `${base}/images/${encodeURIComponent(image.id)}`;
+  const file = pictureFile(source, roots);
+  if (file === null) return null;
+  const extension = (file.split(".").pop() ?? "jpg").toLowerCase().replace("jpeg", "jpg");
+  const type = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : extension === "gif" ? "image/gif" : "image/jpeg";
+  const key = await cloud.putPicture(id, new Uint8Array(fs.readFileSync(file)), type, extension);
+  return `${base}/files/${key.split("/").pop()}`;
+}
+
 /** The pictures attached to the latest message, saved in `folder` for Claude to Read: their paths. */
 async function attachedPictures(idea: Idea, folder: string): Promise<string[]> {
   const last = [...idea.chat].reverse().find((turn) => turn.role === "you");
@@ -667,6 +687,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         idea.duplicate !== null && options.improve ? `# Already on the board\nThe card is “${idea.duplicate.name}” (${idea.duplicate.list}). The person wants this case improved: that title is the bad version.` : "",
         options.changes && idea.changes !== null ? `# The reviewers' comments on its card\n${idea.changes.comments.map((one) => `- ${one.author}: ${one.text}`).join("\n")}` : "",
         recent.length > 0 ? `# The conversation so far\n${recent.join("\n\n")}` : "",
+        "# The chat\nThe person reads your words as Markdown, and it shows pictures: ![what it is](a picture's file path or image id).",
         attached.length > 0 ? `# Pictures the person attached to this message (Read them)\n${attached.map((one) => `- ${one}`).join("\n")}` : "",
         what === "chat"
           ? `# The person asks\n${asked}`
@@ -678,7 +699,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         const answer = await live.within(running.turn, () =>
           asking.ask({ model: claude.OPUS, system: system(idea.workspace), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/ideas/${token}`, read: prepared.folder, maxTurns: 40, effort: "medium", timeoutMs: 20 * 60_000, label: `Ideas ${id}`, signal }),
         );
-        const said = (answer.text ?? running.turn.text).trim();
+        const said = await inlinePictures((answer.text ?? running.turn.text).trim(), (source) => placePicture(id, source, [prepared.folder]));
         if (session.skipped !== null) return { state: "done" as const, text: session.skipped };
         if (what === "chat") return { state: "done" as const, text: said || "Done." };
         const now = await cloud.get(id);

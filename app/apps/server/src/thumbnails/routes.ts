@@ -272,6 +272,17 @@ export function routes(router: Router<App>): void {
         failed(error);
       }
     })
+    // A picture Claude showed in the chat (a look, a comparison), kept in the thumbnail's folder.
+    .get("/api/thumbnails/{id}/files/{file}", async ({ params, app }: Context) => {
+      const file = params.file ?? "";
+      if (!/^[a-f0-9]{24}\.(png|jpg|webp|gif)$/.test(file) || !/^[a-z0-9-]+$/i.test(params.id ?? "")) throw notFound("No such picture.");
+      try {
+        const key = `edit/thumbnails/${params.id}/${file}`;
+        return picture(await assets.cached(app.store.cacheDir(), key), assets.typeOf(key));
+      } catch (error) {
+        failed(error);
+      }
+    })
     .get("/api/thumbnails/{id}/render", async ({ params, app }: Context) => {
       guard();
       try {

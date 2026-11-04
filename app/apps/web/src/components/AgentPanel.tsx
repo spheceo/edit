@@ -57,7 +57,7 @@ import { useEditor } from "../lib/store";
 import { ChatComposer, SentFiles } from "./ChatComposer";
 import { NoteQueue } from "./NoteQueue";
 import { ProblemView } from "./ProblemView";
-import { Button, cx } from "./ui";
+import { Button, cx, Modal } from "./ui";
 import { ClaudeSetupCard } from "./ClaudeSetupCard";
 import { ClaudeMark } from "./ClaudeMark";
 
@@ -643,8 +643,41 @@ function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean
  * The agent’s replies as Markdown (tables, lists, headings, code), styled for
  * the panel. Raw HTML in a reply is shown as text, never run.
  */
+/**
+ * A picture an agent put in its answer (Sphe, Nov 4: "all of the agents have the
+ * ability to inline images"): its chat has made it an address this page can
+ * load (the server's chat_pictures.ts); shown in the answer, big on a click.
+ * One it couldn't place (or one from anywhere else) is named, never fetched.
+ */
+function ChatPicture({ src, alt }: { src?: string; alt?: string }) {
+  const [open, setOpen] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const words = alt?.trim() || "Picture";
+  if (src === undefined || !src.startsWith("/api/") || failed) {
+    return (
+      <span className="my-1 inline-flex h-7 items-center gap-1.5 rounded-md bg-raised px-2 text-[12px] text-muted ring-1 ring-line">
+        <Image size={13} className="text-faint" /> {words}
+      </span>
+    );
+  }
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)} title={words} className="my-2 block w-full overflow-hidden rounded-lg bg-black ring-1 ring-line transition-shadow hover:ring-line-strong">
+        <img src={src} alt={words} loading="lazy" onError={() => setFailed(true)} className="block max-h-72 w-full object-contain" />
+      </button>
+      <Modal open={open} onClose={() => setOpen(false)} width={Math.min(1400, window.innerWidth - 64)}>
+        <button type="button" onClick={() => setOpen(false)} className="block w-full bg-black" aria-label="Close">
+          <img src={src} alt={words} className="block max-h-[calc(100vh-96px)] w-full object-contain" />
+        </button>
+      </Modal>
+    </>
+  );
+}
+
 const MARKDOWN: Components = {
-  p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0">{children}</p>,
+  // A paragraph holding a picture is a block of its own (a <p> can't hold the picture's button and dialog).
+  p: ({ children, node }) => (node?.children.some((child) => child.type === "element" && child.tagName === "img") ? <div className="my-1.5 first:mt-0 last:mb-0">{children}</div> : <p className="my-1.5 first:mt-0 last:mb-0">{children}</p>),
+  img: ({ src, alt }) => <ChatPicture src={typeof src === "string" ? src : undefined} alt={alt} />,
   strong: ({ children }) => <strong className="font-semibold text-fg">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
   a: ({ children, href }) => (

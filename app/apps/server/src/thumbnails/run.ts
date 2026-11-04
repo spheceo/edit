@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import { assetRef, FONTS, HEIGHT, WIDTH, type Design, type Layer, type Thumbnail, type ThumbImage, type ThumbRun, type ThumbTool, type ThumbTrace, type ThumbTurn } from "@edit/types/thumbnails";
 
 import { thumbnailsGuide } from "../agent_text.ts";
+import { inlinePictures, pictureFile } from "../chat_pictures.ts";
 import * as diag from "../diag.ts";
 import { native } from "../native/index.ts";
 import { join } from "../paths.ts";
@@ -768,6 +769,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
     `# The thumbnail: “${thumb.title || "New thumbnail"}”${thumb.brief ? `\nFor: ${thumb.brief}` : ""}`,
     `Canvas ${WIDTH}×${HEIGHT}.`,
     images.length > 0 ? `# Its images (Read the ones you use)\n${images.join("\n")}` : "# Its images\nNone yet.",
+    "# The chat\nThe person reads your words as Markdown, and it shows pictures: ![what it is](a picture's file path or image id).",
     `# The layers now, bottom first\n${describe(thumb.design)}`,
     baseBrief(thumb),
     (thumb.versions ?? []).length > 1 ? `# Versions: ${(thumb.versions ?? []).map((one) => `${one.name}${one.id === thumb.activeVersion ? " (the person is looking at it: yours to work on)" : ""}${one.id === thumb.finalVersion ? " (final)" : ""}`).join(", ")}\nLook at or compare another with look / compare (version), without switching; switch_version only to change another. The person's view never moves with yours.` : "",
@@ -794,6 +796,26 @@ async function commentsBrief(session: Session, thumb: Thumbnail): Promise<string
   if (listed === "") return "";
   const pins = openComments(thumb).length > 0 ? await marked(session, thumb).catch(() => null) : null;
   return [`# Comments the team pinned on it (open)\n${listed}`, pins !== null ? `With their pins, numbered (Read it): ${pins}` : ""].filter(Boolean).join("\n");
+}
+
+/**
+ * Where a picture in Claude's answer is, for the page: one of the thumbnail's
+ * pictures (by id, or the copy of it Claude read), else a picture file it has
+ * on this Mac (a look, a comparison), kept with the thumbnail so it's still
+ * there once the turn's folder is gone and on a teammate's Mac.
+ */
+async function placePicture(session: Session, source: string): Promise<string | null> {
+  const found = await cloud.get(session.id);
+  if (found === null) return null;
+  const base = `/api/thumbnails/${encodeURIComponent(session.id)}`;
+  const named = source.split("/").pop()!.replace(/\.[a-z0-9]+$/i, "");
+  const image = found.thumb.images.find((one) => one.id === source || (source.startsWith("/") && one.id === named));
+  if (image !== undefined) return `${base}/images/${encodeURIComponent(image.id)}`;
+  const file = pictureFile(source, [session.folder, session.context.cacheDir]);
+  if (file === null) return null;
+  const extension = (file.split(".").pop() ?? "png").toLowerCase().replace("jpeg", "jpg");
+  const key = await cloud.put(session.id, new Uint8Array(fs.readFileSync(file)), assets.typeOf(`x.${extension}`), extension);
+  return `${base}/files/${key.split("/").pop()}`;
 }
 
 // ---------------------------------------------------------------- turns
@@ -850,7 +872,7 @@ async function work(context: Context, id: string, asked: string, given: string[]
         const answer = await live.within(running.turn, () =>
           hooks.ask({ model: claude.OPUS, system: thumbnailsGuide("guide"), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/thumbnails/${token}`, read: folder, maxTurns: 60, effort: "medium", timeoutMs: 25 * 60_000, label: `Thumbnail ${id}`, signal }),
         );
-        const said = (answer.text ?? running.turn.text).trim();
+        const said = await inlinePictures((answer.text ?? running.turn.text).trim(), (source) => placePicture(session, source));
         return { state: "done" as const, text: said || (session.changed ? "Done." : "Nothing changed.") };
       } finally {
         sessions.delete(token);

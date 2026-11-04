@@ -17,12 +17,12 @@ import { attachFiles, picturesOnly, postFile, type Uploader } from "../lib/chatF
 import { AppMenu } from "../components/AppMenu";
 import { toggleMenu } from "../components/ContextMenu";
 import { Button, cx, IconButton, Spinner, spring } from "../components/ui";
-import { conversationEntries } from "../lib/agentTurns";
+import { conversationEntries, thumbActivity } from "../lib/agentTurns";
 import { saveFile } from "../lib/files";
 import { navigate } from "../lib/route";
 import { ago } from "../lib/time";
 import { useEditor } from "../lib/store";
-import { sourceUrl, thumbnailsApi, working, type Design, type OpenArtAccount, type OpenArtState, type Thumbnail, type ThumbComment, type ThumbVersion } from "../lib/thumbnails";
+import { sourceUrl, thumbnailsApi, working, type Design, type OpenArtAccount, type OpenArtState, type Thumbnail, type ThumbComment, type ThumbRun, type ThumbVersion } from "../lib/thumbnails";
 import { drawThumbnail, type Context as DrawContext } from "@edit/types/thumbnail_render";
 import { captionShadow, HEIGHT, WIDTH } from "@edit/types/thumbnails";
 
@@ -63,6 +63,15 @@ function usePictures(id: string, designs: Design[]): [(source: string) => HTMLIm
       image.src = url;
     }
   }, [id, sources]);
+  // A caption's face landing redraws too (what was drawn in a stand-in face isn't kept).
+  useEffect(() => {
+    const landed = () => {
+      faces++;
+      setTick((n) => n + 1);
+    };
+    document.fonts.addEventListener("loadingdone", landed);
+    return () => document.fonts.removeEventListener("loadingdone", landed);
+  }, []);
   const picture = useCallback((source: string) => loaded.get(sourceUrl(id, source)) ?? null, [id]);
   return [picture, tick];
 }
@@ -74,10 +83,36 @@ const surface = (width: number, height: number) => {
   return made;
 };
 
-function draw(canvas: HTMLCanvasElement, design: Design, picture: (source: string) => HTMLImageElement | null): void {
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (context === null) return;
+/** How many caption faces have landed: a drawing made before one did isn't the same drawing. */
+let faces = 0;
+
+/**
+ * Each layout drawn whole, kept (Sphe, Nov 4: switching versions should be
+ * "a lot more instant"): the canvas and the version tiles show a layout drawn
+ * once, so moving between versions is a copy, not the adjustments worked out
+ * again. Only a drawing with all its pictures in is kept; the last dozen.
+ */
+const drawings = new Map<string, HTMLCanvasElement>();
+function drawingOf(design: Design, picture: (source: string) => HTMLImageElement | null): HTMLCanvasElement {
+  const key = `${faces}:${JSON.stringify(design)}`;
+  const kept = drawings.get(key);
+  if (kept !== undefined) {
+    drawings.delete(key);
+    drawings.set(key, kept);
+    return kept;
+  }
+  const made = surface(WIDTH, HEIGHT);
+  const context = made.getContext("2d", { willReadFrequently: true })!;
   drawThumbnail(context as unknown as DrawContext, design, { picture, canvas: surface }, WIDTH, HEIGHT);
+  if (design.layers.every((layer) => layer.kind !== "image" || layer.hidden || picture(layer.source) !== null)) {
+    drawings.set(key, made);
+    if (drawings.size > 12) drawings.delete(drawings.keys().next().value!);
+  }
+  return made;
+}
+
+function draw(canvas: HTMLCanvasElement, design: Design, picture: (source: string) => HTMLImageElement | null): void {
+  canvas.getContext("2d")?.drawImage(drawingOf(design, picture), 0, 0);
 }
 
 /** A box-less caption still carrying an older house shadow shows the current one (opacity 100, spread 36, size 32, angle 90). */
@@ -107,13 +142,15 @@ export function ThumbnailScreen({ id }: { id: string }) {
     shownRev.current = rev;
     setThumb({ ...next, design: settleCaptions(next.design) });
   }, []);
+  // Versions switched here and not yet answered for: a poll meanwhile would show the one before.
+  const switching = useRef(0);
   const load = useCallback(
     () =>
       thumbnailsApi
         .get(id)
         .then(({ thumb, rev }) => {
           setMissing(null);
-          if (rev !== shownRev.current) show(thumb, rev);
+          if (rev !== shownRev.current && switching.current === 0) show(thumb, rev);
         })
         .catch((error: unknown) => setMissing((error as Error).message)),
     [id, show],
@@ -137,9 +174,34 @@ export function ThumbnailScreen({ id }: { id: string }) {
     return () => cancelAnimationFrame(frame);
   }, [design, tick, picture]);
 
-  const showVersion = (version: string) =>
-    // The list's picture is drawn again by the server (switching clears it), once its pictures have loaded.
-    void thumbnailsApi.switchVersion(id, version).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "show that version"));
+  /**
+   * Another version shown at once, from the layouts already here; the server
+   * is told behind it (and draws the list's picture again). The last one asked
+   * for is what stays; a refusal puts back what was showing.
+   */
+  const asked = useRef(0);
+  const showVersion = (version: string) => {
+    if (thumb === null) return;
+    const target = thumb.versions?.find((one) => one.id === version);
+    if (target === undefined) return;
+    const before = thumb;
+    const versions = (thumb.versions ?? []).map((one) => (one.id === thumb.activeVersion ? { ...one, design: thumb.design } : one));
+    setThumb({ ...thumb, versions, activeVersion: version, design: settleCaptions(target.design), history: [], future: [] });
+    const mine = ++asked.current;
+    switching.current++;
+    void thumbnailsApi
+      .switchVersion(id, version)
+      .then(
+        ({ thumb, rev }) => {
+          if (mine === asked.current) show(thumb, rev);
+        },
+        (error: unknown) => {
+          if (mine === asked.current) setThumb(before);
+          toastError(error, "show that version");
+        },
+      )
+      .finally(() => switching.current--);
+  };
   // The comment tool (C, or the header's button): the cursor pins a comment where it's clicked; Escape puts it down.
   const [commenting, setCommenting] = useState(false);
   useEffect(() => {
@@ -158,8 +220,22 @@ export function ThumbnailScreen({ id }: { id: string }) {
       throw error;
     });
   const removeComment = (comment: string) => void thumbnailsApi.removeComment(id, comment).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "remove the comment"));
-  const takeFinal = (version: string) =>
-    void thumbnailsApi.takeFinal(id, version).then(({ thumb, rev }) => show(thumb, rev), (error: unknown) => toastError(error, "mark it final"));
+  const takeFinal = (version: string) => {
+    if (thumb === null) return;
+    const before = thumb;
+    setThumb({ ...thumb, finalVersion: version });
+    switching.current++;
+    void thumbnailsApi
+      .takeFinal(id, version)
+      .then(
+        ({ thumb, rev }) => show(thumb, rev),
+        (error: unknown) => {
+          setThumb(before);
+          toastError(error, "mark it final");
+        },
+      )
+      .finally(() => switching.current--);
+  };
 
   // The chat's uploader (lib/chatFiles.ts): a picture into the thumbnail's images, given to Claude with the message.
   const chatKey = `thumb:${id}`;
@@ -235,7 +311,7 @@ export function ThumbnailScreen({ id }: { id: string }) {
             <div className="flex flex-1 items-center justify-center text-[13px] text-white/40">{missing ?? <Spinner size={20} />}</div>
           ) : (
             <>
-              <Stage canvas={canvas} empty={design.layers.length === 0} running={running} step={thumb.run?.step}>
+              <Stage canvas={canvas} empty={design.layers.length === 0} run={thumb.run}>
                 {(scale) => <Comments thumb={thumb} scale={scale} commenting={commenting} onComment={comment} onRemove={removeComment} />}
               </Stage>
               <Versions thumb={thumb} picture={picture} tick={tick} running={running} onShow={showVersion} onFinal={takeFinal} />
@@ -271,7 +347,8 @@ function Header({ thumb, running, commenting, onCommenting, onTitle, onDownload 
     setTitleWidth(Math.min(480, Math.max(56, text + 20)));
   }, [title]);
   return (
-    <header className="flex h-12 shrink-0 items-center gap-1.5 px-3">
+    <header className="relative flex h-12 shrink-0 items-center gap-1.5 px-3">
+      <AnimatePresence>{running && <motion.div key="line" initial={{ opacity: 0 }} animate={{ opacity: 0.9 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }} className="working-line pointer-events-none absolute inset-x-0 bottom-0 h-px" />}</AnimatePresence>
       <IconButton label="Thumbnails" onClick={() => navigate("/thumbnails")}>
         <ArrowLeft size={16} />
       </IconButton>
@@ -343,10 +420,12 @@ function OpenArtMenu({ thumb, running }: { thumb: Thumbnail; running: boolean })
   const [open, setOpen] = useState(false);
   const toastError = useEditor((store) => store.toastError);
   const box = useRef<HTMLDivElement>(null);
+  // Read when the page opens and again as each of Claude's turns ends (what it spent).
+  const known = state !== null;
   useEffect(() => {
-    if (running) return;
-    void thumbnailsApi.openart().then(setState, () => setState(null));
-  }, [running]);
+    if (running && known) return;
+    void thumbnailsApi.openart().then(setState, () => {});
+  }, [running, known]);
   // Closed by a click anywhere else, or Escape.
   useEffect(() => {
     if (!open) return;
@@ -456,8 +535,9 @@ function OpenArtMenu({ thumb, running }: { thumb: Thumbnail; running: boolean })
 
 // ---------------------------------------------------------------- the canvas
 
-function Stage({ canvas, empty, running, step, children }: { canvas: React.RefObject<HTMLCanvasElement | null>; empty: boolean; running: boolean; step?: string; children: (scale: number) => ReactNode }) {
+function Stage({ canvas, empty, run, children }: { canvas: React.RefObject<HTMLCanvasElement | null>; empty: boolean; run: ThumbRun | null; children: (scale: number) => ReactNode }) {
   const area = useRef<HTMLDivElement>(null);
+  const running = run !== null && (run.state === "running" || run.state === "queued");
   // The canvas as big as the space allows, at 16:9.
   const [size, setSize] = useState({ width: 640, height: 360 });
   useEffect(() => {
@@ -470,9 +550,20 @@ function Stage({ canvas, empty, running, step, children }: { canvas: React.RefOb
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
+  const doing = thumbActivity(run);
+  const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0.5, ease: [0.2, 0, 0, 1] } } as const;
   return (
-    <div ref={area} className="flex min-h-0 w-full flex-1 items-center justify-center">
-      <div style={{ width: size.width, height: size.height }} className="relative shrink-0 select-none">
+    <div ref={area} className="relative flex min-h-0 w-full flex-1 items-center justify-center">
+      {/* While Claude works: the page breathes behind the thumbnail. */}
+      <AnimatePresence>{running && <motion.div key="aura" {...fade} className="pointer-events-none absolute -inset-x-4 -inset-y-2"><div className="working-aura" /></motion.div>}</AnimatePresence>
+      <div style={{ width: size.width, height: size.height }} className="relative isolate shrink-0 rounded-xl select-none">
+        <AnimatePresence>
+          {running && (
+            <motion.div key="light" {...fade} className="pointer-events-none absolute inset-0 -z-10 rounded-xl">
+              <div className="working-glow" />
+            </motion.div>
+          )}
+        </AnimatePresence>
         <canvas ref={canvas} width={WIDTH} height={HEIGHT} className="block size-full rounded-xl bg-panel" />
         {empty && (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center text-[13px] text-faint">
@@ -480,20 +571,23 @@ function Stage({ canvas, empty, running, step, children }: { canvas: React.RefOb
             Drop a frame or a thumbnail here, or ask Claude for one.
           </div>
         )}
-        {children(size.width / WIDTH)}
         <AnimatePresence>
           {running && (
-            <motion.div
-              initial={{ opacity: 0, y: -4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={spring}
-              className="pointer-events-none absolute top-3 left-3 flex items-center gap-1.5 rounded-full bg-black/75 px-2.5 py-1 text-[12px] text-white backdrop-blur-sm"
-            >
-              <Spinner size={11} /> {step ?? "Claude is working"}
+            <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-xl">
+              <div className="working-sheen" />
+              <div className="working-ring" />
+              {/* What it's doing, at the foot of the picture over a soft shade. */}
+              <div className="absolute inset-x-0 bottom-0 flex h-20 items-end justify-center rounded-b-xl bg-gradient-to-t from-black/65 to-transparent pb-3.5">
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.span key={doing} initial={{ opacity: 0, y: 6, filter: "blur(4px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -6, filter: "blur(4px)" }} transition={{ duration: 0.28, ease: [0.2, 0, 0, 1] }} className="working-text text-[13px] font-medium tracking-[-0.01em] drop-shadow-[0_1px_6px_#000c]">
+                    {doing}
+                  </motion.span>
+                </AnimatePresence>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
+        {children(size.width / WIDTH)}
       </div>
     </div>
   );
@@ -728,9 +822,6 @@ function Versions({ thumb, picture, tick, running, onShow, onFinal }: { thumb: T
   );
 }
 
-// One full-size canvas every tile draws on before it's scaled into its own.
-let full: HTMLCanvasElement | null = null;
-
 function VersionTile({ version, design, showing, final, comments, running, picture, tick, onShow, onFinal }: { version: ThumbVersion; design: Design; showing: boolean; final: boolean; comments: number; running: boolean; picture: (source: string) => HTMLImageElement | null; tick: number; onShow: () => void; onFinal: () => void }) {
   const small = useRef<HTMLCanvasElement>(null);
   const shape = JSON.stringify(design);
@@ -738,10 +829,8 @@ function VersionTile({ version, design, showing, final, comments, running, pictu
     const frame = requestAnimationFrame(() => {
       const target = small.current?.getContext("2d");
       if (!target) return;
-      full ??= surface(WIDTH, HEIGHT);
-      draw(full, settleCaptions(JSON.parse(shape) as Design), picture);
       target.imageSmoothingQuality = "high";
-      target.drawImage(full, 0, 0, target.canvas.width, target.canvas.height);
+      target.drawImage(drawingOf(settleCaptions(JSON.parse(shape) as Design), picture), 0, 0, target.canvas.width, target.canvas.height);
     });
     return () => cancelAnimationFrame(frame);
   }, [shape, picture, tick]);
@@ -761,6 +850,7 @@ function VersionTile({ version, design, showing, final, comments, running, pictu
         )}
       >
         <canvas ref={small} width={224} height={126} className="block size-full" />
+        {running && showing && <span className="working-ring inset-0! rounded-md" />}
         {comments > 0 && (
           <span title={`${comments} open comment${comments === 1 ? "" : "s"}`} className="absolute top-1 right-1 flex h-4 items-center gap-0.5 rounded-full bg-black/80 px-1 text-[10px] font-medium text-white tabular">
             <MessageSquare size={9} /> {comments}

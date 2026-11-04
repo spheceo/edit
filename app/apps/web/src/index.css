@@ -229,3 +229,90 @@
 @media (prefers-reduced-motion: reduce) {
   .edit-loader .loader-clip, .edit-loader .loader-head { animation: none; }
 }
+
+/* A thumbnail Claude is working on (Sphe, Nov 4: "some sort of special border around the image being worked on, and then
+   have some more full-screen indicator that's still very clean"): light running round its edge, a glow behind it that
+   turns with the light, a sheen passing over the picture, the page breathing behind it and a hairline under the header. */
+@property --working-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes working-turn {
+  to { --working-angle: 360deg; }
+}
+@keyframes working-sheen {
+  from { background-position: 160% 0; }
+  to { background-position: -60% 0; }
+}
+@keyframes working-breathe {
+  from { opacity: 0.5; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1.03); }
+}
+@keyframes working-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+.working-ring,
+.working-glow {
+  --working-light: conic-gradient(from var(--working-angle), transparent 0deg, color-mix(in srgb, var(--color-agent) 0%, transparent) 30deg, var(--color-agent) 95deg, #fff 125deg, var(--color-playhead) 160deg, transparent 230deg, transparent 360deg);
+  pointer-events: none;
+  animation: working-turn 3s linear infinite;
+}
+.working-ring {
+  position: absolute;
+  inset: -2px;
+  padding: 2px;
+  border-radius: inherit;
+  background: var(--working-light);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+.working-glow {
+  position: absolute;
+  inset: -14px;
+  border-radius: 26px;
+  background: var(--working-light);
+  filter: blur(26px);
+  opacity: 0.45;
+}
+.working-sheen {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(105deg, transparent 38%, rgb(255 255 255 / 0.07) 50%, transparent 62%);
+  background-size: 300% 100%;
+  mix-blend-mode: screen;
+  animation: working-sheen 3.4s cubic-bezier(0.45, 0, 0.2, 1) infinite;
+}
+.working-aura {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(55% 50% at 50% 45%, color-mix(in srgb, var(--color-agent) 11%, transparent), transparent 72%);
+  animation: working-breathe 3.2s ease-in-out infinite alternate;
+}
+.working-line {
+  background: linear-gradient(90deg, transparent 0%, transparent 30%, var(--color-agent) 45%, #fff 50%, var(--color-playhead) 55%, transparent 70%, transparent 100%);
+  background-size: 200% 100%;
+  animation: working-sweep 2.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-ring, .working-glow, .working-sheen, .working-aura, .working-line { animation: none; }
+  .working-sheen { display: none; }
+}
+/* What Claude is doing, over the picture: white ink with a light passing through it. */
+.working-text {
+  background: linear-gradient(90deg, rgb(255 255 255 / 0.62) 0%, rgb(255 255 255 / 0.62) 40%, #fff 50%, rgb(255 255 255 / 0.62) 60%, rgb(255 255 255 / 0.62) 100%);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  text-shadow: none;
+  animation: shimmer 2.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-text { animation: none; color: #fff; background: none; }
+}

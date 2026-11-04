@@ -1,6 +1,8 @@
 // Shapes the flat chat into phi-style turns: your message, the work (tool
 // calls grouped, interim notes), then the answer.
 
+import type { ThumbRun } from "@edit/types/thumbnails";
+
 import type { AgentEntry } from "./agent";
 
 export type TurnPart =
@@ -125,6 +127,16 @@ const THUMB_TOOLS: Record<string, [string, string]> = {
   save_overlay: ["Saving the overlay", "Saved the overlay to the library"],
   Read: ["Looking at a picture", "Looked at a picture"],
 };
+
+/** What Claude is doing on a thumbnail right now, in a few words: the tool it's in, else thinking or writing. */
+export function thumbActivity(run: ThumbRun | null): string {
+  if (run === null || run.state === "queued") return "Waiting for a turn";
+  const calls = run.trace?.flatMap((part) => (part.kind === "tools" ? part.calls : [])) ?? run.tools ?? [];
+  const live = [...calls].reverse().find((call) => call.state === "running");
+  if (live !== undefined) return THUMB_TOOLS[live.name]?.[0] ?? "Working";
+  const last = run.trace?.at(-1);
+  return last?.kind === "text" ? "Writing" : "Thinking";
+}
 
 /** A short, human title for one call. */
 export function callTitle(entry: AgentEntry): string {

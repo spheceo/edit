@@ -10,6 +10,7 @@ import type * as Sdk from "@anthropic-ai/claude-agent-sdk";
 
 import { baseOptions, findClaude, sdk } from "../claude.ts";
 import * as diag from "../diag.ts";
+import { claudeTurn } from "../memory.ts";
 import { join } from "../paths.ts";
 import * as live from "./live.ts";
 
@@ -113,8 +114,19 @@ export function useWorkspace(dir: string): void {
 
 const workspace = (): string => workspaceDir ?? join(process.env.HOME ?? "/tmp", ".edit", "writer", "claude");
 
-/** One question through the Agent SDK. */
+/** One question through the Agent SDK, once there's room for another Claude Code (memory.ts `claudeTurn`: three at once while the Mac is short of memory). */
 export async function ask(question: Question): Promise<Answer> {
+  const release = await claudeTurn(question.label, question.signal).catch(() => {
+    throw new Trouble("Stopped by you. Completed work is saved.");
+  });
+  try {
+    return await askNow(question);
+  } finally {
+    release();
+  }
+}
+
+async function askNow(question: Question): Promise<Answer> {
   const binary = await findClaude();
   if (binary === null) throw new Trouble("Install Claude Code on this Mac (the claude command), then build again.");
   const { query } = await sdk();

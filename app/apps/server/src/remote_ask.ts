@@ -30,6 +30,7 @@ import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import * as diag from "./diag.ts";
 import { memorySummary } from "./export_capacity.ts";
+import { useNow as memoryUse } from "./memory.ts";
 import type { Router } from "./http/router.ts";
 import { respond } from "./http/server.ts";
 import { join } from "./paths.ts";
@@ -230,12 +231,13 @@ async function system(app: App): Promise<string> {
     run([tools.ffmpeg(), "-hide_banner", "-version"]).then((text) => text.split("\n")[0] ?? ""),
     run(["claude", "--version"]),
   ]);
+  const use = await memoryUse();
   const memory = process.memoryUsage();
   return [
     `Edit ${BUILD} · up ${diag.human(diag.uptime())} · data in ${app.store.home} · cache in ${app.store.cacheDir()}`,
     `this server: ${gb(memory.rss)} resident, heap ${gb(memory.heapUsed)}`,
     `machine: ${model} · ${chip} · ${os.cpus().length} cores · load ${os.loadavg().map((n) => n.toFixed(2)).join(" ")} · up ${(os.uptime() / 86_400).toFixed(1)} days`,
-    `memory: ${memorySummary()}`,
+    `memory: ${memorySummary()}${use === null ? "" : ` · ${use}`}`,
     "",
     product,
     "",

@@ -33,6 +33,7 @@ import { importing } from "./drive_import.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
 import { memorySummary } from "./export_capacity.ts";
+import { useNow as memoryUse } from "./memory.ts";
 import * as ideaRuns from "./ideas/run.ts";
 import * as thumbnailRuns from "./thumbnails/run.ts";
 import * as editTime from "./edit_time.ts";
@@ -271,6 +272,7 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
   const account = accounts.status() as { person?: { email?: string } | null; admin?: boolean; perms?: string[] };
   const free = diskFree(app);
   const needs = await attention(app, setup, relayOk);
+  const use = await memoryUse();
   let errors: string[] = [];
   try {
     errors = problems(fs.readFileSync(join(app.store.home, "logs", "edit.log"), "utf8").split("\n").slice(-200_000), Date.now(), Date.now() - diag.uptime());
@@ -287,6 +289,7 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
     "",
     "Machine:",
     `disk: ${free === null ? "?" : gb(free)} free · memory: ${memorySummary()} · load ${os.loadavg()[0]!.toFixed(2)} on ${os.availableParallelism()} cores`,
+    ...(use === null ? [] : [`memory use: ${use}`]),
     `signed in: ${account.person?.email ?? "nobody"}${account.admin ? " (admin)" : ""} · capabilities: ${(account.perms ?? []).join(", ") || "none"}`,
     `relay: ${relayOk ? `answers in ${relayMs} ms` : "doesn't answer"} (${relay.url()})`,
     ...setup.map((check) => `${check.ok ? "ok" : "NOT READY"}: ${check.title}`),

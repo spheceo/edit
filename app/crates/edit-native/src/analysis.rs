@@ -206,11 +206,16 @@ pub fn censor_issues(
 
 /// Reads a video for censored stretches in the background (one at a time),
 /// so the audit's `censored_broll` is ready when the edit is reviewed: for
-/// footage whose light preview was just made.
+/// footage whose light preview was just made. `read`: the file to decode in
+/// its place (a pieced proxy's original), the result kept as `path`'s.
 #[napi]
-pub fn censor_warm(path: String) {
+pub fn censor_warm(path: String, read: Option<String>) {
     if let Ok(cache) = crate::cache_dir() {
-        edit_engine::censor::analyse_in_background(cache, PathBuf::from(path));
+        edit_engine::censor::analyse_in_background(
+            cache,
+            PathBuf::from(path),
+            read.map(PathBuf::from),
+        );
     }
 }
 

@@ -140,3 +140,34 @@ test("a failed step says why and the rest go on", async () => {
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null)("a pieced proxy's thumbnails, waveform and censor check read its original, kept as the proxy's", async () => {
+  // Reading the pieced proxy itself would make every piece of it (off Modal, step 6).
+  const { dir, app, store, cleanup } = fixtureHome("media-analysis-input");
+  const { mediaHooks } = await import("../src/media.ts");
+  const { native } = await import("../src/native/index.ts");
+  const was = mediaHooks.analysisInput;
+  const censor = native().censorWarm;
+  const warmed: [string, string | null | undefined][] = [];
+  try {
+    const original = `${dir}/original.mp4`;
+    const made = Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-shortest", "-c:v", "libx264", "-g", "15", "-c:a", "aac", original]);
+    expect(made.exitCode).toBe(0);
+    // The source the editor uses, standing in for the pieced proxy: not readable itself.
+    const source = `${dir}/pieced.mp4`;
+    fs.writeFileSync(source, "not a video");
+    mediaHooks.analysisInput = async (asked) => (asked === source ? original : null);
+    native().censorWarm = (path, read) => void warmed.push([path, read]);
+    const probe = await app.native.probe(original);
+    const done = settled(store, source, (status) => status.light !== "pending" && status.light !== "working" && status.proxy !== "working");
+    app.media.ensure(source, probe);
+    const status = await done;
+    expect([status.thumbs, status.peaks]).toEqual(["ready", "ready"]);
+    expect(fs.existsSync(app.media.paths(source).thumbs)).toBe(true);
+    expect(warmed).toEqual([[source, original]]);
+  } finally {
+    mediaHooks.analysisInput = was;
+    native().censorWarm = censor;
+    cleanup();
+  }
+});

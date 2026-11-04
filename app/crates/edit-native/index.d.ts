@@ -75,9 +75,10 @@ export declare function censorIssues(project: ProjectInput, start: boolean): Cen
 /**
  * Reads a video for censored stretches in the background (one at a time),
  * so the audit's `censored_broll` is ready when the edit is reviewed: for
- * footage whose light preview was just made.
+ * footage whose light preview was just made. `read`: the file to decode in
+ * its place (a pieced proxy's original), the result kept as `path`'s.
  */
-export declare function censorWarm(path: string): void
+export declare function censorWarm(path: string, read?: string | undefined | null): void
 
 /** The cloud proxy's bitrate (bits/s) for a `width` × `height` picture. */
 export declare function cloudProxyBitrate(width: number, height: number): number

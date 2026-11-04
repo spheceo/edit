@@ -139,6 +139,12 @@ export function configurePlayback(app: App): void {
   playbackBlocks = join(app.store.cacheDir(), "cloud", "blocks");
   const cache = app.store.cacheDir();
   piecesContexts.set(cache, pieces.cloudContext(cache, (key) => localPath(cache, key), (key) => originalFor(cache, key), fetchKey, () => app.exports.localRunning?.() ?? false));
+  // A pieced proxy's thumbnails, waveform and censored stretches come from its original: reading the proxy would make every piece.
+  mediaHooks.analysisInput = async (source) => {
+    const base = pieces.baseOf(playbackKey(source) ?? "");
+    if (base === null) return null;
+    return originalFor(cache, (await pieces.layoutOf(piecesContext(cache), base)).original);
+  };
   app.store.setMediaResolver((project) => {
     for (const media of project.media) {
       if (media.kind === "image" || media.cloud == null) continue;

@@ -258,6 +258,13 @@ export class Processor {
 
   private async process(source: string, probe: Probe, paths: CachePaths): Promise<void> {
     const status = this.status(source);
+    // Read from the original where the source is a pieced proxy (only what's played of it gets made).
+    let input = source;
+    try {
+      input = (await mediaHooks.analysisInput?.(source)) ?? source;
+    } catch (error) {
+      diag.warn("media", `finding what to read for ${diag.scrub(source)}: ${diag.messageOf(error)}; reading it`);
+    }
     const pictured = (kind: MediaKind) => kind === "video" || kind === "image";
     const failed = (error: unknown) => diag.scrub(diag.messageOf(error));
     if (pictured(probe.kind) && status.thumbs !== "ready") {
@@ -266,7 +273,7 @@ export class Processor {
       });
       try {
         const count = await diag.timeOnAsync("media", "media: thumbnails", source, () =>
-          probe.kind === "image" ? native().makeImageThumbs(source, paths) : makeThumbs(source, probe, paths),
+          probe.kind === "image" ? native().makeImageThumbs(source, paths) : makeThumbs(input, probe, paths),
         );
         this.set(source, (s) => {
           s.thumbs = "ready";
@@ -289,7 +296,7 @@ export class Processor {
         s.peaks = "working";
       });
       try {
-        await diag.timeOnAsync("media", "media: waveform", source, () => native().makePeaks(source, paths.peaks));
+        await diag.timeOnAsync("media", "media: waveform", source, () => native().makePeaks(input, paths.peaks));
         this.set(source, (s) => {
           s.peaks = "ready";
         });
@@ -365,7 +372,7 @@ export class Processor {
     // the audit's censored_broll is ready by the time the edit is reviewed:
     // started only by the audit, Mom Leaves 5 Kids' final pass found all
     // sixteen files still pending and its blurred B-roll went out.
-    if (probe.kind === "video") native().censorWarm(source);
+    if (probe.kind === "video") native().censorWarm(source, input === source ? null : input);
     // Its own black borders (a tape's edge), so footage placed later fills the frame.
     if (probe.kind === "video" || probe.kind === "image") framing.warmBorders({ path: source, name: source, ...probe });
   }
@@ -465,7 +472,16 @@ export class Processor {
 }
 
 /** What media.ts reaches without importing it: cloud_media's shared transcripts (set as it loads). */
-export const mediaHooks: { wholeTranscript: ((source: string, target: string) => Promise<boolean>) | null } = { wholeTranscript: null };
+export const mediaHooks: {
+  wholeTranscript: ((source: string, target: string) => Promise<boolean>) | null;
+  /**
+   * What a source's derived data (thumbnails, waveform, censored stretches)
+   * is read from, when not the source itself: a pieced proxy's original
+   * (cloud_media.ts), since reading the whole proxy would make every piece of
+   * it. The results are still kept as the source's.
+   */
+  analysisInput: ((source: string) => Promise<string | null>) | null;
+} = { wholeTranscript: null, analysisInput: null };
 
 /**
  * The cloud source a proxy in this machine's cache is (`<cache>/cloud/proxies/<drive|youtube>/<id>/<start>-<end>.mp4`

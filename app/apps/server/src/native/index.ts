@@ -271,7 +271,7 @@ export interface Native {
   screenTextCached(source: string): Record<number, ScreenText[]> | null; // S
   readonly SCREEN_TEXT_RATE: number;
   censorIssues(project: ProjectInput, start: boolean): { issues: unknown[]; pending: string[] }; // S (+BG)
-  censorWarm(path: string): void; // BG
+  censorWarm(path: string, read?: string | null): void; // BG
   /** Camera angles from 64×36 grey frames; TS does the FFmpeg read that makes them (the engine's seats.rs `scenes`). */
   seatsScenes(gray64x36: Buffer): Promise<{ scenes: [number, number, number | null][]; angles: number }>; // A (the addon answers asynchronously)
   desktopFiles(width: number, height: number, photoTitle: string, notepadTitle: string): Promise<[string, string, string]>; // A

@@ -99,8 +99,10 @@ pub fn seconds(cache: &Path, source: &Path) -> Option<Arc<Vec<u8>>> {
     Some(bytes)
 }
 
-/// Reads the file in the background unless it's read or being read.
-pub fn analyse_in_background(cache: PathBuf, source: PathBuf) {
+/// Reads the file in the background unless it's read or being read. `read`:
+/// what to decode instead of `source` (a pieced proxy's original: decoding the
+/// proxy would make every piece), its result still kept as `source`'s.
+pub fn analyse_in_background(cache: PathBuf, source: PathBuf, read: Option<PathBuf>) {
     let path = file(&cache, &source);
     if path.is_file() || !pending().lock().insert(path.clone()) {
         return;
@@ -111,7 +113,12 @@ pub fn analyse_in_background(cache: PathBuf, source: PathBuf) {
             "media",
             "censor: analyse",
             &source.to_string_lossy(),
-            || analyse(&cache, &source),
+            || match &read {
+                Some(original) => {
+                    grey_seconds(original, false).map(|frames| censored_seconds(&frames))
+                }
+                None => analyse(&cache, &source),
+            },
         );
         match result {
             Ok(seconds) => {
@@ -151,12 +158,17 @@ pub fn analyse(cache: &Path, source: &Path) -> Result<Vec<u8>, String> {
         }
         None => grey_seconds(source, false)?,
     };
-    Ok(frames
+    Ok(censored_seconds(&frames))
+}
+
+/// Each second's grey frame, 1 when it's censored.
+fn censored_seconds(frames: &[u8]) -> Vec<u8> {
+    frames
         .as_chunks::<{ WIDE * HIGH }>()
         .0
         .iter()
         .map(|frame| u8::from(censored(frame)))
-        .collect())
+        .collect()
 }
 
 /// A 128×72 grey frame a second of `file` (only its keyframes when `keyframes`:
@@ -216,7 +228,7 @@ pub fn issues(project: &Project, cache: &Path, start: bool) -> (Vec<Value>, Vec<
         let source = Path::new(&media.path);
         let Some(seconds) = seconds(cache, source) else {
             if start && source.is_file() {
-                analyse_in_background(cache.to_path_buf(), source.to_path_buf());
+                analyse_in_background(cache.to_path_buf(), source.to_path_buf(), None);
             }
             if !waiting.contains(&media.id) {
                 waiting.push(media.id.clone());

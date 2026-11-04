@@ -72,6 +72,17 @@ test("the viewer reads media from a sibling loopback host, so slow media cannot 
     expect((await sibling("/api/projects/p1/media/m1/proxy", { method: "POST" }))!.status).toBe(403);
     const evil = (await respond(app, routes, new Request("http://localhost:7700/api/projects/p1/media/m1/proxy", { headers: { host: "localhost:7700", origin: "https://evil.example" } }), null))!;
     expect(evil.status).toBe(403);
+    // An <img>, CSS background or <audio> sends no Origin, only Referer (Nov 4: the timeline's
+    // thumbnails and smooth playback's sound were refused as cross-site, 88 times in a day on JJ's Mac).
+    const plain = (path: string, referer?: string) =>
+      checkHost(new Request(`http://localhost:7700${path}`, { headers: { host: "localhost:7700", "sec-fetch-site": "cross-site", ...(referer ? { referer } : {}) } }), ["localhost", "127.0.0.1"]);
+    expect(plain("/api/projects/p1/media/m1/thumbs", "http://127.0.0.1:7700/projects/p1")).toBeNull();
+    expect(plain("/api/projects/p1/playback/sound", "http://127.0.0.1:7700/")).toBeNull();
+    // Still only media, only from Edit's own loopback page on the same port.
+    expect(plain("/api/projects/p1", "http://127.0.0.1:7700/")?.status).toBe(403);
+    expect(plain("/api/projects/p1/media/m1/thumbs", "https://evil.example/")?.status).toBe(403);
+    expect(plain("/api/projects/p1/media/m1/thumbs", "http://127.0.0.1:7701/")?.status).toBe(403);
+    expect(plain("/api/projects/p1/media/m1/thumbs")?.status).toBe(403);
   } finally {
     cleanup();
   }

@@ -43,6 +43,14 @@ export function checkHost(request: Request, allowed: string[]): Response | null 
   // they get their own connection pool and can't queue the API behind them.
   const pathname = new URL(request.url).pathname;
   if ((request.method === "GET" || request.method === "OPTIONS") && origin !== null && (pathname.startsWith("/v1/3dtiles/") || mediaPath(pathname)) && loopbackSibling(origin, host)) return null;
+  // An <img>, a CSS background or an <audio> sends no Origin; the browser names
+  // the page in Referer instead, which no other site can set. Without this the
+  // timeline's thumbnails and smooth playback's sound were refused as
+  // cross-site in Edit's window (Nov 4, JJ's log: 88 in a day).
+  if (request.method === "GET" && origin === null && mediaPath(pathname)) {
+    const page = refererOrigin(request.headers.get("referer"));
+    if (page !== null && loopbackSibling(page, host)) return null;
+  }
   if (origin !== null && !sameOrigin(origin, host)) return text("cross-origin requests are not allowed", 403);
   if (request.headers.get("sec-fetch-site") === "cross-site") return text("cross-site requests are not allowed", 403);
   return null;
@@ -78,6 +86,17 @@ export function loopbackSibling(origin: string, host: string): boolean {
   const to = authority(host);
   const loopback = (name: string) => name === "127.0.0.1" || name === "localhost" || name.endsWith(".localhost");
   return from !== null && to !== null && loopback(from.host.toLowerCase()) && loopback(to.host.toLowerCase()) && from.port !== null && from.port === to.port;
+}
+
+/** The page a Referer names, as an origin (`http://127.0.0.1:7700`); null when there's none to read. */
+export function refererOrigin(referer: string | null): string | null {
+  if (referer === null || referer === "") return null;
+  try {
+    const url = new URL(referer);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The map page's name for `loopbackSibling` (its tiles were the first sibling reads). */

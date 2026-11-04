@@ -531,6 +531,9 @@ export function Slider({
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
   const drag = useRef<{ x: number; width: number; value: number; moved: boolean } | null>(null);
+  // A click types only once it's clear it isn't the first of a double-click (which resets).
+  const typeSoon = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => clearTimeout(typeSoon.current ?? undefined), []);
   const origin = min < 0 && max > 0 ? 0 : min;
   const settle = (next: number) => Math.min(max, Math.max(min, Number((Math.round(next / step) * step).toFixed(precision))));
   const at = (v: number) => (max > min ? ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * 100 : 0);
@@ -581,13 +584,18 @@ export function Slider({
       onPointerUp={() => {
         const state = drag.current;
         drag.current = null;
-        if (state !== null && !state.moved) {
+        if (state === null || state.moved) return;
+        clearTimeout(typeSoon.current ?? undefined);
+        typeSoon.current = setTimeout(() => {
           setText(shown);
           setEditing(true);
-        }
+        }, 250);
       }}
       onPointerCancel={() => (drag.current = null)}
-      onDoubleClick={() => onChange(reset ?? origin)}
+      onDoubleClick={() => {
+        clearTimeout(typeSoon.current ?? undefined);
+        onChange(reset ?? origin);
+      }}
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
         event.preventDefault();

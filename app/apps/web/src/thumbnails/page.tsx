@@ -7,7 +7,7 @@
 // anywhere go to Claude with the next message.
 
 import { AnimatePresence, motion } from "motion/react";
-import { ArrowLeft, Check, ChevronDown, Copy, Download, FolderDown, Image as ImageIcon, MessageSquare, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, Copy, Download, Image as ImageIcon, MessageSquare, Trash2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ChatShell, ChatTurns, Empty, useChatTurns, useSentNow } from "../components/AgentPanel";
@@ -16,10 +16,9 @@ import { ChatDock } from "../components/ChatDock";
 import { attachFiles, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
 import { AppMenu } from "../components/AppMenu";
 import { openMenu, toggleMenu, type MenuItem } from "../components/ContextMenu";
-import { FolderPicker } from "../components/FolderBrowser";
 import { Button, cx, IconButton, spring } from "../components/ui";
 import { conversationEntries, thumbActivity } from "../lib/agentTurns";
-import { onThisMac, saveFile } from "../lib/files";
+import { saveFile } from "../lib/files";
 import { useAccount } from "../lib/account";
 import { navigate } from "../lib/route";
 import { ago } from "../lib/time";
@@ -323,12 +322,9 @@ export function ThumbnailScreen({ id }: { id: string }) {
   });
 
   const named = (thumb?.title || "thumbnail").replace(/[^\w -]+/g, "").trim() || "thumbnail";
-  const [savingAs, setSavingAs] = useState<Picture | null>(null);
   /** What a right click on the thumbnail (or a version's tile) offers, in place of the window's own menu. */
   const imageMenu = (image: Picture): MenuItem[] => [
     { label: "Copy image", icon: <Copy size={14} />, onSelect: () => copyImage(image.drawing) },
-    // Its folder is picked on this Mac: from another device, Export is the download.
-    ...(onThisMac() ? [{ label: "Save image as…", icon: <FolderDown size={14} />, onSelect: () => setSavingAs(image) }] : []),
     {
       label: "Export",
       icon: <Download size={14} />,
@@ -369,7 +365,6 @@ export function ThumbnailScreen({ id }: { id: string }) {
           if (image !== null) exportImage(image, type);
         }}
       />
-      <SaveImageAs image={savingAs} onClose={() => setSavingAs(null)} />
       {/* No padding on the right: the chat's edge sits there. */}
       <div className="flex min-h-0 flex-1 pb-2 pl-2">
         <main className="flex min-w-0 flex-1 flex-col items-center gap-3 px-4 pt-2 pb-2">
@@ -425,44 +420,6 @@ function copyImage(drawing: HTMLCanvasElement): void {
   navigator.clipboard.write([new ClipboardItem({ "image/png": blobOf(drawing, "image/png") })]).then(
     () => useEditor.getState().toast("Copied the image"),
     (error: unknown) => useEditor.getState().toastError(error, "copy the image"),
-  );
-}
-
-const SAVE_FOLDER = "thumbnails.save-folder";
-
-/** Save image as…: a folder on this Mac (the last one picked opens first) and the file's name; a name ending in .png saves a PNG, anything else a JPEG. */
-function SaveImageAs({ image, onClose }: { image: Picture | null; onClose: () => void }) {
-  const [name, setName] = useState("");
-  useEffect(() => {
-    if (image !== null) setName(`${image.name}.jpg`);
-  }, [image]);
-  return (
-    <FolderPicker
-      open={image !== null}
-      onClose={onClose}
-      title="Save image as"
-      detail="A JPEG, or a PNG if its name ends in .png."
-      start={localStorage.getItem(SAVE_FOLDER) ?? undefined}
-      confirm="Save here"
-      onPick={async (folder) => {
-        if (image === null) return;
-        const typed = name.trim().replace(/[/\\:]+/g, " ") || `${image.name}.jpg`;
-        const type: Format = /\.png$/i.test(typed) ? "image/png" : "image/jpeg";
-        const file = type === "image/png" || /\.jpe?g$/i.test(typed) ? typed : `${typed}.jpg`;
-        await saveFile(file, await blobOf(image.drawing, type), folder);
-        localStorage.setItem(SAVE_FOLDER, folder);
-        onClose();
-      }}
-      aside={(_here, _pick, busy) => (
-        <input
-          value={name}
-          disabled={busy}
-          aria-label="File name"
-          onChange={(event) => setName(event.target.value)}
-          className="h-[34px] w-[260px] min-w-0 rounded-md border border-line bg-panel px-3 text-[13px] text-fg outline-none focus:border-line-strong"
-        />
-      )}
-    />
   );
 }
 

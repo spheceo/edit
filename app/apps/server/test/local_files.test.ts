@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import { ExportRegistry } from "../src/exports.ts";
-import { deleteStored, freePath, saveToDownloads, storedExports } from "../src/local_files.ts";
+import { deleteStored, freePath, storedExports } from "../src/local_files.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
 test("Storage lists Edit's exports on this Mac, deletes only those, and keeps a cloud copy's entry", () => {
@@ -43,20 +43,6 @@ test("a saved file never overwrites one already there", () => {
     fs.writeFileSync(`${home}/frame (2).png`, "");
     expect(freePath(home, "frame.png")).toBe(`${home}/frame (3).png`);
     expect(freePath(home, "a/b:c.png")).toBe(`${home}/a b c.png`);
-  } finally {
-    cleanup();
-  }
-});
-
-test("Save image as… writes into the folder picked, never over a file there, and refuses one that isn't a folder", () => {
-  const { home, cleanup } = fixtureHome("save-as");
-  try {
-    fs.writeFileSync(`${home}/Thumb.jpg`, "old");
-    const path = saveToDownloads("Thumb.jpg", new TextEncoder().encode("new"), home);
-    expect(path).toBe(`${home}/Thumb (2).jpg`);
-    expect(fs.readFileSync(path, "utf8")).toBe("new");
-    expect(fs.readFileSync(`${home}/Thumb.jpg`, "utf8")).toBe("old");
-    expect(() => saveToDownloads("Thumb.jpg", new Uint8Array(), `${home}/nowhere`)).toThrow("pick a folder");
   } finally {
     cleanup();
   }

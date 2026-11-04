@@ -15,8 +15,8 @@ export function showInFinder(path: string): void {
   void api.reveal(path).catch((error: unknown) => useEditor.getState().toastError(error, "show it in Finder"));
 }
 
-/** Keeps `blob` as `name`: in `folder` on this Mac (Save image as…) or its Downloads (said, with Show in Finder), or as this device's download. */
-export async function saveFile(name: string, blob: Blob, folder?: string): Promise<void> {
+/** Keeps `blob` as `name`: in this Mac's Downloads (said, with Show in Finder), or as this device's download. */
+export async function saveFile(name: string, blob: Blob): Promise<void> {
   if (!onThisMac()) {
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
@@ -26,11 +26,11 @@ export async function saveFile(name: string, blob: Blob, folder?: string): Promi
     return;
   }
   try {
-    const response = await fetch(`/api/files/save?name=${encodeURIComponent(name)}${folder === undefined ? "" : `&folder=${encodeURIComponent(folder)}`}`, { method: "POST", headers: { "content-type": blob.type || "application/octet-stream" }, body: blob });
+    const response = await fetch(`/api/files/save?name=${encodeURIComponent(name)}`, { method: "POST", headers: { "content-type": blob.type || "application/octet-stream" }, body: blob });
     const answer = (await response.json()) as { path?: string; error?: string };
     if (!response.ok || answer.path === undefined) throw new Error(answer.error ?? `${response.status}`);
     const path = answer.path;
-    useEditor.getState().toast(folder === undefined ? `Saved to Downloads as ${path.split("/").pop()}` : `Saved to ${path.split("/").slice(-2).join("/")}`, "info", { label: "Show in Finder", run: () => showInFinder(path) });
+    useEditor.getState().toast(`Saved to Downloads as ${path.split("/").pop()}`, "info", { label: "Show in Finder", run: () => showInFinder(path) });
   } catch (error) {
     useEditor.getState().toastError(error, `save ${name}`);
   }

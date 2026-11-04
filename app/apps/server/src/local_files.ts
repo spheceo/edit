@@ -43,10 +43,9 @@ export function freePath(folder: string, name: string): string {
   }
 }
 
-/** Saves bytes the page made into a folder the person picked, or their Downloads; the path. */
-export function saveToDownloads(name: string, bytes: Uint8Array, picked?: string): string {
-  if (picked !== undefined && !isDir(picked)) throw new Error("pick a folder");
-  const folder = picked ?? join(userHome(), "Downloads");
+/** Saves bytes the page made into the person's Downloads; the path. */
+export function saveToDownloads(name: string, bytes: Uint8Array): string {
+  const folder = join(userHome(), "Downloads");
   fs.mkdirSync(folder, { recursive: true });
   const path = freePath(folder, name);
   fs.writeFileSync(path, bytes);
@@ -247,7 +246,7 @@ export function routes(router: Router<App>): void {
         const name = context.query.get("name") ?? "";
         if (name.trim() === "") throw bad("name is required");
         try {
-          return json({ path: saveToDownloads(name, await readBytes(context.request, LIMIT), context.query.get("folder") ?? undefined) });
+          return json({ path: saveToDownloads(name, await readBytes(context.request, LIMIT)) });
         } catch (error) {
           if (error instanceof ApiError) throw error;
           throw bad(ioMessage(error));

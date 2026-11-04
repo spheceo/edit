@@ -225,41 +225,12 @@ dev: wasm web-install (native "debug")
     #!/usr/bin/env bash
     set -euo pipefail
     mkdir -p apps/web/dist
-    if command -v infisical >/dev/null; then
-        for name in GOOGLE_DRIVE_CLIENT_ID GOOGLE_DRIVE_CLIENT_SECRET GOOGLE_DOCS_REFRESH_TOKEN PROXY_URL; do
-            if [ -z "${!name:-}" ] && value="$(infisical secrets get "$name" --projectId=979fe56c-c4d0-4809-b64f-5ebc75eeaf05 --env=dev --path=/edit-relay --plain --silent 2>/dev/null)"; then
-                export "$name=$value"
-            fi
-        done
-    fi
-    # Dev's own data folder: ~/.edit is the installed Edit's (prod), and a cloud project cached there must never sync into dev.
-    export EDIT_HOME="${EDIT_HOME:-$HOME/.edit-dev}"
-    # Dev talks to dev: its own relay (edit-relay-dev: Infisical dev's keys, dev's Convex and R2). Installed builds use the live one.
-    export EDIT_RELAY_URL="${EDIT_RELAY_URL:-https://edit-relay-dev.sphe-g-personal.workers.dev}"
-    # bun --watch keeps a handle on every file it watches: macOS's default 256 ran out (EMFILE) on Nov 2 and the
-    # server stopped, Vite serving a page with nothing behind it ("i just get a blank screen").
-    ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
-    # bun --watch restarts the server on its own files and on the addon it loads; if it stops anyway, it's started again.
-    # `set +e` in the loop: under the recipe's `set -e` the server's exit ended the loop instead (Nov 2, 21:34: it died of
-    # EMFILE mid-reload, holding 10,245 files after five hours of reloads, and nothing started it again).
-    # A watch can also hang instead of exiting (Nov 3: EMFILE resolving modules mid-reload, the process alive and 7700
-    # closed for good): a server that stops answering for a minute is killed, and the loop starts it again.
-    (set +e; while true; do
-        bun --watch apps/server/src/main.ts serve &
-        BUN=$!
-        misses=0
-        while kill -0 "$BUN" 2>/dev/null; do
-            sleep 10
-            if curl -sf -m 5 -o /dev/null "http://127.0.0.1:7700/api/health"; then misses=0; else misses=$((misses + 1)); fi
-            if [ "$misses" -ge 6 ]; then
-                echo "dev: the server stopped answering for a minute; restarting it" >&2
-                kill "$BUN" 2>/dev/null; sleep 3; kill -9 "$BUN" 2>/dev/null
-            fi
-        done
-        wait "$BUN"
-        echo "dev: the server stopped (exit $?); starting it again" >&2
-        sleep 2
-    done) &
+    source scripts/dev-env.sh
+    # The server (scripts/dev-server.ts): a fresh one on each change to what it's made of (its source, the shared types,
+    # agent/, the addon `just native` swaps in), started again when it exits or stops answering for a minute. It was
+    # `bun --watch`, which reloads in one process and ran out of file handles after a day of reloads (EMFILE), hanging
+    # with 7700 closed (Nov 2, 3, and three times on Nov 4).
+    bun scripts/dev-server.ts &
     SERVER=$!
     # The engine and its bindings aren't rebuilt on every save any more: run `just native` after a Rust change and the
     # server restarts onto the new addon. A watch rebuilt it (debug) on every save of a Rust file, over the release
@@ -267,8 +238,15 @@ dev: wasm web-install (native "debug")
     # The browser engine shares edit-core/edit-render: rebuild it too (Vite reloads it).
     cargo watch -q --postpone -w crates/edit-core -w crates/edit-render -w crates/edit-wasm -s 'just wasm' &
     ENGINE=$!
-    trap 'pkill -P $SERVER 2>/dev/null; kill $SERVER $ENGINE 2>/dev/null || true' EXIT INT TERM
+    trap 'kill $SERVER $ENGINE 2>/dev/null || true' EXIT INT TERM
     bun run --cwd apps/web dev
+
+# The dev server alone (:7700), as `just dev` runs it, for when Vite is already up or the server's loop went away
+dev-server:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source scripts/dev-env.sh
+    exec bun scripts/dev-server.ts
 
 # Copy a prod cloud project into dev (scripts/copy_to_dev.py): `just copy-to-dev --list`, then `just copy-to-dev <id or name>`
 copy-to-dev *args:

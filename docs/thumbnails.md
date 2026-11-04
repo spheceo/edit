@@ -61,6 +61,10 @@ person asks; Claude changes it through its tools:
   a comment settled only when the comparison shows it done).
 - `comments`, `look_at_comment`, `reply_to_comment`, `settle_comment`,
   `remove_comment`: comments (below).
+- `cut_out`: a picture's subject lifted out exactly (the engine's
+  `subjectCutout`: Vision's foreground instances on the Mac, half a second, no
+  credits), added to the pictures as a transparent PNG at the picture's size,
+  to lay over another base instead of OpenArt redrawing him.
 - `save_overlay`: a picture the person gave, into the team's library with a
   note on where it goes, when they ask to keep it.
 - `openart_models`, `model_options`, `rename`.

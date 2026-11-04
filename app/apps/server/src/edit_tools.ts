@@ -645,7 +645,12 @@ async function coverCutIn(call: ToolCall): Promise<Content[]> {
     void _id;
     return applyEditPlan({ ...call, args: { base_rev: live(app, projectId).rev, operations: [{ op: "cover_cut_in", ...operation }] } });
   }
-  const [, [report, smooth]] = await app.store.update(projectId, ORIGIN, (project) => cutin.cover(project, args));
+  const [, [report, smooth]] = await app.store.update(projectId, ORIGIN, (project) => {
+    const covered = cutin.cover(project, args);
+    // Horror: tall reels over their own blurred copy, as after a plan.
+    horrorLook.fillReels(project);
+    return covered;
+  });
   report.smoothing_started = hooks.smoothInBackground(app, projectId, smooth);
   Object.assign(report, background(projectId));
   return text(stableStringify(report, 2));

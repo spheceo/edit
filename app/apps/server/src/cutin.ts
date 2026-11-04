@@ -302,7 +302,8 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
   // The B-roll look over the footage shots (never over a desktop, which keeps
   // its colour): one adjustment per run of footage, fading where a desktop follows or ends.
   let look: string | null = null;
-  if (args.look) {
+  // Horror's analog look is Edit's, over the whole video (commentary_look): no second grade per cut-in.
+  if (args.look && project.style !== "horror") {
     const track = freeAbove(project, upperTrack, cut.start, cut.end);
     const fade = Math.round(8 * (fps / 30));
     let index = 0;
@@ -395,7 +396,10 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
     }
     const label = shot.name ?? `shot ${index + 1}`;
     // Relative to filling the frame (its own black borders cropped past): never black bars.
-    const filled = framing.fill(project, media);
+    // Horror's tall reels are fitted instead: Edit stands each over its own
+    // blurred, darkened copy (horror_look.ts fillReels; the user, Nov 4).
+    const tall = project.style === "horror" && media.kind === "video" && media.height > media.width * 1.1;
+    const filled = tall ? { scale: 1, x: 0, y: 0 } : framing.fill(project, media);
     const scale = (shot.scale ?? 1) * filled.scale;
     const [from, to] = [zoomAt(start), zoomAt(start + duration - 1)];
     const id = freshId(project, "c");

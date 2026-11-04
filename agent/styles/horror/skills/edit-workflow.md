@@ -10,4 +10,4 @@ Do the complete edit in this turn, stage by stage. One context read, one plan an
 4. Load outro. Finish on the narrator's last line with a slow fade through black.
 5. Load subtitles. mute_house_words over the whole edit (narration and clips: silence, never a beep); censor sensitive pictures.
 6. Load music-and-sound. Level the clips' sound to the narrator; a low, dark bed under the narration only; a whoosh on each slide up.
-7. Load final-pass. commentary_look over the whole video last (every frame, footage and clips), then review_edit, the audit and one motion sample; fix what's concretely wrong. Share for review when asked, and return the real link only once it's ready.
+7. Load final-pass. one apply_edit_plan with the operation commentary_look {start: 0, end: the last frame} last (every frame, footage and clips), then review_edit, the audit and one motion sample; fix what's concretely wrong. Share for review when asked, and return the real link only once it's ready.

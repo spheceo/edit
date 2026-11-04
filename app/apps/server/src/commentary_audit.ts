@@ -204,7 +204,7 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
     if (bare > p.settings.fps) {
       const at = bareSpans[0]?.[0] ?? 0;
       out.push({ kind: "horror_look_missing", start: at, seconds: Math.round(bare / p.settings.fps * 10) / 10,
-        fix: "the analog look goes on all footage: commentary_look over the whole video (start 0, end the last frame) once the pictures are placed, and again over anything added after it" });
+        fix: "the analog look goes on all footage: apply_edit_plan with the operation commentary_look {start: 0, end: the last frame} once the pictures are placed, and again after adding more" });
     }
   }
   return out;

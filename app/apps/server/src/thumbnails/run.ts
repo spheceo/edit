@@ -203,8 +203,13 @@ export const TOOLS = [
   },
   {
     name: "comments",
-    description: "The open comments on the thumbnail as they are now (the team may pin one while you work): each with its number, version, pin and replies, and the version showing drawn with their pins. Run it before you finish any turn that changed the thumbnail, for anything still to do.",
+    description: "The open comments on the thumbnail as they are now (the team may pin one while you work): each with its number, version, pin and replies, and the version showing drawn with its pins. Run it before you finish any turn that changed the thumbnail: do what's new on the version showing; ask about those on other versions.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
+  },
+  {
+    name: "remove_comment",
+    description: "Take a comment off the thumbnail for good (#3), only when the person asks to remove or delete it. One that's done is settled, not removed.",
+    inputSchema: { type: "object", additionalProperties: false, properties: { comment: { type: "string" } }, required: ["comment"] },
   },
   {
     name: "look_at_comment",
@@ -484,6 +489,15 @@ async function runTool(session: Session, name: string, args: Args): Promise<stri
       const listed = describeComments(found.thumb);
       if (listed === "") return "No open comments.";
       return `${listed}${openComments(found.thumb).length > 0 ? `\nWith their pins (Read it): ${await marked(session, found.thumb)}` : ""}`;
+    }
+    case "remove_comment": {
+      let n = 0;
+      await cloud.change(session.id, session.by, (thumb) => {
+        const comment = commentOf(thumb, args.comment);
+        n = comment.n;
+        thumb.comments = (thumb.comments ?? []).filter((one) => one !== comment);
+      });
+      return `Removed #${n}.`;
     }
     case "look_at_comment": {
       const found = await cloud.get(session.id);

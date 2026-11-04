@@ -646,6 +646,20 @@ function Comments({ thumb, scale, commenting, onComment, onRemove }: { thumb: Th
   useEffect(() => {
     if (!commenting) setDraft(null);
   }, [commenting]);
+  // The comment open goes with Delete or Backspace; Escape puts it down.
+  useEffect(() => {
+    if (opened === null) return;
+    const key = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLElement && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName))) return;
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        onRemove(opened);
+        setOpened(null);
+      } else if (event.key === "Escape") setOpened(null);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [opened, onRemove]);
   // A click anywhere else puts an open comment down.
   useEffect(() => {
     if (opened === null && draft === null) return;
@@ -732,30 +746,31 @@ function Pin({ comment, scale, opened, onOpen, onRemove }: { comment: ThumbComme
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, transition: { duration: 0.1 } }}
             transition={spring}
-            className={cx("absolute w-[264px] rounded-xl border border-line-strong bg-raised p-3 text-left shadow-[0_16px_40px_#000a]", cardSide(comment), !opened && "pointer-events-none")}
+            // Padding, not a margin, between the pin and its card: the pointer crosses to the card without leaving it.
+            className={cx("absolute", comment.x > WIDTH * 0.62 ? "right-full pr-2" : "left-full pl-2", comment.y > HEIGHT * 0.6 ? "bottom-0" : "top-0")}
           >
-            <div className="flex items-center gap-2 text-[11.5px]">
-              <span className="truncate font-medium text-fg">{comment.by.split(" ")[0]}</span>
-              <span className="text-faint">{ago(comment.at)}</span>
-              <div className="flex-1" />
-              {opened && (
-                <IconButton label="Remove the comment" onClick={onRemove} className="-my-1 size-6">
+            <div className="w-[264px] rounded-xl border border-line-strong bg-raised p-3 text-left shadow-[0_16px_40px_#000a]">
+              <div className="flex items-center gap-2 text-[11.5px]">
+                <span className="truncate font-medium text-fg">{comment.by.split(" ")[0]}</span>
+                <span className="text-faint">{ago(comment.at)}</span>
+                <div className="flex-1" />
+                <IconButton label={opened ? "Remove the comment (Delete)" : "Remove the comment"} onClick={onRemove} className="-my-1 size-6">
                   <Trash2 size={12} />
                 </IconButton>
-              )}
-            </div>
-            <p className={cx("mt-1 text-[13px] leading-snug whitespace-pre-wrap text-secondary", !opened && "line-clamp-3")}>{comment.text}</p>
-            {opened &&
-              replies.map((reply) => (
-                <div key={reply.at} className="mt-2.5 border-t border-line pt-2.5">
-                  <div className="flex items-center gap-2 text-[11.5px]">
-                    <span className={cx("font-medium", reply.by === "claude" ? "text-agent" : "text-fg")}>{reply.by === "claude" ? "Claude" : reply.by.split(" ")[0]}</span>
-                    <span className="text-faint">{ago(reply.at)}</span>
+              </div>
+              <p className={cx("mt-1 text-[13px] leading-snug whitespace-pre-wrap text-secondary", !opened && "line-clamp-3")}>{comment.text}</p>
+              {opened &&
+                replies.map((reply) => (
+                  <div key={reply.at} className="mt-2.5 border-t border-line pt-2.5">
+                    <div className="flex items-center gap-2 text-[11.5px]">
+                      <span className={cx("font-medium", reply.by === "claude" ? "text-agent" : "text-fg")}>{reply.by === "claude" ? "Claude" : reply.by.split(" ")[0]}</span>
+                      <span className="text-faint">{ago(reply.at)}</span>
+                    </div>
+                    <p className="mt-1 text-[13px] leading-snug whitespace-pre-wrap text-secondary">{reply.text}</p>
                   </div>
-                  <p className="mt-1 text-[13px] leading-snug whitespace-pre-wrap text-secondary">{reply.text}</p>
-                </div>
-              ))}
-            {!opened && replies.length > 0 && <p className="mt-1.5 text-[11.5px] text-agent">Claude answered</p>}
+                ))}
+              {!opened && replies.length > 0 && <p className="mt-1.5 text-[11.5px] text-agent">Claude answered</p>}
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

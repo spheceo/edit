@@ -260,6 +260,8 @@ test("comments: pinned on the version showing, numbered for good, settled ones o
   expect(second).toMatchObject({ n: 2, version: v2!.id });
   expect(openComments(thumb).map((one) => one.n)).toEqual([2]);
   expect(describeComments(thumb)).toContain("#2 (V2, showing; pinned at 100, 100) Sphe: move the caption up");
+  // The one showing's are Claude's to do; another version's, only when the person says so.
+  expect(describeComments(thumb)).toMatch(/On the version showing \(V2\), yours to do[^\n]*\n- #2 [\s\S]*On other versions, not yours to do unasked[^\n]*\n- #1 /);
   expect(describeComments(thumb)).toContain("#1 (V1; pinned at 1280, 300) Sphe: brighter face");
   expect(commentOf(thumb, "#2").id).toBe(second.id);
   expect(() => commentOf(thumb, 9)).toThrow("There's no comment 9");

@@ -421,15 +421,25 @@ export function commentOf(thumb: Thumbnail, wanted: unknown): ThumbComment {
   return found;
 }
 
-/** The comments as Claude's message lists them: each open one, its version, where it is, what it says and the replies. */
+/**
+ * The comments as Claude's message lists them: each open one, where it's
+ * pinned, what it says and the replies. Those on the version showing are its
+ * to do with what's asked; those on other versions only with the person's
+ * say-so (Sphe, Nov 4: "it can ask you, there are comments in this other V as
+ * well, can I implement those?").
+ */
 export function describeComments(thumb: Thumbnail): string {
   const open = (thumb.comments ?? []).filter((one) => one.settled === undefined);
   if (open.length === 0) return "";
   const name = (version: string | undefined) => (version === undefined ? "" : `${thumb.versions?.find((one) => one.id === version)?.name ?? "?"}${version === thumb.activeVersion ? ", showing" : ""}; `);
-  return open
-    .map((one) => {
-      const replies = (one.replies ?? []).map((reply) => `\n  ↳ ${reply.by === "claude" ? "you" : reply.by}: ${reply.text}`).join("");
-      return `- #${one.n} (${name(one.version)}pinned at ${one.x}, ${one.y}) ${one.by}: ${one.text}${replies}`;
-    })
+  const line = (one: ThumbComment) => `- #${one.n} (${name(one.version)}pinned at ${one.x}, ${one.y}) ${one.by}: ${one.text}${(one.replies ?? []).map((reply) => `\n  ↳ ${reply.by === "claude" ? "you" : reply.by}: ${reply.text}`).join("")}`;
+  const here = open.filter((one) => one.version === thumb.activeVersion);
+  const elsewhere = open.filter((one) => one.version !== thumb.activeVersion);
+  const showing = thumb.versions?.find((one) => one.id === thumb.activeVersion)?.name;
+  return [
+    here.length > 0 ? `On ${showing !== undefined ? `the version showing (${showing})` : "the thumbnail"}, yours to do with whatever is asked:\n${here.map(line).join("\n")}` : "",
+    elsewhere.length > 0 ? `On other versions, not yours to do unasked: say they're there and ask whether to do them (yes: switch_version to that one first):\n${elsewhere.map(line).join("\n")}` : "",
+  ]
+    .filter(Boolean)
     .join("\n");
 }

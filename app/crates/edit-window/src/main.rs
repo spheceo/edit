@@ -11,12 +11,21 @@
 //!   window closes. A server that goes while the window is open (an update's
 //!   restart that didn't come back: Nov 1, the window sat at "Restarting…"
 //!   with nothing behind it) is started again: the new build, after an update.
+//!
+//! Quitting leaves nothing of Edit.app running (Nov 4, Sphe on macOS 27: Edit
+//! stayed in the Dock as "running in background" after Quit and had to be
+//! stopped again). The server runs in its own process group, so everything it
+//! started (Claude, Chrome's map pages, FFmpeg) goes with it; it gets a few
+//! seconds to let its cloud projects go, then the group is killed. A server
+//! this app left behind before (found on the port, Resources/edit of this same
+//! app) is taken over and stopped on quit too, instead of reused forever.
 
 #[cfg(target_os = "macos")]
 mod events;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -49,10 +58,10 @@ fn main() {
                         .unwrap_or_else(|_| fail("--port must be a number"))
                 })
                 .unwrap_or(DEFAULT_PORT);
-            let server = start_server(port);
+            let server = start_server(port).or_else(|| leftover_server(port));
             run(
                 &format!("http://127.0.0.1:{port}/"),
-                server.map(|child| (child, port)),
+                server.map(|server| (server, port)),
                 false,
             );
         }
@@ -61,13 +70,13 @@ fn main() {
 
 /// Opens the editor at `url` and runs until the window closes (or, with
 /// `watch_stdin`, until stdin closes).
-fn run(url: &str, server: Option<(Child, u16)>, watch_stdin: bool) -> ! {
+fn run(url: &str, server: Option<(Server, u16)>, watch_stdin: bool) -> ! {
     let url: Url = url.parse().unwrap_or_else(|_| fail("bad URL"));
     #[cfg(target_os = "macos")]
     events::guard();
     let closing = Arc::new(AtomicBool::new(false));
     let port = server.as_ref().map(|(_, port)| *port);
-    let server = Arc::new(Mutex::new(server.map(|(child, _)| child)));
+    let server = Arc::new(Mutex::new(server.map(|(server, _)| server)));
     if let Some(port) = port {
         let (server, closing) = (Arc::clone(&server), Arc::clone(&closing));
         std::thread::spawn(move || keep_serving(&server, &closing, port));
@@ -126,9 +135,9 @@ fn run(url: &str, server: Option<(Child, u16)>, watch_stdin: bool) -> ! {
     app.run(move |_, event| {
         if let RunEvent::Exit = event {
             closing.store(true, Ordering::SeqCst);
-            let child = server.lock().ok().and_then(|mut server| server.take());
-            if let Some(child) = child {
-                stop(child);
+            let running = server.lock().ok().and_then(|mut server| server.take());
+            if let Some(running) = running {
+                stop(running);
             }
         }
     });
@@ -141,7 +150,7 @@ fn run(url: &str, server: Option<(Child, u16)>, watch_stdin: bool) -> ! {
 /// on "Restarting…" with nothing behind it. Starting `Resources/edit` again
 /// runs whatever build is there now, and the page reloads once it answers. A
 /// build that keeps dying within a minute of starting is tried three times.
-fn keep_serving(server: &Mutex<Option<Child>>, closing: &AtomicBool, port: u16) {
+fn keep_serving(server: &Mutex<Option<Server>>, closing: &AtomicBool, port: u16) {
     let mut started = Instant::now();
     let mut quick_deaths = 0;
     loop {
@@ -151,8 +160,9 @@ fn keep_serving(server: &Mutex<Option<Child>>, closing: &AtomicBool, port: u16) 
         }
         let Ok(mut guard) = server.lock() else { return };
         let gone = match guard.as_mut() {
-            Some(child) => matches!(child.try_wait(), Ok(Some(_)) | Err(_)),
-            None => return,
+            Some(Server::Started(child)) => matches!(child.try_wait(), Ok(Some(_)) | Err(_)),
+            // One taken over from before isn't ours to start again.
+            Some(Server::Leftover(_)) | None => return,
         };
         if !gone || closing.load(Ordering::SeqCst) {
             continue;
@@ -230,25 +240,41 @@ fn open_in_browser(url: &Url) {
     }
 }
 
-/// Edit.app's server: `Resources/edit serve` beside this program, unless an
-/// Edit already serves on the port (then the window opens onto that one).
-fn start_server(port: u16) -> Option<Child> {
-    if TcpListener::bind(("127.0.0.1", port)).is_err() {
-        return None;
-    }
+/// The server behind the window: one it started, or one this same app left
+/// running before (taken over, so quitting stops it).
+enum Server {
+    Started(Child),
+    Leftover(u32),
+}
+
+/// Edit.app's own server program, `Contents/Resources/edit`.
+fn server_program() -> PathBuf {
     let exe = std::env::current_exe()
         .and_then(std::fs::canonicalize)
         .unwrap_or_else(|error| fail(&format!("could not find this program: {error}")));
-    let edit = exe
-        .parent()
+    exe.parent()
         .and_then(|macos| macos.parent())
         .map(|contents| contents.join("Resources").join("edit"))
-        .unwrap_or_else(|| fail("Edit.app has no Resources/edit"));
-    let child = Command::new(&edit)
+        .unwrap_or_else(|| fail("Edit.app has no Resources/edit"))
+}
+
+/// Edit.app's server: `Resources/edit serve` beside this program, unless an
+/// Edit already serves on the port (then the window opens onto that one).
+fn start_server(port: u16) -> Option<Server> {
+    if TcpListener::bind(("127.0.0.1", port)).is_err() {
+        return None;
+    }
+    let edit = server_program();
+    let mut command = Command::new(&edit);
+    command
         .args(["serve", "--port", &port.to_string()])
         // Opened from Finder: the server borrows the login shell's PATH and keys.
         .env("EDIT_ADOPT_SHELL_ENV", "1")
-        .stdin(Stdio::null())
+        .stdin(Stdio::null());
+    // Its own process group: what it starts is stopped with it.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let child = command
         .spawn()
         .unwrap_or_else(|error| fail(&format!("could not start {}: {error}", edit.display())));
     let started = Instant::now();
@@ -258,31 +284,166 @@ fn start_server(port: u16) -> Option<Child> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Some(child)
+    Some(Server::Started(child))
 }
 
-/// Stops the server as Ctrl-C would (it pushes its cloud projects and lets
-/// their locks go), and kills it if it hasn't gone after ten seconds.
-fn stop(mut child: Child) {
-    let _ = Command::new("kill")
-        .args(["-INT", &child.id().to_string()])
-        .status();
-    let started = Instant::now();
-    while started.elapsed() < Duration::from_secs(10) {
-        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
+/// A server on `port` that is this app's own `Resources/edit`, left running
+/// by an earlier window (it crashed, or was killed): taken over, so quitting
+/// stops it. Anything else on the port (`edit serve` in a terminal, a dev
+/// server) is only opened onto, never stopped.
+fn leftover_server(port: u16) -> Option<Server> {
+    let ours = std::fs::canonicalize(server_program()).ok()?;
+    let listening = Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&listening.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse::<u32>().ok())
+        .find(|pid| program_of(*pid).is_some_and(|program| program == ours))
+        .map(Server::Leftover)
+}
+
+/// The program process `pid` runs, as `ps` names it (macOS: its full path).
+fn program_of(pid: u32) -> Option<PathBuf> {
+    let shown = Command::new("/bin/ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let path = String::from_utf8_lossy(&shown.stdout).trim().to_owned();
+    if path.is_empty() {
+        return None;
     }
-    let _ = child.kill();
-    let _ = child.wait();
+    std::fs::canonicalize(path).ok()
+}
+
+/// How long the server has after Quit to push its cloud projects and let
+/// their locks go (it bounds its own shutdown below this; what it couldn't
+/// push stays marked and goes up at the next start).
+const QUIT_GRACE: Duration = Duration::from_secs(6);
+
+/// Stops the server as Ctrl-C would (it pushes its cloud projects and lets
+/// their locks go), then kills whatever is left of its process group (Claude,
+/// map pages, FFmpeg), so nothing of Edit runs on after Quit.
+fn stop(server: Server) {
+    match server {
+        Server::Started(mut child) => {
+            let pid = child.id();
+            signal(pid, false, Signal::Interrupt);
+            let started = Instant::now();
+            while started.elapsed() < QUIT_GRACE {
+                if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            // The group outlives its leader: anything it started still in it goes too.
+            signal(pid, true, Signal::Kill);
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Server::Leftover(pid) => {
+            signal(pid, false, Signal::Interrupt);
+            let started = Instant::now();
+            while started.elapsed() < QUIT_GRACE && alive(pid) {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            // A group of its own only when an earlier window started it that way.
+            signal(pid, leads_group(pid), Signal::Kill);
+            signal(pid, false, Signal::Kill);
+        }
+    }
+}
+
+enum Signal {
+    Interrupt,
+    Kill,
+}
+
+/// Sends `signal` to process `pid`, or to its whole process group.
+#[cfg(unix)]
+fn signal(pid: u32, group: bool, signal: Signal) {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return;
+    };
+    let number = match signal {
+        Signal::Interrupt => libc::SIGINT,
+        Signal::Kill => libc::SIGKILL,
+    };
+    // SAFETY: kill only sends a signal; a process or group that's gone answers ESRCH.
+    unsafe {
+        libc::kill(if group { -pid } else { pid }, number);
+    }
+}
+
+#[cfg(not(unix))]
+fn signal(_pid: u32, _group: bool, _signal: Signal) {}
+
+/// Whether process `pid` is still running.
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 checks the process exists and sends nothing.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+#[cfg(not(unix))]
+fn alive(_pid: u32) -> bool {
+    false
+}
+
+/// Whether process `pid` leads its own process group.
+#[cfg(unix)]
+fn leads_group(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: getpgid only reads the process's group id.
+    unsafe { libc::getpgid(pid) == pid }
+}
+
+#[cfg(not(unix))]
+fn leads_group(_pid: u32) -> bool {
+    false
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ask_focus;
-    use std::io::{Read, Write};
+    use super::{alive, ask_focus, stop, Server};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
+    use std::process::{Command, Stdio};
+
+    /// Quit leaves nothing running: a server that exits on Ctrl-C but left
+    /// something it started behind (Nov 4, "running in background" on macOS 27)
+    /// takes that with it.
+    #[cfg(unix)]
+    #[test]
+    fn quitting_stops_what_the_server_started() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sleep 30 & echo $!; wait"])
+            .stdout(Stdio::piped());
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        let mut child = command.spawn().unwrap();
+        let mut line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let left: u32 = line.trim().parse().unwrap();
+        assert!(alive(left));
+        stop(Server::Started(child));
+        // Killed, then reaped by launchd once orphaned: give it a moment.
+        let started = std::time::Instant::now();
+        while alive(left) && started.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!alive(left));
+    }
 
     /// A server answering one request with `answer`; what it was asked comes back.
     fn serve_once(answer: &'static str) -> (u16, std::thread::JoinHandle<String>) {

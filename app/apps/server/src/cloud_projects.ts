@@ -1723,7 +1723,8 @@ export async function shutdown(): Promise<void> {
     if (entry.saved.token !== undefined) held.push([id, entry.saved.token, entry.saved.dirty, entry.saved.rev]);
   }
   const holder = cloudProjects.holder();
-  for (const [id, token, dirty, base] of held) {
+  // All at once: Quit gives this a few seconds (serve.ts), and one slow answer mustn't hold up the rest.
+  await Promise.all(held.map(async ([id, token, dirty, base]) => {
     if (dirty) {
       const live = app.store.get(id);
       if (live !== null) {
@@ -1743,8 +1744,9 @@ export async function shutdown(): Promise<void> {
       // The lease runs out by itself.
     }
     cloudProjects.with(id, (entry) => entry.released());
-  }
-  cloudProjects.persist();
+    // Kept as each one ends: Quit may cut the rest short, and a push not written down would come back as a conflict.
+    cloudProjects.persist();
+  }));
 }
 
 /** Lets go of every lock (the token forgotten). */

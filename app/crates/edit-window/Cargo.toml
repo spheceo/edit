@@ -18,6 +18,10 @@ tauri = { version = "2", features = [] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["exception"] }
 
+# Signals the server and what it started (its process group) when the window quits.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

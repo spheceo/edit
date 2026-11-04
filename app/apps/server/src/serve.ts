@@ -259,10 +259,11 @@ export function start(home: string, host: string | null, port: number): { app: A
   optional("research cloud", () => researchCloud.start(app));
   let quitting = false;
   const quit = (code: number) => {
-    // A second signal, or a cloud push that never answers, doesn't hold Edit open.
+    // A second signal, or a cloud push that never answers, doesn't hold Edit open: Edit.app's window
+    // kills what's left after 6 s (crates/edit-window), and macOS 27 shows Edit "running in background" meanwhile.
     if (quitting) process.exit(code);
     quitting = true;
-    setTimeout(() => process.exit(code), 20_000).unref();
+    setTimeout(() => process.exit(code), 5_000).unref();
     // The agents first: a turn left running goes on editing (and spending) with no Edit to answer it.
     try {
       app.agents.shutdown?.();

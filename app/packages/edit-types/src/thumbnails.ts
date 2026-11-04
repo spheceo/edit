@@ -84,7 +84,7 @@ export const BLACK_BOX_FONT = "ITC Avant Garde Gothic" as const;
  * 36, size 32, angle 90 (the light above, so it falls straight down), distance
  * 6. It lives beside the drawing, which is what the page and Chrome both run.
  */
-export { HOUSE_SHADOW, captionShadow } from "./thumbnail_render.ts";
+export { HOUSE_SHADOW, captionShadow } from "./thumbnail_render";
 
 /**
  * The fonts a text can take. The first three ship with Edit

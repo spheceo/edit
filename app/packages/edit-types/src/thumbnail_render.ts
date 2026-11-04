@@ -3,7 +3,7 @@
 // sees is what the person sees). Canvas 2D only, and no imports but types:
 // the server hands it to Chrome as it is.
 
-import type { Adjust, Design, ImageLayer, Layer, Shadow, TextLayer } from "./thumbnails.ts";
+import type { Adjust, Design, ImageLayer, Layer, Shadow, TextLayer } from "./thumbnails";
 
 /** A picture to draw from: an <img>, a bitmap, a canvas. */
 export type Picture = { width: number; height: number };

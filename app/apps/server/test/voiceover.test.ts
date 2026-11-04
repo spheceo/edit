@@ -10,6 +10,7 @@ import { footageSound, muteOf, suggestions, timedWords, writeMutes } from "../sr
 import type { Word } from "../src/transcribe.ts";
 import {
   find,
+  readings,
   widen,
   garbled,
   isVoiceover,
@@ -257,4 +258,25 @@ test("a block's first word said a little differently stays in its voice-over", (
   const aligned = find(written, heard)!;
   expect(aligned.first).toBe(3);
   expect(widen(written, heard, aligned)).toMatchObject({ first: 2, last: 6 });
+});
+
+test("a cut-in the narrator said his own way gets the recording between its neighbours' readings", () => {
+  const said = "this guy appears to be an entire mystery and we will not get answers soon pacman master stands still in a grey filter while creepy noises play in the back and then he promotes music in his posts rony is not ai but something far more disturbing";
+  let at = 0;
+  const words = said.split(" ").map((text) => ({ text, start: (at += 0.4) - 0.4, end: at - 0.05 }));
+  const blocks = [
+    { kind: "narration" as const, text: "This guy appears to be an entire mystery, and we will not get answers soon.", clip: "a" },
+    { kind: "footage" as const, url: "", file: "x", start: 0, end: 1, label: "" },
+    // Written as a draft; read quite differently.
+    { kind: "narration" as const, text: "Case 3: Pacman Master. His content mainly features him standing motionless with a greyscale filter.", clip: "b" },
+    { kind: "narration" as const, text: "Rony is not AI, but something far more disturbing.", clip: "c" },
+  ];
+  const [matches, byOrder] = readings(blocks, [["vo", words]]);
+  expect([...byOrder]).toEqual([2]);
+  const [, , gap] = matches.get(2)!;
+  expect(words[gap.first]!.text).toBe("pacman");
+  expect(words[gap.last]!.text).toBe("posts");
+  // Two unread in a row can't be told apart.
+  const twice = [blocks[0]!, { ...blocks[2]!, clip: "b1" }, { ...blocks[2]!, clip: "b2", text: "Another draft line nobody read out loud at all." }, blocks[3]!];
+  expect([...readings(twice, [["vo", words]])[1]]).toEqual([]);
 });

@@ -14,7 +14,7 @@ import { copyFile, ioMessage } from "./files.ts";
 import * as footageLevels from "./footage_levels.ts";
 import { isBug } from "./guard.ts";
 import { importPaths } from "./import.ts";
-import type { Clip, Media, Project } from "./model.ts";
+import type { Clip, Media, Project, ScriptBlock } from "./model.ts";
 import { native } from "./native/index.ts";
 import { addTrack, clipEnd, clipMedia, clipOf, cutTime, fps as fpsOf, freshId, insertTime, isSoundEffect, marksCut, mediaOf, trackOf } from "./project.ts";
 import { join } from "./paths.ts";
@@ -57,6 +57,9 @@ function replaceContents(target: Project, source: Project): void {
  * Places voice-overs on the cut-ins: `media` (default: audio that isn't on the
  * timeline and isn't a sound effect). Placing again replaces what it placed.
  */
+/** Edit's own stand-in voice's takes ("<project> (voice-over) - Cut-in 11.mp3"). */
+const STAND_IN = /\(voice-over\) - Cut-in \d+/u;
+
 export async function place(app: App, id: string, given: string[] | null, only?: Set<string>, expected?: Map<string, string>): Promise<Json> {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
@@ -77,6 +80,11 @@ export async function place(app: App, id: string, given: string[] | null, only?:
         !isSoundEffect(media) &&
         (placed.includes(media.id) || !project.clips.some((clip) => clipMedia(clip) === media.id)),
     );
+    // Edit's own stand-in takes read the script word for word, so they'd
+    // always win the match: with the team's recording there, they stand
+    // aside and the recording is placed everywhere it reads.
+    const real = recordings.filter((media) => !STAND_IN.test(media.name));
+    if (real.length > 0) recordings = real;
   }
   if (recordings.length === 0) throw new Error("no voice-over recordings: import the audio first");
   const heard: [string, Word[]][] = [];
@@ -106,6 +114,7 @@ export async function place(app: App, id: string, given: string[] | null, only?:
     const permitted = expected === undefined ? only : new Set(narrationRecovery(project)
       .flatMap((line) => line.state === "missing" && line.clip &&
         expected.get(line.clip) === narrationSnapshot(project, line.clip) ? [line.clip] : []));
+    const [matches, byOrder] = readings(blocks, heard);
     blocks.forEach((block, index) => {
       if (block.kind === "narration" && permitted && (!block.clip || !permitted.has(block.clip))) {
         const kept = previous.get(index);
@@ -117,31 +126,29 @@ export async function place(app: App, id: string, given: string[] | null, only?:
       if (found === undefined) return;
       const card = structuredClone(found);
       const wanted = wordsOf(block.text);
-      let best: [string, Word[], Found] | null = null;
-      for (const [media, words] of heard) {
-        const spoken = words.map((word) => normalize(word.text));
-        const match = find(wanted, spoken);
-        // max_by_key keeps the last of equals.
-        if (match !== null && (best === null || match.matched >= best[2].matched)) best = [media, words, match];
-      }
+      const best = matches.get(index) ?? null;
       const preview = splitWhitespace(block.text).slice(0, 8).join(" ");
       const missing = { cut_in: preview, placed: false, why: "its words weren't found in the recordings" };
-      const kept = given !== null ? previous.get(index) : undefined;
+      const prior = previous.get(index);
+      const priorClip = prior === undefined ? undefined : clipOf(project, prior);
+      const standIn = priorClip !== undefined && STAND_IN.test(mediaOf(project, clipMedia(priorClip) ?? "")?.name ?? "");
+      // A cut-in no recording reads keeps the stand-in it had, never silence.
+      const kept = given !== null || standIn ? prior : undefined;
       const unread = () => {
         if (kept !== undefined && clipOf(project, kept) !== undefined) {
           voiceovers.set(index, kept);
-          report.push({ cut_in: preview, kept, why: "the recordings given don't read it: its voice-over stays" });
+          report.push({ cut_in: preview, kept, why: standIn ? "the recording doesn't read it: it stays on the stand-in voice" : "the recordings given don't read it: its voice-over stays" });
         } else {
           drop(index);
           report.push(missing);
         }
       };
-      if (best === null || !(best[2].matched >= wanted.length * LEAST_MATCH)) {
+      if (best === null) {
         unread();
         return;
       }
       const [media, words, aligned] = best;
-      const match = widen(wanted, words.map((word) => normalize(word.text)), aligned);
+      const match = byOrder.has(index) ? aligned : widen(wanted, words.map((word) => normalize(word.text)), aligned);
       // Breathing room, without reaching into the words around it.
       const first = words[match.first];
       const last = words[match.last];
@@ -209,7 +216,7 @@ export async function place(app: App, id: string, given: string[] | null, only?:
         media,
         placed: true,
         seconds: round((length / fps) * 100) / 100,
-        words_matched: `${match.matched}/${wanted.length}`,
+        words_matched: byOrder.has(index) ? "by order: the recording between the readings either side" : `${match.matched}/${wanted.length}`,
       });
     });
     project.script?.blocks.forEach((block, index) => {
@@ -576,6 +583,51 @@ export function same(a: string, b: string): boolean {
     }
   }
   return edits + (x.length - i) + (y.length - j) <= 1;
+}
+
+/**
+ * Where each narration cut-in is read in the recordings (index → recording,
+ * its words, the stretch), and which of them were placed by order.
+ */
+export function readings(blocks: readonly ScriptBlock[], heard: readonly [string, Word[]][]): [Map<number, [string, Word[], Found]>, Set<number>] {
+  // Each cut-in's reading: found by its words first.
+  const matches = new Map<number, [string, Word[], Found]>();
+  const byOrder = new Set<number>();
+  blocks.forEach((block, index) => {
+    if (block.kind !== "narration" || block.clip === undefined || block.clip === null) return;
+    const wanted = wordsOf(block.text);
+    let best: [string, Word[], Found] | null = null;
+    for (const [media, words] of heard) {
+      const match = find(wanted, words.map((word) => normalize(word.text)));
+      // max_by_key keeps the last of equals.
+      if (match !== null && (best === null || match.matched >= best[2].matched)) best = [media, words, match];
+    }
+    if (best !== null && best[2].matched >= wanted.length * LEAST_MATCH) matches.set(index, best);
+  });
+  // Then by order: a recording reads the script in order, so a cut-in whose
+  // words weren't found (the narrator said it his own way, or read a pasted
+  // article in his words) is what's said between the readings either side
+  // of it, or after the last one when it's the last. The first horror edit
+  // (Nov 4): three of its cut-ins went to the stand-in voice while 4 minutes
+  // of the narrator's recording between them went unused. Two such cut-ins
+  // in a row can't be told apart: they stay unread.
+  const narrated = blocks.flatMap((block, index) => (block.kind === "narration" && block.clip ? [index] : []));
+  narrated.forEach((index, at) => {
+    if (matches.has(index)) return;
+    const before = narrated[at - 1];
+    const after = narrated[at + 1];
+    const prev = before === undefined ? undefined : matches.get(before);
+    const next = after === undefined ? undefined : matches.get(after);
+    if (prev === undefined || (after !== undefined && next === undefined)) return;
+    if (next !== undefined && next[0] !== prev[0]) return;
+    const words = prev[1];
+    const first = prev[2].last + 1;
+    const last = next === undefined ? words.length - 1 : next[2].first - 1;
+    if (last - first + 1 < 3) return;
+    matches.set(index, [prev[0], words, { first, last, matched: last - first + 1 }]);
+    byOrder.add(index);
+  });
+  return [matches, byOrder];
 }
 
 /**

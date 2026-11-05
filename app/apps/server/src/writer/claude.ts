@@ -232,10 +232,13 @@ async function askNow(question: Question): Promise<Answer> {
     throw explain("Claude Code ended without an answer");
   }
   const result = finished as Record<string, unknown>;
-  const usage = (result.usage ?? {}) as { output_tokens?: number };
+  const usage = (result.usage ?? {}) as { output_tokens?: number; input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  // What it read, and how much of that came from Claude's cache: a call paying whole for what another just sent shows here.
+  const read = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  const reading = `read ${read} tokens (${usage.cache_read_input_tokens ?? 0} from the cache, ${usage.cache_creation_input_tokens ?? 0} written to it)`;
   answer.result = { subtype: result.subtype, stop_reason: result.stop_reason, terminal_reason: result.terminal_reason, num_turns: result.num_turns, usage: { output_tokens: usage.output_tokens ?? 0 }, is_error: result.is_error };
   const ran = typeof result.duration_ms === "number" ? result.duration_ms : 0;
-  const why = `${whyStopped(answer.result)}; ${answer.replies} replies, the biggest ${answer.biggestReply} output tokens${stops.length ? `, stopped short: ${stops.join(", ")}` : ""}`;
+  const why = `${whyStopped(answer.result)}; ${reading}; ${answer.replies} replies, the biggest ${answer.biggestReply} output tokens${stops.length ? `, stopped short: ${stops.join(", ")}` : ""}`;
   if (result.subtype !== "success" || result.is_error === true) {
     const errors = Array.isArray(result.errors) ? result.errors.filter((one): one is string => typeof one === "string").join("; ") : "";
     const said = typeof result.result === "string" && result.result !== "" ? result.result : errors;

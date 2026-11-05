@@ -14,7 +14,7 @@ import * as claude from "./writer/claude.ts";
 
 type Part = { type?: string; text?: string; image_url?: { url?: string }; file?: { filename?: string; file_data?: string } };
 type Message = { role?: string; content?: string | Part[] };
-type Request = { messages?: Message[]; response_format?: { json_schema?: { schema?: Record<string, unknown> } } };
+type Request = { messages?: Message[]; response_format?: { json_schema?: { schema?: Record<string, unknown> } }; reasoning?: { effort?: string } };
 
 /** The tests' stand-in for Claude (test/setup.ts: their mock server answers); null everywhere else. */
 export const standIn: { post: ((bodyFile: string) => Promise<unknown>) | null } = { post: null };
@@ -60,13 +60,20 @@ export async function post(bodyFile: string, model: string = claude.OPUS, label 
       .join("\n\n");
     const shown = images.length === 0 ? prompt : `${prompt}\n\nRead each image file above (in order) before answering.`;
     const schema = request.response_format?.json_schema?.schema;
-    const answer = await claude.askPatiently({ model, system: system || "Answer exactly as asked.", prompt: shown, label, ...(schema ? { schema } : {}), ...(images.length > 0 ? { read: folder } : {}) });
+    // How hard to think, as the caller asked (every one asks "low"): dropped here until Nov 5, so each
+    // of these small questions thought at Claude Code's default, on the person's plan.
+    const effort = effortOf(request.reasoning?.effort);
+    const answer = await claude.askPatiently({ model, system: system || "Answer exactly as asked.", prompt: shown, label, ...(schema ? { schema } : {}), ...(images.length > 0 ? { read: folder } : {}), ...(effort ? { effort } : {}) });
     const content = answer.structured !== null ? JSON.stringify(answer.structured) : (answer.text ?? "");
     return { choices: [{ message: { content } }] };
   } finally {
     fs.rmSync(folder, { recursive: true, force: true });
   }
 }
+
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/** A request's effort as Claude Code takes it (none when it names none Claude Code knows). */
+export const effortOf = (given: string | undefined): (typeof EFFORTS)[number] | undefined => EFFORTS.find((one) => one === given);
 
 const textOf = (content: Message["content"]): string => (typeof content === "string" ? content : (content ?? []).map((part) => part.text ?? "").join("\n"));
 

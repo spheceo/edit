@@ -210,17 +210,24 @@ pub fn sections(project: &Project) -> Sections {
     }
 }
 
-/// Where the story starts: the "On <date>" cut-in after the teasers; else the
-/// cut-in(s) leading into the first full-length footage; else the first cut-in.
+/// Where the story starts: the "On <date>" cut-in after the teasers, with
+/// footage still to come (a dated closing line, "In 1966, while imprisoned…",
+/// is the outro, not the story's start); else the cut-in(s) leading into the
+/// first full-length footage; else the first cut-in.
 fn intro_end(project: &Project, blocks: &[Placed]) -> Option<i64> {
     let after_teasers = blocks
         .iter()
         .position(|block| block.cut_in.is_none())
         .unwrap_or(blocks.len());
+    let last_footage = blocks.iter().rposition(|block| block.cut_in.is_none());
     if let Some(card) = blocks
         .iter()
+        .enumerate()
         .skip(after_teasers)
-        .find(|block| block.cut_in.is_some_and(is_date_card))
+        .find(|(index, block)| {
+            block.cut_in.is_some_and(is_date_card) && last_footage.is_some_and(|last| last > *index)
+        })
+        .map(|(_, block)| block)
     {
         return Some(card.start);
     }
@@ -409,6 +416,30 @@ mod tests {
         assert_eq!(sections.intro_splits, 3);
         assert_eq!(sections.outro, None);
         assert_eq!(sections.parts.last().unwrap().kind, SectionKind::Story);
+    }
+
+    #[test]
+    fn a_dated_closing_line_is_the_outro_not_the_story() {
+        // A horror compilation (Nov 5): an opening card, whole videos between cards, and a closing card that opens with a year.
+        let project = edit(&[
+            (Some("If you're not living under a rock"), 46),
+            (None, 140),
+            (Some("But it gets even worse"), 44),
+            (None, 182),
+            (Some("In 1966, while imprisoned in a POW camp"), 117),
+        ]);
+        let sections = sections(&project);
+        assert_eq!(sections.outro, Some((412 * 30, 529 * 30)));
+        assert_eq!(
+            summary(&sections),
+            [
+                ("B-roll".into(), 0, 46),
+                ("Story".into(), 46, 186),
+                ("B-roll".into(), 186, 230),
+                ("Story".into(), 230, 412),
+                ("Outro".into(), 412, 529),
+            ]
+        );
     }
 
     #[test]

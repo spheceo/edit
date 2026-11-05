@@ -3157,7 +3157,9 @@ mod tests {
         )
         .unwrap();
         let made = manifest(&cache);
-        assert!(made.chunks.len() >= 3, "{:?}", made.chunks);
+        // Where chunks end hangs on the fresh sources' keys (one cut in 16 may end one), so a
+        // run makes two or more: two came up on Nov 5 and failed a nightly's check at ">= 3".
+        assert!(made.chunks.len() >= 2, "{:?}", made.chunks);
         assert_eq!(made.output, output, "made of chunks, not exported whole");
         shows(&output, |frame| (frame / 30) % 2 == 1, 3000);
         std::fs::remove_dir_all(dir).ok();

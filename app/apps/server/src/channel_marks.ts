@@ -6,10 +6,15 @@
 // Sams Interrogations), so a new channel is a new picture there, nothing here.
 //
 // The logo goes on the timeline being exported, not into the project: a
-// locked top track over everything (subtitles too) with one picture clip
-// across the export, at 10%, its x and y keyframed in straight lines from
-// wall to wall, so an export and one started again after a restart (its
-// snapshot) draw the same thing.
+// locked top track over everything (subtitles too), at 10%, its x and y
+// keyframed in straight lines from wall to wall, so an export and one
+// started again after a restart (its snapshot) draw the same thing.
+//
+// Only over the story's footage (JJ, Nov 5: "we only want watermarks where
+// we have 'story'", and not on reuse cases): one picture clip per stretch of
+// Story, none over the intro, cut-ins, case transitions, the outro or a
+// reused case's footage. The bounce runs across the whole export, so the
+// logo comes back after a cut-in where it would have been.
 //
 //   GET /api/watermarks    {channels: [{id, code, name}]}: the folder's pictures
 
@@ -20,10 +25,11 @@ import type { App } from "./app.ts";
 import { json } from "./http/errors.ts";
 import type { Router } from "./http/router.ts";
 import { curl, driveError, encode, quote } from "./library.ts";
-import type { Clip, Keyframe, Media, Plan, Project, Track } from "./model.ts";
+import type { Clip, Keyframe, Media, Plan, Project, Sections, Track } from "./model.ts";
 import { native } from "./native/index.ts";
 import { join } from "./paths.ts";
-import { serdeParse } from "./rust.ts";
+import { clipEnd, reusedScriptBlock, reusedSpans } from "./project.ts";
+import { jsonForSerde, serdeParse } from "./rust.ts";
 import * as seams from "./seams.ts";
 
 const API = "https://www.googleapis.com/drive/v3";
@@ -144,14 +150,61 @@ export function bounce(from: number, direction: 1 | -1, reach: number, speed: nu
   }
 }
 
+/** A stretch of story shorter than this (seconds) gets no logo, nor a gap this short between two: no flashes. */
+const SHORTEST = 0.5;
+
+/**
+ * The frames of `plan` (timeline frames, `end` exclusive) the logo shows
+ * over: the Story parts of `sections`, less the frames a reused case plays
+ * (a finished video reused whole, or a reused script's footage). A script
+ * whose story wasn't found: its footage between cut-ins. An edit without a
+ * script (a subtitled video) is all of it, as before.
+ */
+export function storySpans(project: Project, sections: Sections, plan: Pick<Plan, "start" | "end">, fps: number): [number, number][] {
+  // No story found (a compilation with no "On <date>" cut-in reads as all intro): the footage between its cut-ins.
+  const story = sections.parts.filter((part) => part.kind === "story");
+  const between = story.length > 0 ? story : sections.parts.filter((part) => part.kind === "intro");
+  let spans: [number, number][] = between.length === 0 ? [[plan.start, plan.end]] : between.map((part) => [part.start, part.end]);
+  const ids = new Set((project.script?.blocks ?? []).flatMap((block) => (block.kind === "footage" && reusedScriptBlock(block) && typeof block.clip === "string" ? [block.clip] : [])));
+  const reused = [...reusedSpans(project), ...project.clips.filter((clip) => ids.has(clip.id)).map((clip): [number, number] => [clip.start, clipEnd(clip)])];
+  for (const [from, to] of reused) {
+    spans = spans.flatMap(([a, b]): [number, number][] => (to <= a || from >= b ? [[a, b]] : ([[a, Math.min(b, from)], [Math.max(a, to), b]] as [number, number][]).filter(([x, y]) => y > x)));
+  }
+  const shortest = Math.round(SHORTEST * fps);
+  const joined: [number, number][] = [];
+  for (const [a, b] of spans
+    .map(([a, b]): [number, number] => [Math.max(a, plan.start), Math.min(b, plan.end)])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0])) {
+    const last = joined.at(-1);
+    if (last !== undefined && a - last[1] < shortest) last[1] = Math.max(last[1], b);
+    else joined.push([a, b]);
+  }
+  return joined.filter(([a, b]) => b - a >= shortest);
+}
+
+/** `keys` (a path over frames from 0) between frames `from` and `to`, counted from `from`. */
+function slice(keys: Keyframe[], from: number, to: number): Keyframe[] {
+  const at = (frame: number): number => {
+    const after = keys.findIndex((key) => key.frame >= frame);
+    if (after < 0) return keys.at(-1)!.value;
+    if (after === 0) return keys[0]!.value;
+    const [a, b] = [keys[after - 1]!, keys[after]!];
+    return a.value + ((b.value - a.value) * (frame - a.frame)) / (b.frame - a.frame);
+  };
+  const key = (frame: number, value: number): Keyframe => ({ frame: frame - from, value, ease: "linear" });
+  return [key(from, at(from)), ...keys.filter((one) => one.frame > from && one.frame < to).map((one) => key(one.frame, one.value)), key(to, at(to))];
+}
+
 /**
  * `project` with `logo` (a picture's media) bouncing across `plan`'s frames
- * at `LOOK`: a new top track, locked, with the one clip. Pure: the project
+ * at `LOOK`, shown over `spans` (timeline frames; all of `plan` when not
+ * given): a new top track, locked, with a clip per span. Pure: the project
  * given is left as it was.
  */
-export function withWatermark(project: Project, plan: Pick<Plan, "start" | "end">, logo: Media): Project {
+export function withWatermark(project: Project, plan: Pick<Plan, "start" | "end">, logo: Media, spans: [number, number][] = [[plan.start, plan.end]]): Project {
   const frames = plan.end - plan.start;
-  if (frames <= 0) return project;
+  if (frames <= 0 || spans.length === 0) return project;
   const { width: W, height: H } = project.settings;
   const fps = project.settings.fps * (project.settings.ntsc ? 1000 / 1001 : 1);
   const fit = Math.min(W / Math.max(logo.width, 1), H / Math.max(logo.height, 1));
@@ -173,26 +226,30 @@ export function withWatermark(project: Project, plan: Pick<Plan, "start" | "end"
   };
   const media: Media = { ...logo, id: fresh(logo.id) };
   const track: Track = { id: fresh(TRACK), kind: "video", hidden: false, muted: false, locked: true };
-  const clip: Clip = {
-    id: fresh(TRACK),
-    track: track.id,
-    type: "video",
-    name: `Watermark: ${logo.name}`,
-    color: "purple",
-    start: plan.start,
-    duration: frames,
-    fade_in: 0,
-    fade_out: 0,
-    media: media.id,
-    source_in: 0,
-    speed: 1,
-    transform: { x: x[0]!.value, y: y[0]!.value, scale, rotation: 0 },
-    opacity: LOOK.opacity,
-    keyframes: { x, y },
-  };
+  const clips = spans.map(([start, end]): Clip => {
+    const [from, to] = [start - plan.start, end - plan.start];
+    const keyframes = { x: slice(x, from, to), y: slice(y, from, to) };
+    return {
+      id: fresh(TRACK),
+      track: track.id,
+      type: "video",
+      name: `Watermark: ${logo.name}`,
+      color: "purple",
+      start,
+      duration: end - start,
+      fade_in: 0,
+      fade_out: 0,
+      media: media.id,
+      source_in: 0,
+      speed: 1,
+      transform: { x: keyframes.x[0]!.value, y: keyframes.y[0]!.value, scale, rotation: 0 },
+      opacity: LOOK.opacity,
+      keyframes,
+    };
+  });
   out.media.push(media);
   out.tracks.push(track);
-  out.clips.push(clip);
+  out.clips.push(...clips);
   return out;
 }
 
@@ -205,8 +262,11 @@ export async function addWatermark(app: Pick<App, "library">, cacheDir: string, 
   const probe = await native().probe(path);
   if (probe.kind !== "image") throw new Error(`${channel.name}'s watermark isn't a picture`);
   const logo: Media = { id: `watermark-${channel.code.toLowerCase()}`, name: `${channel.code} watermark`, path, kind: "image", duration: probe.duration, width: probe.width, height: probe.height, fps: probe.fps, has_audio: false };
-  diag.info("watermark", `${project.name}: ${channel.name}'s watermark at ${Math.round(LOOK.opacity * 100)}%`);
-  return withWatermark(project, plan, logo);
+  const fps = project.settings.fps * (project.settings.ntsc ? 1000 / 1001 : 1);
+  const spans = storySpans(project, native().sections({ json: jsonForSerde(project) }), plan, fps);
+  const shown = spans.reduce((sum, [a, b]) => sum + b - a, 0);
+  diag.info("watermark", `${project.name}: ${channel.name}'s watermark at ${Math.round(LOOK.opacity * 100)}% over ${spans.length} stretches of story (${Math.round(shown / fps)} of ${Math.round((plan.end - plan.start) / fps)} s)`);
+  return withWatermark(project, plan, logo, spans);
 }
 
 export function routes(router: Router<App>): void {

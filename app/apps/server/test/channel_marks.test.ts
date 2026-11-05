@@ -3,8 +3,8 @@
 
 import { expect, test } from "bun:test";
 
-import { bounce, channelOf, LOOK, withWatermark } from "../src/channel_marks.ts";
-import type { Keyframe, Media } from "../src/model.ts";
+import { bounce, channelOf, LOOK, storySpans, withWatermark } from "../src/channel_marks.ts";
+import type { Clip, Keyframe, Media, Sections } from "../src/model.ts";
 import { isReal, native } from "../src/native/index.ts";
 import { jsonForSerde } from "../src/rust.ts";
 import { newProject } from "../src/project.ts";
@@ -81,4 +81,53 @@ test("the engine takes the watermarked timeline as it is (with the real addon)",
   const project = newProject("p1793000000000-abc", "Case", { width: 1920, height: 1080, fps: 30 });
   const marked = withWatermark(project, { start: 0, end: 900 }, logo);
   expect(() => native().projectPrepare(marked.id, jsonForSerde(marked))).not.toThrow();
+});
+
+test("the watermark shows only over the story's footage: not the intro, cut-ins, outro or a reused case, and the bounce carries on across the gaps", () => {
+  const project = newProject("p1793000000000-abc", "Case", { width: 1920, height: 1080, fps: 30 });
+  const part = (kind: Sections["parts"][number]["kind"], start: number, end: number) => ({ kind, start, end, label: kind });
+  // Intro 0–300, a cut-in 300–390, story 390–1500, a case transition 1500–1590, story 1590–3000, the outro 3000–3300.
+  const sections: Sections = {
+    intro: [0, 390],
+    intro_splits: 1,
+    outro: [3000, 3300],
+    parts: [part("intro", 0, 300), part("broll", 300, 390), part("story", 390, 1500), part("broll", 1500, 1590), part("story", 1590, 3000), part("outro", 3000, 3300)],
+  };
+  // A reused case's footage plays 2000–2600 (a reused script's block), and a stray 5 frames of story are left after it.
+  const reused: Clip = { id: "c-reused", track: "v1", type: "video", name: "Reused", color: "blue", start: 2000, duration: 600, fade_in: 0, fade_out: 0, media: "m1", source_in: 0, speed: 1, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1 };
+  const withReuse = { ...project, clips: [reused], script: { source: "doc", blocks: [{ kind: "footage", clip: "c-reused", notes: ["Reused script (preserve ranges and cut-in words): https://docs.google.com/document/d/x/edit"] }] } } as unknown as typeof project;
+  const spans = storySpans(withReuse, sections, { start: 0, end: 3300 }, 30);
+  expect(spans).toEqual([
+    [390, 1500],
+    [1590, 2000],
+    [2600, 3000],
+  ]);
+  // Exported from 2995 on: only the story's last 5 frames, too short to show.
+  expect(storySpans(withReuse, sections, { start: 2995, end: 3300 }, 30)).toEqual([]);
+  // A script whose story wasn't found (all "Intro n/m"): its footage between the cut-ins, still not the outro.
+  const allIntro: Sections = { intro: [0, 3000], intro_splits: 2, outro: [3000, 3300], parts: [part("intro", 0, 1500), part("broll", 1500, 1590), part("intro", 1590, 3000), part("outro", 3000, 3300)] };
+  expect(storySpans(project, allIntro, { start: 0, end: 3300 }, 30)).toEqual([
+    [0, 1500],
+    [1590, 3000],
+  ]);
+  // No script (a subtitled video): all of it, as before.
+  expect(storySpans(project, { intro: null, intro_splits: 1, outro: null, parts: [] }, { start: 0, end: 900 }, 30)).toEqual([[0, 900]]);
+
+  const plan = { start: 0, end: 3300 };
+  const whole = withWatermark(project, plan, logo).clips.at(-1)!;
+  const marked = withWatermark(project, plan, logo, spans);
+  const clips = marked.clips.filter((one) => one.track === marked.tracks.at(-1)!.id);
+  expect(clips.map((one) => [one.start, one.start + one.duration])).toEqual(spans);
+  expect(new Set(clips.map((one) => one.id)).size).toBe(3);
+  // Each clip's logo is where the one bounce across the export has it, frame for frame.
+  for (const clip of clips) {
+    for (let frame = clip.start; frame <= clip.start + clip.duration; frame += 13) {
+      expect(valueAt(clip.keyframes!.x!, frame - clip.start)).toBeCloseTo(valueAt(whole.keyframes!.x!, frame), 6);
+      expect(valueAt(clip.keyframes!.y!, frame - clip.start)).toBeCloseTo(valueAt(whole.keyframes!.y!, frame), 6);
+    }
+    if (clip.type !== "video") throw new Error("a picture clip");
+    expect(clip.transform.x).toBeCloseTo(valueAt(whole.keyframes!.x!, clip.start), 6);
+  }
+  // Nothing to show it over: no watermark at all.
+  expect(withWatermark(project, plan, logo, [])).toBe(project);
 });

@@ -276,6 +276,20 @@ export function cachedCuts(source: string): number[] | null {
   }
 }
 
+/**
+ * The cuts that stand alone: the scene finder samples two frames a second,
+ * and a bodycam walking into a flat changes as much every half second
+ * (Serial Predator's entry footage had a "cut" every 0.5 s, so every slowed
+ * B-roll shot of it was flagged; JJ's Predator Son & Dad, Nov 6: about 25
+ * slowed bodycam shots refused smoothing for "cuts" 0.5 s in). An edit's cut
+ * has none within LONE seconds.
+ */
+const LONE = 1.5;
+export function lone(cuts: readonly number[]): number[] {
+  const sorted = [...cuts].sort((a, b) => a - b);
+  return sorted.filter((cut, index) => (index === 0 || cut - sorted[index - 1]! > LONE) && (index === sorted.length - 1 || sorted[index + 1]! - cut > LONE));
+}
+
 /** Runs `work` over `items`, at most `limit` at a time; results in the items' order. */
 export async function atOnce<T, R>(items: T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);

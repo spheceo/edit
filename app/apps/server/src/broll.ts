@@ -308,10 +308,12 @@ function backfillSoon(app: App, projectId: string): void {
  */
 /**
  * A cut found at two frames a second (`seats.cutsOf`), to the frame: the
- * biggest scene change FFmpeg sees within half a second of it, or the rough
- * time when it sees none.
+ * biggest scene change FFmpeg sees within half a second of it. None there
+ * means no cut (a bodycam turning changes as much between two samples half a
+ * second apart, and no frame of it is a new scene); the rough time stands
+ * only when FFmpeg couldn't look.
  */
-export async function exactCut(source: string, rough: number): Promise<number> {
+export async function exactCut(source: string, rough: number): Promise<number | null> {
   const from = Math.max(rough - 0.6, 0);
   const remote = tools.isUrl(source) ? ["-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source)] : [];
   const found = await ffmpeg(["-hide_banner", "-loglevel", "info", ...remote, "-ss", fixed(from, 3), "-t", "1.2", "-i", source, "-an",
@@ -323,7 +325,8 @@ export async function exactCut(source: string, rough: number): Promise<number> {
     const score = /lavfi\.scene_score=([\d.]+)/u.exec(line);
     if (score && at !== null && (best === null || Number(score[1]) > best[1])) best = [from + at, Number(score[1])];
   }
-  return best === null ? rough : best[0];
+  if (best !== null) return best[0];
+  return found.ok && !found.timedOut ? null : rough;
 }
 
 export async function smoothSlowMotion(app: App, projectId: string, clipId: string): Promise<Json> {
@@ -351,8 +354,10 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
   if (cuts === null) {
     try { cuts = await seats.cutsOf(source.path); } catch { cuts = []; }
   }
-  // Those are found at two frames a second: the ones near this stretch to the frame.
-  cuts = await Promise.all(cuts.filter((cut) => cut > clip.source_in - 0.6 && cut < clip.source_in + length + 0.6).map((cut) => exactCut(source.path, cut)));
+  // Those are found at two frames a second: the ones that stand alone (not a
+  // camera moving) near this stretch, to the frame.
+  const near = seats.lone(cuts).filter((cut) => cut > clip.source_in - 0.6 && cut < clip.source_in + length + 0.6);
+  cuts = (await Promise.all(near.map((cut) => exactCut(source.path, cut)))).filter((cut) => cut !== null);
   const played = clip.source_in + (clip.duration / fps) * speed;
   const crossed = cuts.find((cut) => cut > clip.source_in + 0.02 && cut < played - 0.02);
   if (crossed !== undefined) throw new CrossesCut(`${clipId} plays across a cut in its footage ${fixed(crossed - clip.source_in, 2)} s in: split it at the cut (or trim it to one side) before smoothing; smoothing across a cut morphs one scene into the next`);
@@ -741,8 +746,9 @@ export function smoothInBackground(app: App, projectId: string, clipIds: string[
               kept.set(clipId, { shape, why: error.message.replace(`${clipId} `, "") });
               refusedSmoothing.set(projectId, kept);
             }
-            // The edit moved on (the clip cut or changed): nothing to smooth, not a failure.
-            if (!(error instanceof Superseded)) throw error;
+            // The edit moved on (the clip cut or changed), or it plays across a
+            // cut and the agent's reports say so: nothing to smooth, not a failure.
+            if (!(error instanceof Superseded) && !(error instanceof CrossesCut)) throw error;
             diag.info("agent", `not smoothing ${clipId} in ${projectId}: ${error.message}`);
           }
         });

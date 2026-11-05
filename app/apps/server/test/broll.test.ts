@@ -443,7 +443,9 @@ test("a cut found at two frames a second is found again to the frame", async () 
   const made = Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=30:duration=1.3667", "-f", "lavfi", "-i", "smptebars=size=320x240:rate=30:duration=2",
     "-filter_complex", "[0][1]concat=n=2:v=1[v]", "-map", "[v]", "-c:v", "libx264", file]);
   expect(made.exitCode).toBe(0);
-  expect(Math.abs((await broll.exactCut(file, 1.5)) - 1.3667)).toBeLessThan(0.04);
+  expect(Math.abs((await broll.exactCut(file, 1.5))! - 1.3667)).toBeLessThan(0.04);
+  // Half a second of one moving picture: no frame of it is a new scene, so no cut.
+  expect(await broll.exactCut(file, 0.7)).toBeNull();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -490,6 +492,37 @@ test("a place label on a cloud project's map, or its slowed copy, is pinned from
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null)("a scene finder's cut with no new scene at any frame (a camera moving) doesn't stop smoothing", async () => {
+  // JJ's Predator Son & Dad, Nov 6: about 25 slowed bodycam shots refused for "cuts" 0.5 s in.
+  const { app, cleanup, dir } = fixtureHome("smooth-false-cut");
+  try {
+    const file = join(dir, "moving.mp4");
+    const made = Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30:duration=8", "-c:v", "libx264", file]);
+    expect(made.exitCode).toBe(0);
+    const live = app.store.create("p", { width: 160, height: 120, fps: 30 });
+    const project = structuredClone(live.project) as Project;
+    project.media = [{ id: "m1", name: "moving.mp4", path: file, kind: "video", duration: 8, width: 160, height: 120, fps: 30, has_audio: false }];
+    project.clips = [{
+      id: "c1", track: project.tracks[0]!.id, start: 0, duration: 60, color: "blue", fade_in: 0, fade_out: 0,
+      type: "video", media: "m1", source_in: 3.5, speed: 0.5, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1,
+    } as VideoClip];
+    await app.store.replace(project.id, null, project, "test");
+    // A "cut" at 4 s inside the shot, as the two-a-second scan can find one in moving footage.
+    const cache = mediaCache(file)!;
+    fs.mkdirSync(cache, { recursive: true });
+    fs.writeFileSync(join(cache, "cuts-v1.json"), JSON.stringify([4]));
+    expect(broll.smoothInBackground(app, project.id, ["c1"])).toEqual(["c1"]);
+    expect(await broll.waitForSmoothing(project.id, 120_000)).toBe(true);
+    const now = app.store.get(project.id)!.project;
+    expect(broll.smoothingPending(project.id, now)).toEqual([]);
+    const clip = now.clips.find((one) => one.id === "c1") as VideoClip;
+    expect(clip.media).not.toBe("m1");
+    expect(clip.speed).toBe(1);
+  } finally {
+    cleanup();
+  }
+}, 180_000);
 
 test.skipIf(ffmpeg === null)("a slowed clip across a cut is refused once, said in the agent's reports, and looked at again only once it changes", async () => {
   const { app, cleanup, dir } = fixtureHome("smooth-cut");

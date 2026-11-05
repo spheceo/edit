@@ -116,6 +116,6 @@ test("another channel's subtitles burned into the footage are flagged with the s
 });
 
 test("cuts every half second (a bodycam walking) aren't cuts; one standing alone is", async () => {
-  const { lone } = await import("../src/onscreen.ts");
+  const { lone } = await import("../src/seats.ts");
   expect(lone([0.5, 1.5, 2, 3, 3.5, 5.5, 6, 6.5, 30, 44.5, 45.5])).toEqual([30]);
 });

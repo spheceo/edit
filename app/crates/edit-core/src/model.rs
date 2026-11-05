@@ -1538,6 +1538,11 @@ pub struct Grade {
     /// An unsharp mask, 0..1: edges and faces crisper (horror's look on people).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub sharpen: f32,
+    /// A spherical lens over the picture, -1..1: the middle bulges toward the
+    /// viewer (After Effects' CC Lens, which horror's guide uses "from time to
+    /// time"); negative pinches it. Keyframed in and out as a move.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub lens: f32,
 }
 
 impl Default for Grade {
@@ -1561,6 +1566,7 @@ impl Default for Grade {
             fade: 0.0,
             chromatic: 0.0,
             sharpen: 0.0,
+            lens: 0.0,
         }
     }
 }
@@ -1632,11 +1638,16 @@ pub struct Blur {
     pub feather: f32,
     #[serde(default, skip_serializing_if = "BlurShape::is_ellipse")]
     pub shape: BlurShape,
+    /// Pixelated instead of smooth: square blocks this many project px wide
+    /// (0 = the Gaussian). Horror censors a face this way (its guide's
+    /// reference: a child's face in coarse blocks beside the named man).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub mosaic: f32,
 }
 
 impl Blur {
     pub fn is_off(&self) -> bool {
-        self.radius <= 0.0
+        self.radius <= 0.0 && self.mosaic <= 0.0
     }
 
     /// Whether it covers the whole frame (no region given).
@@ -1748,6 +1759,7 @@ pub fn animatable_params(content: &ClipContent) -> &'static [&'static str] {
             "vignette_size",
             "leak",
             "leak_x",
+            "lens",
             "glitch",
             "blur",
             "blur.x",
@@ -2836,6 +2848,7 @@ mod validation_tests {
                 height: 220.0,
                 feather: 0.0,
                 shape: BlurShape::Rect,
+                mosaic: 0.0,
             }
         );
         assert!(!blur.is_off() && !blur.is_whole_frame());

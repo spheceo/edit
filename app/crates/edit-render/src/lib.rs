@@ -88,7 +88,8 @@ struct GradeUniforms {
     /// Chromatic aberration and an unsharp mask (0..1 each).
     chromatic: f32,
     sharpen: f32,
-    _pad2: [f32; 2],
+    lens: f32,
+    _pad2: f32,
 }
 
 #[repr(C)]
@@ -117,7 +118,8 @@ struct RegionBlurUniforms {
     half: [f32; 2],
     size: [f32; 2],
     amount: f32,
-    _pad: f32,
+    /// Block size (target px) when the region is pixelated, else 0.
+    mosaic: f32,
 }
 
 /// Taps each side of a blur pass: about one every 1.5 px over 3 sigma, at most 48.
@@ -1380,7 +1382,8 @@ impl Renderer {
                         height: self.height as f32,
                         chromatic: grade.chromatic,
                         sharpen: grade.sharpen,
-                        _pad2: [0.0; 2],
+                        lens: grade.lens,
+                        _pad2: 0.0,
                     };
                     let offset =
                         slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&uniforms));
@@ -2037,7 +2040,8 @@ impl Renderer {
     ) {
         let (width, height) = (self.width as f32, self.height as f32);
         let texel = [1.0 / width, 1.0 / height];
-        let sigma = blur.radius.max(0.5);
+        // A mosaic's block is one colour: about its average, from a blur a third its size.
+        let sigma = if blur.mosaic > 0.0 { (blur.mosaic * 0.35).max(0.5) } else { blur.radius.max(0.5) };
         let taps = blur_taps(sigma);
         if self
             .blur_scratch
@@ -2116,7 +2120,7 @@ impl Renderer {
             half: [blur.width / 2.0, blur.height / 2.0],
             size: [width, height],
             amount: opacity.clamp(0.0, 1.0),
-            _pad: 0.0,
+            mosaic: blur.mosaic.max(0.0),
         };
         let offset = slots.push(&self.queue, &self.uniforms, bytemuck::bytes_of(&down));
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {

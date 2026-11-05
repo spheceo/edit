@@ -42,6 +42,44 @@ export function markerPng(width: number, height: number, rect: Rect): Uint8Array
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR", header), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
 }
 
+/**
+ * Horror's highlighter (its guide's Animation 4, after Styks' marker: "our
+ * main reference because of its roughened edges. However, instead of yellow…
+ * we want the highlight to be red while keeping the roughened edges"): red
+ * ink a little past the words, its top and bottom torn unevenly and its
+ * ends ragged, a darker edge where the marker pooled, and a soft red glow
+ * round it (Sirius' red highlight glows).
+ */
+export function roughMarkerPng(width: number, height: number, rect: Rect): Uint8Array {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width * height > 12_000_000) throw new Error("screenshot too large for a highlight");
+  rectOf(rect, width, height);
+  const h = rect.height; const over = h * 0.12; const glow = h * 0.3;
+  // A fixed pattern per rectangle, so the same mark draws the same way every time.
+  const seed = (rect.x * 7.13 + rect.y * 3.71 + rect.width) % 97;
+  const noise = (t: number) => Math.sin(t * 0.9 + seed) * 0.5 + Math.sin(t * 2.3 + seed * 1.7) * 0.3 + Math.sin(t * 5.1 + seed * 2.9) * 0.2;
+  const left = rect.x - over; const right = rect.x + rect.width + over;
+  const x0 = Math.max(0, Math.floor(left - glow)); const x1 = Math.min(width, Math.ceil(right + glow));
+  const y0 = Math.max(0, Math.floor(rect.y - over - glow)); const y1 = Math.min(height, Math.ceil(rect.y + h + over + glow));
+  return rgbaPng(width, height, (x, y) => {
+    if (x < x0 || x >= x1 || y < y0 || y >= y1) return null;
+    const unit = h / 9;
+    const top = rect.y + noise(x / unit) * h * 0.05 + (Math.sin(x * 1.7) * 0.5) * h * 0.015;
+    const bottom = rect.y + h + noise(x / unit + 40) * h * 0.06 + (Math.sin(x * 2.3) * 0.5) * h * 0.015;
+    const l = left + noise(y / unit + 80) * h * 0.12; const r = right + noise(y / unit + 120) * h * 0.12;
+    // Distance inside the torn shape (negative outside).
+    const inside = Math.min(y - top, bottom - y, x - l, r - x);
+    if (inside >= 0) {
+      const edge = Math.min(1, inside / (h * 0.09));
+      // Pooled ink at the edge: a deeper red.
+      const shade = 0.78 + 0.22 * edge;
+      return [228 * shade, 22 * shade, 22 * shade, 240];
+    }
+    const out = -inside; if (out > glow) return null;
+    const a = Math.pow(1 - out / glow, 2) * 0.3;
+    return [235, 30, 30, 255 * a];
+  });
+}
+
 /** An RGBA picture as PNG bytes, from a pixel function (0–255 each). */
 export function rgbaPng(width: number, height: number, pixel: (x: number, y: number) => [number, number, number, number] | null): Uint8Array {
   const stride = width * 4 + 1; const raw = Buffer.alloc(stride * height);
@@ -85,10 +123,12 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
   // with Screen, as the reference's tweet highlight does; Multiply would turn
   // them red and leave the black ground black.
   const dark = args.dark === true;
-  const draw = typeof args.draw_frames === "number" ? Math.max(2, Math.min(60, Math.round(args.draw_frames))) : 14;
+  // Horror's marker is drawn slower ("give each moment room to breathe"; Styks' takes about 20 frames a line).
+  const draw = typeof args.draw_frames === "number" ? Math.max(2, Math.min(60, Math.round(args.draw_frames))) : p.style === "horror" ? 20 : 14;
   if (start < parent.start || end > clipEnd(parent) || end <= start) throw new Error("the highlight must stay within its source card's frames");
   const dir = join(app.store.home, "research", projectId, "highlights"); fs.mkdirSync(dir, { recursive: true });
-  const paths = rects.map((r, i) => { const path = join(dir, `ink-${Date.now()}-${i}.png`); fs.writeFileSync(path, markerPng(media.width, media.height, r)); return path; });
+  const horror = p.style === "horror";
+  const paths = rects.map((r, i) => { const path = join(dir, `ink-${Date.now()}-${i}.png`); fs.writeFileSync(path, (horror ? roughMarkerPng : markerPng)(media.width, media.height, r)); return path; });
   const [, ids, errors] = await importPaths(app, projectId, paths, false, "agent"); if (ids.length !== paths.length) throw new Error(errors.join("; "));
   const [, made] = await app.store.update(projectId, "agent", (project) => {
     const original = on(project, args.on as string); const made: string[] = [];
@@ -103,7 +143,7 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
       }
       keyframes["crop.right"] = [{ frame: 0, value: Math.min(0.9999, 1 - r.x / media.width), ease: "linear" }, { frame: Math.min(draw, duration - 1), value: Math.max(0, 1 - (r.x + r.width) / media.width), ease: "linear" }];
       const id = freshId(project, "c");
-      project.clips.push(clipFrom({ id, type: "video", name: "Janitor · evidence marker", media: ids[i], track: addTrack(project, "video"), start: at, duration,
+      project.clips.push(clipFrom({ id, type: "video", name: horror ? "Horror · marker" : "Janitor · evidence marker", media: ids[i], track: addTrack(project, "video"), start: at, duration,
         source_in: 0, blend: dark ? "screen" : "multiply", transform: original.transform, opacity: original.opacity, fade_out: Math.min(original.fade_out, duration - 1), keyframes }));
       made.push(id);
     }

@@ -38,7 +38,9 @@ struct Grade {
     // Chromatic aberration and an unsharp mask (0..1 each).
     chromatic: f32,
     sharpen: f32,
-    _q: vec2f,
+    // CC Lens: the middle bulged toward the viewer (negative: pinched).
+    lens: f32,
+    _q: f32,
 };
 
 // A hash in 0..1 per pixel and pattern (the grain's noise).
@@ -109,7 +111,16 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     let moving = any(g.prev != g.shake) || g.prev_turn != g.turn;
     let taps = select(1, BLUR_TAPS, moving);
     let slide = select(0.0, glitch_slide(in.uv.y), g.glitch > 0.0);
-    let start = in.uv + vec2f(slide, 0.0);
+    var start = in.uv + vec2f(slide, 0.0);
+    // CC Lens: the picture as through a sphere, the middle magnified most
+    // and the corners not at all.
+    if (g.lens != 0.0) {
+        let half = vec2f(g.aspect, 1.0) * 0.5;
+        let p = (start - 0.5) * vec2f(g.aspect, 1.0);
+        let rr = clamp(dot(p, p) / dot(half, half), 0.0, 1.0);
+        let k = 1.0 - g.lens * 0.6 * (1.0 - rr);
+        start = p * k / vec2f(g.aspect, 1.0) + 0.5;
+    }
     var sum = vec4f(0.0);
     for (var i = 0; i < taps; i++) {
         let t = (f32(i) + 0.5) / f32(taps);

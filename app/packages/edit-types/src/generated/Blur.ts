@@ -24,4 +24,10 @@ width?: number, height?: number,
  * Project px over which the blur fades out beyond the region's edge
  * (the region itself is always fully blurred).
  */
-feather?: number, shape?: BlurShape, };
+feather?: number, shape?: BlurShape, 
+/**
+ * Pixelated instead of smooth: square blocks this many project px wide
+ * (0 = the Gaussian). Horror censors a face this way (its guide's
+ * reference: a child's face in coarse blocks beside the named man).
+ */
+mosaic?: number, };

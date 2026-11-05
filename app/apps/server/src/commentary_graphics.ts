@@ -4,6 +4,7 @@ import { clipFrom } from "./clips.ts";
 import type { Project } from "./model.ts";
 import { native } from "./native/index.ts";
 import { addTrack, clipEnd, freshId, mediaOf } from "./project.ts";
+import * as horror from "./horror_graphics.ts";
 import { GRADE as HORROR_GRADE, LOOK_NAME as HORROR_LOOK } from "./horror_look.ts";
 
 type Args = Record<string, unknown>;
@@ -44,6 +45,7 @@ const RED = [1, 0, 0, 1];
  * pieces). A short phrase is bigger. soft/typewriter sweep the letters in.
  */
 export function text(p: Project, a: Args): Args {
+  if (p.style === "horror") return horror.title(p, a);
   const [start, end] = span(a); const d = end - start; const h = p.settings.height;
   if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("commentary_text needs text");
   const made: string[] = [];
@@ -146,6 +148,13 @@ function horrorCard(p: Project, a: Args, retro: Record<string, string>): Args {
   const source = number(a, "source_in", 0);
   const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
   const scale = Math.min(number(a, "width", 0.8) * w / (m.width * fit), number(a, "height", 0.8) * h / (m.height * fit));
+  // A page (an article, a channel, a thread) fills the frame, as every
+  // reference shows one (Styks' headlines, Sirius' threads, the guide's AI
+  // Overview and toxic gas frames): its width across the frame, the words
+  // being read at the middle (`focus`, image px), slowly pushing in. A strip
+  // or a post stays a card over the darkened footage (Animation 12).
+  const full = !photo && (typeof a.full === "boolean" ? a.full : m.width >= 900 && m.width / Math.max(m.height, 1) <= 3.2);
+  if (full) return horrorPage(p, a, m, given.id, start, end);
   const made: string[] = [];
   if (a.backdrop !== false) made.push(push(p, { type: "adjustment", name: "Horror · card backdrop", start, duration: d,
     blur: { radius: 5 * k }, grade: { exposure: -1.05, vignette: 0.45 }, fade_in: 8, fade_out: 8 }));
@@ -166,8 +175,35 @@ function horrorCard(p: Project, a: Args, retro: Record<string, string>): Args {
   return { photo: card, clips: made, ...(m.id !== given.id ? { shown: m.id, note: "the screenshot's retro copy (same size: highlight rects stay in its original pixels)" } : {}) };
 }
 
+function horrorPage(p: Project, a: Args, m: NonNullable<ReturnType<typeof mediaOf>>, given: string, start: number, end: number): Args {
+  const d = end - start; const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
+  const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+  // Close, as the references read a page: its lines large, about half its width across the frame (a narrow page a little less close).
+  const zoom = number(a, "fill", Math.min(1.9, Math.max(1.04, m.width / 900)));
+  const scale = (w * zoom) / (m.width * fit);
+  const shownW = m.width * fit * scale; const shownH = m.height * fit * scale; const px = fit * scale;
+  const focus = Array.isArray(a.focus) && a.focus.length === 2 && a.focus.every((v) => typeof v === "number") ? (a.focus as [number, number]) : null;
+  // The words read at the middle (focus, image px); else the page's top left. Never past its edges.
+  // Kept clear of its torn edges (the retro copy's), which belong to a card, not a page.
+  const edge = Math.min(m.width, m.height) * 0.03 * px;
+  const roomX = Math.max(0, (shownW - w) / 2 - edge); const room = Math.max(0, (shownH - h) / 2 - edge);
+  const x = Math.max(-roomX, Math.min(roomX, focus === null ? roomX : (m.width / 2 - focus[0]) * px));
+  const y = Math.max(-room, Math.min(room, focus === null ? room : (m.height / 2 - focus[1]) * px));
+  const made: string[] = [];
+  // Shorter than the frame: the footage behind it darkened, as behind a card.
+  if (shownH < h * 0.98 && a.backdrop !== false) made.push(push(p, { type: "adjustment", name: "Horror · card backdrop", start, duration: d,
+    blur: { radius: 5 * k }, grade: { exposure: -1.05, vignette: 0.45 }, fade_in: 8, fade_out: 8 }));
+  const settle = Math.min(20, Math.floor(d / 3)); const push_ = Math.min(Math.max(number(a, "push", 1.06), 1), 1.4);
+  const page = push(p, { type: "video", media: m.id, source_in: 0, start, duration: d, name: "Horror · screenshot", fade_in: 6, fade_out: 8,
+    transform: { scale, x, y },
+    keyframes: { y: [...arrival(y + 34 * k, y, settle), key(d - 1, y * push_)], x: [key(0, x), key(d - 1, x * push_)], scale: [key(0, scale), key(d - 1, scale * push_)] } });
+  made.push(page);
+  return { photo: page, clips: made, full: true, ...(m.id !== given ? { shown: m.id, note: "the screenshot's retro copy (same size: highlight rects stay in its original pixels)" } : {}) };
+}
+
 /** Clean chapter slate: no baked-in name from a reference episode. */
 export function chapter(p: Project, a: Args): Args {
+  if (p.style === "horror") return horror.chapter(p, a);
   const [start, end] = span(a); const h = p.settings.height; const d = end - start;
   if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("commentary_chapter needs text");
   const made = [push(p, { type: "solid", name: "Janitor · chapter backdrop", start, duration: d, fill: [0.025, 0.028, 0.035, 1] })];
@@ -212,6 +248,7 @@ function horrorLook(p: Project, start: number, end: number): Args {
 /** A portrait and genuinely left-aligned list. Lay out the complete final
  * list from the outset; timed words reveal each bullet without recentering. */
 export function profile(p: Project, a: Args): Args {
+  if (p.style === "horror") return horror.profile(p, a);
   const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width;
   if (!Array.isArray(a.lines) || a.lines.length < 1 || a.lines.length > 5) throw new Error("commentary_profile needs 1–5 lines [{text,at}] (absolute frames)");
   const lines = a.lines.map((v) => {
@@ -501,6 +538,7 @@ export function punch(p: Project, a: Args): Args {
  * stating the obvious, used where a beat earns it, never as a caption.
  */
 export function label(p: Project, a: Args): Args {
+  if (p.style === "horror") return horror.label(p, a);
   const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
   if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("commentary_label needs text");
   const size = number(a, "size", 74) * k; const text = a.text.trim();
@@ -525,6 +563,7 @@ export function label(p: Project, a: Args): Args {
  * Animation 6 has it ("LUTON, ENGLAND"): rising in, then fading.
  */
 export function location(p: Project, a: Args): Args {
+  if (p.style === "horror") return horror.location(p, a);
   const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width; const k = h / 1080; const d = end - start;
   if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("commentary_location needs text");
   const words = a.text.trim().toUpperCase(); const size = number(a, "size", 58) * k;
@@ -540,6 +579,7 @@ export function location(p: Project, a: Args): Args {
  * guide's Animation 9 ("JAMES WARREN / FORMER CEO, BEAST INDUSTRIES").
  */
 export function icon(p: Project, a: Args): Args {
+  if (p.style === "horror") return horror.icon(p, a);
   const [start, end] = span(a); const h = p.settings.height; const w = p.settings.width; const k = h / 1080; const d = end - start;
   const m = picture(p, a.media, "commentary_icon");
   const made: string[] = [];

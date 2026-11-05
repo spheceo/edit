@@ -79,4 +79,10 @@ chromatic?: number,
 /**
  * An unsharp mask, 0..1: edges and faces crisper (horror's look on people).
  */
-sharpen?: number, };
+sharpen?: number, 
+/**
+ * A spherical lens over the picture, -1..1: the middle bulges toward the
+ * viewer (After Effects' CC Lens, which horror's guide uses "from time to
+ * time"); negative pinches it. Keyframed in and out as a move.
+ */
+lens?: number, };

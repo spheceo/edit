@@ -54,7 +54,9 @@ impl FontBook {
     }
 }
 
-/// Fonts used by Edit. Geist, Montserrat and Reenie Beanie are SIL OFL 1.1.
+/// Fonts used by Edit. Geist, Montserrat, Reenie Beanie, VT323 (horror's VHS
+/// lettering), Tinos (its serif place names) and Arimo (its dates and quotes,
+/// static weights cut from the variable font) are SIL OFL 1.1.
 /// Akwe Pro is the team's commentary reference face; see assets/commentary/README.md
 /// for the review-build source and its separate distribution licence requirement.
 pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
@@ -68,6 +70,11 @@ pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Geist Mono", 500, "GeistMono-Medium.ttf"),
     ("Geist Mono", 600, "GeistMono-SemiBold.ttf"),
     ("Akwe Pro", 700, "AkwePro-Bold.otf"),
+    ("VT323", 400, "VT323-Regular.ttf"),
+    ("Tinos", 400, "Tinos-Regular.ttf"),
+    ("Tinos", 700, "Tinos-Bold.ttf"),
+    ("Arimo", 400, "Arimo-Regular.ttf"),
+    ("Arimo", 700, "Arimo-Bold.ttf"),
 ];
 
 #[cfg(feature = "bundled-fonts")]
@@ -83,6 +90,11 @@ pub fn bundled_font_bytes(file: &str) -> Option<&'static [u8]> {
         "ReenieBeanie.ttf" => include_bytes!("../fonts/ReenieBeanie.ttf"),
         "GeistMono-Medium.ttf" => include_bytes!("../fonts/GeistMono-Medium.ttf"),
         "GeistMono-SemiBold.ttf" => include_bytes!("../fonts/GeistMono-SemiBold.ttf"),
+        "VT323-Regular.ttf" => include_bytes!("../fonts/VT323-Regular.ttf"),
+        "Tinos-Regular.ttf" => include_bytes!("../fonts/Tinos-Regular.ttf"),
+        "Tinos-Bold.ttf" => include_bytes!("../fonts/Tinos-Bold.ttf"),
+        "Arimo-Regular.ttf" => include_bytes!("../fonts/Arimo-Regular.ttf"),
+        "Arimo-Bold.ttf" => include_bytes!("../fonts/Arimo-Bold.ttf"),
         _ => return None,
     })
 }

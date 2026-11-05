@@ -7,6 +7,7 @@ import * as horrorLook from "./horror_look.ts";
 import { clipFrom, keyframesFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
 import * as screen from "./desktop_screen.ts";
+import * as horrorGraphics from "./horror_graphics.ts";
 import * as framing from "./framing.ts";
 import * as vignettes from "./vignettes.ts";
 import * as looks from "./looks.ts";
@@ -188,6 +189,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   });
   // Horror: every tall reel shown full frame stands over its own blurred copy (horror_look.ts).
   horrorLook.fillReels(project);
+  horrorLook.mosaicCensors(project);
   // Text placed or relabelled (a quote, a caption's speaker): one colour per
   // person across the video, as add_subtitles leaves it.
   if (
@@ -514,6 +516,9 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return commentaryGraphics.punch(project, args);
     case "commentary_leak":
       return commentaryGraphics.leak(project, args);
+    case "commentary_lens":
+      if (project.style !== "horror") throw new Error("commentary_lens is horror's (its guide's CC Lens)");
+      return horrorGraphics.lens(project, args);
     case "intro_captions":
       return intro.introCaptions(project, args);
     case "countdown":

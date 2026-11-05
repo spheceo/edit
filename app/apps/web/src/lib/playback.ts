@@ -39,6 +39,11 @@ export const FONTS: [string, number, string][] = [
   ["Reenie Beanie", 400, "ReenieBeanie.ttf"],
   ["Geist Mono", 500, "GeistMono-Medium.ttf"],
   ["Geist Mono", 600, "GeistMono-SemiBold.ttf"],
+  ["VT323", 400, "VT323-Regular.ttf"],
+  ["Tinos", 400, "Tinos-Regular.ttf"],
+  ["Tinos", 700, "Tinos-Bold.ttf"],
+  ["Arimo", 400, "Arimo-Regular.ttf"],
+  ["Arimo", 700, "Arimo-Bold.ttf"],
 ];
 
 let wasmReady: Promise<unknown> | null = null;

@@ -15,7 +15,8 @@ struct Region {
     half: vec2f,
     size: vec2f,
     amount: f32,
-    _p: f32,
+    // Block size (target px) when pixelated, else 0.
+    mosaic: f32,
 };
 
 @group(0) @binding(0) var<uniform> r: Region;
@@ -51,16 +52,21 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     if (cover <= 0.0) {
         return base;
     }
+    // Pixelated: every pixel of a block reads the block's middle.
+    var uv = in.uv;
+    if (r.mosaic > 0.0) {
+        uv = (floor(in.uv * r.size / r.mosaic) + 0.5) * r.mosaic / r.size;
+    }
     let n = i32(r.taps);
     let step = 3.0 * r.sigma / max(r.taps, 1.0);
-    var sum = textureSampleLevel(src, samp, in.uv, 0.0);
+    var sum = textureSampleLevel(src, samp, uv, 0.0);
     var total = 1.0;
     for (var i = 1; i <= n; i = i + 1) {
         let x = f32(i) * step;
         let w = exp(-(x * x) / (2.0 * r.sigma * r.sigma));
         let offset = r.dir * r.texel * x;
-        sum = sum + (textureSampleLevel(src, samp, in.uv + offset, 0.0)
-            + textureSampleLevel(src, samp, in.uv - offset, 0.0)) * w;
+        sum = sum + (textureSampleLevel(src, samp, uv + offset, 0.0)
+            + textureSampleLevel(src, samp, uv - offset, 0.0)) * w;
         total = total + 2.0 * w;
     }
     return mix(base, sum / total, cover);

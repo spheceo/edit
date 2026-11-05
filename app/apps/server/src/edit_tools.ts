@@ -649,6 +649,7 @@ async function coverCutIn(call: ToolCall): Promise<Content[]> {
     const covered = cutin.cover(project, args);
     // Horror: tall reels over their own blurred copy, as after a plan.
     horrorLook.fillReels(project);
+    horrorLook.mosaicCensors(project);
     return covered;
   });
   report.smoothing_started = hooks.smoothInBackground(app, projectId, smooth);
@@ -2345,6 +2346,7 @@ export async function planAssets(app: App, project: Project, operations: Json[])
     assets.screen = { wallpaper: wall, frames: keyed, marks };
   }
   const [retro, aged] = await horrorLook.retroScreenshots(app, project, operations as Record<string, unknown>[]);
+  made.push(...(await horrorLook.drawnIcons(app, project, operations as Record<string, unknown>[])));
   if (aged.length > 0 || Object.keys(retro).length > 0) {
     assets.retro = retro;
     made.push(...aged);

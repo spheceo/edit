@@ -146,6 +146,7 @@ const GRADE = struct("Grade", [
   field("fade", "f32", 0, isZero),
   field("chromatic", "f32", 0, isZero),
   field("sharpen", "f32", 0, isZero),
+  field("lens", "f32", 0, isZero),
 ]);
 
 const SHAKE = struct("Shake", [
@@ -174,6 +175,7 @@ const BLUR = struct("Blur", [
   field("height", "f32", 0, isZero),
   field("feather", "f32", 0, isZero),
   field("shape", enumOf("BlurShape", ["ellipse", "rect"]), "ellipse", (value) => value === "ellipse"),
+  field("mosaic", "f32", 0, isZero),
 ]);
 
 const GRADIENT = struct("Gradient", [required("from", "f32"), required("to", "f32")]);

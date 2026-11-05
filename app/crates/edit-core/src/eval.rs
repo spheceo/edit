@@ -260,6 +260,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         fade: grade.fade.clamp(0.0, 1.0),
                         chromatic: grade.chromatic.clamp(0.0, 1.0),
                         sharpen: grade.sharpen.clamp(0.0, 1.0),
+                        lens: anim("lens", grade.lens).clamp(-1.0, 1.0),
                     },
                     glitch: GlitchFrame {
                         // Amounts are at 1080p.
@@ -278,6 +279,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                         height: anim("blur.height", blur.height).max(0.0),
                         feather: blur.feather.max(0.0),
                         shape: blur.shape,
+                        mosaic: blur.mosaic.max(0.0),
                     }),
                     shake: shake_offset(
                         &clip.id,
@@ -675,6 +677,7 @@ impl Follow {
             height: blur.height * scale,
             feather: blur.feather * scale,
             shape: blur.shape,
+            mosaic: blur.mosaic * scale,
         }
     }
 }

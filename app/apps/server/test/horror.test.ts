@@ -47,7 +47,7 @@ test("the analog look covers every frame, clips included, and taking it again re
 
 test("a horror card shows a screenshot's retro copy over darkened footage, a photo in a white outline, both blurring in", () => {
   const p = horror();
-  const shown = card(p, { media: "shot", start: 30, end: 150 }, { shot: "aged" });
+  const shown = card(p, { media: "shot", start: 30, end: 150, full: false }, { shot: "aged" });
   const photo = p.clips.find((c) => c.id === shown.photo) as { media: string; name: string; frame: { width: number } };
   expect(photo.media).toBe("aged");
   expect(photo.name).toBe("Horror · screenshot");
@@ -63,6 +63,20 @@ test("a horror card shows a screenshot's retro copy over darkened footage, a pho
   expect(framed.media).toBe("shot");
   expect(framed.frame.width).toBeGreaterThan(0);
   expect(framed.frame.glow).toBeGreaterThan(0);
+});
+
+test("a page fills the frame close, framed on the words read, its torn edges off screen; a strip stays a card", () => {
+  const p = horror();
+  const page = card(p, { media: "shot", start: 0, end: 120, focus: [585, 450] }, { shot: "aged" });
+  expect(page.full).toBe(true);
+  const clip = p.clips.find((c) => c.id === page.photo) as { media: string; transform: { scale: number; x: number; y: number } };
+  expect(clip.media).toBe("aged");
+  // 1170 px wide: shown at 1.3 frame widths, its middle on the focus.
+  const fit = Math.min(1920 / 1170, 1080 / 900);
+  expect(1170 * fit * clip.transform.scale).toBeCloseTo(1920 * 1.3, 0);
+  expect(Math.abs(clip.transform.x)).toBeLessThan(1);
+  p.media.push(media({ id: "strip", name: "headline.png", kind: "image", path: "/h.png", duration: 0, width: 900, height: 80 }));
+  expect(card(p, { media: "strip", start: 130, end: 250 }).full).toBeUndefined();
 });
 
 test("the retro filter keeps the screenshot's size and roughens its edges in alpha", () => {
@@ -155,4 +169,52 @@ test("a post that can't be had says why plainly and isn't tried again by itself"
   expect(passing("That post is pictures only, with no video to play. Go on without it (the edit can show it as a screenshot), or give another link.")).toBe(false);
   expect(passing("That post is only shown to someone signed in to instagram. Go on without it, or give another link to the same video.")).toBe(false);
   expect(passing("instagram DU6q9WeEjRX: Read timed out")).toBe(true);
+});
+
+test("horror's titles take the guide's looks: a chapter over a blur, a date at the bottom, a name tag typed in VHS capitals, words on the voice", async () => {
+  const { chapter, label, title } = await import("../src/horror_graphics.ts");
+  const p = horror();
+  const made = chapter(p, { start: 0, end: 120, text: "Bye /R9K/", sub: "case 2:" });
+  const names = (made.clips as string[]).map((id) => p.clips.find((c) => c.id === id)!.name);
+  expect(names).toEqual(["Horror · title backdrop", "Horror · bold title", "Horror · title motion blur", "Horror · bold title line"]);
+  // As written, not forced to capitals (Styks' "Bye /R9K/").
+  expect((p.clips.find((c) => c.id === made.text) as { text: string }).text).toBe("Bye /R9K/");
+  const date = title(p, { start: 130, end: 250, text: "March 14th, 2018", look: "sans", at: "bottom" });
+  const dated = p.clips.find((c) => c.id === date.text) as { style: { font: string }; transform: { y: number } };
+  expect(dated.style.font).toBe("Arimo");
+  expect(dated.transform.y).toBeGreaterThan(300);
+  const tag = label(p, { start: 260, end: 380, text: "Clifford\nWallach" });
+  const tagged = p.clips.find((c) => c.id === tag.text) as { text: string; style: { font: string; background: unknown }; animation: { preset: string }; transform: { x: number } };
+  expect(tagged.text).toBe("CLIFFORD\nWALLACH");
+  expect(tagged.style.font).toBe("VT323");
+  expect(tagged.style.background).toBeDefined();
+  expect(tagged.animation.preset).toBe("typewriter");
+  expect(tagged.transform.x).toBeLessThan(-500);
+  const spoken = title(p, { start: 400, end: 500, text: "arranged to meet", look: "caption", motion: "words", words_at: [400, 410, 420] });
+  expect((p.clips.find((c) => c.id === spoken.text) as { word_times: number[] }).word_times).toEqual([0, 10, 20]);
+  expect(() => title(p, { start: 400, end: 500, text: "two words", motion: "words", words_at: [400] })).toThrow("words_at");
+});
+
+test("Animation 11's icons are drawn by Edit; the CC Lens swells in and out; a censor region is a mosaic", async () => {
+  const { iconPng, lens } = await import("../src/horror_graphics.ts");
+  const { mosaicCensors } = await import("../src/horror_look.ts");
+  for (const icon of ["person", "phone", "folder", "document", "camera"] as const) expect(iconPng(icon, [0.86, 0, 0], 64).length).toBeGreaterThan(100);
+  const p = horror();
+  const made = lens(p, { start: 0, end: 90, strength: 0.7 });
+  const keys = (p.clips.find((c) => c.id === made.clip)!.keyframes as Record<string, { value: number }[]>).lens!;
+  expect(keys[0]!.value).toBe(0);
+  expect(Math.max(...keys.map((k) => k.value))).toBe(0.7);
+  expect(keys.at(-1)!.value).toBe(0);
+  p.clips.push(clip({ id: "face", type: "adjustment", track: "v1", start: 0, duration: 60, blur: { radius: 30, x: 0, y: 0, width: 240, height: 300 } } as never));
+  p.clips.push(clip({ id: "whole", type: "adjustment", track: "v1", start: 0, duration: 60, blur: { radius: 20 } } as never));
+  mosaicCensors(p);
+  expect((p.clips.find((c) => c.id === "face") as { blur: { mosaic: number } }).blur.mosaic).toBe(30);
+  expect((p.clips.find((c) => c.id === "whole") as { blur: { mosaic?: number } }).blur.mosaic).toBeUndefined();
+});
+
+test("horror's marker is red with torn edges and a glow, inside the screenshot", async () => {
+  const { roughMarkerPng } = await import("../src/evidence_highlight.ts");
+  const png = roughMarkerPng(400, 200, { x: 50, y: 80, width: 200, height: 30 });
+  expect(Buffer.from(png.slice(1, 4)).toString()).toBe("PNG");
+  expect(() => roughMarkerPng(400, 200, { x: 300, y: 80, width: 200, height: 30 })).toThrow("fit inside");
 });

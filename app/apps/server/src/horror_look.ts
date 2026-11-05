@@ -16,6 +16,7 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import { iconFile } from "./horror_graphics.ts";
 import { houseMedia } from "./import.ts";
 import type { Media, Project, VideoClip } from "./model.ts";
 import { join } from "./paths.ts";
@@ -60,7 +61,9 @@ export function retroFilter(width: number, height: number): string {
     "eq=saturation=1.12:contrast=1.06:brightness=-0.015",
     "noise=c0s=7:c1s=7:c2s=7:allf=0",
     `rgbashift=rh=-${fringe}:bh=${fringe}`,
-    `drawgrid=w=${cell}:h=${cell}:t=1:c=black@0.2`,
+    // Sirius' scan lines across, Threadbare's fainter grid down.
+    `drawgrid=w=iw:h=${cell}:t=1:c=black@0.24`,
+    `drawgrid=w=${cell * 2}:h=ih:t=1:c=black@0.08`,
     `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(${inset},${threshold}),0,alpha(X,Y))'`,
   ].join(",");
 }
@@ -101,6 +104,30 @@ export async function retroScreenshots(app: App, project: Project, operations: J
     made.push(...fresh);
   }
   return [swaps, made];
+}
+
+/**
+ * Animation 11's icons a plan asks for by name (commentary_icon's `icon`),
+ * drawn and brought into the project: each op's `media` set to its icon.
+ */
+export async function drawnIcons(app: App, project: Project, operations: Json[]): Promise<seams.Made[]> {
+  const made: seams.Made[] = [];
+  if (project.style !== "horror") return made;
+  for (const op of operations) {
+    if (op.op !== "commentary_icon" || op.media !== undefined) continue;
+    const path = iconFile(app.store.home, op);
+    if (path === null) continue;
+    const name = path.split("/").pop()!;
+    const had = project.media.find((m) => m.name === name);
+    if (had !== undefined) { op.media = had.id; continue; }
+    const [ids, fresh] = await houseMedia(app, project, [path]);
+    if (ids[0] === undefined) throw new Error(`the ${String(op.icon)} icon didn't import`);
+    const media = project.media.find((m) => m.id === ids[0]);
+    if (media !== undefined) media.name = name;
+    op.media = ids[0];
+    made.push(...fresh);
+  }
+  return made;
 }
 
 const REEL_BACKDROP = "Horror · reel backdrop";
@@ -148,5 +175,24 @@ export function fillReels(project: Project): void {
     project.clips.push({ ...structuredClone(reel), ...base, id: fresh("c"), track: copyTrack, name: REEL_BACKDROP, link: undefined, transform: { ...(reel.transform ?? {}), x: 0, y: 0, scale: cover, rotation: 0 } } as typeof reel);
     project.clips.push({ id: fresh("c"), type: "adjustment", track: blurTrack, name: REEL_BLUR, ...base,
       blur: { radius: 38 * h / 1080 }, grade: { exposure: -0.85, vignette: 0.3, saturation: -0.15 } } as unknown as typeof reel);
+  }
+}
+
+/**
+ * A face or anything graphic hidden in a horror video is a mosaic, coarse
+ * square blocks, never a smooth blur (the guide's reference: a child's face
+ * in blocks beside the named man; "If it shows gore, bodies or graphic
+ * injuries, censor it"). Edit's call: every region blur over the footage
+ * becomes one, its blocks about an eighth of the region across. Edit's own
+ * blurs (backdrops, motion, another channel's marks) stay smooth.
+ */
+export function mosaicCensors(project: Project): void {
+  if (project.style !== "horror") return;
+  const k = project.settings.height / 1080;
+  for (const clip of project.clips) {
+    if (clip.type !== "adjustment" || /^(Horror|Janitor|Desktop) · |^Mark blur/u.test(clip.name ?? "")) continue;
+    const blur = (clip as { blur?: { radius: number; width?: number; height?: number; mosaic?: number } }).blur;
+    if (blur === undefined || !(blur.radius > 0) || !((blur.width ?? 0) > 0) || !((blur.height ?? 0) > 0) || (blur.mosaic ?? 0) > 0) continue;
+    blur.mosaic = Math.round(Math.min(Math.max(Math.min(blur.width!, blur.height!) / 8, 12 * k), 48 * k));
   }
 }

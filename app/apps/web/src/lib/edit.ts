@@ -521,6 +521,7 @@ const params: Record<string, [Getter, Setter]> = {
   vignette_size: [(c) => (c.type === "adjustment" ? (c.grade.vignette_size ?? 1) : 1), (c, v) => c.type === "adjustment" && (c.grade.vignette_size = v)],
   leak: [(c) => (c.type === "adjustment" ? (c.grade.leak ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.leak = v)],
   leak_x: [(c) => (c.type === "adjustment" ? (c.grade.leak_x ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.leak_x = v)],
+  lens: [(c) => (c.type === "adjustment" ? (c.grade.lens ?? 0) : 0), (c, v) => c.type === "adjustment" && (c.grade.lens = v)],
   glitch: [
     (c) => (c.type === "adjustment" ? (c.glitch?.amount ?? 0) : 0),
     (c, v) => c.type === "adjustment" && (c.glitch = changedGlitch(c.glitch, { amount: v })),
@@ -542,7 +543,7 @@ function animatableParams(clip: Clip): string[] {
   switch (clip.type) {
     case "video": return ["x", "y", "scale", "rotation", "shake", "opacity", "crop.left", "crop.right", "crop.top", "crop.bottom"];
     case "text": return ["x", "y", "scale", "rotation", "shake", "opacity", "size", "tracking", "glow.radius", "glow.strength", "leader.x", "leader.y"];
-    case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "leak", "leak_x", "blur", "blur.x", "blur.y", "blur.width", "blur.height", "opacity"];
+    case "adjustment": return ["shake", "glitch", "exposure", "contrast", "saturation", "temperature", "vignette", "vignette_x", "vignette_y", "vignette_size", "leak", "leak_x", "lens", "blur", "blur.x", "blur.y", "blur.width", "blur.height", "opacity"];
     case "solid": return ["opacity"];
     case "waveform": return ["x", "y", "scale", "rotation", "opacity", "gain", "glow.radius", "glow.strength"];
     case "audio": return ["volume_db"];

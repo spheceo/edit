@@ -493,6 +493,40 @@ test("a place label on a cloud project's map, or its slowed copy, is pinned from
   }
 });
 
+test.skipIf(ffmpeg === null)("an older smoother's renders are put back where they began in their source, its frames read once for all of them", async () => {
+  const { app, cleanup, dir } = fixtureHome("smooth-stale");
+  try {
+    const source = join(dir, "src.mp4");
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30:duration=6", "-c:v", "libx264", source]).exitCode).toBe(0);
+    // Two renders kept no note of where they came from: each starts at a frame of the source.
+    const renders = [["src-0.80x-aaaa11.mp4", 2], ["src-0.80x-bbbb22.mp4", 4]] as const;
+    for (const [name, from] of renders) {
+      expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-ss", String(from), "-i", source, "-t", "1", "-c:v", "libx264", join(dir, name)]).exitCode).toBe(0);
+    }
+    (app.native as { smoothSupported: () => boolean }).smoothSupported = () => true;
+    const live = app.store.create("p", { width: 160, height: 120, fps: 30 });
+    const project = structuredClone(live.project) as Project;
+    const video = (id: string, name: string) => ({ id, name, path: join(dir, name), kind: "video", duration: 1, width: 160, height: 120, fps: 30, has_audio: false }) as Project["media"][number];
+    project.media = [{ ...video("m1", "src.mp4"), duration: 6 }, video("m2", renders[0][0]), video("m3", renders[1][0])];
+    const clip = (id: string, media: string, start: number, sourceIn: number) => ({
+      id, track: project.tracks[0]!.id, start, duration: 15, color: "blue", fade_in: 0, fade_out: 0,
+      type: "video", media, source_in: sourceIn, speed: 1, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1,
+    }) as VideoClip;
+    project.clips = [clip("c1", "m2", 0, 0), clip("c2", "m3", 15, 0.5)];
+    await app.store.replace(project.id, null, project, "test");
+    expect((await broll.smoothStaleAgain(app, project.id)).sort()).toEqual(["c1", "c2"]);
+    expect(await broll.waitForSmoothing(project.id, 120_000)).toBe(true);
+    // Smoothed again from there: the new renders' notes say where (c2 at its own offset into its render, at the speed it was made).
+    const notes = Object.values(JSON.parse(fs.readFileSync(join(app.store.home, "smooth-renders.json"), "utf8")) as Record<string, { source: string; source_in: number; speed: number }>)
+      .sort((a, b) => a.source_in - b.source_in);
+    expect(notes.map((note) => [note.source, note.speed])).toEqual([["m1", 0.8], ["m1", 0.8]]);
+    expect(Math.abs(notes[0]!.source_in - 2)).toBeLessThan(0.04);
+    expect(Math.abs(notes[1]!.source_in - (4 + 0.5 * 0.8))).toBeLessThan(0.04);
+  } finally {
+    cleanup();
+  }
+}, 180_000);
+
 test.skipIf(ffmpeg === null)("a scene finder's cut with no new scene at any frame (a camera moving) doesn't stop smoothing", async () => {
   // JJ's Predator Son & Dad, Nov 6: about 25 slowed bodycam shots refused for "cuts" 0.5 s in.
   const { app, cleanup, dir } = fixtureHome("smooth-false-cut");

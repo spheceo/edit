@@ -535,10 +535,15 @@ function noteRender(home: string, name: string, render: Render): void {
 /** A smoothed render's name: `<the source's stem>-<speed>x-<key>.mp4`. */
 const RENDER_NAME = /^(?<stem>.+)-(?<speed>\d+\.\d{2})x-[0-9a-f]+\.mp4$/u;
 
-/** A frame's small grey picture (32×18), for finding where a render began in its source. */
-async function signatures(path: string): Promise<Uint8Array[]> {
+/**
+ * Each frame's small grey picture (32×18), for finding where a render began
+ * in its source: decoded on the Mac's video hardware where it can be (a
+ * 14-minute cloud source ran past two minutes in software, JJ's Mac, Nov 5–6).
+ */
+async function signatures(path: string, timeoutMs: number): Promise<Uint8Array[]> {
   const remote = tools.isUrl(path) ? ["-protocol_whitelist", tools.protocols(path), ...tools.urlArgs(path)] : [];
-  const raw = await tools.run([tools.ffmpeg(), "-v", "error", ...remote, "-i", path, "-an", "-vf", "scale=32:18,format=gray", "-f", "rawvideo", "-"], { timeoutMs: 120_000 });
+  const hardware = process.platform === "darwin" ? ["-hwaccel", "videotoolbox"] : [];
+  const raw = await tools.run([tools.ffmpeg(), "-v", "error", ...remote, ...hardware, "-i", path, "-an", "-vf", "scale=32:18,format=gray", "-f", "rawvideo", "-"], { timeoutMs });
   const frames: Uint8Array[] = [];
   for (let at = 0; at + 576 <= raw.length; at += 576) frames.push(raw.subarray(at, at + 576));
   return frames;
@@ -565,6 +570,18 @@ export function nearestFrame(first: Uint8Array, frames: Uint8Array[]): number | 
  * name (its source's stem and speed) and its first frame (the source's frame
  * nearest it). Returns the clips smoothed again.
  */
+/**
+ * Renders whose source wasn't found, by name: not looked for again while Edit
+ * runs. Every render of a long source decoded all of it again, two minutes
+ * each until it was stopped, and each opening of the project began again
+ * (JJ's Mac, Nov 5: one interrogation's footage, 34 times).
+ */
+const unplaced = new Set<string>();
+
+/** How long a source's frames may take to read (a render's own are seconds). */
+const SOURCE_SIGNATURES_MS = 10 * 60_000;
+const RENDER_SIGNATURES_MS = 2 * 60_000;
+
 export async function smoothStaleAgain(app: App, projectId: string): Promise<string[]> {
   const live = app.store.get(projectId);
   if (live === null || !app.native.smoothSupported()) return [];
@@ -574,6 +591,8 @@ export async function smoothStaleAgain(app: App, projectId: string): Promise<str
   const fps = fpsOf(project);
   const back: { clip: string; media: string; source_in: number; speed: number }[] = [];
   const found = new Map<string, { media: string; source_in: number; speed: number } | null>();
+  // A source's frames, read once for all its renders.
+  const sourceFrames = new Map<string, Promise<Uint8Array[]>>();
   for (const clip of project.clips) {
     if (clip.type !== "video") continue;
     const render = mediaOf(project, clip.media);
@@ -581,7 +600,7 @@ export async function smoothStaleAgain(app: App, projectId: string): Promise<str
     const parts = RENDER_NAME.exec(name)?.groups;
     if (render === undefined || parts === undefined || Math.abs(clip.speed - 1) > 1e-6) continue;
     const note = notes[name];
-    if (note?.smoother === smoother) continue;
+    if (note?.smoother === smoother || unplaced.has(name)) continue;
     if (!found.has(name)) {
       let origin: { media: string; source_in: number; speed: number } | null = null;
       try {
@@ -589,8 +608,13 @@ export async function smoothStaleAgain(app: App, projectId: string): Promise<str
         else {
           const source = project.media.find((m) => m.kind === "video" && m.id !== render.id && fileStem(m.name) === parts.stem && !RENDER_NAME.test(m.name));
           if (source !== undefined) {
-            const [first] = await signatures(render.path);
-            const at = first === undefined ? null : nearestFrame(first, await signatures(source.path));
+            const [first] = await signatures(render.path, RENDER_SIGNATURES_MS);
+            let frames = sourceFrames.get(source.path);
+            if (frames === undefined) {
+              frames = signatures(source.path, SOURCE_SIGNATURES_MS);
+              sourceFrames.set(source.path, frames);
+            }
+            const at = first === undefined ? null : nearestFrame(first, await frames);
             if (at !== null) origin = { media: source.id, source_in: at / Math.max(source.fps || fps, 1), speed: Number(parts.speed) };
           }
         }
@@ -598,6 +622,7 @@ export async function smoothStaleAgain(app: App, projectId: string): Promise<str
         diag.warn("broll", `finding where ${name} came from: ${diag.messageOf(error)}`);
       }
       found.set(name, origin);
+      if (origin === null) unplaced.add(name);
     }
     const origin = found.get(name);
     if (origin === null || origin === undefined) continue;

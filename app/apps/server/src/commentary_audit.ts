@@ -226,7 +226,7 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
       if (c.type !== "video" || !/Horror · screenshot$/u.test(c.name ?? "")) continue;
       if (marks.some((m) => m.start >= c.start && m.start < clipEnd(c))) continue;
       out.push({ kind: "horror_unhighlighted_screenshot", clip: c.id, start: c.start,
-        fix: "the highlighter \"is the one we use most\": highlight_evidence on this screenshot over the exact words the narration reads (red, roughened edges), or show something else here" });
+        fix: "the highlighter \"is the one we use most\": highlight_evidence on this screenshot over the exact words the narration reads (red, roughened edges). If it isn't a page with words (a photo, a still or a frame of footage), it's no screenshot: commentary_card it again with photo: true, or place the footage itself" });
     }
     // "Stock footage is the exception, not the rule": real footage of the story is 75–90% of the B-roll.
     const broll = live.filter((c): c is Extract<Clip, { type: "video" }> => c.type === "video" && /B-roll/u.test(c.name ?? "") && mediaOf(p, c.media)?.kind === "video");

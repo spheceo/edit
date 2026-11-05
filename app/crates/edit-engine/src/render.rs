@@ -445,8 +445,9 @@ impl VideoReader {
             self.restart(time)?;
         }
         self.frame.resize(self.source.bytes(), 0);
-        let target = target(self);
-        while !self.eof && self.next_index <= target {
+        let mut want = target(self);
+        let mut backed_off = false;
+        while !self.eof && self.next_index <= want {
             let Some((child, stdout)) = self.child.as_mut() else {
                 break;
             };
@@ -468,6 +469,20 @@ impl VideoReader {
                     // End of source: hold the last frame.
                     self.eof = true;
                     break;
+                }
+                // Asked for its very end (an 8.0 s map's frame at 8.0 s, a
+                // look_at_media sample at a clip's last instant): the seek
+                // lands past the last frame and nothing comes. Start a second
+                // earlier and hold the last frame there is.
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::UnexpectedEof
+                        && !backed_off
+                        && self.start > 0.0 =>
+                {
+                    backed_off = true;
+                    let earlier = (self.start - 1.0).max(0.0);
+                    self.restart(earlier)?;
+                    want = target(self);
                 }
                 Err(error) => {
                     return Err(format!(
@@ -3630,6 +3645,31 @@ mod tests {
                     assert_eq!(counted(&frame), n, "native at {time:.4}");
                 }
             }
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_frame_asked_at_the_very_end_is_the_last_one() {
+        // look_at_media sampled an 8.0 s map at 8.0 s: the seek landed past
+        // the last frame and the reader failed ("failed to fill whole buffer").
+        let dir = temp_dir("end");
+        let path = frame_counter(&dir);
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": path, "kind": "video",
+            "duration": 2.0, "width": 64, "height": 36, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, path.clone(), (64, 36), Order::Rgba);
+        for time in [2.0, 2.05, 1.99] {
+            #[allow(unused_mut)]
+            let mut reader = VideoReader::open(source.clone());
+            #[cfg(target_os = "macos")]
+            {
+                reader.native_failed = true;
+            }
+            let got = counted(reader.frame_at(time).unwrap());
+            assert_eq!(got, 59, "at {time:.3} s");
         }
         std::fs::remove_dir_all(dir).ok();
     }

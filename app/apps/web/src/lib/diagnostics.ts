@@ -72,7 +72,34 @@ export function note(level: Level, area: string, message: string) {
 }
 
 /** Records how long something took here (requests include the network). */
+/** Playback's own timings ("preview: …", "script preview: …") not yet sent to the server, by name. */
+const unsent = new Map<string, number[]>();
+/** Timings the Mac's report carries (the server keeps them as "ui: <name>"): how playback goes, not only its stalls. */
+const SENT = /^(preview|script preview):/u;
+
+/**
+ * Sends playback's timings to the server once a minute, so a teammate's
+ * report (and remote ask) has every wait for a frame, smooth or live, playing
+ * or paused, not only the ones long enough to warn (Nov 5: JJ's Mac had no
+ * record of the waits under 10 s).
+ */
+function sendTimings() {
+  if (unsent.size === 0) return;
+  const batch = [...unsent].map(([name, ms]) => ({ name, ms: ms.slice(-200) }));
+  unsent.clear();
+  void fetch("/api/diagnostics/timings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ timings: batch }), keepalive: true }).catch(() => {});
+}
+if (typeof window !== "undefined") {
+  setInterval(sendTimings, 60_000);
+  window.addEventListener("pagehide", sendTimings);
+}
+
 export function recordTiming(name: string, ms: number, failed = false) {
+  if (SENT.test(name)) {
+    const list = unsent.get(name) ?? [];
+    list.push(Math.round(ms));
+    unsent.set(name, list);
+  }
   let stat = timings.get(name);
   if (!stat) timings.set(name, (stat = { count: 0, failed: 0, totalMs: 0, maxMs: 0, recent: [] }));
   stat.count++;

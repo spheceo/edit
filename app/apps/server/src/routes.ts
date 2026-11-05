@@ -115,6 +115,7 @@ export function buildRouter(): Router<App> {
   seams.voice.routes(router);
   router
     .post("/api/diagnostics/client", clientLog)
+    .post("/api/diagnostics/timings", clientTimings)
     .get("/api/update", updateStatus)
     .post("/api/update", updateInstall)
     .put("/api/update/channel", updateChannel)
@@ -405,6 +406,24 @@ async function setup({ app }: Context): Promise<Response> {
     },
   );
   return json({ checks });
+}
+
+/**
+ * The window's playback timings (each wait for a frame, smooth or live; the
+ * script player's starts and stalls), kept with the server's as "ui: <name>"
+ * so a Mac's report and remote ask show how playback goes there.
+ */
+async function clientTimings(context: Context): Promise<Response> {
+  const given = (await body(context)) as { timings?: unknown };
+  const list = Array.isArray(given.timings) ? given.timings.slice(0, 40) : [];
+  for (const one of list) {
+    const { name, ms } = (one ?? {}) as { name?: unknown; ms?: unknown };
+    if (typeof name !== "string" || !/^(preview|script preview): [\w ,()]{1,80}$/u.test(name) || !Array.isArray(ms)) continue;
+    for (const sample of ms.slice(0, 200)) {
+      if (typeof sample === "number" && Number.isFinite(sample) && sample >= 0 && sample <= 3_600_000) diag.record("ui", `ui: ${name}`, sample, null);
+    }
+  }
+  return json({ ok: true });
 }
 
 /** The UI's own problems, kept with the server's so one report has both. */

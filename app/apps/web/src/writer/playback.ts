@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import { isCutIn } from "./clips";
 import { Decoder, videoTime } from "../lib/decoder";
 import { AUDIO_CHUNK_SECONDS } from "../lib/decoder.protocol";
-import { note } from "../lib/diagnostics";
+import { note, recordTiming } from "../lib/diagnostics";
 import type { Clip } from "./types";
 
 /**
@@ -504,6 +504,7 @@ export class ScriptPlayer implements Player {
           this.frame = requestAnimationFrame(tick);
           return;
         }
+        recordTiming("script preview: waiting to start", waited);
         if (waited >= SLOW_WAIT_MS) note("warn", "preview", `The script's preview waited ${(waited / 1000).toFixed(1)} s for its picture at ${Math.round(pos / 1000)} s`);
         this.setBuffering(false);
         this.clockStart = audio.currentTime + 0.05;
@@ -526,6 +527,7 @@ export class ScriptPlayer implements Player {
       else if (this.missingSince === 0) this.missingSince = performance.now();
       else if (performance.now() - this.missingSince > STALL_MS) {
         // Fallen behind the picture (a cut's footage not in yet, a slow read): hold here until it is.
+        recordTiming("script preview: stalled while playing", performance.now() - this.missingSince);
         this.holdAt(pos);
       }
       this.report();

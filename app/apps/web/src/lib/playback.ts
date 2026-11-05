@@ -82,6 +82,8 @@ class Preview {
   /** Waiting on a frame for long enough that something's probably wrong. */
   stuck = false;
   private waitingSince: number | undefined;
+  /** What the wait was for, for its timing: smooth or live, playing or paused. */
+  private waitingKind = "";
   private stuckTimer: ReturnType<typeof setTimeout> | undefined;
   private bufferingTimer: ReturnType<typeof setTimeout> | undefined;
   private persistTimer: ReturnType<typeof setTimeout> | undefined;
@@ -609,7 +611,12 @@ class Preview {
   play() {
     if (!this.project || playhead.playing || this.duration <= 0 || this.error) return;
     if (playhead.frame >= this.duration - 1) playhead.frame = 0;
-    if (this.smooth && this.video && this.smoothAt(playhead.frame, Math.round(rate(this.project.settings)))) { this.playSmooth(this.video); return; }
+    if (this.smooth && this.video && this.smoothAt(playhead.frame, Math.round(rate(this.project.settings)))) {
+      recordTiming("preview: play (smooth)", 0);
+      this.playSmooth(this.video);
+      return;
+    }
+    recordTiming("preview: play (live)", 0);
     // Live from here: the render (hidden since a scrub past its chunks) is silent first.
     this.stopSmooth();
     playhead.playing = true;
@@ -1103,6 +1110,7 @@ class Preview {
     if (waiting) {
       if (this.waitingSince === undefined) {
         this.waitingSince = performance.now();
+        this.waitingKind = `${this.smoothShown ? "smooth" : "live"}, ${playhead.playing ? "playing" : "paused"}`;
         this.stuckTimer = setTimeout(() => {
           this.stuck = true; this.notify();
           note("warn", "preview", `Still waiting for frame ${Math.floor(playhead.frame)} after ${STUCK_MS / 1000} s`);
@@ -1113,7 +1121,7 @@ class Preview {
       }, BUFFERING_BADGE_MS);
     } else {
       if (this.waitingSince !== undefined) {
-        recordTiming("preview: waiting for a frame", performance.now() - this.waitingSince);
+        recordTiming(`preview: waiting for a frame (${this.waitingKind})`, performance.now() - this.waitingSince);
         this.waitingSince = undefined;
         clearTimeout(this.stuckTimer);
         if (this.stuck) { this.stuck = false; this.notify(); }

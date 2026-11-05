@@ -29,6 +29,7 @@ let days: Record<string, Day> | null = null;
 export function use(dir: string): void {
   home = dir;
   days = null;
+  sessions = null;
 }
 
 function loaded(): Record<string, Day> | null {
@@ -68,17 +69,62 @@ function today(all: Record<string, Day>, now: number): Day {
   return all[key]!;
 }
 
-/** One Claude call's cost (dollars at API prices) under `label`, ending `now` after running `ms`. */
-export function record(label: string, usd: number, now: number = Date.now(), ms = 0): void {
+// Claude Code's `total_cost_usd` is its session's whole cost so far, carried
+// over when a session is resumed (Nov 5, JJ's Mac: one chat's turns read
+// $15.85, $16.02, $16.16 … $18.19; a two-minute turn "cost" $20.37 that was
+// $0.65), so every turn of a long chat was counted again with all before it.
+// What a call spent is its session's total less what that session had already
+// reached, kept across restarts (a total lower than that is a fresh count).
+
+/** Sessions' totals so far, the most recent last. */
+const SESSIONS = "claude-sessions.json";
+const SESSIONS_KEPT = 500;
+let sessions: Map<string, number> | null = null;
+
+function sessionTotals(): Map<string, number> {
+  if (sessions === null) {
+    const raw = home !== null && fs.existsSync(join(home, SESSIONS)) ? readState(join(home, SESSIONS)) : null;
+    sessions = new Map(Array.isArray(raw) ? (raw as unknown[]).filter((one): one is [string, number] => Array.isArray(one) && typeof one[0] === "string" && typeof one[1] === "number") : []);
+  }
+  return sessions;
+}
+
+/** What a call in `session` spent, given its session's `total` so far. */
+export function spentNow(session: string | null | undefined, total: number): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  if (!session) return total;
+  const totals = sessionTotals();
+  const before = totals.get(session) ?? 0;
+  totals.delete(session);
+  totals.set(session, total);
+  while (totals.size > SESSIONS_KEPT) totals.delete(totals.keys().next().value!);
+  if (home !== null) {
+    try {
+      writeAtomic(join(home, SESSIONS), JSON.stringify([...totals]));
+    } catch {
+      // Only a tally.
+    }
+  }
+  return total >= before ? total - before : total;
+}
+
+/**
+ * One Claude call's cost (dollars at API prices) under `label`, ending `now`
+ * after running `ms`. Given its `session`, `usd` is that session's total so
+ * far (Claude Code's `total_cost_usd`) and only what this call added counts.
+ * Answers the dollars counted.
+ */
+export function record(label: string, usd: number, now: number = Date.now(), ms = 0, session?: string | null): number {
   const all = loaded();
-  if (all === null) return;
+  if (all === null) return session === undefined ? usd : spentNow(session, usd);
   const day = today(all, now);
   const key = labelOf(label);
   const [spent, calls] = day.calls[key] ?? [0, 0];
-  const dollars = Number.isFinite(usd) ? usd : 0;
+  const dollars = session === undefined ? (Number.isFinite(usd) ? usd : 0) : spentNow(session, usd);
   day.calls[key] = [spent + dollars, calls + 1];
   (day.times ??= []).push([now, dollars, Math.max(0, Math.round(n(ms)))]);
   save(all);
+  return dollars;
 }
 
 /** Claude Code said the plan was used up. */

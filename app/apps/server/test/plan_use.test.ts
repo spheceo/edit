@@ -119,3 +119,24 @@ test("each rise of the 5-hour meter goes to what spent meanwhile: Edit, other Cl
   expect(lines.join("\n")).toContain("Terminal in /Users/someone/code/site $5.00 ×1 (opus-5-5)");
   expect(planUse.timeline(24, T + 61 * MIN).filter((line) => line.endsWith("← nothing on this Mac"))).toHaveLength(2);
 });
+
+test("a resumed session's cost counts only what it added: Claude Code's total is the session's so far", () => {
+  // JJ's Mac, Nov 5: one chat's turns read $15.85, $16.02, $16.16 … each counted whole.
+  expect(claudeUsage.record("edit chat claude-sonnet-5-5", 15.85, T, 0, "chat-1")).toBeCloseTo(15.85);
+  expect(claudeUsage.record("edit chat claude-sonnet-5-5", 16.02, T + MIN, 0, "chat-1")).toBeCloseTo(0.17);
+  expect(claudeUsage.record("Claude opus writing section 1 of 8", 2.5, T + MIN, 0, "section-1")).toBeCloseTo(2.5);
+  // Kept across a restart; a session counting afresh (a total lower than before) counts whole.
+  claudeUsage.use(home);
+  expect(claudeUsage.record("edit chat claude-sonnet-5-5", 16.16, T + 2 * MIN, 0, "chat-1")).toBeCloseTo(0.14);
+  expect(claudeUsage.record("edit chat claude-sonnet-5-5", 0.4, T + 3 * MIN, 0, "chat-1")).toBeCloseTo(0.4);
+  expect(claudeUsage.daysKept().at(-1)?.rows.find(([label]) => label.startsWith("edit chat"))?.[1]).toBeCloseTo(15.85 + 0.17 + 0.14 + 0.4);
+});
+
+test("a reset time a little different at each reading is the same window, not a new one", () => {
+  // JJ's Mac, Nov 5: 15:20:00.179913, 15:20:00.070624, 15:19:59.887857: each counted as a new window, 533% in a day.
+  const keep = (minutes: number, five: number, resets: string) => planUse.keep({ at: T + minutes * MIN, five, fiveResets: resets, week: 20, weekResets: null, split: null });
+  keep(0, 32, "2026-11-05T15:20:00.179913+00:00");
+  keep(15, 40, "2026-11-05T15:20:00.070624+00:00");
+  keep(30, 44, "2026-11-05T15:19:59.887857+00:00");
+  expect(planUse.stretches(T - MIN, T + 31 * MIN).map((stretch) => stretch.rose)).toEqual([8, 4]);
+});

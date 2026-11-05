@@ -339,6 +339,9 @@ export interface Stretch {
   outside: number;
 }
 
+/** Reset times this close are one window's. */
+const SAME_RESET_MS = 5 * 60_000;
+
 export function stretches(since: number, now = Date.now()): Stretch[] {
   const list = kept().filter((reading) => reading.at >= since && reading.at <= now);
   const out: Stretch[] = [];
@@ -346,7 +349,10 @@ export function stretches(since: number, now = Date.now()): Stretch[] {
     const a = list[i - 1]!;
     const b = list[i]!;
     if (b.at - a.at > GAP_MS || b.five === null) continue;
-    const sameWindow = a.five !== null && a.fiveResets !== null && a.fiveResets === b.fiveResets;
+    // The reset time comes back a little different at each reading (Nov 5, JJ's Mac:
+    // 15:20:00.179913, 15:20:00.070624, 15:19:59.887857): compared as text, every
+    // reading was a new window and its whole level counted again (533% in a day).
+    const sameWindow = a.five !== null && a.fiveResets !== null && b.fiveResets !== null && Math.abs(Date.parse(a.fiveResets) - Date.parse(b.fiveResets)) < SAME_RESET_MS;
     const rose = sameWindow ? Math.max(0, b.five - a.five!) : b.five;
     out.push({
       from: a.at,

@@ -241,14 +241,14 @@ async function askNow(question: Question): Promise<Answer> {
     const said = typeof result.result === "string" && result.result !== "" ? result.result : errors;
     diag.error("writer", `${question.label}: stopped after ${seconds(began)} (${why}): ${clipped(said, 300)}`);
     // A call cut short spent the plan all the same.
-    if (typeof result.total_cost_usd === "number" && result.total_cost_usd > 0) claudeUsage.record(`${question.label} (failed)`, result.total_cost_usd, Date.now(), ran);
+    if (typeof result.total_cost_usd === "number" && result.total_cost_usd > 0) claudeUsage.record(`${question.label} (failed)`, result.total_cost_usd, Date.now(), ran, sessionOf(result));
     throw stoppedShort(answer.result) ?? noted(explain(said, typeof result.api_error_status === "number" ? result.api_error_status : null), said);
   }
-  answer.costUsd = typeof result.total_cost_usd === "number" ? result.total_cost_usd : 0;
-  answer.session = typeof result.session_id === "string" ? result.session_id : null;
+  answer.session = sessionOf(result);
+  // Its session's total so far, less what a resumed session had spent before.
+  answer.costUsd = claudeUsage.record(question.label, typeof result.total_cost_usd === "number" ? result.total_cost_usd : 0, Date.now(), ran, answer.session);
   answer.text = typeof result.result === "string" ? result.result : null;
   answer.structured = typeof result.structured_output === "object" && result.structured_output !== null ? (result.structured_output as Record<string, unknown>) : null;
-  claudeUsage.record(question.label, answer.costUsd, Date.now(), ran);
   diag.info("writer", `${question.label}: answered in ${seconds(began)} ($${answer.costUsd.toFixed(2)} at API prices; ${why})`);
   return answer;
 }
@@ -364,3 +364,6 @@ export function extractJson(text: string): unknown {
     }
   }
 }
+
+/** A result's session id (null when it names none). */
+const sessionOf = (result: Record<string, unknown>): string | null => (typeof result.session_id === "string" ? result.session_id : null);

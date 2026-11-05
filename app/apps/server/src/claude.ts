@@ -309,7 +309,7 @@ export async function ask(
       const result = message as unknown as Record<string, unknown>;
       const error = resultError(result);
       // Counted whether it answered or not: a call cut short spent the plan all the same.
-      if (typeof result.total_cost_usd === "number") claudeUsage.record(`Claude ${model} answering the agent${error === null ? "" : " (failed)"}`, result.total_cost_usd, Date.now(), typeof result.duration_ms === "number" ? result.duration_ms : 0);
+      if (typeof result.total_cost_usd === "number") claudeUsage.record(`Claude ${model} answering the agent${error === null ? "" : " (failed)"}`, result.total_cost_usd, Date.now(), typeof result.duration_ms === "number" ? result.duration_ms : 0, typeof result.session_id === "string" ? result.session_id : null);
       if (error !== null && planLimit.isLimit(error)) planLimit.note(error);
       if (error !== null) throw new Error(signInProblem(error) ? SIGN_IN_AGAIN : error);
       if (result.structured_output !== undefined) return JSON.stringify(result.structured_output);

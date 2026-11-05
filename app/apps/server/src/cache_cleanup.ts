@@ -519,6 +519,11 @@ export function cleanCache(
       const path = join(chunksDir, project, entry);
       if (age(path, now) >= DOWNLOADED) remove(path);
     }
+    // Its sound kept a minute at a time (smooth playback's, the engine's mix.rs render_kept), the same way.
+    for (const entry of safeList(join(chunksDir, project, "sound"))) {
+      const path = join(chunksDir, project, "sound", entry);
+      if (age(path, now) >= DOWNLOADED) remove(path);
+    }
   }
   for (const name of names) {
     if (!/^[0-9a-f]{16}$/.test(name)) continue;

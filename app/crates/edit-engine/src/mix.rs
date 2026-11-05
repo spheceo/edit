@@ -821,6 +821,399 @@ fn open_sink(encoding: &Encoding, output: &Path) -> Result<Box<dyn Sink>, String
     Ok(Box::new(FfmpegSink::open(encoding.codec, output)?))
 }
 
+/// Frames of a kept block (`render_kept`): a minute, in whole AAC frames.
+pub const BLOCK_FRAMES: usize = 2813 * AAC_FRAME;
+/// Samples in an AAC frame.
+const AAC_FRAME: usize = 1024;
+/// Frames of the neighbours' sound each block is encoded with on either side,
+/// so the frames either side of a join are made from the same sound.
+const CONTEXT: usize = 2 * AAC_FRAME;
+/// FFmpeg's AAC encoder's own delay, in frames (one AAC frame).
+const PRIMING: usize = AAC_FRAME;
+
+/// `parts` (seconds into a span) cut to `[offset, offset + seconds)` of it,
+/// as [`parts`] cuts a timeline's: each one's start, length, source and
+/// clock (`elapsed`, which its fades and volume read) moved to the cut.
+pub fn cut(parts: &[Part], offset: f64, seconds: f64) -> Vec<Part> {
+    parts
+        .iter()
+        .filter_map(|part| {
+            let from = part.segment.start.max(offset);
+            let to = (part.segment.start + part.segment.duration).min(offset + seconds);
+            if to <= from {
+                return None;
+            }
+            let into = from - part.segment.start;
+            let mut segment = part.segment.clone();
+            segment.source_in += into * segment.speed;
+            segment.start = from - offset;
+            segment.duration = to - from;
+            Some(Part {
+                path: part.path.clone(),
+                segment,
+                elapsed: part.elapsed + into,
+                original: part.original,
+            })
+        })
+        .collect()
+}
+
+/// What a block of the mix sounds like, as a name: its parts (files by
+/// content, never by clip or media id, so a clip split or renamed that plays
+/// the same is the same) and its length.
+fn block_key(parts: &[Part], frames: usize) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    "sound-block-v1".hash(&mut hasher);
+    env!("EDIT_SOUND_SOURCE").hash(&mut hasher);
+    frames.hash(&mut hasher);
+    for part in parts {
+        crate::chunks::content_key(&part.path).hash(&mut hasher);
+        let mut segment = part.segment.clone();
+        segment.clip.clear();
+        segment.media.clear();
+        format!(
+            "{segment:?}|{}|{}",
+            part.elapsed.to_bits(),
+            part.original.to_bits()
+        )
+        .hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+/// The AAC frames of an ADTS stream, each with its header.
+fn adts_frames(stream: &[u8]) -> Result<Vec<&[u8]>, String> {
+    let mut frames = Vec::new();
+    let mut at = 0;
+    while at + 7 <= stream.len() {
+        let header = stream.get(at..at + 7).unwrap_or_default();
+        if header.first() != Some(&0xff) || header.get(1).is_none_or(|byte| byte & 0xf0 != 0xf0) {
+            return Err("the sound's encoder wrote something that isn't AAC".to_owned());
+        }
+        let byte = |index: usize| usize::from(header.get(index).copied().unwrap_or(0));
+        let length = ((byte(3) & 0x03) << 11) | (byte(4) << 3) | (byte(5) >> 5);
+        if length < 7 || at + length > stream.len() {
+            return Err("the sound's encoder wrote a cut-short AAC frame".to_owned());
+        }
+        frames.push(stream.get(at..at + length).unwrap_or_default());
+        at += length;
+    }
+    Ok(frames)
+}
+
+/// One block encoded (FFmpeg's AAC, ADTS, at nice 10: smooth playback is
+/// background work) from `window`, its sound with `before` and `after`
+/// frames of its neighbours' either side: only the frames that play the
+/// block itself are kept, so blocks encoded apart join frame to frame as if
+/// encoded whole.
+fn encode_block(
+    window: &[u8],
+    before: usize,
+    after: usize,
+    frames: usize,
+    bitrate: u32,
+) -> Result<Vec<u8>, String> {
+    let mut command = if cfg!(unix) && Path::new("/usr/bin/nice").exists() {
+        let mut nice = Command::new("/usr/bin/nice");
+        nice.args(["-n", "10"]).arg(crate::util::ffmpeg());
+        nice
+    } else {
+        Command::new(crate::util::ffmpeg())
+    };
+    let mut child = command
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "f32le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-i",
+            "pipe:0",
+        ])
+        .args([
+            "-c:a",
+            "aac",
+            "-b:a",
+            &bitrate.to_string(),
+            "-f",
+            "adts",
+            "pipe:1",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    let mut stdin = child.stdin.take().ok_or("ffmpeg stdin")?;
+    // Silence where a neighbour is missing (the edit's start and end), so every block starts CONTEXT frames in.
+    let input = [
+        vec![0_u8; (CONTEXT - before) * 8],
+        window.to_vec(),
+        vec![0_u8; (CONTEXT - after) * 8],
+    ];
+    let writer = std::thread::spawn(move || -> std::io::Result<()> {
+        for part in &input {
+            stdin.write_all(part)?;
+        }
+        Ok(())
+    });
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("ffmpeg: {error}"))?;
+    writer
+        .join()
+        .map_err(|_| "the sound's encoder input stopped".to_owned())?
+        .ok();
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "encoding the sound: {}",
+            stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("ffmpeg failed")
+                .trim()
+        ));
+    }
+    let all = adts_frames(&output.stdout)?;
+    let first = (PRIMING + CONTEXT) / AAC_FRAME;
+    let count = frames.div_ceil(AAC_FRAME);
+    let kept = all.get(first..first + count).ok_or_else(|| {
+        format!(
+            "the sound's encoder made {} frames, not {}",
+            all.len(),
+            first + count
+        )
+    })?;
+    Ok(kept.concat())
+}
+
+/// Mixes `parts` (`total` frames) and encodes it (AAC at `bitrate`) to
+/// `output`, keeping the encoded sound in `blocks` a minute at a time, each
+/// named by what plays in it and around it: a minute that sounds as it did
+/// last time is used as it is, and the others are mixed and encoded four at
+/// once. Smooth playback mixed and encoded a 92-minute edit's whole sound
+/// again after every turn, 4 to 5 minutes on one core, though a turn trimmed
+/// one clip, and the next turn threw it away (JJ's Mac, Nov 5: eleven times in
+/// 17 minutes). Each minute is encoded with its neighbours' sound either side
+/// and only its own frames kept, so the minutes join frame to frame. (A
+/// change that moves what follows it, a trim, is heard differently from there
+/// on, and those minutes are made again, four at a time.)
+pub fn render_kept(
+    parts: &[Part],
+    total: usize,
+    bitrate: u32,
+    output: &Path,
+    blocks: &Path,
+    cancel: &AtomicBool,
+    progress: impl FnMut(f32),
+) -> Result<(), String> {
+    render_kept_in(
+        BLOCK_FRAMES,
+        parts,
+        total,
+        bitrate,
+        output,
+        blocks,
+        cancel,
+        progress,
+    )
+}
+
+/// One block of a kept sound: where it plays, its sound with its
+/// neighbours' (`before` and `after` frames of theirs), and its file.
+struct Block {
+    frames: usize,
+    window: Vec<Part>,
+    window_frames: usize,
+    before: usize,
+    after: usize,
+    path: PathBuf,
+}
+
+/// `render_kept` in blocks of `block` frames (whole AAC frames).
+#[allow(clippy::too_many_arguments)]
+fn render_kept_in(
+    block: usize,
+    parts: &[Part],
+    total: usize,
+    bitrate: u32,
+    output: &Path,
+    blocks: &Path,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(f32),
+) -> Result<(), String> {
+    use std::hash::{Hash, Hasher};
+    let began = Instant::now();
+    std::fs::create_dir_all(blocks).map_err(|error| error.to_string())?;
+    let plan: Vec<Block> = (0..total.div_ceil(block))
+        .map(|index| {
+            let from = index * block;
+            let frames = block.min(total - from);
+            let before = CONTEXT.min(from);
+            let after = CONTEXT.min(total - from - frames);
+            let window_frames = before + frames + after;
+            let window = cut(
+                parts,
+                (from - before) as f64 / RATE as f64,
+                window_frames as f64 / RATE as f64,
+            );
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (
+                "aac-block-v1",
+                bitrate,
+                before,
+                after,
+                block_key(&window, window_frames),
+            )
+                .hash(&mut hasher);
+            let path = blocks.join(format!("{:016x}.aac", hasher.finish()));
+            Block {
+                frames,
+                window,
+                window_frames,
+                before,
+                after,
+                path,
+            }
+        })
+        .collect();
+    let todo: Vec<&Block> = plan.iter().filter(|one| !one.path.exists()).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let finished = std::sync::atomic::AtomicUsize::new(0);
+    let failure = parking_lot::Mutex::new(None::<String>);
+    let workers = std::thread::available_parallelism()
+        .map_or(2, |count| count.get() / 3)
+        .clamp(1, 4)
+        .min(todo.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                if cancel.load(Ordering::Acquire) || failure.lock().is_some() {
+                    return;
+                }
+                let Some(one) = todo.get(next.fetch_add(1, Ordering::AcqRel)) else {
+                    return;
+                };
+                let result = (|| -> Result<(), String> {
+                    let mut window = Vec::with_capacity(one.window_frames * 8);
+                    mix(
+                        &one.window,
+                        one.window_frames,
+                        cancel,
+                        |_| {},
+                        |samples| {
+                            for sample in samples {
+                                window.extend_from_slice(&sample.to_le_bytes());
+                            }
+                            Ok(())
+                        },
+                    )?;
+                    let aac = encode_block(&window, one.before, one.after, one.frames, bitrate)?;
+                    let partial = one
+                        .path
+                        .with_extension(format!("aac.{}.partial", std::process::id()));
+                    std::fs::write(&partial, aac).map_err(|error| error.to_string())?;
+                    std::fs::rename(&partial, &one.path).map_err(|error| error.to_string())
+                })();
+                match result {
+                    Ok(()) => {
+                        finished.fetch_add(1, Ordering::AcqRel);
+                    }
+                    Err(error) => {
+                        failure.lock().get_or_insert(error);
+                    }
+                }
+            });
+        }
+        while finished.load(Ordering::Acquire) < todo.len()
+            && failure.lock().is_none()
+            && !cancel.load(Ordering::Acquire)
+        {
+            progress(finished.load(Ordering::Acquire) as f32 / todo.len() as f32 * 0.95);
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    if cancel.load(Ordering::Acquire) {
+        return Err("cancelled".to_owned());
+    }
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+    // The minutes' frames end to end, put in an .m4a as they are.
+    let joined = output.with_extension("adts.partial");
+    {
+        let mut file = BufWriter::with_capacity(
+            1 << 20,
+            std::fs::File::create(&joined).map_err(|error| error.to_string())?,
+        );
+        for one in &plan {
+            file.write_all(&std::fs::read(&one.path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        }
+        file.flush().map_err(|error| error.to_string())?;
+    }
+    let made = Command::new(crate::util::ffmpeg())
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "aac",
+            "-i",
+        ])
+        .arg(&joined)
+        .args(["-c:a", "copy", "-f", "mp4", "-movflags", "+faststart"])
+        .arg(output)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("ffmpeg: {error}"));
+    std::fs::remove_file(&joined).ok();
+    let made = made?;
+    if !made.status.success() {
+        let stderr = String::from_utf8_lossy(&made.stderr);
+        return Err(format!(
+            "putting the sound together: {}",
+            stderr
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("ffmpeg failed")
+                .trim()
+        ));
+    }
+    progress(1.0);
+    crate::log::info(
+        "export",
+        format!(
+            "the sound: {} of {} minutes as before, {} made now ({} at once) in {}",
+            plan.len() - todo.len(),
+            plan.len(),
+            todo.len(),
+            workers,
+            crate::log::human(began.elapsed())
+        ),
+    );
+    // What this sound no longer has goes (another edit's, or one cut short).
+    let kept: std::collections::HashSet<&Path> =
+        plan.iter().map(|one| one.path.as_path()).collect();
+    if let Ok(entries) = std::fs::read_dir(blocks) {
+        for entry in entries.flatten() {
+            if !kept.contains(entry.path().as_path()) {
+                std::fs::remove_file(entry.path()).ok();
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Mixes `parts` (`total` frames) and encodes the result to `output`. With
 /// `loudness`, the mix goes to `scratch` first to be measured, then is
 /// encoded at the gain that reaches it.
@@ -1445,6 +1838,135 @@ mod tests {
             let frames = decoded.stdout.len() / 8;
             assert!(frames.abs_diff(RATE * 6) < 1100, "{name}: {frames} frames");
         }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Smooth playback's kept sound plays as the mix encoded whole: its
+    /// minutes, encoded apart, join without a click (no worse than AAC is
+    /// anywhere else), and a change makes again only the minutes it's heard
+    /// in (or at their edges).
+    #[test]
+    fn a_kept_sound_joins_cleanly_and_redoes_only_what_changed() {
+        let dir = temp_dir("kept");
+        let tone = dir.join("tone.wav");
+        assert!(Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("sine=frequency=440:sample_rate=48000:duration=10")
+            .args(["-ac", "2", "-c:a", "pcm_f32le"])
+            .arg(&tone)
+            .status()
+            .unwrap()
+            .success());
+        let decoded = |file: &Path| -> Vec<f32> {
+            let out = Command::new(crate::util::ffmpeg())
+                .args(["-v", "error", "-i"])
+                .arg(file)
+                .args(["-f", "f32le", "-ac", "2", "-"])
+                .output()
+                .unwrap();
+            out.stdout
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|bytes| f32::from_le_bytes(*bytes))
+                .collect()
+        };
+        let mut faded = segment(0.0, 4.0, 0.0);
+        faded.fade_in = 1.5;
+        faded.fade_out = 1.5;
+        let mut quiet = segment(3.0, 5.0, 2.0);
+        quiet.volume_db = -6.0;
+        let parts = vec![part(&tone, faded), part(&tone, quiet.clone())];
+        let total = RATE * 8;
+        let ideal = mixed_with(true, &parts, total);
+        let cancel = AtomicBool::new(false);
+        // Blocks of a little under a second: eight joins in eight seconds.
+        let block = 45 * AAC_FRAME;
+        let blocks = dir.join("blocks");
+        let kept = dir.join("kept.m4a");
+        render_kept_in(
+            block,
+            &parts,
+            total,
+            128_000,
+            &kept,
+            &blocks,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        let heard = decoded(&kept);
+        assert!(
+            heard.len() / 2 >= total && heard.len() / 2 < total + 2 * AAC_FRAME,
+            "{} frames",
+            heard.len() / 2
+        );
+        // Its error against the exact mix, in 10 ms stretches: at the joins no worse than between them.
+        let error = |from: usize| -> f32 {
+            let span = RATE / 100;
+            let range = from.saturating_sub(span / 2) * 2..(from + span / 2) * 2;
+            let (a, b) = (&ideal[range.clone()], &heard[range]);
+            (a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>() / a.len() as f32).sqrt()
+        };
+        let joins: Vec<usize> = (1..total.div_ceil(block))
+            .map(|index| index * block)
+            .collect();
+        let between: Vec<usize> = joins
+            .iter()
+            .map(|join| join - block / 2)
+            .filter(|at| *at > RATE / 10)
+            .collect();
+        let worst_join = joins.iter().map(|&at| error(at)).fold(0.0_f32, f32::max);
+        let typical = between.iter().map(|&at| error(at)).fold(0.0_f32, f32::max);
+        assert!(
+            worst_join < 2.0 * typical + 1e-3,
+            "at a join {worst_join}, elsewhere up to {typical}"
+        );
+        assert!(worst_join < 0.01, "at a join {worst_join}");
+        let files = |extension: &str| {
+            let mut names: Vec<String> = std::fs::read_dir(&blocks)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(extension))
+                .collect();
+            names.sort();
+            names
+        };
+        let blocks_count = total.div_ceil(block);
+        assert_eq!(files("").len(), blocks_count);
+        let encodes = files(".aac");
+        // The second clip a little quieter from 6 s: the blocks it changes are mixed again, and their
+        // neighbours' encodes made again; the first blocks are as they were.
+        let mut later = quiet;
+        later.volume_keys = vec![];
+        later.volume_db = -9.0;
+        let changed = vec![parts[0].clone(), part(&tone, later)];
+        let again = dir.join("again.m4a");
+        render_kept_in(
+            block,
+            &changed,
+            total,
+            128_000,
+            &again,
+            &blocks,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        let same = |before: &[String], now: Vec<String>| {
+            before.iter().filter(|name| now.contains(name)).count()
+        };
+        let first_changed = (RATE * 3) / block;
+        assert_eq!(same(&encodes, files(".aac")), first_changed);
+        assert_eq!(files("").len(), blocks_count);
+        let ideal = mixed_with(true, &changed, total);
+        let heard = decoded(&again);
+        let rms = |a: &[f32], b: &[f32]| {
+            (a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum::<f32>() / a.len() as f32).sqrt()
+        };
+        let range = RATE / 10 * 2..total * 2;
+        assert!(rms(&ideal[range.clone()], &heard[range]) < 0.005);
         std::fs::remove_dir_all(dir).ok();
     }
 }

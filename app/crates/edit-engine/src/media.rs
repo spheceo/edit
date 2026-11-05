@@ -64,6 +64,11 @@ pub fn as_background<T>(work: impl FnOnce() -> T) -> T {
     work()
 }
 
+/// Whether this thread's export is background work (smooth playback's render).
+pub fn is_background() -> bool {
+    QUIET.with(std::cell::Cell::get)
+}
+
 /// Whether media work waits while an export runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pause {

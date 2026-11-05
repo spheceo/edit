@@ -1623,6 +1623,7 @@ fn export_chunked(
             &parts,
             seconds,
             &sound_file.0,
+            Some(&dir.join("sound")),
             cancel,
             &mut |done| progress(rendered + done * sound_share),
         )?;
@@ -1881,6 +1882,7 @@ fn export_with(
             &parts,
             seconds,
             destination,
+            None,
             cancel,
             &mut |done| progress(done * share),
         )?;
@@ -1921,12 +1923,18 @@ fn export_with(
 
 /// Mixes `parts` (`seconds` long) into `destination`: the file itself for a
 /// sound format, else the sound a join copies in.
+/// `blocks`: where a chunked export keeps its sound a minute at a time
+/// (`mix::render_kept`): smooth playback's renders (background exports)
+/// only, whose sound nothing measures for loudness; a real export's sound is
+/// mixed and encoded whole, as before.
+#[allow(clippy::too_many_arguments)]
 fn mix_sound(
     project: &Project,
     options: &ExportOptions,
     parts: &[crate::mix::Part],
     seconds: f64,
     destination: &Path,
+    blocks: Option<&Path>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(f32),
 ) -> Result<(), String> {
@@ -1949,16 +1957,17 @@ fn mix_sound(
     let mixing = beside(destination, &format!(".mixing.{extension}"));
     crate::log::time_on("export", "export: sound", &project.id, || {
         crate::util::killed_on_cancel(cancel, || {
-            crate::mix::render(
-                parts,
-                (seconds * crate::mix::RATE as f64).round() as usize,
-                options.target_loudness(),
-                &encoding,
-                &mixing.0,
-                &scratch.0,
-                cancel,
-                progress,
-            )
+            let total = (seconds * crate::mix::RATE as f64).round() as usize;
+            match (blocks, options.target_loudness(), encoding.aac) {
+                (Some(blocks), None, Some(bitrate)) if crate::media::is_background() => {
+                    crate::mix::render_kept(
+                        parts, total, bitrate, &mixing.0, blocks, cancel, progress,
+                    )
+                }
+                (_, loudness, _) => crate::mix::render(
+                    parts, total, loudness, &encoding, &mixing.0, &scratch.0, cancel, progress,
+                ),
+            }
         })
     })?;
     std::fs::rename(&mixing.0, destination).map_err(|error| format!("the sound's mix: {error}"))
@@ -3126,6 +3135,80 @@ mod tests {
             &two,
             |frame| (frame / 30) % 2 == 1 || frame / 30 == 96,
             3000,
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Smooth playback's render (a background export) keeps its sound a
+    /// minute at a time: the file's sound is the edit's length, and after a
+    /// change to the edit's last seconds only the last minute is made again.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn smooth_playback_keeps_its_sound_a_minute_at_a_time() {
+        let dir = temp_dir("kept-sound");
+        let red = source(&dir, "red.mp4", "red", 0.5);
+        let blue = source(&dir, "blue.mp4", "blue", 1.0);
+        let options = ExportOptions {
+            quality: crate::export::Quality::Small,
+            ..ExportOptions::default()
+        };
+        let cache = dir.join("cache");
+        let run = |project: &Project, name: &str| {
+            let plan = export_plan(project, &options).unwrap();
+            let output = dir.join(name);
+            crate::media::as_background(|| {
+                export_file(
+                    project,
+                    &options,
+                    &plan,
+                    &output,
+                    &cache,
+                    &HashMap::new(),
+                    &AtomicBool::new(false),
+                    |_| {},
+                )
+            })
+            .unwrap();
+            output
+        };
+        let blocks = crate::chunks::folder(&cache, "chunky").join("sound");
+        let names = || {
+            let mut names: Vec<String> = std::fs::read_dir(&blocks)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        let one = run(&cuts(&red, &blue, &[], 0), "one.mp4");
+        assert!(
+            (duration(&one, "a:0") - 100.0).abs() < 0.05,
+            "{}",
+            duration(&one, "a:0")
+        );
+        let first = names();
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert!(first.iter().all(|name| name.ends_with(".aac")));
+        // The last second's sound quieter: only the last minute's is made again.
+        let mut quieter = serde_json::to_value(cuts(&red, &blue, &[], 0)).unwrap();
+        for clip in quieter["clips"].as_array_mut().unwrap() {
+            if clip["id"] == "a99" {
+                clip["volume_db"] = json!(-6.0);
+            }
+        }
+        let two = run(&serde_json::from_value(quieter).unwrap(), "two.mp4");
+        assert!(
+            (duration(&two, "a:0") - 100.0).abs() < 0.05,
+            "{}",
+            duration(&two, "a:0")
+        );
+        let second = names();
+        assert_eq!(second.len(), 2);
+        assert_eq!(
+            second.iter().filter(|name| first.contains(name)).count(),
+            1,
+            "{first:?} then {second:?}"
         );
         std::fs::remove_dir_all(dir).ok();
     }

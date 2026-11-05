@@ -769,7 +769,6 @@ export function CommentaryEditor({
                       </ul>
                     </div>
                   )}
-                  {working && <p className="px-1.5 text-[12px] leading-relaxed text-faint">A full script from long sources takes 10 to 20 minutes. You can close this window; it keeps going.</p>}
                 </>
               )}
             </ChatShell>

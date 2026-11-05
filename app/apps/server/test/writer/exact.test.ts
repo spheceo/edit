@@ -39,6 +39,15 @@ test("stretches pad, join and skip what was heard", () => {
   expect(stretches(script, clips)).toEqual([[57_000, 64_000]]);
 });
 
+// JJ's Mac, Nov 5: "Remove the last intro clip" brought the footage back to hear it. A revision that only takes clips out has nothing left to hear, so its footage isn't needed.
+test("a heard timeline with a clip taken out has nothing to hear", () => {
+  const script = base();
+  const clips = [clip(10_000, 12_000), clip(16_000, 20_000), clip(60_000, 61_000)];
+  script.exact = stretches(script, clips);
+  expect(stretches(script, clips.slice(0, 2))).toEqual([]);
+  expect(stretches(script, [clips[0]!, clips[2]!])).toEqual([]);
+});
+
 test("a clip with no sound is found", () => {
   const peaks = new Array<number>(500).fill(0.5);
   for (let i = 100; i < 150; i++) peaks[i] = 0.01;

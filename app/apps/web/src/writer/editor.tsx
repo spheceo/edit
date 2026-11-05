@@ -892,15 +892,6 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
               )}
             </div>
           )}
-          {working && (
-            <p className="px-1.5 text-[12px] leading-relaxed text-faint">
-              {stage === "Editing the script"
-                ? "Edits usually take a minute or two."
-                : /reused/i.test(stage) || stage.startsWith("Adding the footage")
-                  ? "Each reused case is downloaded, transcribed and read for its strongest moments. A long video takes several minutes."
-                  : "Long footage takes 5 to 15 minutes. You can keep reading the transcript meanwhile."}
-            </p>
-          )}
         </ChatShell>
       </div>
       <VersionsDialog

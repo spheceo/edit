@@ -343,7 +343,8 @@ export async function reviseWith(data: string, id: string, request: string, said
   const before = structuredClone(now);
   let answer = done.answer;
   let clips = done.clips;
-  if (exact.wanted(now)) {
+  // Only footage the revision plays that wasn't heard yet is heard, so the footage comes back only then: a clip taken out or a cut-in reworded needs none (JJ's Mac, Nov 5: "Remove the last intro clip" waited on the footage coming back).
+  if (exact.wanted(now) && exact.stretches(now, done.clips).length > 0) {
     const words = now.words;
     try {
       const away = await footageHere(null, data, dir, now, job);

@@ -503,21 +503,12 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
 /**
  * Horror's picture shot (its guide's Animation 5: "Images slide up using
  * position keyframes, with Gaussian blur keyframes applied to the movement.
- * Each image has a white outline with a glow effect and a drop shadow"):
- * the picture over a blurred, darkened copy of itself filling the frame.
+ * Each image has a white outline with a glow effect and a drop shadow").
  */
 function horrorPicture(project: Project, media: string, start: number, end: number, prefix: string): string[] {
-  const m = mediaOf(project, media)!;
-  const { width: w, height: h } = project.settings;
-  const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
-  const cover = Math.max(w / (m.width * fit), h / (m.height * fit)) * 1.08;
-  const ground = freshId(project, "c");
-  project.clips.push(clipFrom({ id: ground, type: "video", name: `${prefix}Horror · picture ground`, media, source_in: 0, start, duration: end - start, track: addTrack(project, "video"), transform: { scale: cover } }));
-  const blur = freshId(project, "c");
-  project.clips.push(clipFrom({ id: blur, type: "adjustment", name: `${prefix}Horror · picture ground blur`, start, duration: end - start, track: addTrack(project, "video"),
-    blur: { radius: 34 * h / 1080 }, grade: { exposure: -0.9, vignette: 0.35 } }));
+  // The card stands over a blurred, darkened copy of the picture itself (nothing plays under a cut-in's shot).
   const shown = commentaryGraphics.card(project, { media, start, end, photo: true, backdrop: false });
   // Named for its cut-in, so covering it again replaces them.
   for (const id of shown.clips as string[]) { const clip = project.clips.find((c) => c.id === id); if (clip !== undefined) clip.name = `${prefix}${clip.name ?? ""}`; }
-  return [ground, blur, ...(shown.clips as string[])];
+  return shown.clips as string[];
 }

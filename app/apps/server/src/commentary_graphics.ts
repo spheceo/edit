@@ -156,6 +156,13 @@ function horrorCard(p: Project, a: Args, retro: Record<string, string>): Args {
   const full = !photo && (typeof a.full === "boolean" ? a.full : m.width >= 900 && m.width / Math.max(m.height, 1) <= 3.2);
   if (full) return horrorPage(p, a, m, given.id, start, end);
   const made: string[] = [];
+  // Nothing playing under it: the picture over a blurred, darkened copy of itself, never over black.
+  const under = p.clips.some((c) => c.type === "video" && c.start < end && clipEnd(c) > start && !(c.name ?? "").includes("Horror · "));
+  if (!under) {
+    const cover = Math.max(w / (given.width * Math.min(w / Math.max(given.width, 1), h / Math.max(given.height, 1))), h / (given.height * Math.min(w / Math.max(given.width, 1), h / Math.max(given.height, 1)))) * 1.08;
+    made.push(push(p, { type: "video", media: given.id, source_in: source, start, duration: d, name: "Horror · card ground", transform: { scale: cover } }));
+    made.push(push(p, { type: "adjustment", name: "Horror · card ground blur", start, duration: d, blur: { radius: 34 * k }, grade: { exposure: -0.9, vignette: 0.35 } }));
+  }
   if (a.backdrop !== false) made.push(push(p, { type: "adjustment", name: "Horror · card backdrop", start, duration: d,
     blur: { radius: 5 * k }, grade: { exposure: -1.05, vignette: 0.45 }, fade_in: 8, fade_out: 8 }));
   // Slower than commentary's: the guide's "very slow and deliberate" slide up.
@@ -179,7 +186,8 @@ function horrorPage(p: Project, a: Args, m: NonNullable<ReturnType<typeof mediaO
   const d = end - start; const h = p.settings.height; const w = p.settings.width; const k = h / 1080;
   const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
   // Close, as the references read a page: its lines large, about half its width across the frame (a narrow page a little less close).
-  const zoom = number(a, "fill", Math.min(1.9, Math.max(1.04, m.width / 900)));
+  const focusGiven = Array.isArray(a.focus) && a.focus.length === 2;
+  const zoom = number(a, "fill", Math.min(focusGiven ? 1.9 : 1.4, Math.max(1.04, m.width / 900)));
   const scale = (w * zoom) / (m.width * fit);
   const shownW = m.width * fit * scale; const shownH = m.height * fit * scale; const px = fit * scale;
   const focus = Array.isArray(a.focus) && a.focus.length === 2 && a.focus.every((v) => typeof v === "number") ? (a.focus as [number, number]) : null;
@@ -187,7 +195,8 @@ function horrorPage(p: Project, a: Args, m: NonNullable<ReturnType<typeof mediaO
   // Kept clear of its torn edges (the retro copy's), which belong to a card, not a page.
   const edge = Math.min(m.width, m.height) * 0.03 * px;
   const roomX = Math.max(0, (shownW - w) / 2 - edge); const room = Math.max(0, (shownH - h) / 2 - edge);
-  const x = Math.max(-roomX, Math.min(roomX, focus === null ? roomX : (m.width / 2 - focus[0]) * px));
+  // No focus: its middle across (an article's column, not its left margin), its top.
+  const x = Math.max(-roomX, Math.min(roomX, focus === null ? 0 : (m.width / 2 - focus[0]) * px));
   const y = Math.max(-room, Math.min(room, focus === null ? room : (m.height / 2 - focus[1]) * px));
   const made: string[] = [];
   // Shorter than the frame: the footage behind it darkened, as behind a card.

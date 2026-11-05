@@ -47,6 +47,7 @@ test("the analog look covers every frame, clips included, and taking it again re
 
 test("a horror card shows a screenshot's retro copy over darkened footage, a photo in a white outline, both blurring in", () => {
   const p = horror();
+  p.clips.push(clip({ id: "under", type: "video", media: "wide", track: "v1", start: 0, duration: 400 }));
   const shown = card(p, { media: "shot", start: 30, end: 150, full: false }, { shot: "aged" });
   const photo = p.clips.find((c) => c.id === shown.photo) as { media: string; name: string; frame: { width: number } };
   expect(photo.media).toBe("aged");
@@ -247,7 +248,7 @@ test("in horror a picture shot is Animation 5 over its own blurred copy, replace
   const run = () => cover(p, { cut_in: 1, shots: [{ media: "shot", source_in: 0, name: "the photo" }] } as never, null);
   run();
   run();
-  expect(p.clips.filter((c) => (c.name ?? "").endsWith("Horror · picture ground"))).toHaveLength(1);
+  expect(p.clips.filter((c) => (c.name ?? "").endsWith("Horror · card ground"))).toHaveLength(1);
   const pictures = p.clips.filter((c) => /Horror · picture$/u.test(c.name ?? ""));
   expect(pictures).toHaveLength(1);
   expect((pictures[0] as { frame: { width: number } }).frame.width).toBeGreaterThan(0);
@@ -281,4 +282,11 @@ test("a YouTube range whose download came back a little short, or whose video en
   expect(excerptFor([{ from: 0, to: 30 }, { from: 0, to: 95.4 }], { start: 0 })).toBe(1);
   expect(excerptFor([{ from: 10, to: 40 }], { start: 0 })).toBe(-1);
   expect(excerptFor([{ from: 0, to: 0.3 }], { start: 0 })).toBe(-1);
+});
+
+test("a horror card with nothing playing under it stands over a blurred copy of its picture, never black", () => {
+  const p = horror();
+  const shown = card(p, { media: "shot", start: 0, end: 120, photo: true });
+  const names = (shown.clips as string[]).map((id) => p.clips.find((c) => c.id === id)!.name);
+  expect(names.slice(0, 2)).toEqual(["Horror · card ground", "Horror · card ground blur"]);
 });

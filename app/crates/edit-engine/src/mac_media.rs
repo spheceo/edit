@@ -1157,6 +1157,69 @@ mod tests {
     }
 
     #[test]
+    fn smoothed_frames_keep_the_footages_brightness() {
+        // The horror drafts (Nov 5): every frame VideoToolbox made came out
+        // far darker than the real ones either side, a flicker five times a
+        // second.
+        if !smooth_supported() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("edit-smooth-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("moving.mp4");
+        let made = std::process::Command::new(crate::util::ffmpeg())
+            // A phone's tall frame, tagged Rec. 709 (decoded with those tags, the processor's frames came out dark).
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=608x1080:rate=30:duration=3",
+                "-pix_fmt",
+                "yuv420p",
+                "-x264-params",
+                "colorprim=bt709:transfer=bt709:colormatrix=bt709",
+                "-color_range",
+                "tv",
+                "-movflags",
+                "+write_colr",
+                "-c:v",
+                "libx264",
+                "-y",
+            ])
+            .arg(&source)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let out = dir.join("smoothed.mp4");
+        smooth(&source, 0.5, 1.5, 0.8, 30.0, (608, 1080), 4_000_000, &out).unwrap();
+        let raw = std::process::Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-i"])
+            .arg(&out)
+            .args(["-vf", "scale=32:24,format=gray", "-f", "rawvideo", "-"])
+            .output()
+            .unwrap();
+        let means: Vec<f64> = raw
+            .stdout
+            .chunks(32 * 24)
+            .map(|f| f.iter().map(|&v| f64::from(v)).sum::<f64>() / f.len() as f64)
+            .collect();
+        assert!(means.len() > 20, "{} frames", means.len());
+        for (i, pair) in means.windows(2).enumerate() {
+            assert!(
+                (pair[0] - pair[1]).abs() < 8.0,
+                "frame {} is {:.0}, frame {} {:.0}: {means:?}",
+                i,
+                pair[0],
+                i + 1,
+                pair[1]
+            );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn images_keep_orientation_alpha_and_pixels_without_video() {
         let dir = temp_dir("image");
         let path = dir.join("still.png");

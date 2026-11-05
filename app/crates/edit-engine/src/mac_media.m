@@ -1008,8 +1008,32 @@ static int smooth_inner(const char *path, double start, double length, double sp
                 VTFrameProcessorFrame *target = [[VTFrameProcessorFrame alloc] initWithBuffer:after presentationTimeStamp:CMTimeMakeWithSeconds(t1, 600000)];
                 VTFrameRateConversionParameters *parameters = [[VTFrameRateConversionParameters alloc] initWithSourceFrame:source nextFrame:target
                     opticalFlow:nil interpolationPhase:phases submissionMode:VTFrameRateConversionParametersSubmissionModeSequential destinationFrames:destinations];
+                // The processor reads untagged frames as they are; a frame tagged
+                // Rec. 709 (phone footage) it turns to linear light, and its own
+                // frames come out linear and untagged, so the encoder made them
+                // far darker than the real ones: a flicker on every made frame
+                // (the horror drafts, Nov 5: 137 in a real frame, 26 in a made
+                // one). Untagged while it works; then the real frames get their
+                // tags back and the made frames the same ones.
+                CFDictionaryRef beforeTags = CVBufferCopyAttachments(before, kCVAttachmentMode_ShouldPropagate);
+                CFDictionaryRef beforeOwn = CVBufferCopyAttachments(before, kCVAttachmentMode_ShouldNotPropagate);
+                CFDictionaryRef afterTags = CVBufferCopyAttachments(after, kCVAttachmentMode_ShouldPropagate);
+                CFDictionaryRef afterOwn = CVBufferCopyAttachments(after, kCVAttachmentMode_ShouldNotPropagate);
+                CVBufferRemoveAllAttachments(before); CVBufferRemoveAllAttachments(after);
                 NSError *processProblem = nil;
-                if (!parameters || ![processor processWithParameters:parameters error:&processProblem]) {
+                BOOL processed = parameters && [processor processWithParameters:parameters error:&processProblem];
+                void (^restore)(CVBufferRef, CFDictionaryRef, CFDictionaryRef) = ^(CVBufferRef buffer, CFDictionaryRef shared, CFDictionaryRef own) {
+                    if (shared) CVBufferSetAttachments(buffer, shared, kCVAttachmentMode_ShouldPropagate);
+                    if (own) CVBufferSetAttachments(buffer, own, kCVAttachmentMode_ShouldNotPropagate);
+                };
+                restore(before, beforeTags, beforeOwn);
+                restore(after, afterTags, afterOwn);
+                for (VTFrameProcessorFrame *frame in destinations) restore(frame.buffer, beforeTags, beforeOwn);
+                if (beforeTags) CFRelease(beforeTags);
+                if (beforeOwn) CFRelease(beforeOwn);
+                if (afterTags) CFRelease(afterTags);
+                if (afterOwn) CFRelease(afterOwn);
+                if (!processed) {
                     ok = NO; why = processProblem.localizedDescription ?: @"Frame rate conversion failed"; break;
                 }
                 [made addObjectsFromArray:destinations];

@@ -524,6 +524,12 @@ async function streamUrl(key: string): Promise<string> {
   return url;
 }
 
+/** The address a script's preview in the cloud is read from (an hour's presign), or null when the cloud has none: FFmpeg reads the stretches it needs from it, a range at a time. */
+export async function previewUrl(data: string, id: string): Promise<string | null> {
+  const kept = fileKey(data, id, "proxy.mp4");
+  return kept === null || kept.key === "" ? null : await streamUrl(kept.key);
+}
+
 /**
  * A script's preview that's only in the cloud (another Mac made it), played
  * from there a range at a time; null when the cloud has none. Bounded ranges

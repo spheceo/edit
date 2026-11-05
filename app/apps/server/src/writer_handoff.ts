@@ -25,6 +25,7 @@ import * as caseNames from "./names.ts";
 import { withDocuments } from "./writer/casefiles.ts";
 import * as writerResearch from "./writer/research.ts";
 import * as writerCloud from "./writer/cloud.ts";
+import * as exactAfter from "./writer/exact_after.ts";
 import * as drive from "./writer/drive.ts";
 import * as writerShare from "./writer/handoff.ts";
 import * as writerStore from "./writer/store.ts";
@@ -348,9 +349,11 @@ export function carryResearch(app: App, scriptId: string, projectId: string): vo
 
 /** Makes an Edit project from a Writer script and starts its import (footage, transcripts, voice-over, layout). */
 export async function importScript(app: App, id: string): Promise<{ project: string }> {
+  const data = writerStore.dataDir(app.store.home);
+  // Footage a revision brought in and still being heard exactly (writer/exact_after.ts): the edit is made from its exact times, not the captions'.
+  if (writerStore.idOk(id)) await exactAfter.settle(data, id);
   let given = await fetchScript(id, app.store.home);
   // A Drive folder case not yet in Edit's originals: sent up now (or the send under way joined), so Start the edit goes on rather than stopping on it.
-  const data = writerStore.dataDir(app.store.home);
   if (writerShare.unsharedFolder(given) && writerStore.idOk(id) && fs.existsSync(join(writerStore.scriptDir(data, id), "script.json"))) {
     diag.info("script", `${given.title}: sending its Drive folder cases to Edit's cloud before the edit starts`);
     await writerShare.shareNow(data, id);

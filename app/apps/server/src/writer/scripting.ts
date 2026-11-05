@@ -8,15 +8,14 @@ import type { Clip, Focus, Kind, Research, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
-import { isFile } from "../paths.ts";
 import * as build from "./build.ts";
 import * as casefiles from "./casefiles.ts";
 import * as chat from "./chat.ts";
 import * as house from "./house.ts";
-import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import { checkClips } from "./edits.ts";
 import * as exact from "./exact.ts";
+import { footageFor, footagePath, soon as hearSoon, unsigned } from "./exact_after.ts";
 import { checkStopped, type Job, type Outcome, named } from "./jobs.ts";
 import * as lessonNote from "./lesson_note.ts";
 import { lessonsText } from "./lessons.ts";
@@ -27,15 +26,11 @@ import { compile, type Plan } from "./plan.ts";
 import * as research from "./research.ts";
 import * as reuse from "./reuse.ts";
 import { revise } from "./revise.ts";
-import * as storage from "./storage.ts";
 import * as store from "./store.ts";
 import { keepPeaks, readPeaks } from "./tidy.ts";
 import * as versions from "./versions.ts";
 
 const CHANGED = "The script changed while Claude was editing it, so nothing was applied. Ask again.";
-
-/** The footage a script plays: its original where it's still on this Mac, else its preview. */
-export const footagePath = (dir: string, script: Script): string => (script.originalPath !== "" && isFile(script.originalPath) ? script.originalPath : store.proxyPath(dir));
 
 /** The footage's 20 ms peaks, kept beside the script once read: transcription saves them, and a script made before that reads them once from its footage. */
 export async function peaksOf(dir: string, script: Script, signal?: AbortSignal): Promise<Float32Array> {
@@ -268,39 +263,19 @@ export async function exactOnce(app: App, data: string, id: string, job: Job): P
  * again on those times, without any piece that has no sound. Hearing that
  * fails leaves the captions' cut, and says so.
  */
-/**
- * The footage exact hearing reads, on this Mac: null when it's here, else why
- * it couldn't come back. A script imported on another Mac points at that Mac's
- * file, and one whose footage was left to the cloud has none here, so what's
- * heard is the preview (the footage's own sound, one file), fetched from the
- * cloud; bringing back the recordings didn't bring it (Oct 30, When Teen
- * Delinquents: 824 MB of recordings back, then "No such file or directory").
- */
-async function footageHere(app: App | null, data: string, dir: string, script: Script, job: Job): Promise<string | null> {
-  if (isFile(footagePath(dir, script))) return null;
-  job.stage("Bringing the footage back to hear it");
-  try {
-    if (cloud.fileKey(data, script.id, "proxy.mp4")?.key) await cloud.fetchPreview(data, script.id);
-    else if (app !== null) await storage.bringBack(app, data, script.id, job, true);
-  } catch (error) {
-    checkStopped(job);
-    return diag.messageOf(error);
-  }
-  return isFile(footagePath(dir, script)) ? null : "its preview isn't in the cloud";
-}
-
 async function cutExactly(app: App, data: string, dir: string, script: Script, plan: Plan, clips: Clip[], peaks: ArrayLike<number>, job: Job): Promise<[Clip[], string]> {
-  // Footage cleared from this Mac once the cloud held it comes back first.
-  const away = await footageHere(app, data, dir, script, job);
-  if (away !== null) return [clips, `The footage isn't on this Mac and couldn't be brought back (${away}), so its cuts follow YouTube's captions. Build again to try once more.`];
+  // Footage cleared from this Mac once the cloud held it is read from the cloud's preview, a stretch at a time.
+  const source = await footageFor(app, data, dir, script.id, job);
+  if ("away" in source) return [clips, `The footage isn't on this Mac and couldn't be read from the cloud (${source.away}), so its cuts follow YouTube's captions. Build again to try once more.`];
   const words = script.words;
   let heard: exact.Report;
   try {
-    heard = await exact.run(script, dir, footagePath(dir, script), clips, job.stage, job.signal);
+    heard = await exact.run(script, dir, source.footage, clips, job.stage, job.signal);
   } catch (error) {
     checkStopped(job);
-    diag.warn("writer", `${named(script.id, script.title)}: the chosen footage couldn't be heard exactly: ${diag.messageOf(error)}`);
-    return [clips, `The chosen footage couldn't be heard exactly (${diag.messageOf(error)}), so its cuts follow YouTube's captions. Build again to try once more.`];
+    const why = unsigned(diag.messageOf(error));
+    diag.warn("writer", `${named(script.id, script.title)}: the chosen footage couldn't be heard exactly: ${why}`);
+    return [clips, `The chosen footage couldn't be heard exactly (${why}), so its cuts follow YouTube's captions. Build again to try once more.`];
   }
   let cut: Clip[];
   try {
@@ -341,26 +316,8 @@ export async function reviseWith(data: string, id: string, request: string, said
   const now = store.read(dir);
   if (now.revision !== script.revision) failed(dir, job, new Error(CHANGED));
   const before = structuredClone(now);
-  let answer = done.answer;
-  let clips = done.clips;
-  // Only footage the revision plays that wasn't heard yet is heard, so the footage comes back only then: a clip taken out or a cut-in reworded needs none (JJ's Mac, Nov 5: "Remove the last intro clip" waited on the footage coming back).
-  if (exact.wanted(now) && exact.stretches(now, done.clips).length > 0) {
-    const words = now.words;
-    try {
-      const away = await footageHere(null, data, dir, now, job);
-      if (away !== null) throw new Error(`the footage isn't on this Mac and couldn't be brought back: ${away}`);
-      const heard = await exact.run(now, dir, footagePath(dir, now), done.clips, job.stage, job.signal);
-      if (heard.stretches > 0) {
-        const remapped = exact.remapFrom(words, done.clips, now.words, now.durationMs);
-        const silent = new Set(exact.silent(remapped, peaks));
-        clips = remapped.filter((_, index) => !silent.has(index));
-        answer = `${answer}\n\n${exact.said(heard, silent.size)}`;
-      }
-    } catch (error) {
-      checkStopped(job);
-      answer = `${answer}\n\nThe footage this added couldn't be heard exactly (${diag.messageOf(error)}), so its cuts follow YouTube's captions.`;
-    }
-  }
+  const answer = done.answer;
+  const clips = done.clips;
   try {
     now.clips = checkClips(clips, now.durationMs);
   } catch (error) {
@@ -372,6 +329,8 @@ export async function reviseWith(data: string, id: string, request: string, said
   house.withMuteNotes(now);
   save(dir, before, now);
   chat.add(dir, "editor", answer + noted, done.costUsd);
+  // Footage it brought in is heard exactly after it's done, its cuts moved onto those times a moment later (exact_after.ts).
+  hearSoon(data, id);
   return [answer + noted, done.costUsd];
 }
 

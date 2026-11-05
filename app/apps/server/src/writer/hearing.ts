@@ -16,7 +16,7 @@ import { runPromise } from "../effect/runtime.ts";
 import * as service from "../effect/service.ts";
 import { covers } from "../names.ts";
 import { join } from "../paths.ts";
-import { ffmpeg } from "../tools.ts";
+import { ffmpeg, isUrl, protocols, urlArgs } from "../tools.ts";
 import * as transcribe from "../transcribe.ts";
 import { runProgram, STOPPED } from "./proc.ts";
 
@@ -51,7 +51,8 @@ export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [
       const cut = yield* Effect.acquireRelease(Effect.succeed(join(work, "stretch.m4a")), (path) => Effect.sync(() => fs.rmSync(path, { force: true })));
       yield* runProgram(
         ffmpeg(),
-        ["-hide_banner", "-loglevel", "error", "-y", "-ss", (span[0] / 1000).toFixed(3), "-t", ((span[1] - span[0]) / 1000).toFixed(3), "-i", file, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "96k", cut],
+        // The footage may be the cloud's preview (exact_after.ts): only this stretch's bytes are read.
+        ["-hide_banner", "-loglevel", "error", "-y", ...(isUrl(file) ? ["-protocol_whitelist", protocols(file), ...urlArgs(file)] : []), "-ss", (span[0] / 1000).toFixed(3), "-t", ((span[1] - span[0]) / 1000).toFixed(3), "-i", file, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "96k", cut],
         { timeoutMs: CUT_MS },
       ).pipe(Effect.mapError((error) => new StretchUncut({ message: `Could not take the sound out of the footage: ${error.message}` })));
       source = cut;

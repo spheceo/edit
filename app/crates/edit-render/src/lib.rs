@@ -2041,7 +2041,11 @@ impl Renderer {
         let (width, height) = (self.width as f32, self.height as f32);
         let texel = [1.0 / width, 1.0 / height];
         // A mosaic's block is one colour: about its average, from a blur a third its size.
-        let sigma = if blur.mosaic > 0.0 { (blur.mosaic * 0.35).max(0.5) } else { blur.radius.max(0.5) };
+        let sigma = if blur.mosaic > 0.0 {
+            (blur.mosaic * 0.35).max(0.5)
+        } else {
+            blur.radius.max(0.5)
+        };
         let taps = blur_taps(sigma);
         if self
             .blur_scratch

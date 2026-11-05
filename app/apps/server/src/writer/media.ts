@@ -150,15 +150,34 @@ async function encode(args: string[], dest: string, totalMs: number, onPercent: 
 
 const seconds = (ms: number) => (ms / 1000).toFixed(3);
 
+/**
+ * A part's FFmpeg inputs (from input number `first`) and where its picture and
+ * sound are read. One in the cloud with both is opened twice, the picture read
+ * from one and the sound from the other, so each reads straight through the
+ * file. Read once, FFmpeg takes them in time order, and a recording whose
+ * sound is stored apart from its picture (Nov 5, JJ's redacted bodycam: 100 s
+ * of sound in one block at 61 MB, its picture at 75–95 MB) sent it back and
+ * forth across the file, each jump a new request to R2: a 3:24 recording
+ * crawled at a few seconds a minute from 2:04 on, its piece and then the whole
+ * preview stopped at their hour, twice. Opened twice, 45 s. A file here jumps
+ * for nothing, so it's opened once.
+ */
+export function inputsOf(part: JoinPart, first: number, decode: string[] = []): { args: string[]; video: string; audio: string; count: number } {
+  const one = [...decode, ...input(part.path), "-i", part.path];
+  if (!isUrl(part.path) || !part.streams.video || !part.streams.audio) return { args: one, video: `${first}:v`, audio: `${first}:a`, count: 1 };
+  return { args: [...one, ...input(part.path), "-i", part.path], video: `${first}:v`, audio: `${first + 1}:a`, count: 2 };
+}
+
 async function joinHardware(part: JoinPart, dest: string, onPercent: (percent: number) => void, signal?: AbortSignal): Promise<void> {
   const total = part.streams.durationMs;
   if (total === 0 || total > MAX_CASE_MS) throw new Error("Use footage between a second and twenty hours in all.");
-  const picture = `[0:v]${hardwarePicture(854, 480)},trim=duration=${seconds(total)},setpts=PTS-STARTPTS[v]`;
+  const read = inputsOf(part, 0, HARDWARE_DECODE);
+  const picture = `[${read.video}]${hardwarePicture(854, 480)},trim=duration=${seconds(total)},setpts=PTS-STARTPTS[v]`;
   const sound = part.streams.audio
-    ? `[0:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=${seconds(total)},asetpts=PTS-STARTPTS[a]`
+    ? `[${read.audio}]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=${seconds(total)},asetpts=PTS-STARTPTS[a]`
     : `anullsrc=r=48000:cl=stereo,atrim=duration=${seconds(total)}[a]`;
   await encode(
-    ["-hide_banner", "-y", ...HARDWARE_DECODE, ...input(part.path), "-i", part.path, "-filter_complex", `${picture};${sound}`, "-map", "[v]", "-map", "[a]", ...HARDWARE_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
+    ["-hide_banner", "-y", ...read.args, "-filter_complex", `${picture};${sound}`, "-map", "[v]", "-map", "[a]", ...HARDWARE_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
     dest,
     total,
     onPercent,
@@ -232,15 +251,18 @@ async function joinSized(parts: JoinPart[], dest: string, onPercent: (percent: n
   const args = ["-hide_banner", "-y"];
   const filters: string[] = [];
   let joined = "";
+  let opened = 0;
   for (const [index, part] of parts.entries()) {
-    args.push(...input(part.path), "-i", part.path);
+    const read = inputsOf(part, opened);
+    args.push(...read.args);
+    opened += read.count;
     const length = seconds(part.streams.durationMs);
     filters.push(
       part.streams.video
-        ? `[${index}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease${RANGE},pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p,trim=duration=${length},setpts=PTS-STARTPTS[v${index}]`
+        ? `[${read.video}]scale=${width}:${height}:force_original_aspect_ratio=decrease${RANGE},pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p,trim=duration=${length},setpts=PTS-STARTPTS[v${index}]`
         : `color=c=black:s=${width}x${height}:r=30:d=${length},format=yuv420p,setsar=1[v${index}]`,
       part.streams.audio
-        ? `[${index}:a]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=${length},asetpts=PTS-STARTPTS[a${index}]`
+        ? `[${read.audio}]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=${length},asetpts=PTS-STARTPTS[a${index}]`
         : `anullsrc=r=48000:cl=stereo,atrim=duration=${length}[a${index}]`,
     );
     joined += `[v${index}][a${index}]`;

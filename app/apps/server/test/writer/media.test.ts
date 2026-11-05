@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { join as joinPath } from "node:path";
 
 import { ffmpeg } from "../../src/tools.ts";
-import { append, join, overview, peaks, streams } from "../../src/writer/media.ts";
+import { append, inputsOf, join, overview, peaks, streams } from "../../src/writer/media.ts";
 
 function make(args: string[], out: string) {
   const done = Bun.spawnSync([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...args, out]);
@@ -59,3 +59,34 @@ test("a full-range recording's piece matches the others and joins by copying", a
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }, 120_000);
+
+// Nov 5, JJ's redacted bodycam: its sound stored apart from its picture, read once from R2, sent FFmpeg back and forth across the file, a request each time; it never finished.
+test("footage in the cloud is read twice, the picture from one and the sound from the other", async () => {
+  const dir = fs.mkdtempSync(joinPath(os.tmpdir(), "writer-cloud-"));
+  const file = joinPath(dir, "a.mp4");
+  make(["-f", "lavfi", "-i", "testsrc=s=640x360:d=3", "-f", "lavfi", "-i", "sine=d=3", "-shortest"], file);
+  let requests = 0;
+  const server = Bun.serve({ port: 0, fetch: () => (requests++, new Response(Bun.file(file))) });
+  try {
+    const url = `http://127.0.0.1:${server.port}/a.mp4`;
+    const both = { video: true, audio: true, durationMs: 3_000 };
+    const cloud = inputsOf({ path: url, streams: both }, 4);
+    expect([cloud.video, cloud.audio, cloud.count]).toEqual(["4:v", "5:a", 2]);
+    expect(cloud.args.filter((arg) => arg === url)).toHaveLength(2);
+    expect(inputsOf({ path: file, streams: both }, 4)).toMatchObject({ video: "4:v", audio: "4:a", count: 1 });
+    expect(inputsOf({ path: url, streams: { ...both, audio: false } }, 0).count).toBe(1);
+    // Both ways of joining: a piece alone (the hardware first) and several together.
+    const part = { path: url, streams: await streams(url) };
+    for (const parts of [[part], [part, part]]) {
+      const out = joinPath(dir, `out-${parts.length}.mp4`);
+      await join(parts, out);
+      const found = await streams(out);
+      expect(found.video && found.audio).toBe(true);
+      expect(Math.abs(found.durationMs - 3_000 * parts.length)).toBeLessThan(300);
+    }
+    expect(requests).toBeGreaterThan(0);
+  } finally {
+    await server.stop(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

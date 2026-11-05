@@ -14,7 +14,7 @@ import { readBytes, readJson, type RouteContext, type Router } from "../http/rou
 import { mayIdeas, mayWorkspace, workspacesOf } from "../ideas/routes.ts";
 import * as assets from "./assets.ts";
 import * as cloud from "./cloud.ts";
-import { addComment, canonical, switchVersion, takeFinal } from "./design.ts";
+import { addComment, canonical, editComment, switchVersion, takeFinal } from "./design.ts";
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
@@ -188,6 +188,23 @@ export function routes(router: Router<App>): void {
         const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
           try {
             addComment(thumb, { x: Number(body.x), y: Number(body.y) }, typeof body.text === "string" ? body.text : "", by(), typeof body.version === "string" ? body.version : undefined);
+          } catch (error) {
+            throw bad(diag.messageOf(error));
+          }
+        });
+        return json({ thumb, rev });
+      } catch (error) {
+        failed(error);
+      }
+    })
+    // A comment's pin dragged to another spot, or its words changed.
+    .put("/api/thumbnails/{id}/comments/{comment}", async (context: Context) => {
+      guard();
+      const body = await readJson<{ x?: unknown; y?: unknown; text?: unknown }>(context);
+      try {
+        const { thumb, rev } = await cloud.change(context.params.id!, by(), (thumb) => {
+          try {
+            return editComment(thumb, context.params.comment!, body);
           } catch (error) {
             throw bad(diag.messageOf(error));
           }

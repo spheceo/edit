@@ -430,6 +430,28 @@ export function addComment(thumb: Thumbnail, at: { x: number; y: number }, text:
   return comment;
 }
 
+/**
+ * A comment moved (its pin dragged to another spot) or reworded (its words
+ * clicked and changed): only what's given changes. Answers whether anything did.
+ */
+export function editComment(thumb: Thumbnail, id: string, change: { x?: unknown; y?: unknown; text?: unknown }): boolean {
+  const comment = (thumb.comments ?? []).find((one) => one.id === id);
+  if (comment === undefined) throw new Error("That comment was removed.");
+  const before = JSON.stringify(comment);
+  if (change.x !== undefined || change.y !== undefined) {
+    const [x, y] = [Number(change.x ?? comment.x), Number(change.y ?? comment.y)];
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error("Pin the comment somewhere on the thumbnail.");
+    comment.x = Math.round(Math.min(WIDTH, Math.max(0, x)));
+    comment.y = Math.round(Math.min(HEIGHT, Math.max(0, y)));
+  }
+  if (change.text !== undefined) {
+    const words = (typeof change.text === "string" ? change.text : "").trim().slice(0, 2000);
+    if (words === "") throw new Error("Write the comment.");
+    comment.text = words;
+  }
+  return JSON.stringify(comment) !== before;
+}
+
 /** A comment by its number (#3, "3") or id. */
 export function commentOf(thumb: Thumbnail, wanted: unknown): ThumbComment {
   const key = (typeof wanted === "string" || typeof wanted === "number" ? String(wanted) : "").trim().replace(/^#/, "");

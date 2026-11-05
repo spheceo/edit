@@ -40,6 +40,8 @@ export const thumbnailsApi = {
   switchVersion: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/switch`, { version }),
   /** A comment pinned at a spot on the canvas (canvas px), on the version showing; and one taken back. */
   comment: (id: string, at: { x: number; y: number }, text: string, version?: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/comments`, { ...at, text, ...(version !== undefined ? { version } : {}) }),
+  /** A comment's pin moved, or its words changed (only what's given). */
+  editComment: (id: string, comment: string, change: { x?: number; y?: number; text?: string }) => call<{ thumb: Thumbnail; rev: number }>("PUT", `${base(id)}/comments/${encodeURIComponent(comment)}`, change),
   removeComment: (id: string, comment: string) => call<{ thumb: Thumbnail; rev: number }>("DELETE", `${base(id)}/comments/${encodeURIComponent(comment)}`),
   takeFinal: (id: string, version: string) => call<{ thumb: Thumbnail; rev: number }>("POST", `${base(id)}/versions/final`, { version }),
   /** The team's OpenArt accounts with their credits, and the one in use on this Mac. */

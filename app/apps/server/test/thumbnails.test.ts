@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { addComment, canonical, commentOf, describeComments, designOf, labelOf, layerOf, makeVersion, openComments, record, removeVersion, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
+import { addComment, canonical, commentOf, editComment, describeComments, designOf, labelOf, layerOf, makeVersion, openComments, record, removeVersion, step, switchVersion, takeFinal } from "../src/thumbnails/design.ts";
 import { baseBrief, changed, fresh, pickModel } from "../src/thumbnails/run.ts";
 import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
@@ -284,4 +284,16 @@ test("a picture layer's oval mask: given, kept when left out, taken off with nul
   expect((layerOf({ kind: "image", source: "img1", mask: { width: 300 } }, masked, sources) as ImageLayer).mask).toEqual({ x: 0, y: 40, width: 300, height: 680, feather: 60 });
   expect((layerOf({ kind: "image", source: "img1", mask: null }, masked, sources) as ImageLayer).mask).toBeUndefined();
   expect(() => layerOf({ kind: "image", source: "img1", mask: "oval" }, undefined, sources)).toThrow("mask is");
+});
+
+test("a comment's pin dragged elsewhere and its words changed: only what's given changes, kept on the canvas", () => {
+  const thumb = fresh("t11", "Sphe", "", "");
+  const one = addComment(thumb, { x: 100, y: 100 }, "brighter face", "Sphe");
+  expect(editComment(thumb, one.id, { x: 640.6, y: 9000 })).toBe(true);
+  expect(one).toMatchObject({ x: 641, y: 720, text: "brighter face" });
+  expect(editComment(thumb, one.id, { text: "  warmer face " })).toBe(true);
+  expect(one).toMatchObject({ x: 641, y: 720, text: "warmer face" });
+  expect(editComment(thumb, one.id, { text: "warmer face" })).toBe(false);
+  expect(() => editComment(thumb, one.id, { text: "  " })).toThrow("Write the comment");
+  expect(() => editComment(thumb, "nope", { x: 1 })).toThrow("removed");
 });

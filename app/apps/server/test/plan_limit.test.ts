@@ -67,9 +67,13 @@ test("each day's Claude use is kept by kind of call, with the limits hit, for th
     usage.record("edit chat opus", 2, day - 86_400_000);
     // Read back from the file, as after a restart.
     usage.use(home);
-    expect(usage.reportLines(8, day)).toEqual([
-      "2026-11-04: $9.10 at API prices over 4 calls (edit chat opus $8.00 ×1; Claude opus writing section N of N $1.00 ×2; Claude opus watching footage $0.10 ×1); plan used up 1×",
-      "2026-11-03: $2.00 at API prices over 1 calls (edit chat opus $2.00 ×1)",
+    expect(usage.daysKept()).toEqual([
+      { day: "2026-11-03", rows: [["edit chat opus", 2, 1]], limits: 0 },
+      {
+        day: "2026-11-04",
+        rows: [["edit chat opus", 8, 1], ["Claude opus writing section N of N", 1, 2], ["Claude opus watching footage", 0.1, 1]],
+        limits: 1,
+      },
     ]);
   } finally {
     usage.use("/nonexistent-never-written");

@@ -221,6 +221,43 @@ export async function listModels(binary: string, workspace: string): Promise<Mod
   }
 }
 
+/** What Claude Code's /usage reads from claude.ai: the plan's windows and the week's split (an experimental SDK call; null when this Claude Code hasn't it). */
+export type PlanMeter = NonNullable<Sdk.SDKControlGetUsageResponse["rate_limits"]>;
+
+/**
+ * The plan's meter as Claude Code's /usage shows it (the 5-hour and weekly
+ * windows, and the week's split between Claude Code, claude.ai's chats,
+ * Cowork and the rest), without starting a conversation: nothing is asked of
+ * a model, so it costs the plan nothing. Null when the plan has no meter (an
+ * API key) or this Claude Code can't say.
+ */
+export async function planMeter(binary: string, workspace: string): Promise<PlanMeter | null> {
+  const { query } = await sdk();
+  const abort = new AbortController();
+  const never = (async function* (): AsyncGenerator<Sdk.SDKUserMessage> {
+    await new Promise<void>((resolve) => abort.signal.addEventListener("abort", () => resolve()));
+  })();
+  const probe = query({
+    prompt: never,
+    options: { ...baseOptions(binary, workspace), persistSession: false, tools: [], mcpServers: {}, abortController: abort },
+  });
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const read = (probe as { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (opts: { skipBehaviors: boolean }) => Promise<Sdk.SDKControlGetUsageResponse> })
+      .usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (typeof read !== "function") return null;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Claude Code didn't read the plan's meter in time")), MODELS_MS);
+    });
+    const answer = await Promise.race([read.call(probe, { skipBehaviors: true }), late]);
+    return answer.rate_limits_available ? answer.rate_limits : null;
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+    abort.abort();
+    probe.close();
+  }
+}
+
 /**
  * One question to a Claude model through the user's Claude Code, outside any
  * chat: no tools, no session kept, `instructions` as the system prompt, the
@@ -271,9 +308,10 @@ export async function ask(
       if (message.type !== "result") continue;
       const result = message as unknown as Record<string, unknown>;
       const error = resultError(result);
+      // Counted whether it answered or not: a call cut short spent the plan all the same.
+      if (typeof result.total_cost_usd === "number") claudeUsage.record(`Claude ${model} answering the agent${error === null ? "" : " (failed)"}`, result.total_cost_usd, Date.now(), typeof result.duration_ms === "number" ? result.duration_ms : 0);
       if (error !== null && planLimit.isLimit(error)) planLimit.note(error);
       if (error !== null) throw new Error(signInProblem(error) ? SIGN_IN_AGAIN : error);
-      if (typeof result.total_cost_usd === "number") claudeUsage.record(`Claude ${model} answering the agent`, result.total_cost_usd);
       if (result.structured_output !== undefined) return JSON.stringify(result.structured_output);
       return typeof result.result === "string" ? result.result : "";
     }

@@ -22,6 +22,8 @@
 //   ls [path] / file <path> [lines=N] [grep=re]
 //                                 Edit's data folder (paths inside it; sign-in files refused)
 //   get /api/…                    one of Edit's own GET routes, answered inside (no window touched)
+//   usage [hours=24]              the Claude plan: the meter read now, every stretch
+//                                 between readings with what spent in it, each day in full
 
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -35,6 +37,7 @@ import { useNow as memoryUse } from "./memory.ts";
 import type { Router } from "./http/router.ts";
 import { respond } from "./http/server.ts";
 import { join } from "./paths.ts";
+import * as planUse from "./plan_use.ts";
 import * as pieces from "./proxy_pieces.ts";
 import * as relay from "./relay.ts";
 import { report, work } from "./remote_actions.ts";
@@ -144,6 +147,8 @@ export async function respondTo(app: App, question: string): Promise<string> {
       return file(app.store.home, words[0], options);
     case "get":
       return get(app, words[0]);
+    case "usage":
+      return usage(options);
     default:
       return `"${verb}" isn't something Edit answers.\n\n${HELP}`;
   }
@@ -160,7 +165,26 @@ const HELP = `Questions (read-only):
   project <id>                  its media and their state, clips, the chat's end
   ls [path]                     a folder in Edit's data folder
   file <path> [lines=N] [grep=re]   a file there (sign-in files refused)
-  get /api/…                    one of Edit's own GET routes`;
+  get /api/…                    one of Edit's own GET routes
+  usage [hours=24]              the Claude plan: meter now, each stretch and what spent in it, each day in full`;
+
+/** The Claude plan in full: the meter read afresh, every stretch of the last `hours`, each day's every kind of call and every other Claude Code. */
+async function usage(options: Map<string, string>): Promise<string> {
+  const hours = Math.max(1, Math.min(8 * 24, Number(options.get("hours") ?? 24) || 24));
+  let fresh = "read afresh";
+  try {
+    if (!(await planUse.read())) fresh = "not read: this Claude Code has no plan meter (an API key, or signed out)";
+  } catch (error) {
+    fresh = `not read: ${diag.messageOf(error)}`;
+  }
+  return [
+    `The meter: ${fresh}.`,
+    ...(await planUse.reportLines(8, Date.now(), true)),
+    "",
+    `Each stretch between readings, the last ${hours} h:`,
+    ...planUse.timeline(hours),
+  ].join("\n");
+}
 
 // ---------------------------------------------------------------- the log
 

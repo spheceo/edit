@@ -18,6 +18,7 @@ bun apps/server/scripts/remote.ts ask mathiass work       # jobs, uploads, piece
 bun apps/server/scripts/remote.ts ask mathiass cpu        # the server busy or big with nothing under way: its threads, event loop, JS heap
 bun apps/server/scripts/remote.ts ask mathiass project p1793748290029-143711
 bun apps/server/scripts/remote.ts ask mathiass get /api/projects/<id>/media/<m>/status
+bun apps/server/scripts/remote.ts ask mathiass usage hours=48   # the Claude plan: meter now, each 15-min stretch and what spent it
 bun apps/server/scripts/remote.ts history mathiass        # what was sent and how it went
 ```
 
@@ -34,4 +35,5 @@ A Mac is named by any part of its name (`devices` lists them). Answers print and
 ## Good to know
 - `ask` needs a build with `remote_ask.ts` (after nightly-53). On an older build, `latest`, `diagnostics`, `probe` and `history` still work.
 - Their `latest` report is pushed every 5 minutes when what needs attention changes, else hourly, while Edit is open.
+- **The Claude plan running out:** the report's "Claude plan" section and `ask <mac> usage` line up Anthropic's own meter (read every 15 minutes via Claude Code's /usage, at no cost to the plan) with Edit's calls and every other Claude Code conversation on that Mac (from `~/.claude/projects`: folder, model, tokens, never content). Each rise of the 5-hour meter goes to Edit, other Claude Code there, or *nothing on this Mac* — that last is claude.ai or the Claude app's chats, or another computer on the same account; Anthropic's week split (Claude Code / Chats / Cowork / Other) says which. Dollars are at API prices; "a 5-hour window held about $N" is that plan's size. Needs a build after Nov 5 (`plan_use.ts`).
 - A new question goes in `remote_ask.ts` (read-only, tested in `test/remote_ask.test.ts`); try it with `--dev` before it ships.

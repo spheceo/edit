@@ -867,7 +867,7 @@ export class Agents implements seams.AgentPanel {
       // The chat's own turn ran the plan out: Edit's other Claude work waits for the reset too.
       if (error !== null && planLimit.isLimit(error)) planLimit.note(error);
       const usage = (result.usage ?? {}) as Record<string, number | undefined>;
-      if (typeof result.total_cost_usd === "number") claudeUsage.record(`edit chat ${typeof result.model === "string" ? result.model : (this.withChat(project).model ?? this.turnModel(project))}`, result.total_cost_usd);
+      if (typeof result.total_cost_usd === "number") claudeUsage.record(`edit chat ${typeof result.model === "string" ? result.model : (this.withChat(project).model ?? this.turnModel(project))}`, result.total_cost_usd, Date.now(), typeof result.duration_ms === "number" ? result.duration_ms : 0);
       const cost = typeof result.total_cost_usd === "number" ? `; $${result.total_cost_usd.toFixed(2)} at API prices` : "";
       diag.info(
         "agent",

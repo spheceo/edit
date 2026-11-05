@@ -36,7 +36,7 @@ import { memorySummary } from "./export_capacity.ts";
 import { useNow as memoryUse } from "./memory.ts";
 import * as ideaRuns from "./ideas/run.ts";
 import * as thumbnailRuns from "./thumbnails/run.ts";
-import * as claudeUsage from "./claude_usage.ts";
+import * as planUse from "./plan_use.ts";
 import * as editTime from "./edit_time.ts";
 import { join } from "./paths.ts";
 import * as presence from "./presence.ts";
@@ -314,12 +314,9 @@ export async function report(app: App, why = "Diagnostics asked for by an admin 
       return lines.length > 0 ? lines : ["none"];
     })(),
     "",
-    // What the person's Claude plan paid for (Nov 4: Max plans used up in hours, the log too short to compare weeks).
-    "Claude usage (by day, at API prices; the biggest kinds of call):",
-    ...(() => {
-      const lines = claudeUsage.reportLines();
-      return lines.length > 0 ? lines : ["none"];
-    })(),
+    // What the person's Claude plan paid for (Nov 4: Max plans used up in hours), and whether it was Edit (Nov 5).
+    "Claude plan (Anthropic's meter; Edit's calls and other Claude Code on this Mac, at API prices; `ask usage` for every stretch):",
+    ...(await planUse.reportLines()),
     "",
     "Timings:",
     ...slow,

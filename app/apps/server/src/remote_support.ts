@@ -18,6 +18,7 @@ import { writeAtomic } from "./files.ts";
 import { ApiError, bad, json } from "./http/errors.ts";
 import { readJson, type RouteContext, type Router } from "./http/router.ts";
 import * as relay from "./relay.ts";
+import * as planUse from "./plan_use.ts";
 import * as actions from "./remote_actions.ts";
 import { RemoteCommandReceipts } from "./remote_commands.ts";
 import { installUpdate } from "./routes.ts";
@@ -355,6 +356,8 @@ function retry(app: App) {
 export function start(app: App) {
   observe(app);
   actions.keepLatest(app);
+  // The Claude plan's meter, read every 15 minutes, for the report's "Claude plan".
+  planUse.start(app.store.home);
   // An update asked for "when idle" waits across restarts.
   actions.watchIdle(app);
   const account = accounts.status();

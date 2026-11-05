@@ -18,6 +18,8 @@ interface Day {
   calls: Record<string, [number, number]>;
   /** Times Claude Code said the plan was used up. */
   limits: number;
+  /** Each call's [end (ms), dollars, how long it ran (ms)], to line Edit's spend up with the plan's meter (plan_use.ts). */
+  times?: [number, number, number?][];
 }
 
 let home: string | null = null;
@@ -66,14 +68,16 @@ function today(all: Record<string, Day>, now: number): Day {
   return all[key]!;
 }
 
-/** One Claude call's cost (dollars at API prices) under `label`. */
-export function record(label: string, usd: number, now: number = Date.now()): void {
+/** One Claude call's cost (dollars at API prices) under `label`, ending `now` after running `ms`. */
+export function record(label: string, usd: number, now: number = Date.now(), ms = 0): void {
   const all = loaded();
   if (all === null) return;
   const day = today(all, now);
   const key = labelOf(label);
   const [spent, calls] = day.calls[key] ?? [0, 0];
-  day.calls[key] = [spent + (Number.isFinite(usd) ? usd : 0), calls + 1];
+  const dollars = Number.isFinite(usd) ? usd : 0;
+  day.calls[key] = [spent + dollars, calls + 1];
+  (day.times ??= []).push([now, dollars, Math.max(0, Math.round(n(ms)))]);
   save(all);
 }
 
@@ -85,20 +89,34 @@ export function limitHit(now: number = Date.now()): void {
   save(all);
 }
 
-/** The report's lines: each of the last `count` days with use, newest first: its total, the biggest labels, and the limits hit. */
-export function reportLines(count = 8, now: number = Date.now()): string[] {
+const n = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
+
+/** Edit's dollars (at API prices) spent in (from, to]: each call's spread over the time it ran (a 20-minute build spends all along, not at its end). */
+export function spentBetween(from: number, to: number): number {
+  const all = loaded();
+  if (all === null) return 0;
+  let sum = 0;
+  for (const day of Object.values(all)) {
+    for (const [end, usd, ran] of day.times ?? []) {
+      const ms = n(ran);
+      if (ms <= 0) {
+        if (end > from && end <= to) sum += usd;
+        continue;
+      }
+      const overlap = Math.min(end, to) - Math.max(end - ms, from);
+      if (overlap > 0) sum += (usd * overlap) / ms;
+    }
+  }
+  return sum;
+}
+
+/** The days kept, oldest first: each day's labels as [label, dollars, calls], dearest first, and its limits. */
+export function daysKept(): { day: string; rows: [string, number, number][]; limits: number }[] {
   const all = loaded();
   if (all === null) return [];
-  const since = dayOf(now - (count - 1) * 86_400_000);
-  return Object.keys(all)
-    .filter((day) => day >= since)
-    .sort()
-    .reverse()
-    .map((day) => {
-      const { calls, limits } = all[day]!;
-      const rows = Object.entries(calls).sort((a, b) => b[1][0] - a[1][0]);
-      const total = rows.reduce((sum, [, [usd]]) => sum + usd, 0);
-      const top = rows.slice(0, 6).map(([label, [usd, n]]) => `${label} $${usd.toFixed(2)} ×${n}`).join("; ");
-      return `${day}: $${total.toFixed(2)} at API prices over ${rows.reduce((sum, [, [, n]]) => sum + n, 0)} calls${top === "" ? "" : ` (${top})`}${limits > 0 ? `; plan used up ${limits}×` : ""}`;
-    });
+  return Object.keys(all).sort().map((day) => ({
+    day,
+    rows: Object.entries(all[day]!.calls).map(([label, [usd, n]]): [string, number, number] => [label, usd, n]).sort((a, b) => b[1] - a[1]),
+    limits: all[day]!.limits,
+  }));
 }

@@ -234,18 +234,21 @@ async function askNow(question: Question): Promise<Answer> {
   const result = finished as Record<string, unknown>;
   const usage = (result.usage ?? {}) as { output_tokens?: number };
   answer.result = { subtype: result.subtype, stop_reason: result.stop_reason, terminal_reason: result.terminal_reason, num_turns: result.num_turns, usage: { output_tokens: usage.output_tokens ?? 0 }, is_error: result.is_error };
+  const ran = typeof result.duration_ms === "number" ? result.duration_ms : 0;
   const why = `${whyStopped(answer.result)}; ${answer.replies} replies, the biggest ${answer.biggestReply} output tokens${stops.length ? `, stopped short: ${stops.join(", ")}` : ""}`;
   if (result.subtype !== "success" || result.is_error === true) {
     const errors = Array.isArray(result.errors) ? result.errors.filter((one): one is string => typeof one === "string").join("; ") : "";
     const said = typeof result.result === "string" && result.result !== "" ? result.result : errors;
     diag.error("writer", `${question.label}: stopped after ${seconds(began)} (${why}): ${clipped(said, 300)}`);
+    // A call cut short spent the plan all the same.
+    if (typeof result.total_cost_usd === "number" && result.total_cost_usd > 0) claudeUsage.record(`${question.label} (failed)`, result.total_cost_usd, Date.now(), ran);
     throw stoppedShort(answer.result) ?? noted(explain(said, typeof result.api_error_status === "number" ? result.api_error_status : null), said);
   }
   answer.costUsd = typeof result.total_cost_usd === "number" ? result.total_cost_usd : 0;
   answer.session = typeof result.session_id === "string" ? result.session_id : null;
   answer.text = typeof result.result === "string" ? result.result : null;
   answer.structured = typeof result.structured_output === "object" && result.structured_output !== null ? (result.structured_output as Record<string, unknown>) : null;
-  claudeUsage.record(question.label, answer.costUsd);
+  claudeUsage.record(question.label, answer.costUsd, Date.now(), ran);
   diag.info("writer", `${question.label}: answered in ${seconds(began)} ($${answer.costUsd.toFixed(2)} at API prices; ${why})`);
   return answer;
 }

@@ -2603,17 +2603,18 @@
   },
   {
     "name": "wait",
-    "description": "Wait once for background work (smoothing, map shots, the watcher, an export) for as long as it says it has left, instead of reading the project again to see. Returns when it's done, or after at_most seconds (default: its estimate, at most 300) with what's still running.",
+    "description": "Wait once for background work (smoothing, map shots, the watcher, an export, B-roll imports still downloading) for as long as it says it has left, instead of reading the project again to see. Returns when it's done, or after at_most seconds (default: its estimate, at most 300) with what's still running.",
     "inputSchema": {
       "properties": {
         "for": {
-          "description": "Which: smooth, map, watch, export (default all).",
+          "description": "Which: smooth, map, watch, export, import (default all).",
           "items": {
             "enum": [
               "smooth",
               "map",
               "watch",
-              "export"
+              "export",
+              "import"
             ],
             "type": "string"
           },

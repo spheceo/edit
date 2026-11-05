@@ -198,7 +198,7 @@ export async function once(key: string, name: string, work: () => Promise<Conten
     const answer = await Promise.race([own.promise, late]);
     if (answer !== null) return answer;
     const seconds = Math.round((Date.now() - own.started) / 1000);
-    const meanwhile = name === "import_broll" ? ". search_broll {queries:[]} lists completed ranges as they arrive; inspect those or existing source footage and compose the current chapter while the rest download" : "";
+    const meanwhile = name === "import_broll" ? ". search_broll {queries:[]} lists completed ranges as they arrive; inspect those or existing source footage and compose the current chapter while the rest download (YouTube takes one to four minutes a video), then wait {for: [\"import\"]} rather than giving up on them" : "";
     return [{ type: "text", text: `${name} is still working in the background (${seconds} s so far): call ${name} again with the same arguments in a minute or two; it answers with this run's result and never runs it twice${meanwhile}` }];
   } finally {
     if (timer !== null) clearTimeout(timer);

@@ -14,6 +14,7 @@ import { registerTool, text } from "./mcp/registry.ts";
 import { join, parent } from "./paths.ts";
 import * as cloud from "./cloud.ts";
 import * as seams from "./seams.ts";
+import * as progress from "./progress.ts";
 import * as youtube from "./youtube.ts";
 import * as posts from "./posts.ts";
 import { stableStringify } from "./stable.ts";
@@ -192,6 +193,12 @@ registerTool("import_broll", async ({ app, args, projectId }) => {
   if (!Array.isArray(args.ranges) || args.ranges.length === 0 || args.ranges.length > 12) throw new Error("ranges must contain 1–12 source ranges");
   const ranges = args.ranges.map(rangeOf); // validate the entire batch before downloads
   const results: unknown[] = [];
+  // In flight for `wait` (for: ["import"]): YouTube takes one to four minutes
+  // a video, two at a time, and a batch outlived the agent's patience
+  // (Instagram Reels v2, Nov 5: it gave up and kept stock while the footage was arriving).
+  const part = `${Date.now()}`;
+  progress.begin("import", projectId, part, ranges.length);
+  try {
   // Posts (Instagram, X, TikTok…): each one's video whole, then the range asked of it.
   const posts = ranges.filter((r) => isPost(r.url));
   for (let i = 0; i < posts.length; i += 3) {
@@ -236,6 +243,7 @@ registerTool("import_broll", async ({ app, args, projectId }) => {
     } catch (error) { results.push({ url: `https://www.youtube.com/watch?v=${id}`, error: error instanceof Error ? error.message : String(error) }); }
     }));
   }
+  } finally { progress.end("import", projectId, part); }
   return text(stableStringify({ results, next: "Inspect each selected scene with look_at_media, then place its returned media/source_in. Source audio stays off under narration. Save actual frame observations with record_broll_observations." }));
 });
 

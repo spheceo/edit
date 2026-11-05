@@ -266,3 +266,11 @@ test("horror's audit asks for the highlighter on a screenshot and for the story'
   p.clips.push(clip({ id: "m", type: "video", media: "shot", track: "v2", start: 10, duration: 100, name: "Horror · marker" }));
   expect(issues(p).map((i) => i.kind)).not.toContain("horror_unhighlighted_screenshot");
 });
+
+test("a B-roll import in flight is background work wait knows about", async () => {
+  const progress = await import("../src/progress.ts");
+  progress.begin("import", "p-wait", "1", 6);
+  expect(progress.summary("p-wait", ["import"])).toContain("a B-roll import downloading");
+  progress.end("import", "p-wait", "1");
+  expect(progress.summary("p-wait", ["import"])).toBeNull();
+});

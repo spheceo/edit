@@ -13,7 +13,7 @@ export const timing = {
   sleep: (ms: number) => Bun.sleep(ms),
 };
 
-export type Work = "smooth" | "map" | "watch" | "export";
+export type Work = "smooth" | "map" | "watch" | "export" | "import";
 
 /**
  * How long each takes here before it has measured progress of its own, from
@@ -22,7 +22,7 @@ export type Work = "smooth" | "map" | "watch" | "export";
  * 50 s to 2 min 21 s, a few at once. Each finished job moves its kind's
  * figure toward what it took.
  */
-const typical: Record<Work, number> = { smooth: 190_000, map: 300_000, watch: 130_000, export: 600_000 };
+const typical: Record<Work, number> = { smooth: 190_000, map: 300_000, watch: 130_000, export: 600_000, import: 240_000 };
 
 interface Entry {
   kind: Work;
@@ -89,7 +89,7 @@ function left(entry: Entry, now: number): number {
 }
 
 /** What's still running for a project, of these kinds (all by default). */
-export function pending(project: string, kinds: readonly Work[] = ["smooth", "map", "watch", "export"]): Entry[] {
+export function pending(project: string, kinds: readonly Work[] = ["smooth", "map", "watch", "export", "import"]): Entry[] {
   return [...running.values()].filter((entry) => entry.project === project && kinds.includes(entry.kind));
 }
 
@@ -134,6 +134,7 @@ export function summary(project: string, kinds?: readonly Work[]): string | null
     ...count("map", "a map shot rendering", "map shots rendering"),
     ...(watch === undefined ? [] : [watch.total > 0 ? `the watcher (${watch.done} of ${watch.total} windows)` : "the watcher"]),
     ...count("export", "an export", "exports"),
+    ...count("import", "a B-roll import downloading", "B-roll imports downloading"),
   ];
   return `${parts.join(", ")}: done in ${about(ms)}`;
 }

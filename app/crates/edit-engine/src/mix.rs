@@ -442,7 +442,28 @@ pub fn mix(
     mix_with(Sources::new(native), parts, total, cancel, progress, sink)
 }
 
+/// A cancel kills the export's decoders, so a read that fails after it is
+/// the cancel's doing: said as "cancelled", not as a sound that couldn't be
+/// decoded (JJ's Mac, Nov 5: every smooth-playback render a newer edit
+/// replaced was logged as "sound failed … signal: 9 (SIGKILL)").
 fn mix_with(
+    sources: Sources,
+    parts: &[Part],
+    total: usize,
+    cancel: &AtomicBool,
+    progress: impl FnMut(f32),
+    sink: impl FnMut(&[f32]) -> Result<(), String>,
+) -> Result<(), String> {
+    mix_windows(sources, parts, total, cancel, progress, sink).map_err(|error| {
+        if cancel.load(Ordering::Acquire) {
+            "cancelled".to_owned()
+        } else {
+            error
+        }
+    })
+}
+
+fn mix_windows(
     mut sources: Sources,
     parts: &[Part],
     total: usize,
@@ -1161,7 +1182,7 @@ mod tests {
                 mix_result(false, &[part(&fifo, segment(0.0, 1.0, 0.0))], RATE, &cancel)
             })
         });
-        assert!(result.is_err());
+        assert_eq!(result, Err("cancelled".to_owned()));
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "{:?}",

@@ -81,9 +81,13 @@ pub fn time_on<T, E: Display>(
 ) -> Result<T, E> {
     let started = Instant::now();
     let result = work();
+    // A cancel is someone's stop (a newer edit replacing a playback render),
+    // not a failure: timed, never logged as an error.
     let failure = result
         .as_ref()
         .err()
+        .map(ToString::to_string)
+        .filter(|error| error != "cancelled")
         .map(|error| format!("{subject}: {error}"));
     record(area, name, started.elapsed(), failure.as_deref());
     result

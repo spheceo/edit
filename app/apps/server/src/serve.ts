@@ -15,6 +15,7 @@ import { startCleaning } from "./cache_cleanup.ts";
 import * as cloud from "./cloud.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
+import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
 import { archiveFinished, ExportRegistry, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
@@ -170,6 +171,7 @@ function holdDataLock(home: string): void {
 
 export function start(home: string, host: string | null, port: number): { app: App; servers: Server<unknown>[] } {
   diag.open(home);
+  lastRun.begin(home);
   const ended = endLeftovers();
   if (ended.length > 0) diag.info("edit", `ended ${ended.length} process(es) the last run left (${[...new Set(ended)].join(", ")}): their work starts again`);
   // And on the way out: a quit, Edit.app closed or a server stopped leaves its FFmpeg and `claude` running for
@@ -268,6 +270,7 @@ export function start(home: string, host: string | null, port: number): { app: A
     // kills what's left after 6 s (crates/edit-window), and macOS 27 shows Edit "running in background" meanwhile.
     if (quitting) process.exit(code);
     quitting = true;
+    lastRun.quitting();
     setTimeout(() => process.exit(code), 5_000).unref();
     // The agents first: a turn left running goes on editing (and spending) with no Edit to answer it.
     try {
@@ -288,6 +291,9 @@ export function start(home: string, host: string | null, port: number): { app: A
   process.on("SIGTERM", () => quit(143));
   // A promise nobody waited on that failed: said in the log, where it used to go unseen (the audit, Oct 23).
   process.on("unhandledRejection", (reason) => diag.error("server", `unhandled failure: ${diag.messageOf(reason)}${reason instanceof Error && reason.stack ? `\n${reason.stack}` : ""}`));
+  // A throw nobody caught (a timer's, a stream's): said in the log, and Edit carries on, as for a
+  // promise. It stopped the server, and Edit.app's window keeps no stderr, so nothing said why.
+  process.on("uncaughtException", (error) => diag.error("server", `uncaught failure: ${diag.messageOf(error)}${error.stack ? `\n${error.stack}` : ""}`));
   const router = buildRouter();
   remoteAsk.useRouter(router);
   const servers: Server<unknown>[] = [];

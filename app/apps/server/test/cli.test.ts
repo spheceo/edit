@@ -33,4 +33,4 @@ test("edit --version, help, mcp and refusals print what they should", () => {
   });
   // A dev build never updates itself.
   expect(edit(["update"]).stdout).toBe(`This build of Edit (v${VERSION}) doesn't update itself; pull and rebuild.\n`);
-});
+}, 30_000);

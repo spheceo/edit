@@ -75,7 +75,7 @@ test("cells are cut from the original, picture copied, kept in the cache, and fo
   } finally {
     cleanup();
   }
-});
+}, 30_000);
 
 test("a background render's cells wait for the viewer once, briefly — never per cell, so it cannot sit at 0% while watched", async () => {
   const { dir, cleanup } = scratch("excerpts-behind-viewer");

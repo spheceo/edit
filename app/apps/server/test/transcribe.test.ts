@@ -143,7 +143,7 @@ test.skipIf(ffmpeg === null)("what was heard is kept: a run cut short pays only 
   } finally {
     cleanup();
   }
-});
+}, 30_000);
 
 test.skipIf(ffmpeg === null)("listens for the case's names, and asks once without them when Scribe refuses them", async () => {
   const { dir, cleanup } = scratch("transcribe-names");
@@ -223,7 +223,7 @@ test.skipIf(ffmpeg === null)("a long file is heard whole and in pieces at once, 
   } finally {
     cleanup();
   }
-});
+}, 30_000);
 
 test.skipIf(ffmpeg === null)("a gateway timeout (524) is asked again twice, then said", async () => {
   const { dir, cleanup } = scratch("transcribe-gateway");

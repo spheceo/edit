@@ -220,6 +220,21 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
       if (m !== undefined && m.kind === "image" && m.height < 220) out.push({ kind: "horror_screenshot_strip", clip: c.id, start: c.start, size: `${m.width}x${m.height}`,
         fix: "capture the page, not a line of it: capture_evidence the article, post or thread without a tight crop, then commentary_card it (a page fills the frame, close on the words: focus [x, y]) and highlight_evidence the words" });
     }
+    // "The news highlighter/marker effect is the one we use most": a screenshot shown with nothing highlighted on it.
+    const marks = live.filter((c) => /Horror · marker$/u.test(c.name ?? ""));
+    for (const c of live) {
+      if (c.type !== "video" || !/Horror · screenshot$/u.test(c.name ?? "")) continue;
+      if (marks.some((m) => m.start >= c.start && m.start < clipEnd(c))) continue;
+      out.push({ kind: "horror_unhighlighted_screenshot", clip: c.id, start: c.start,
+        fix: "the highlighter \"is the one we use most\": highlight_evidence on this screenshot over the exact words the narration reads (red, roughened edges), or show something else here" });
+    }
+    // "Stock footage is the exception, not the rule": real footage of the story is 75–90% of the B-roll.
+    const broll = live.filter((c): c is Extract<Clip, { type: "video" }> => c.type === "video" && /B-roll/u.test(c.name ?? "") && mediaOf(p, c.media)?.kind === "video");
+    const stockish = broll.filter((c) => /stock|royalty|free 4k|b-?roll|pexels|pixabay|storyblocks|envato/iu.test(mediaOf(p, c.media)?.name ?? ""));
+    const shown = broll.reduce((n, c) => n + c.duration, 0); const stockFrames = stockish.reduce((n, c) => n + c.duration, 0);
+    if (shown > 0 && stockFrames / shown > 0.25) out.push({ kind: "horror_stock_heavy", start: stockish[0]!.start, share: Math.round((stockFrames / shown) * 100) / 100,
+      sources: [...new Set(stockish.map((c) => mediaOf(p, c.media)?.name))].slice(0, 8),
+      fix: `${Math.round((stockFrames / shown) * 100)}% of the B-roll is stock: the guide wants the story's own footage for 75–90% (the post itself, the account, the people, the place, the news); keep stock for wide establishing shots, matching the era (no modern phones in an older story)` });
     const bare = bareSpans.reduce((n, [a, b]) => n + b - a, 0);
     if (bare > p.settings.fps) {
       const at = bareSpans[0]?.[0] ?? 0;

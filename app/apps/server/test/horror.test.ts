@@ -253,3 +253,16 @@ test("in horror a picture shot is Animation 5 over its own blurred copy, replace
   expect((pictures[0] as { frame: { width: number } }).frame.width).toBeGreaterThan(0);
   expect(p.clips.some((c) => /Desktop/u.test(c.name ?? ""))).toBe(false);
 });
+
+test("horror's audit asks for the highlighter on a screenshot and for the story's own footage over stock", () => {
+  const p = horror();
+  p.clips.push(clip({ id: "s", type: "video", media: "shot", track: "v1", start: 0, duration: 120, name: "Horror · screenshot" }));
+  p.media.push(media({ id: "stock", name: "Close-up of hands using smartphone - Stock Footage [abc].mp4", kind: "video", path: "/s.mp4", duration: 60, width: 1920, height: 1080 }));
+  p.clips.push(clip({ id: "b1", type: "video", media: "stock", track: "v1", start: 200, duration: 200, name: "Cut-in 1 · B-roll: a phone" }));
+  p.clips.push(clip({ id: "b2", type: "video", media: "wide", track: "v1", start: 400, duration: 100, name: "Cut-in 1 · B-roll: the news" }));
+  const kinds = issues(p).map((i) => i.kind);
+  expect(kinds).toContain("horror_unhighlighted_screenshot");
+  expect(kinds).toContain("horror_stock_heavy");
+  p.clips.push(clip({ id: "m", type: "video", media: "shot", track: "v2", start: 10, duration: 100, name: "Horror · marker" }));
+  expect(issues(p).map((i) => i.kind)).not.toContain("horror_unhighlighted_screenshot");
+});

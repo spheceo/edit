@@ -16,6 +16,7 @@ import { isImagePath } from "../src/media.ts";
 import { addTrack } from "../src/project.ts";
 import { routes } from "../src/media_tools.ts";
 import type { Project, VideoClip } from "../src/model.ts";
+import { mediaCache } from "../src/tools.ts";
 import { serialize } from "../src/transcribe.ts";
 import { fixtureHome, write } from "./helpers/home.ts";
 
@@ -489,3 +490,41 @@ test("a place label on a cloud project's map, or its slowed copy, is pinned from
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null)("a slowed clip across a cut is refused once, said in the agent's reports, and looked at again only once it changes", async () => {
+  const { app, cleanup, dir } = fixtureHome("smooth-cut");
+  try {
+    const file = join(dir, "cut.mp4");
+    // A cut at 4 s: one picture, then another.
+    const made = Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30:duration=4", "-f", "lavfi", "-i", "smptebars=size=160x120:rate=30:duration=4",
+      "-filter_complex", "[0][1]concat=n=2:v=1[v]", "-map", "[v]", "-c:v", "libx264", file]);
+    expect(made.exitCode).toBe(0);
+    const live = app.store.create("p", { width: 160, height: 120, fps: 30 });
+    const project = structuredClone(live.project) as Project;
+    project.media = [{ id: "m1", name: "cut.mp4", path: file, kind: "video", duration: 8, width: 160, height: 120, fps: 30, has_audio: false }];
+    project.clips = [{
+      id: "c1", track: project.tracks[0]!.id, start: 0, duration: 60, color: "blue", fade_in: 0, fade_out: 0,
+      type: "video", media: "m1", source_in: 3.5, speed: 0.5, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, opacity: 1,
+    } as VideoClip];
+    await app.store.replace(project.id, null, project, "test");
+    // The cut as the native scan finds it (the stub has none), kept where the scan keeps it.
+    const cache = mediaCache(file)!;
+    fs.mkdirSync(cache, { recursive: true });
+    fs.writeFileSync(join(cache, "cuts-v1.json"), JSON.stringify([4]));
+    expect(broll.smoothInBackground(app, project.id, ["c1"])).toEqual(["c1"]);
+    expect(await broll.waitForSmoothing(project.id, 60_000)).toBe(true);
+    const now = () => app.store.get(project.id)!.project;
+    expect(broll.smoothingPending(project.id, now())).toEqual([expect.stringMatching(/^c1 \(not smoothed: plays across a cut in its footage 0\.\d+ s in: split it/u)]);
+    // The next plan keeps it as it was: not looked at again.
+    expect(broll.smoothInBackground(app, project.id, ["c1"])).toEqual([]);
+    // Trimmed to one side of the cut: tried again, and no longer said.
+    await app.store.update(project.id, "test", (draft) => {
+      (draft.clips[0] as VideoClip).duration = 30;
+    });
+    expect(broll.smoothingPending(project.id, now())).toEqual([]);
+    expect(broll.smoothInBackground(app, project.id, ["c1"])).toEqual(["c1"]);
+    await broll.waitForSmoothing(project.id, 120_000);
+  } finally {
+    cleanup();
+  }
+}, 180_000);

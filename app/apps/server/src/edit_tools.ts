@@ -97,7 +97,7 @@ export const hooks = {
   unsubtitledSpeech: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.unsubtitledSpeech(project, transcripts),
   subtitleCoverage: (project: Project, transcripts: Map<string, Transcript>): Json =>
     seams.editReview.subtitleCoverage(project, transcripts),
-  smoothingPending: (projectId: string): string[] => seams.broll.smoothingPending(projectId),
+  smoothingPending: (projectId: string, project?: Project): string[] => seams.broll.smoothingPending(projectId, project),
   // Nothing to smooth starts nothing, so a plan or cover without slowed
   // shots never reaches for B-roll after it saved.
   smoothInBackground: (app: App, projectId: string, clipIds: string[]): string[] =>
@@ -420,7 +420,7 @@ async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]
     rev: found.rev,
     audit: audited(app, found.project, found.rev),
     subtitle_coverage: hooks.subtitleCoverage(found.project, cachedTranscripts(app, found.project, true)),
-    smoothing: hooks.smoothingPending(projectId),
+    smoothing: hooks.smoothingPending(projectId, found.project),
     ...background(projectId),
   };
   return withReview(app, found.project, { ref: { id: projectId, rev: found.rev } }, frames, report);
@@ -450,7 +450,7 @@ function getProject({ app, args, projectId }: ToolCall): Content[] {
     duration_seconds: total / fps,
     track_labels: labels,
     sections: onLive(found, (input) => native().sections(input)),
-    smoothing: hooks.smoothingPending(projectId),
+    smoothing: hooks.smoothingPending(projectId, project),
     ...background(projectId),
   };
   const whole = stableStringify({ ...head, project: { ...project, clips } });
@@ -1775,7 +1775,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
     footage_blocks: footage,
     cut_ins: cutIns.filter((cutIn) => cutIn !== null),
     audit,
-    smoothing: hooks.smoothingPending(p.id),
+    smoothing: hooks.smoothingPending(p.id, p),
     ...background(p.id),
   };
   if (overview) {

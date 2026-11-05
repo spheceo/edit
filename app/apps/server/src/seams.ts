@@ -906,7 +906,7 @@ export interface BrollSeam {
   mediaTranscript(app: App, media: Media, from: number, to: number, words: boolean): Promise<string>;
   smoothInBackground(app: App, projectId: string, clipIds: string[]): string[];
   smoothSlowMotion(app: App, projectId: string, clipId: string): Promise<Json>;
-  smoothingPending(projectId: string): string[];
+  smoothingPending(projectId: string, project?: Project): string[];
   /** Clips showing a render an older smoother made, smoothed again (broll.ts). */
   smoothStaleAgain(app: App, projectId: string): Promise<string[]>;
   /** A still as 30 s of steady footage (off macOS, where pictures don't stay images). */

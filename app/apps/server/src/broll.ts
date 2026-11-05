@@ -355,7 +355,7 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
   cuts = await Promise.all(cuts.filter((cut) => cut > clip.source_in - 0.6 && cut < clip.source_in + length + 0.6).map((cut) => exactCut(source.path, cut)));
   const played = clip.source_in + (clip.duration / fps) * speed;
   const crossed = cuts.find((cut) => cut > clip.source_in + 0.02 && cut < played - 0.02);
-  if (crossed !== undefined) throw new Error(`${clipId} plays across a cut in its footage ${fixed(crossed - clip.source_in, 2)} s in: split it at the cut (or trim it to one side) before smoothing; smoothing across a cut morphs one scene into the next`);
+  if (crossed !== undefined) throw new CrossesCut(`${clipId} plays across a cut in its footage ${fixed(crossed - clip.source_in, 2)} s in: split it at the cut (or trim it to one side) before smoothing; smoothing across a cut morphs one scene into the next`);
   const tail = cuts.find((cut) => cut >= played - 0.02 && cut < clip.source_in + length);
   const stop = tail === undefined ? length : Math.max(tail - clip.source_in - 0.04, 0.1);
   const dir = join(app.store.uploadsDir(projectId), "smooth");
@@ -616,6 +616,21 @@ export async function smoothStaleAgain(app: App, projectId: string): Promise<str
 /** A clip that changed or went away before its smoothing landed: skipped, never a failure (it filled the log, Oct 28). */
 class Superseded extends Error {}
 
+/** A slowed clip played across a cut in its footage: refused until it's split or trimmed. */
+class CrossesCut extends Error {}
+
+/**
+ * Clips refused for playing across a cut, by project: the clip as it was
+ * then and why. Each plan that keeps the clip asks for it again, and it was
+ * looked at and refused again each time, 16 s of work for the same answer,
+ * and never told to the agent (JJ's Mac, Nov 5: c3939, 17 times). Now it's
+ * asked again only once the clip has changed, and the agent's reports say
+ * why it isn't smooth (smoothingPending).
+ */
+const refusedSmoothing = new Map<string, Map<string, { shape: string; why: string }>>();
+
+const shapeOf = (clip: Clip): string => (clip.type === "video" ? `${clip.media}|${clip.source_in}|${clip.duration}|${clip.speed}` : "");
+
 /**
  * Puts a smoothed render in place of the slowed stretch it was made from,
  * unless the clip has changed since (re-trimmed, re-timed, other media): the
@@ -661,12 +676,21 @@ async function swapInSmooth(app: App, projectId: string, rendered: Clip, out: st
 }
 
 /**
- * The clips of a project still being smoothed in the background. Map shots
+ * The clips of a project still being smoothed in the background (and, given
+ * the project, those refused for crossing a cut, with why). Map shots
  * still rendering (and any whose render failed) come after them, by media:
  * "m7 (map view rendering)".
  */
-export function smoothingPending(projectId: string): string[] {
-  const pending = [...(smoothing.get(projectId) ?? [])].sort(compareStrings);
+export function smoothingPending(projectId: string, project?: Project): string[] {
+  // Given the project, the clips refused for crossing a cut that are still as they were, and why.
+  const refused =
+    project === undefined
+      ? []
+      : [...(refusedSmoothing.get(projectId)?.entries() ?? [])].flatMap(([clip, { shape, why }]) => {
+          const now = clipOf(project, clip);
+          return now !== undefined && shapeOf(now) === shape ? [`${clip} (not smoothed: ${why})`] : [];
+        });
+  const pending = [...(smoothing.get(projectId) ?? []), ...refused].sort(compareStrings);
   const maps = [...(mapsPending.get(projectId)?.values() ?? [])]
     .map((map) =>
       map.error === null
@@ -684,7 +708,15 @@ export function smoothingPending(projectId: string): string[] {
  */
 export function smoothInBackground(app: App, projectId: string, clipIds: string[]): string[] {
   const started: string[] = [];
+  const project = app.store.get(projectId)?.project ?? null;
+  const refused = refusedSmoothing.get(projectId);
   for (const clipId of clipIds) {
+    const now = project === null ? undefined : clipOf(project, clipId);
+    const before = refused?.get(clipId);
+    if (before !== undefined) {
+      if (now !== undefined && shapeOf(now) === before.shape) continue;
+      refused!.delete(clipId);
+    }
     let clips = smoothing.get(projectId);
     if (clips === undefined) {
       clips = new Set();
@@ -693,6 +725,7 @@ export function smoothInBackground(app: App, projectId: string, clipIds: string[
     if (clips.has(clipId)) continue;
     clips.add(clipId);
     started.push(clipId);
+    const shape = now === undefined ? "" : shapeOf(now);
     const job = jobs.begin(app.store.home, "smooth", projectId, { clip: clipId }, clipId);
     progress.begin("smooth", projectId, clipId);
     void (async () => {
@@ -703,6 +736,11 @@ export function smoothInBackground(app: App, projectId: string, clipIds: string[
             await smoothSlowMotion(app, projectId, clipId);
             ok = true;
           } catch (error) {
+            if (error instanceof CrossesCut && shape !== "") {
+              const kept = refusedSmoothing.get(projectId) ?? new Map<string, { shape: string; why: string }>();
+              kept.set(clipId, { shape, why: error.message.replace(`${clipId} `, "") });
+              refusedSmoothing.set(projectId, kept);
+            }
             // The edit moved on (the clip cut or changed): nothing to smooth, not a failure.
             if (!(error instanceof Superseded)) throw error;
             diag.info("agent", `not smoothing ${clipId} in ${projectId}: ${error.message}`);

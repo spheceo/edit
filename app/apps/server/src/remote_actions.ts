@@ -77,6 +77,9 @@ const LOW_DISK = 5e9;
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 
+/** The disk's free bytes where Edit keeps its data (tests stand in for it: the Mac running them may be short). */
+export const disk = { free: (app: App): number | null => diskFree(app) };
+
 function diskFree(app: App): number | null {
   try {
     const stat = fs.statfsSync(app.store.home);
@@ -414,7 +417,7 @@ export async function unstick(app: App): Promise<string> {
     await (app.agents as { stop?: (project: string) => Promise<void> }).stop?.(project);
     done.push(`project ${project}: its agent turn, quiet ${Math.round(quiet / 60_000)} min, stopped`);
   }
-  const free = diskFree(app);
+  const free = disk.free(app);
   if (free !== null && free < LOW_DISK) {
     const cleaned = (await cleanCloudPreviews(app, false)).bytes + cleanCache(app, false).bytes;
     done.push(`the disk had ${gb(free)} free: ${gb(cleaned)} of cache cleaned`);
@@ -505,7 +508,8 @@ export function watchIdle(app: App, install: () => Promise<unknown> = () => app.
       diag.warn("remote", `update when idle: ${diag.messageOf(error)}; trying again when idle`);
     });
   };
-  setInterval(() => void look(), 60_000).unref?.();
+  // A look that throws is said, never left unhandled (a test's Mac with no updater threw into whatever ran a minute later).
+  setInterval(() => void look().catch((error: unknown) => diag.warn("remote", `update when idle: ${diag.messageOf(error)}`)), 60_000).unref?.();
 }
 
 // ---------------------------------------------------------------------------

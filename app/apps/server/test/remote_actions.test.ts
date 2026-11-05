@@ -7,7 +7,7 @@ import type { Script } from "@edit/types/writer";
 
 import type { App } from "../src/app.ts";
 import * as presence from "../src/presence.ts";
-import { busyWith, IDLE_MS, idleNow, lastUsed, problems, probe, RESTART, resume, UNSTICK, updateWhenIdle } from "../src/remote_actions.ts";
+import { busyWith, disk, IDLE_MS, idleNow, lastUsed, problems, probe, RESTART, resume, UNSTICK, updateWhenIdle } from "../src/remote_actions.ts";
 import * as problemReports from "../src/problem_reports.ts";
 import * as store from "../src/writer/store.ts";
 
@@ -50,7 +50,14 @@ describe("remote support's other actions", () => {
   };
 
   test("unstick on a Mac with nothing stuck says so; restart refuses while work would be cut off", async () => {
-    expect(await resume(quiet(), UNSTICK)).toBe("nothing was stuck");
+    // A disk with room, whatever the Mac running the tests has (Nov 5: 2.9 GB free here, and unstick cleaned the cache).
+    const free = disk.free;
+    disk.free = () => 100e9;
+    try {
+      expect(await resume(quiet(), UNSTICK)).toBe("nothing was stuck");
+    } finally {
+      disk.free = free;
+    }
     await expect(resume(quiet(true), RESTART)).rejects.toThrow("Not restarted: an export would be cut off");
   });
 

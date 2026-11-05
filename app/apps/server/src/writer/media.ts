@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as diag from "../diag.ts";
 import { isFile } from "../paths.ts";
 import { ffmpeg, ffprobe, isUrl, protocols, urlArgs } from "../tools.ts";
-import { run } from "./proc.ts";
+import { ProgramTimedOut, run } from "./proc.ts";
 
 /** A joined case may run as long as Repack lets one run. */
 export const MAX_CASE_MS = 20 * 3_600_000;
@@ -125,25 +125,56 @@ function hardwarePicture(width: number | null, height: number): string {
 const NICE = process.platform !== "win32" && fs.existsSync("/usr/bin/nice");
 const lowered = (command: string, args: string[]): [string, string[]] => (NICE ? ["/usr/bin/nice", ["-n", "10", command, ...args]] : [command, args]);
 
+/** How long an encode runs before its pace is judged, and how often after. */
+export const PACE = { afterMs: 5 * 60_000, everyMs: 30_000 };
+
 /**
  * Runs an ffmpeg encode, reporting 0–100 of `totalMs` from its progress clock;
  * a failed one leaves no file. At a lower priority (nice 10): an import's
  * encode is background work, and at full priority a long libx264 join held the
  * Mac at load 30 and Edit's own answers took seconds (Oct 30).
+ *
+ * Judged by its pace from five minutes in: one far from finishing within its
+ * time at the pace it's going (or that hasn't moved at all) is stopped then,
+ * not left to run out the hour. Nov 5, JJ's Mac: a recording read from the cloud
+ * crawled, and its piece, the libx264 try and the whole preview each ran
+ * their full time, 3 h 30 min before the import said anything.
  */
 async function encode(args: string[], dest: string, totalMs: number, onPercent: (percent: number) => void, signal?: AbortSignal): Promise<void> {
+  const limitMs = toolTime(totalMs);
+  const began = Date.now();
+  let doneMs = 0;
+  const slow = new AbortController();
+  let why = "";
+  const judge = setInterval(() => {
+    const ran = Date.now() - began;
+    if (totalMs <= 0 || ran < PACE.afterMs) return;
+    const projected = doneMs <= 0 ? Number.POSITIVE_INFINITY : (ran * totalMs) / doneMs;
+    // Half again its time to spare: a start slowed by a busy Mac or a slow first read isn't judged as its pace.
+    if (projected <= limitMs * 1.5) return;
+    why =
+      doneMs <= 0
+        ? `FFmpeg made no progress in ${Math.round(ran / 60_000)} min and was stopped.`
+        : `FFmpeg was going too slowly to finish (${Math.round((doneMs / totalMs) * 100)}% in ${Math.round(ran / 60_000)} min, about ${Math.round(projected / 60_000)} min in all) and was stopped.`;
+    slow.abort();
+  }, PACE.everyMs);
   try {
     await run(...lowered(ffmpeg(), args), {
-      timeoutMs: toolTime(totalMs),
-      ...(signal ? { signal } : {}),
+      timeoutMs: limitMs,
+      signal: signal ? AbortSignal.any([signal, slow.signal]) : slow.signal,
       onLine: (line) => {
         const micros = /^out_time_(?:us|ms)=(\d+)/.exec(line)?.[1];
-        if (micros !== undefined && totalMs > 0) onPercent(Math.min(100, Math.floor((Number(micros) / 1000) * 100 / totalMs)));
+        if (micros === undefined || totalMs <= 0) return;
+        doneMs = Math.max(doneMs, Number(micros) / 1000);
+        onPercent(Math.min(100, Math.floor((doneMs * 100) / totalMs)));
       },
     });
   } catch (error) {
     fs.rmSync(dest, { force: true });
+    if (slow.signal.aborted && !signal?.aborted) throw new ProgramTimedOut({ message: why });
     throw error;
+  } finally {
+    clearInterval(judge);
   }
   if (!fs.existsSync(dest)) throw new Error("The footage was not written.");
 }

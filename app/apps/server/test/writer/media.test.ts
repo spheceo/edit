@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { join as joinPath } from "node:path";
 
 import { ffmpeg } from "../../src/tools.ts";
-import { append, inputsOf, join, overview, peaks, streams } from "../../src/writer/media.ts";
+import { append, encodeProxy, inputsOf, join, overview, PACE, peaks, streams } from "../../src/writer/media.ts";
 
 function make(args: string[], out: string) {
   const done = Bun.spawnSync([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...args, out]);
@@ -90,3 +90,23 @@ test("footage in the cloud is read twice, the picture from one and the sound fro
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("an encode that makes no progress is stopped by its pace, not left to run out its hour", async () => {
+  const dir = fs.mkdtempSync(joinPath(os.tmpdir(), "edit-pace-"));
+  const never = joinPath(dir, "never.mp4");
+  // A pipe nobody writes to: FFmpeg waits on it forever, as on a read from the cloud that stalled.
+  expect(Bun.spawnSync(["mkfifo", never]).exitCode).toBe(0);
+  const was = { ...PACE };
+  Object.assign(PACE, { afterMs: 400, everyMs: 100 });
+  const began = Date.now();
+  try {
+    const failed = await encodeProxy(never, joinPath(dir, "out.mp4"), 3_600_000).then(() => null, (error: unknown) => error as Error);
+    expect(failed?.message).toMatch(/made no progress/);
+    // Both tries (the video hardware, then libx264), each judged within a second or so.
+    expect(Date.now() - began).toBeLessThan(15_000);
+    expect(fs.existsSync(joinPath(dir, "out.mp4"))).toBe(false);
+  } finally {
+    Object.assign(PACE, was);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 30_000);

@@ -235,7 +235,10 @@ export function uptime(): number {
 
 /**
  * `text` with every URL replaced: presigned URLs are credentials, never shown
- * or logged (native lines and errors go through it).
+ * or logged (native lines and errors go through it). The page's own built
+ * code on this Mac's server stays, as `assets/<file>:<line>:<column>`: it's
+ * where a UI error came from, and the only clue when WebKit gives no stack
+ * (JJ's Mac, Nov 5–6: React's #185, twelve times, said only "(<url>").
  */
 export function scrub(text: string): string {
   let out = "";
@@ -246,9 +249,11 @@ export function scrub(text: string): string {
       .filter((index) => index >= 0)
       .reduce((a, b) => Math.min(a, b), Number.POSITIVE_INFINITY);
     if (at === Number.POSITIVE_INFINITY) break;
-    out += `${rest.slice(0, at)}<url>`;
     const tail = rest.slice(at);
     const end = tail.search(/[\s'"<>]/u);
+    const url = end < 0 ? tail : tail.slice(0, end);
+    const asset = /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\/(assets\/[\w.-]+\.js(?::\d+){0,2}\)?)$/u.exec(url)?.[1];
+    out += `${rest.slice(0, at)}${asset ?? "<url>"}`;
     rest = end < 0 ? "" : tail.slice(end);
   }
   return out + rest;

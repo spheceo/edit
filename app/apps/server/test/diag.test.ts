@@ -57,6 +57,14 @@ test("presigned URLs never reach a log line", () => {
   expect(scrub("GET https://r2.example/edit/x?X-Amz-Signature=abc failed: 403")).toBe("GET <url> failed: 403");
   expect(scrub("'http://a/b' and \"https://c/d\"")).toBe("'<url>' and \"<url>\"");
   expect(scrub("nothing to hide")).toBe("nothing to hide");
+  // The page's built code on this Mac stays: where a UI error came from.
+  expect(scrub("ui: Error: Minified React error #185; visit https://react.dev/errors/185 (http://127.0.0.1:7700/assets/index-Bx1.js:58:19044)")).toBe("ui: Error: Minified React error #185; visit <url> (assets/index-Bx1.js:58:19044)");
+  expect(scrub("applyAgentEvent@http://localhost:7700/assets/index-Bx1.js:12:345")).toBe("applyAgentEvent@assets/index-Bx1.js:12:345");
+  // Anything else on it isn't kept: a cloud preview's key, a page with a query.
+  expect(scrub("(http://127.0.0.1:7700/api/cloud/preview?key=edit/x)")).toBe("(<url>");
+  // A bracket inside a URL doesn't end it: nothing after it shows.
+  expect(scrub("https://r2.example/a(1).mp4?X-Amz-Signature=abc")).toBe("<url>");
+  expect(scrub("http://127.0.0.1:7700/assets/index.js?token=1")).toBe("<url>");
 });
 
 test("the log is set aside as it grows, the last five kept", () => {

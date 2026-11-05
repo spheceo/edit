@@ -148,7 +148,8 @@ export function installDiagnostics() {
   if (installed) return;
   installed = true;
   // With the stack: which function threw (names are kept in the build), not only the message.
-  addEventListener("error", (event) => note("error", "ui", `${event.message} (${event.filename}:${event.lineno})${stackOf(event.error)}`));
+  // Its column too: the build's lines are long, so a line alone doesn't say where.
+  addEventListener("error", (event) => note("error", "ui", `${event.message} (${event.filename}:${event.lineno}:${event.colno})${stackOf(event.error)}`));
   addEventListener("unhandledrejection", (event) => {
     const reason = event.reason as { stack?: string } | undefined;
     note("error", "ui", `Unhandled: ${reason?.stack ?? String(event.reason)}`);

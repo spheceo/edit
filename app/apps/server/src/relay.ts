@@ -158,7 +158,8 @@ export const SERVICE = "Edit's relay";
 /** One request to the relay; any status is answered. */
 export const ask = Effect.fn("relay.ask")(function* (method: string, route: string, body: unknown, timeoutMs: number) {
   for (let again = false; ; again = true) {
-    const used = token();
+    // A sign-in being restored or renewed is waited for, never asked without (accounts.tokenWhenReady).
+    const used = accounts.accessToken() ?? (yield* Effect.promise(() => accounts.tokenWhenReady())) ?? envToken();
     const headers: Record<string, string> = authHeaders(used);
     let payload: string | undefined;
     if (body !== undefined && body !== null) {

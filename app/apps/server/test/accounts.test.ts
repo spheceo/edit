@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { Duration, Effect, Schedule } from "effect";
 
 import * as accounts from "../src/accounts.ts";
+import * as keychain from "../src/keychain.ts";
 import type { App } from "../src/app.ts";
 import * as relay from "../src/relay.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
@@ -67,6 +68,8 @@ beforeAll(() => {
         cutOff ??= bearer;
         return bearer === cutOff ? Response.json({ error: "Sign in to Edit" }, { status: 401 }) : Response.json({ ok: true });
       }
+      // Standing in for the relay too: the token a call carried.
+      if (url.pathname === "/v1/test/bearer") return Response.json({ bearer: request.headers.get("authorization") });
       // Standing in for the relay too: what a tile request carried.
       if (url.pathname.startsWith("/v1/3dtiles/")) return Response.json({ bearer: request.headers.get("authorization"), query: url.search }, { headers: { "cache-control": "max-age=60" } });
       if (url.pathname !== "/app/token") return new Response("not found", { status: 404 });
@@ -362,4 +365,20 @@ test("a sign-out the site's limit refuses (429) is revoked again after its Retry
   expect(accounts.status().signed_in).toBe(false);
   for (let i = 0; i < 100 && seen.slice(from).filter((one) => one.path === "/app/revoke").length < 2; i++) await Bun.sleep(10);
   expect(seen.slice(from).filter((one) => one.path === "/app/revoke").length).toBe(2);
+});
+
+test("a cloud call made while the kept sign-in is restored at start waits for its token instead of going without one", async () => {
+  await keychain.set(app.store.home, "refresh-start-aaaaaaaa");
+  process.env.EDIT_RELAY_URL = process.env.EDIT_ACCOUNTS_URL;
+  process.env.EDIT_TRIALS = "1";
+  try {
+    // As after an update: the server starts, and the page's first cloud call comes in the same moment.
+    const starting = accounts.start(app);
+    const answer = await relay.json<{ bearer: string | null }>("GET", "/v1/test/bearer", null, "the test", 5);
+    await starting;
+    expect(answer.bearer).toBe(`Bearer ${accounts.accessToken()}`);
+  } finally {
+    delete process.env.EDIT_RELAY_URL;
+    delete process.env.EDIT_TRIALS;
+  }
 });

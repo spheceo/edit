@@ -399,6 +399,30 @@ export function renew(home: string | null = state.home): Promise<void> {
   return runtime.runPromise(Deferred.await(done));
 }
 
+/** The kept sign-in restored at start (`start`): resolved once the accounts site has been asked. */
+let restored: Promise<void> = Promise.resolve();
+/** When a request without a token last asked for a renewal (at most one every 30 s). */
+let lastTokenless = 0;
+
+/**
+ * The token to send, waiting for it when there's a sign-in to have one: while
+ * the kept sign-in is restored at start, or renewed when the one held ran
+ * out. Without the wait, the cloud's first calls after an update went with no
+ * token at all and were refused ("Sign in to Edit", 401), 20 ms before the
+ * sign-in was back (JJ's Mac, Nov 5), and a project kept that as its cloud
+ * error (Marius's). Null when signed out.
+ */
+export async function tokenWhenReady(): Promise<string | null> {
+  const held = accessToken();
+  if (held !== null) return held;
+  await restored;
+  if (accessToken() === null && hasSession() && Date.now() - lastTokenless >= 30_000) {
+    lastTokenless = Date.now();
+    await renew();
+  }
+  return accessToken();
+}
+
 /** When the relay last refused a token and a renewal was asked for (at most one a minute). */
 let lastRefused = 0;
 
@@ -432,7 +456,8 @@ export async function start(app: App): Promise<void> {
   state.home = app.store.home;
   void checkAvailable();
   setInterval(() => void checkAvailable(), 10 * 60_000).unref?.();
-  await renew(app.store.home);
+  restored = renew(app.store.home);
+  await restored;
   // Signed-in team devices register automatically; saved disables stay off. A trial server
   // (EDIT_TRIALS=1) is this Mac's second Edit, never a device of its own.
   if (process.env.EDIT_TRIALS !== "1") {

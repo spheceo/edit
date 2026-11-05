@@ -41,7 +41,7 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
     carryOn(app, data, store.markInterrupted(data));
     for (const id of store.ids(data)) jobs.markInterrupted(data, id);
     cloud.start(data);
-    storage.start(data);
+    storage.start(data, join(app.store.home, "projects"));
     scriptSync.start(app);
     return;
   }
@@ -60,7 +60,7 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   cloud.start(data);
   reviews.start(app, data);
   // Idle scripts' footage left to the cloud.
-  storage.start(data);
+  storage.start(data, join(app.store.home, "projects"));
   // Each script and the edit made from it kept in step.
   scriptSync.start(app);
   // Archives and restores heard from the cloud, acted on every 20 s.

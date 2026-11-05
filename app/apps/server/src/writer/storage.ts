@@ -240,20 +240,105 @@ const round = (data: string, said: Said, strays: Set<string>) =>
     { concurrency: 1 },
   ).pipe(Effect.map((bytes) => bytes.reduce((sum, one) => sum + one, 0)));
 
+// Nov 4, JJ's Mac: 12,032 such folders, every one a clone of one deleted
+// script (Writer's sync kept "this Mac's version" of it every 30 s for days,
+// found no script in the copy and left it; Edit brought them in with Writer's
+// scripts). Each of Edit's passes over the scripts read them all, 64 ms a
+// pass instead of 1. A folder with no script is cleared once nothing can need
+// it: untouched a day, not a script the cloud has (a pull cut short comes
+// down again), nothing at work on it, and no project's media inside it.
+
+/** How long a folder with no script is left untouched before it's cleared. */
+const STRAY_QUIET_MS = 24 * 60 * 60_000;
+
+/** The latest change anywhere in a folder. */
+function newest(dir: string): number {
+  let latest = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const at = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      latest = Math.max(latest, fs.statSync(at).mtimeMs);
+      entries = fs.readdirSync(at, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) stack.push(join(at, entry.name));
+      else
+        try {
+          latest = Math.max(latest, fs.lstatSync(join(at, entry.name)).mtimeMs);
+        } catch {
+          // Gone meanwhile.
+        }
+    }
+  }
+  return latest;
+}
+
+/** The script folders Edit's projects play media from, or null when a project won't read (then nothing is cleared). */
+function usedByProjects(data: string, projects: string): Set<string> | null {
+  const root = `${store.scriptsRoot(data)}/`;
+  const used = new Set<string>();
+  let names: string[];
+  try {
+    names = fs.readdirSync(projects).filter((name) => name.endsWith(".json"));
+  } catch {
+    return fs.existsSync(projects) ? null : used;
+  }
+  for (const name of names) {
+    let media: unknown;
+    try {
+      media = (JSON.parse(fs.readFileSync(join(projects, name), "utf8")) as { media?: unknown }).media;
+    } catch {
+      return null;
+    }
+    for (const item of Array.isArray(media) ? (media as { path?: unknown }[]) : []) {
+      if (typeof item?.path === "string" && item.path.startsWith(root)) used.add(item.path.slice(root.length).split("/")[0]!);
+    }
+  }
+  return used;
+}
+
+/** Of `strays`, the folders nothing needs, removed: their ids. */
+export const clearStrays = (data: string, projects: string, strays: Iterable<string>, now = Date.now()) =>
+  Effect.gen(function* () {
+    const live = cloud.liveInCloud();
+    const used = usedByProjects(data, projects);
+    const cleared: string[] = [];
+    if (live === null || used === null) return cleared;
+    for (const id of strays) {
+      const dir = store.scriptDir(data, id);
+      if (live.has(id) || used.has(id) || importing(id) || jobs.running(id) || isFile(join(dir, "script.json"))) continue;
+      if (now - newest(dir) < STRAY_QUIET_MS) continue;
+      fs.rmSync(dir, { recursive: true, force: true });
+      cleared.push(id);
+      // A few at a time, so a Mac's thousands don't hold up the server.
+      if (cleared.length % 50 === 0) yield* idle(0);
+    }
+    return cleared;
+  });
+
+/** Up to ten folders' short ids, for the log. */
+const named = (ids: string[]): string => `${ids.slice(0, 10).map((id) => id.slice(0, 8)).join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}`;
+
 /** Rounds a couple of minutes after Edit starts, then every ten, for as long as Edit runs. */
-const rounds = (data: string) =>
+const rounds = (data: string, projects: string) =>
   Effect.gen(function* () {
     const said: Said = new Map();
-    const strays = new Set<string>();
     let told = 0;
     yield* idle(2 * 60_000);
     for (;;) {
+      const strays = new Set<string>();
       const freed = yield* round(data, said, strays);
       if (freed > 0) yield* Effect.logInfo(`${(freed / 1e9).toFixed(2)} GB of scripts' footage left to the cloud`);
-      if (strays.size > told) {
-        told = strays.size;
-        yield* Effect.logWarning(`${strays.size} folder${strays.size === 1 ? "" : "s"} among the scripts ha${strays.size === 1 ? "s" : "ve"} no script.json, left as they are (${[...strays].map((id) => id.slice(0, 8)).join(", ")})`);
-      }
+      const cleared = yield* clearStrays(data, projects, strays);
+      if (cleared.length > 0) yield* Effect.logInfo(`cleared ${cleared.length} folder${cleared.length === 1 ? "" : "s"} among the scripts with no script.json, which nothing needed (${named(cleared)})`);
+      const gone = new Set(cleared);
+      const kept = [...strays].filter((id) => !gone.has(id));
+      if (kept.length > told) yield* Effect.logWarning(`${kept.length} folder${kept.length === 1 ? "" : "s"} among the scripts ha${kept.length === 1 ? "s" : "ve"} no script.json, kept as something may still need them (${named(kept)})`);
+      told = kept.length;
       yield* idle(EVERY_MS);
     }
   }).pipe(inArea("writer"));
@@ -264,7 +349,7 @@ const rounds = (data: string) =>
  * user, Oct 30: a preview kept here only while it's made, "deleted at once"
  * once the cloud has it): only files the cloud holds as they are here go.
  */
-export function start(data: string): void {
+export function start(data: string, projects: string): void {
   cloud.onPushed((id) => {
     void runPromise(
       freeOne(data, id, Date.now(), 0).pipe(
@@ -274,7 +359,7 @@ export function start(data: string): void {
       ),
     );
   });
-  runtime.runFork(rounds(data));
+  runtime.runFork(rounds(data, projects));
 }
 
 /** One round, as the loop runs it, for tests: the bytes freed, and the folders found with no script. */

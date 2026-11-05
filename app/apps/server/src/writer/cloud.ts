@@ -85,6 +85,12 @@ export interface Status {
 
 const status: Status = { enabled: false, state: "off", pending: 0, transfer: null, lastSync: null, error: null, scripts: 0 };
 export const statusNow = (): Status => ({ ...status });
+/** The scripts the cloud last listed as not deleted (null until it has listed them since Edit started). */
+let live: ReadonlySet<string> | null = null;
+export const liveInCloud = (): ReadonlySet<string> | null => live;
+export const liveForTests = (ids: ReadonlySet<string> | null): void => {
+  live = ids;
+};
 
 let pullNow = true;
 /** Scripts whose push the cloud refused: when to try again, how long it waited last, and what it said. */
@@ -700,7 +706,9 @@ async function tick(data: string, pull: boolean): Promise<number> {
     const listed = await convex("query", "writer:listScripts", {});
     if (!listed.ok) throw new Problem(`The cloud refused to list scripts (${listed.code}).`);
     const rows = (Array.isArray(listed.value) ? listed.value : []) as Record<string, unknown>[];
-    status.scripts = rows.filter((row) => row.deletedAt == null).length;
+    const listedLive = rows.filter((row) => row.deletedAt == null);
+    status.scripts = listedLive.length;
+    live = new Set(listedLive.map((row) => String(row.scriptId)));
     // Archived from Repack's page, or asked back: archive.ts acts on it.
     archive.keepStates(data, rows);
     for (const row of rows) {

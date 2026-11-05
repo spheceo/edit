@@ -15,6 +15,7 @@ bun apps/server/scripts/remote.ts ask mathiass help       # what can be asked
 bun apps/server/scripts/remote.ts ask mathiass log since=2h level=warn
 bun apps/server/scripts/remote.ts ask mathiass log since=1d grep=pieces|upload lines=2000
 bun apps/server/scripts/remote.ts ask mathiass work       # jobs, uploads, pieces, imports, agent turns
+bun apps/server/scripts/remote.ts ask mathiass cpu        # the server busy or big with nothing under way: its threads, event loop, JS heap
 bun apps/server/scripts/remote.ts ask mathiass project p1793748290029-143711
 bun apps/server/scripts/remote.ts ask mathiass get /api/projects/<id>/media/<m>/status
 bun apps/server/scripts/remote.ts history mathiass        # what was sent and how it went

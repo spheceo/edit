@@ -95,3 +95,10 @@ test("an admin's question is answered, scrubbed, and sent up with the reports; t
     cleanup();
   }
 });
+
+test("cpu says the server's CPU, how late its event loop ran, its threads and its JS heap", async () => {
+  const answer = await ask.respondTo({} as never, "cpu");
+  expect(answer).toMatch(/^over 5 s: \d+% CPU .* event loop ran up to \d+ ms late/);
+  expect(answer).toContain("JS heap:");
+  expect(answer).toMatch(/#0 \d+\.\d% now/);
+}, 15_000);

@@ -15,6 +15,7 @@
 //                                 the log (five rotations kept), filtered
 //   system                        the Mac: macOS, model, memory, disks, power, tools
 //   ps                            Edit's own processes (FFmpeg, claude…) and the busiest others
+//   cpu                           where the server's time and memory go: its threads, the event loop, the JS heap
 //   net                           how fast the relay and R2 answer
 //   work                          what's under way: jobs, uploads, pieces, imports, turns
 //   project <id>                  a project's media (and their state), clips, chat's end
@@ -129,6 +130,8 @@ export async function respondTo(app: App, question: string): Promise<string> {
       return system(app);
     case "ps":
       return processes();
+    case "cpu":
+      return cpu();
     case "net":
       return net();
     case "work":
@@ -151,6 +154,7 @@ const HELP = `Questions (read-only):
   log [since=2h] [grep=re] [level=warn|error] [area=pieces] [lines=400]
   system                        macOS, model, memory, disks, power, tools
   ps                            Edit's processes and the busiest others
+  cpu                           the server's threads, event loop and JS heap
   net                           how fast the relay and R2 answer
   work                          jobs, uploads, pieces, imports, agent turns
   project <id>                  its media and their state, clips, the chat's end
@@ -272,6 +276,52 @@ async function processes(): Promise<string> {
   const show = (row: (typeof rows)[number]) => `${String(row.pid).padStart(6)} ${row.etime?.padStart(11)} ${row.cpu.toFixed(1).padStart(5)}% ${(row.rss / 1024).toFixed(0).padStart(6)} MB  ${row.command.slice(0, 400)}`;
   const busiest = rows.filter((row) => !ours.has(row.pid)).sort((a, b) => b.cpu - a.cpu).slice(0, 12);
   return [`Edit's processes (pid, running for, CPU, memory, command):`, ...rows.filter((row) => ours.has(row.pid)).map(show), "", "The busiest others:", ...busiest.map(show)].join("\n");
+}
+
+/**
+ * Where the server's time and memory go (Nov 5, JJ's Mac: 66–83% CPU and
+ * 2.1 GB with nothing under way): over five seconds, the process's CPU, how
+ * late the event loop ran, its busiest threads (the first is JavaScript's;
+ * the rest are the engine's, GC's and Bun's), and the JS heap by kind.
+ */
+async function cpu(): Promise<string> {
+  const WINDOW_MS = 5_000;
+  let late = 0;
+  let last = performance.now();
+  const beat = setInterval(() => {
+    const now = performance.now();
+    late = Math.max(late, now - last - 50);
+    last = now;
+  }, 50);
+  const before = process.cpuUsage();
+  const began = performance.now();
+  await new Promise((resolve) => setTimeout(resolve, WINDOW_MS));
+  clearInterval(beat);
+  const used = process.cpuUsage(before);
+  const percent = ((used.user + used.system) / 1000 / (performance.now() - began)) * 100;
+  // Each thread: %CPU now, and its system and user time since the server started.
+  const threads = (await run(["ps", "-M", "-p", String(process.pid)])).split("\n").slice(1).flatMap((line, at) => {
+    const match = /\s(\d+(?:\.\d+)?)\s+\S+\s+\S+\s+(\d+:\d+\.\d+)\s+(\d+:\d+\.\d+)/.exec(line);
+    return match === null ? [] : [{ at, now: Number(match[1]), total: `${match[2]} sys + ${match[3]} user` }];
+  });
+  const memory = process.memoryUsage();
+  const mb = (bytes: number) => `${Math.round(bytes / 1e6)} MB`;
+  let kinds = "";
+  try {
+    const { heapStats } = await import("bun:jsc");
+    const stats = heapStats();
+    kinds = Object.entries(stats.objectTypeCounts).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([kind, count]) => `${kind} ${count}`).join(", ");
+    kinds = `JS heap: ${mb(stats.heapSize)} in use of ${mb(stats.heapCapacity)}, ${stats.objectCount} objects (${kinds})`;
+  } catch {
+    // Not on Bun.
+  }
+  return [
+    `over ${WINDOW_MS / 1000} s: ${percent.toFixed(0)}% CPU (${(used.user / 1000).toFixed(0)} ms user, ${(used.system / 1000).toFixed(0)} ms system); the event loop ran up to ${Math.round(late)} ms late`,
+    `memory: ${mb(memory.rss)} resident · JS heap ${mb(memory.heapUsed)} of ${mb(memory.heapTotal)} · outside it ${mb(memory.external)} (buffers ${mb(memory.arrayBuffers)})`,
+    ...(kinds === "" ? [] : [kinds]),
+    `${threads.length} threads, the busiest (#0 is JavaScript's):`,
+    ...threads.sort((a, b) => b.now - a.now).slice(0, 10).map((thread) => `  #${thread.at} ${thread.now.toFixed(1)}% now · ${thread.total}`),
+  ].join("\n");
 }
 
 async function timed(what: string, work: () => Promise<unknown>): Promise<string> {

@@ -61,6 +61,18 @@ Sphe asked whether the first draft followed the guide exactly. It didn't, so I r
 
 v2 was shared from prod Edit (14:41): https://feedback.spheceo.com/r/c8ydd2_h4ArYqtMEkISUxA.
 
+## Round 3 (Nov 5): Sphe's first notes on v2
+
+29. **"A lot of flickers… super unnatural"** came from Edit's smoothed slow motion. VideoToolbox's frame processor turned frames tagged Rec. 709 (phone and YouTube footage as decoded) into linear light, then gave its made frames back untagged and far darker (0.54 real, 0.10 made). At 0.8×, four frames in five were dark. The frames now go into the processor untagged and come back with the real frames' tags.
+
+    A finished edit's old renders are smoothed again when its project opens: 21 of v2's 22. 134 flashes became one, which is real exhaust flames in the race footage. Every team edit with smoothed slow motion has this until a nightly ships the fix.
+30. **"The voiceover got cut… starts later than it should":** the narrator reworded the opening ("If you haven't been living…"). The placement matched the line from "living" and dropped 0.7 s. Three more lines lost "He also makes strange noises", "two." and "than you might expect." Placement now keeps the narrator's words around a match, up to a pause.
+
+    For edits already made, the new audit `narration_cut_off` flags them and `extend_clip` puts them back; `place_voiceovers` can't on an edited project. v2's four were put back that way.
+31. **My own slip:** typing into the editor before its chat box had focus added 45 empty titles and switched the timeline to curves. All undone, and messages are now set into the box rather than typed.
+
+v2, corrected, is at the same link (14:45).
+
 ## Not fixable here
 
 - **Five of the 22 posts can't be had without an Instagram sign-in:**

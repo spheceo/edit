@@ -17,7 +17,8 @@ test("Storage lists Edit's exports on this Mac, deletes only those, and keeps a 
     const entry = (path: string, finished: number, cloudKey?: string) => ({ path, name: path.split("/").pop(), finished_ms: finished, bytes: 10, ...(cloudKey ? { cloudKey } : {}) });
     fs.writeFileSync(`${home}/exports.json`, JSON.stringify({ p: [entry(archived!, 1, "edit/exports/p/v0.mp4"), entry(old!, 2), entry(newest!, 3)] }));
 
-    const listed = storedExports(app);
+    // Only this home's: Storage also lists the Mac's real ~/Movies/Edit, which may hold anything.
+    const listed = storedExports(app).filter((one) => one.path.startsWith(home));
     expect(listed.map((one) => one.name).sort()).toEqual(["stray.mov", "v0.mp4", "v1.mp4", "v2.mp4"]);
     expect(listed.find((one) => one.path === newest)).toMatchObject({ project: "p", newest: true });
     expect(listed.find((one) => one.path === stray)).toMatchObject({ project: null, newest: false });

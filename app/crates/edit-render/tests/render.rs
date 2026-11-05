@@ -512,6 +512,7 @@ fn blurs_only_inside_the_region() {
         height: 440.0,
         feather: 24.0,
         shape: BlurShape::Ellipse,
+        mosaic: 0.0,
     };
     let name = Blur {
         radius: 30.0,
@@ -521,6 +522,7 @@ fn blurs_only_inside_the_region() {
         height: 160.0,
         feather: 12.0,
         shape: BlurShape::Rect,
+        mosaic: 0.0,
     };
     let sharp = Scene {
         width: w,
@@ -906,6 +908,7 @@ fn a_bounded_blur_matches_the_whole_frame_blur() {
                 height,
                 feather,
                 shape,
+                mosaic: 0.0,
             }
         };
     let scene = Scene {

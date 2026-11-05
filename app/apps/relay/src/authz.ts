@@ -16,6 +16,8 @@
  * Footage keys are named by their content (a Drive file, a hash), shared by
  * every project that uses them, so they can't be tied to one project.
  */
+import type { Style } from "@edit/types";
+
 import type { Caller } from "./auth";
 
 /** What the kinds rule needs of a project. */
@@ -33,12 +35,15 @@ export function grantedTo(found: Caller): Set<string> | null {
 
 export const isAdmin = (found: Caller) => found.kind === "person" && found.admin;
 
+/** Edit's styles (@edit/types `Style`). Nov 5: only interrogation and courtroom were read, so a commentary, horror or Shorts project counted as bodycam: hidden from someone given only its kind, open to a bodycam editor. */
+const STYLES = new Set<string>(["bodycam", "interrogation", "courtroom", "commentary", "horror", "shorts"] satisfies Style[]);
+
 /** A project's shape from its Convex summary (none: an edit in the default style), as Edit's `cloudShape`. */
 export function shapeOf(summary: unknown): Shape {
   const field = (name: string) => (typeof summary === "object" && summary !== null ? (summary as Record<string, unknown>)[name] : undefined);
   const style = field("style");
   return {
-    style: style === "interrogation" || style === "courtroom" ? style : "bodycam",
+    style: typeof style === "string" && STYLES.has(style) ? style : "bodycam",
     subtitles: field("subtitles") === true,
     footageOnly: field("footageOnly") === true,
   };

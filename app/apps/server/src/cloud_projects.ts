@@ -50,7 +50,7 @@ import { markOpened } from "./opened.ts";
 import { crashed, isBug } from "./guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { badShape, readJson, type RouteContext, type Router } from "./http/router.ts";
-import type { Creator, Project } from "./model.ts";
+import { type Creator, type Project, STYLES } from "./model.ts";
 import { isFile, join } from "./paths.ts";
 import { duration } from "./project.ts";
 import * as relay from "./relay.ts";
@@ -850,7 +850,7 @@ export function summary(project: Project): Record<string, unknown> {
 export function cloudShape(given: unknown): kinds.Shape {
   const style = field(given, "style");
   return {
-    style: style === "interrogation" || style === "courtroom" ? style : "bodycam",
+    style: STYLES.find((one) => one.value === style)?.value ?? "bodycam",
     subtitles: field(given, "subtitles") === true,
     footageOnly: field(given, "footageOnly") === true,
   };

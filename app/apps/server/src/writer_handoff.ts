@@ -253,18 +253,27 @@ export async function list(
   const rows = (await cloud.query("writer:listScripts", {})) as Record<string, unknown>[];
   // A commentary's sources are part of it, not scripts of their own (Script mode hides them too): only this Mac's copies say which.
   let sources = new Set<string>();
+  // This Mac's copies: one changed here since the cloud's (a rename, a new category) shows as it is here until its push lands.
+  let here = new Map<string, { title: string; kind: string | undefined; updatedAt: number }>();
   try {
-    sources = new Set(writerStore.list(writerStore.dataDir(app.store.home)).flatMap((one) => (one.inCommentary ? [one.id] : [])));
+    const local = writerStore.list(writerStore.dataDir(app.store.home));
+    sources = new Set(local.flatMap((one) => (one.inCommentary ? [one.id] : [])));
+    here = new Map(local.map((one) => [one.id, { title: one.title, kind: one.kind, updatedAt: one.updatedAt }]));
   } catch {
     // No scripts here yet.
   }
+  /** This Mac's copy of `row`'s script when it's newer than the cloud's. */
+  const newer = (row: Record<string, unknown>) => {
+    const local = here.get(String(row.scriptId ?? ""));
+    return local !== undefined && local.updatedAt > Number(row.updatedAt ?? 0) ? local : null;
+  };
   // Deleted here, the cloud not told yet (its sync does it in a moment): gone from the list already.
   for (const id of writerCloud.beingDeleted(writerStore.dataDir(app.store.home))) sources.add(id);
   return (Array.isArray(rows) ? rows : [])
     .filter((row) => (row.deletedAt === undefined || row.deletedAt === null) && !sources.has(String(row.scriptId ?? "")))
     .map((row) => ({
       id: String(row.scriptId ?? ""),
-      title: String(row.title ?? "Untitled"),
+      title: newer(row)?.title || String(row.title ?? "Untitled"),
       rev: Number(row.rev ?? 0),
       updatedAt: Number(row.updatedAt ?? 0),
       updatedBy: typeof row.updatedBy === "string" ? row.updatedBy : null,
@@ -274,8 +283,10 @@ export async function list(
       ...(() => {
         const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown; sourceKind?: unknown; compilation?: unknown; runFailed?: unknown };
         const clips = typeof summary.clipCount === "number" ? summary.clipCount : 0;
-        // Its kind of video, once Writer's row says it (as its script's `kind`).
-        const style = summary.sourceKind === "commentary" ? "commentary" : typeof summary.kind === "string" && summary.kind !== "" ? styleOf(summary.kind) : null;
+        // Its kind of video, once Writer's row says it (as its script's `kind`): this Mac's, when its copy is newer.
+        // A category changed here showed the old one until the push landed, ~8 s later (JJ, Nov 6: "it doesn't change when I click it").
+        const kind = newer(row)?.kind ?? summary.kind;
+        const style = summary.sourceKind === "commentary" ? "commentary" : typeof kind === "string" && kind !== "" ? styleOf(kind) : null;
         // Over several videos, and whether Claude's last run on it failed (Home's category and Needs you, whichever Mac made it).
         const failed = summary.runFailed as { at?: unknown; error?: unknown } | null | undefined;
         const runFailed = failed && typeof failed.at === "number" && typeof failed.error === "string" ? { at: failed.at, error: failed.error } : null;

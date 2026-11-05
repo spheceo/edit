@@ -149,3 +149,33 @@ test("a script deleted on this Mac leaves Home's list at once, before its delete
     mock.stop();
   }
 });
+
+test("a category or title changed on this Mac shows on Home's list at once, before its push lands; the cloud's once it's newer", async () => {
+  const { MockServer } = await import("./mocks/server.ts");
+  const { list } = await import("../src/writer_handoff.ts");
+  const mock = MockServer.start();
+  const restore = mock.useEnv({ EDIT_RELAY_TOKEN: "cloud-token" });
+  const { app, cleanup } = fixtureHome("handoff-newer");
+  try {
+    const data = writerStore.dataDir(app.store.home);
+    const local = (id: string, updatedAt: number) => {
+      const dir = writerStore.scriptDir(data, id);
+      fs.mkdirSync(dir, { recursive: true });
+      writerStore.write(dir, { id, title: `${id} here`, kind: "interrogation", sourceKind: "drive", sourceUrl: "", originalPath: join(dir, "original.mp4"), status: "ready", stage: "done", progress: 100, error: null, durationMs: 0, revision: 1, createdAt: 0, updatedAt, overview: [], proxyPath: null, words: [], clips: [] } as unknown as Parameters<typeof writerStore.write>[1]);
+    };
+    // "changed": recategorised here a moment ago, the cloud's row from before. "pushed": the cloud's is newer.
+    const changed = "11111111-1111-4111-8111-111111111111";
+    const pushed = "22222222-2222-4222-8222-222222222222";
+    local(changed, 2_000);
+    local(pushed, 2_000);
+    const row = (scriptId: string, updatedAt: number) => ({ scriptId, title: `${scriptId} in the cloud`, rev: 1, updatedAt, summary: { kind: "foia" } });
+    mock.on("POST", "/v1/cloud/convex", () => Response.json({ status: "success", value: [row(changed, 1_000), row(pushed, 3_000)] }));
+    const rows = new Map((await list(app)).map((one) => [one.id, one]));
+    expect(rows.get(changed)).toMatchObject({ style: "interrogation", title: `${changed} here` });
+    expect(rows.get(pushed)).toMatchObject({ style: "bodycam", title: `${pushed} in the cloud` });
+  } finally {
+    cleanup();
+    restore();
+    mock.stop();
+  }
+});

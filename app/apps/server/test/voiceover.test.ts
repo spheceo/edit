@@ -291,3 +291,33 @@ test("a cut-in the narrator said his own way gets the recording between its neig
   expect(endedBy.has(3)).toBe(true);
   expect(ended.get(3)![2].last).toBe(extra.length - 1);
 });
+
+test("a line whose opening the narrator reworded keeps its opening: the reading reaches back over his words to a pause", () => {
+  // The horror recording, Nov 5: "If you haven't been living under a rock" for the script's "If you're not living under a rock".
+  const timed: [string, number, number][] = [["If", 0.16, 0.26], ["you", 0.34, 0.42], ["haven't", 0.48, 0.7], ["been", 0.72, 0.84], ["living", 0.88, 1.08], ["under", 1.14, 1.34], ["a", 1.4, 1.44], ["rock,", 1.52, 1.9],
+    ["you", 2.12, 2.2], ["already", 2.26, 2.54], ["know", 2.6, 2.8], ["that", 2.85, 3.0], ["Instagram", 3.05, 3.5], ["reels", 3.55, 3.8], ["are", 3.85, 3.95], ["weird.", 4.0, 4.4],
+    ["But", 5.6, 5.7], ["it", 5.75, 5.8], ["gets", 5.85, 6.0], ["even", 6.05, 6.2], ["worse,", 6.25, 6.6], ["let", 6.8, 6.9], ["me", 6.95, 7.0], ["explain", 7.05, 7.4]];
+  const words = timed.map(([text, start, end]) => ({ text, start, end }));
+  const blocks = [
+    { kind: "narration" as const, text: "If you're not living under a rock, you should know by now that Instagram Reels are weird.", clip: "a" },
+    { kind: "narration" as const, text: "But it gets even worse, let me explain.", clip: "b" },
+  ];
+  const [matches] = readings(blocks, [["vo", words]]);
+  expect(matches.get(0)![2].first).toBe(0);
+  // The next line's reading stays its own.
+  expect(matches.get(1)![2].first).toBe(16);
+  expect(matches.get(0)![2].last).toBeLessThan(16);
+});
+
+test("a line the narrator carried on past its last written word, without a pause, keeps the rest of his sentence", () => {
+  const timed: [string, number, number][] = [["the", 521.03, 521.11], ["backstory", 521.15, 521.57], ["behind", 521.61, 521.93], ["it", 521.97, 522.07], ["goes", 522.13, 522.37], ["far", 522.43, 522.61], ["deeper", 522.65, 522.91],
+    ["than", 522.93, 523.05], ["you", 523.09, 523.17], ["might", 523.21, 523.35], ["expect.", 523.41, 523.93], ["In", 524.21, 524.31], ["1966,", 524.33, 525.39], ["while", 525.5, 525.7], ["imprisoned", 525.75, 526.3]];
+  const words = timed.map(([text, start, end]) => ({ text, start, end }));
+  const blocks = [
+    { kind: "narration" as const, text: "However, the backstory behind it is far deeper:", clip: "a" },
+    { kind: "narration" as const, text: "In 1966, while imprisoned", clip: "b" },
+  ];
+  const [matches] = readings(blocks, [["vo", words]]);
+  expect(matches.get(0)![2].last).toBe(10);
+  expect(matches.get(1)![2].first).toBe(11);
+});

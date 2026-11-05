@@ -585,6 +585,9 @@ export function same(a: string, b: string): boolean {
   return edits + (x.length - i) + (y.length - j) <= 1;
 }
 
+/** A gap between words (s) that ends a phrase: an edge reaching over reworded words stops at one. */
+const EDGE_PAUSE = 0.6;
+
 /**
  * Where each narration cut-in is read in the recordings (index → recording,
  * its words, the stretch), and which of them were placed by order.
@@ -650,6 +653,29 @@ export function readings(blocks: readonly ScriptBlock[], heard: readonly [string
       byOrder.add(index);
       from = until + 1;
     });
+  }
+  // A line's first or last words said another way ("If you're not living
+  // under a rock" read as "If you haven't been living under a rock": the
+  // match began at "living" and the opening was cut, both horror drafts,
+  // Nov 5): the reading reaches over the narrator's own words just before
+  // or after it, as many as the script's unmatched edge words and two more,
+  // never past a pause or into another line's reading; at its end, up to four
+  // words more (he carried a sentence on past the script's last word).
+  for (const [index, [media, words, found]] of matches) {
+    if (byOrder.has(index)) continue;
+    const written = wordsOf((blocks[index] as { text: string }).text);
+    const said = words.map((word) => normalize(word.text));
+    const others = [...matches.entries()].filter(([other, match]) => other !== index && match[0] === media).map(([, match]) => match[2]);
+    const floor = Math.max(0, ...others.filter((other) => other.last < found.first).map((other) => other.last + 1));
+    const ceil = Math.min(words.length - 1, ...others.filter((other) => other.first > found.last).map((other) => other.first - 1));
+    const firstWritten = Math.max(0, written.findIndex((word) => same(word, said[found.first] ?? "")));
+    const lastWritten = written.length - 1 - Math.max(0, [...written].reverse().findIndex((word) => same(word, said[found.last] ?? "")));
+    let first = found.first;
+    for (let budget = firstWritten > 0 ? firstWritten + 2 : 0; budget > 0 && first - 1 >= floor && words[first]!.start - words[first - 1]!.end < EDGE_PAUSE; budget--) first -= 1;
+    let last = found.last;
+    // A line he carried on past without a pause ("…goes far deeper than you might expect.") keeps the rest of his sentence.
+    for (let budget = written.length - 1 - lastWritten + 4; budget > 0 && last + 1 <= ceil && words[last + 1]!.start - words[last]!.end < EDGE_PAUSE; budget--) last += 1;
+    if (first !== found.first || last !== found.last) matches.set(index, [media, words, { ...found, first, last }]);
   }
   // The last cut-in read by its words runs on to the end of its recording, when
   // that's a reading of the whole script (two cut-ins or more), not one line's take.

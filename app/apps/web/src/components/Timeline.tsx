@@ -389,8 +389,13 @@ export function Timeline() {
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   };
 
+  // The canvas outlives its project for a moment (a project reloading or
+  // recovered under the cursor): with none, the pointer does nothing (JJ's
+  // Mac, Nov 5: "null is not an object (evaluating 'e.clips')" on a move).
+  const noProject = () => useEditor.getState().project === null;
+
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || noProject()) return;
     const { x, y } = local(event);
     canvasRef.current!.setPointerCapture(event.pointerId);
     const state = useEditor.getState();
@@ -435,6 +440,7 @@ export function Timeline() {
   };
 
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (noProject()) return;
     const { x, y } = local(event);
     hover.current = { x, y };
     const current = drag.current;
@@ -556,6 +562,7 @@ export function Timeline() {
     const current = drag.current;
     drag.current = null;
     snapLine.current = null;
+    if (noProject()) return;
     const state = useEditor.getState();
     if (current?.kind === "pending") {
       state.select([...withLinked(state.project!, [current.clip.id])], "toggle");
@@ -616,7 +623,7 @@ export function Timeline() {
 
   const onDragOver = (event: React.DragEvent) => {
     const types = event.dataTransfer.types;
-    if (!types.includes(MEDIA_MIME) && !types.includes(ELEMENT_MIME) && !types.includes("Files")) return;
+    if ((!types.includes(MEDIA_MIME) && !types.includes(ELEMENT_MIME) && !types.includes("Files")) || noProject()) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
     drop.current = dropInfo(event);
@@ -625,6 +632,7 @@ export function Timeline() {
 
   const onDrop = (event: React.DragEvent) => {
     event.preventDefault();
+    if (noProject()) return;
     const info = dropInfo(event);
     drop.current = null;
     snapLine.current = null;

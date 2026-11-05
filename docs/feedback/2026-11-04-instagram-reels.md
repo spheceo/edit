@@ -54,6 +54,13 @@ Sphe asked whether the first draft followed the guide exactly. It didn't, so I r
 23. **v2's first pass:** 6 screenshots, none highlighted, and a quarter of the B-roll stock (modern phones, a vintage TV). The audit now flags `horror_unhighlighted_screenshot` and `horror_stock_heavy`.
 24. **"Edit crashed during the imports"** was me: commits to `apps/server/src` restarted the dev server mid-turn four times, and the background imports died with it. Don't touch server code while the agent works on a dev project.
 
+25. **The agent gave up on its B-roll imports after about five minutes** while YouTube was still downloading them (one to four minutes a video). `wait {for: ["import"]}` now waits for them, and the "still working" answer tells it to wait rather than give up.
+26. **Every YouTube range from 0 s failed** with "did not cover its requested source range": the download came back a fraction of a second short. `import_broll` now takes what's there and says where it ends.
+27. **Stills shown as screenshots** (an anime figure, TV static) got the retro grid and were waiting for a highlight. The skill and the audit now say any picture that isn't a page of words is `photo: true`.
+28. **Photo cards with nothing under them sat on black.** They now stand over a blurred copy of their own picture. A page given no focus is framed on its middle and top.
+
+v2 was shared from prod Edit (14:41): https://feedback.spheceo.com/r/c8ydd2_h4ArYqtMEkISUxA.
+
 ## Not fixable here
 
 - **Five of the 22 posts can't be had without an Instagram sign-in:**

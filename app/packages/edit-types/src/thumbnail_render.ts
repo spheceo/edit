@@ -109,11 +109,13 @@ function keepOval(context: Context, mask: Mask, surfaces: Surfaces, width: numbe
   const shapeContext = shape.getContext("2d") as Context | null;
   if (shapeContext === null) return;
   const feather = clamp(mask.feather, 0, Math.min(mask.width, mask.height) / 2);
-  shapeContext.filter = feather > 0 ? `blur(${(feather / 2).toFixed(2)}px)` : "none";
+  const blurHere = feather > 0 && !canvasBlurs(surfaces);
+  shapeContext.filter = feather > 0 && !blurHere ? `blur(${(feather / 2).toFixed(2)}px)` : "none";
   shapeContext.fillStyle = "#fff";
   shapeContext.beginPath();
   shapeContext.ellipse(mask.x + mask.width / 2, mask.y + mask.height / 2, Math.max(1, mask.width / 2 - feather / 2), Math.max(1, mask.height / 2 - feather / 2), 0, 0, Math.PI * 2);
   shapeContext.fill();
+  if (blurHere) blurAlpha(shapeContext, width, height, feather / 2);
   context.save();
   context.globalCompositeOperation = "destination-in";
   context.drawImage(shape, 0, 0);
@@ -398,6 +400,9 @@ function dropShadow(context: Context, own: Canvas, shadow: Shadow, surfaces: Sur
   // Spread: the shape drawn round a circle of that radius, so it grows solid before it softens.
   const rings = spread <= 0 ? [[0, 0]] : ringOf(spread);
   for (const [ox, oy] of rings) paint.drawImage(own, ox!, oy!);
+  // A canvas that doesn't blur with `filter` (WebKit's, in the desktop window) has it blurred here instead.
+  const blurHere = sigma > 0.05 && !canvasBlurs(surfaces);
+  if (blurHere) blurAlpha(paint, width, height, sigma);
   paint.globalCompositeOperation = "source-in";
   paint.fillStyle = shadow.color;
   paint.fillRect(0, 0, width, height);
@@ -406,7 +411,7 @@ function dropShadow(context: Context, own: Canvas, shadow: Shadow, surfaces: Sur
   const dy = Math.sin(radians) * shadow.distance;
   context.save();
   context.globalAlpha *= clamp(shadow.opacity, 0, 100) / 100;
-  if (sigma > 0.05) context.filter = `blur(${sigma.toFixed(2)}px)`;
+  if (sigma > 0.05 && !blurHere) context.filter = `blur(${sigma.toFixed(2)}px)`;
   context.drawImage(silhouette, dx, dy);
   context.restore();
 }
@@ -422,4 +427,71 @@ function ringOf(radius: number): number[][] {
   }
   out.push([0, 0]);
   return out;
+}
+
+// ── A blur where the canvas won't (Nov 5, the desktop window) ──
+//
+// WebKit, which shows Edit's desktop window, ignores a 2D canvas's `filter`:
+// a shadow there was its silhouette drawn hard, an outline instead of a soft
+// shadow, on screen and in a download made from the window. Chrome (the
+// browser, the server's renderer) blurs it itself.
+
+/** Whether this browser's canvas blurs with `filter`: one blurred pixel, its neighbour read. Asked once. */
+let blurs: boolean | null = null;
+function canvasBlurs(surfaces: Surfaces): boolean {
+  if (blurs !== null) return blurs;
+  const test = surfaces.canvas(9, 1).getContext("2d") as Context | null;
+  if (test === null) return (blurs = true);
+  test.filter = "blur(2px)";
+  test.fillStyle = "#000";
+  test.fillRect(4, 0, 1, 1);
+  test.filter = "none";
+  blurs = test.getImageData(2, 0, 1, 1).data[3]! > 0;
+  return blurs;
+}
+
+/** A Gaussian blur (`sigma` px) of what's drawn, by its alpha: three box blurs each way, the edges fading into nothing. */
+function blurAlpha(context: Context, width: number, height: number, sigma: number): void {
+  const pixels = context.getImageData(0, 0, width, height);
+  blurPixelsAlpha(pixels, sigma);
+  context.putImageData(pixels, 0, 0);
+}
+
+/** `blurAlpha` on the pixels themselves (their colour left as it is; a fill after gives it). */
+export function blurPixelsAlpha(pixels: Pixels, sigma: number): void {
+  const { width, height, data } = pixels;
+  const alpha = new Float32Array(width * height);
+  for (let i = 0; i < alpha.length; i++) alpha[i] = data[i * 4 + 3]!;
+  const scratch = new Float32Array(alpha.length);
+  for (const radius of boxesFor(sigma)) {
+    boxBlur(alpha, scratch, width, height, radius, true);
+    boxBlur(scratch, alpha, width, height, radius, false);
+  }
+  for (let i = 0; i < alpha.length; i++) data[i * 4 + 3] = alpha[i]!;
+}
+
+/** The three box radii whose blurs together make a Gaussian of `sigma`. */
+function boxesFor(sigma: number): number[] {
+  const ideal = Math.sqrt((12 * sigma * sigma) / 3 + 1);
+  let lower = Math.floor(ideal);
+  if (lower % 2 === 0) lower--;
+  const upper = lower + 2;
+  const lowers = Math.round((12 * sigma * sigma - 3 * lower * lower - 12 * lower - 9) / (-4 * lower - 4));
+  return [0, 1, 2].map((index) => ((index < lowers ? lower : upper) - 1) / 2);
+}
+
+/** One box blur of `radius` along rows (or columns), from `from` into `to`. */
+function boxBlur(from: Float32Array, to: Float32Array, width: number, height: number, radius: number, rows: boolean): void {
+  const [lines, length, step, stride] = rows ? [height, width, 1, width] : [width, height, width, 1];
+  const size = 2 * radius + 1;
+  for (let line = 0; line < lines; line++) {
+    const start = line * stride;
+    const at = (index: number) => (index >= 0 && index < length ? from[start + index * step]! : 0);
+    let sum = 0;
+    for (let index = -radius; index <= radius; index++) sum += at(index);
+    for (let index = 0; index < length; index++) {
+      to[start + index * step] = sum / size;
+      sum += at(index + radius + 1) - at(index - radius);
+    }
+  }
 }

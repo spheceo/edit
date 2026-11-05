@@ -6,7 +6,7 @@ import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
 import { withStops } from "../src/thumbnails/cloud.ts";
 import { HOUSE_SHADOW, NO_ADJUST, type ImageLayer } from "@edit/types/thumbnails";
-import { adjustPixels, captionShadow, shadowMetrics, shownText, type Context } from "@edit/types/thumbnail_render";
+import { adjustPixels, blurPixelsAlpha, captionShadow, shadowMetrics, shownText, type Context } from "@edit/types/thumbnail_render";
 import { sizeOf } from "../src/thumbnails/size.ts";
 
 const sources = new Set(["img1", "asset:bodycam-rec"]);
@@ -296,4 +296,19 @@ test("a comment's pin dragged elsewhere and its words changed: only what's given
   expect(editComment(thumb, one.id, { text: "warmer face" })).toBe(false);
   expect(() => editComment(thumb, one.id, { text: "  " })).toThrow("Write the comment");
   expect(() => editComment(thumb, "nope", { x: 1 })).toThrow("removed");
+});
+
+test("where the canvas won't blur (WebKit, the desktop window), the shadow's blur made by hand is a Gaussian's", () => {
+  // Nov 5: a caption's shadow drawn hard in the desktop window. Across an edge, a Gaussian of sigma 6
+  // leaves 84% one sigma inside, half at the edge, 16% one sigma out.
+  const [width, height, sigma] = [80, 81, 6];
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width / 2; x++) data[(y * width + x) * 4 + 3] = 255;
+  blurPixelsAlpha({ data, width, height }, sigma);
+  const alpha = (x: number) => data[(40 * width + x) * 4 + 3]! / 255;
+  expect(alpha(40 - sigma)).toBeCloseTo(0.84, 1);
+  expect(alpha(40)).toBeCloseTo(0.5, 1);
+  expect(alpha(40 + sigma)).toBeCloseTo(0.16, 1);
+  expect(alpha(20)).toBeCloseTo(1, 1);
+  expect(alpha(60)).toBeCloseTo(0, 1);
 });

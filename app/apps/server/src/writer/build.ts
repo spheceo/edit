@@ -496,10 +496,10 @@ function fastEffort(): NonNullable<claude.Question["effort"]> {
 export const fastChosen = (): boolean => process.env.WRITER_SCRIPT_BUILD !== "steps";
 
 function fastSystem(script: Script, format: Format): string {
-  return `${stepsSystem(script, format)}
+  return `${stepsSystem(script, format).replace("the complete transcript is in the message", "the complete transcript is at the end of these instructions")}
 
 A FAST BUILD
-This build goes in three phases, each its own turn with these same tools, and the end of the message says which is yours. The outline: plan the whole script and set it with set_outline, adding no items. A section: write only your section's items with add_section (fixing them with replace_items or remove_items), then call finish_section. The finish: the sections are joined into the plan; review it, fix it and finish it as above.`;
+This build goes in three phases, each its own turn with these same tools, and the message says which is yours. The outline: plan the whole script and set it with set_outline, adding no items. A section: write only your section's items with add_section (fixing them with replace_items or remove_items), then call finish_section. The finish: the sections are joined into the plan; review it, fix it and finish it as above.`;
 }
 
 const outlineList = (outline: Outline): string => outline.sections.map((section, index) => `${index + 1}. ${section.title} (about ${section.seconds} s of footage): ${section.plan}`).join("\n");
@@ -549,8 +549,11 @@ Call review_plan and fix what it reports by ID. Read the cut-ins where the secti
 export async function buildFast(script: Script, note: string, research: Research | null, peaks: ArrayLike<number>, signal?: AbortSignal, stage: (text: string) => void = () => {}): Promise<Built> {
   const ask_ = request(script, note);
   const format = formatOfScript(script);
-  const system_ = fastSystem(script, format);
-  const base = `${evidence(script, research)}\n\n${ask_}`;
+  // The evidence and the ask close the system prompt, the same for every call of the build, with only the
+  // phase in the message: Claude caches the system prompt, so the outline writes it once and the sections
+  // and the finish read it at a tenth of the price. In the message, each paid for it whole, eight at a time
+  // (Nov 5, JJ's Mac: a 1 h 47 min recording's sections $2.50 each, $91 of a week's $430 on sections alone).
+  const system_ = `${fastSystem(script, format)}\n\nTHE EVIDENCE AND THE ASK (the same for every phase)\n\n${evidence(script, research)}\n\n${ask_}`;
   const effort = fastEffort();
   const began = Date.now();
   const totals = { cost: 0, tokens: 0, turns: 0, calls: 0, refused: 0, biggest: 0 };
@@ -567,7 +570,7 @@ export async function buildFast(script: Script, note: string, research: Research
 
   stage("Outlining the script");
   const outlining = open(newDraft("outline", script, peaks));
-  const [outlined, outlineFailure] = await settle(ask(system_, `${base}\n\n${outlinePhase()}`, outlining, effort, 12, "Claude opus outlining", signal));
+  const [outlined, outlineFailure] = await settle(ask(system_, outlinePhase(), outlining, effort, 12, "Claude opus outlining", signal));
   const outlineDraft = close(outlining);
   count(outlined, outlineDraft);
   const outline = outlineDraft?.outline ?? null;
@@ -586,7 +589,7 @@ export async function buildFast(script: Script, note: string, research: Research
       const draft = newDraft("section", script, peaks);
       draft.afterCutIn = index > 0;
       const token = open(draft);
-      const [answer] = await settle(ask(system_, `${base}\n\n${sectionPhase(outline, index)}`, token, effort, 40, `Claude opus writing section ${index + 1} of ${outline.sections.length}`, signal));
+      const [answer] = await settle(ask(system_, sectionPhase(outline, index), token, effort, 40, `Claude opus writing section ${index + 1} of ${outline.sections.length}`, signal));
       return [close(token), answer];
     }),
   );
@@ -608,7 +611,7 @@ export async function buildFast(script: Script, note: string, research: Research
 
   stage("Reviewing the joined script");
   const finishing = open(joined);
-  const [answer, failure] = await settle(ask(system_, `${base}\n\n${finishPhase(outline, notes, missing)}`, finishing, effort, MAX_TURNS, "Claude opus finishing", signal));
+  const [answer, failure] = await settle(ask(system_, finishPhase(outline, notes, missing), finishing, effort, MAX_TURNS, "Claude opus finishing", signal));
   const draft = close(finishing);
   if (draft === null) throw new Error("Edit lost track of the build. Build again; nothing was changed.");
   count(answer, draft);

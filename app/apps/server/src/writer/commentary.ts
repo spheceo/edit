@@ -773,7 +773,10 @@ export async function revise(dir: string, script: Script, request: string, lesso
   let system = systemPrompt(script.title, commentary.pacing ?? "channel");
   if (lessons.trim() !== "") system += `\n\nLESSONS FROM PAST REVIEWS (follow them as you follow the guide)\n${lessons.trim()}`;
   system += `\n\n${REVISE_NOTE}\n${LESSON_RULE}`;
-  const prompt = `SOURCES\n\n${evidence(sources)}\n\nTHE SCRIPT, as a plan with each paragraph's ID\n${JSON.stringify(planWithIds(draft), null, 2)}\n\n${request.trim()}`;
+  // The sources close the system prompt, which Claude caches, so one revision after another reads them at a
+  // tenth of the price; the script, which changes, stays in the message (as revise.ts, Nov 5).
+  system += `\n\nSOURCES\n\n${evidence(sources)}`;
+  const prompt = `THE SCRIPT, as a plan with each paragraph's ID\n${JSON.stringify(planWithIds(draft), null, 2)}\n\n${request.trim()}`;
   const corpus = new Corpus(sources);
   const ask = async (text: string, resume: string | null) => {
     try {

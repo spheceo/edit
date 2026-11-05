@@ -470,11 +470,14 @@ export async function revise(script: Script, request: string, focus: Focus, chat
   if (asked === "") throw new Error("Say what to change.");
   if ([...asked].length > 12_000) throw new Error("Keep the request under 12,000 characters.");
   const format = formatOfScript(script);
-  const system = systemPrompt(script, format);
+  // The evidence closes the system prompt, which Claude caches: one revision after another (fresh eyes'
+  // two passes, the producer's next request) reads it at a tenth of the price instead of paying for it
+  // whole each time (Nov 5, JJ's Mac: $62 of a week's $430 on revisions). What changes, the script, stays in the message.
+  const system = `${systemPrompt(script, format).replace("the complete transcript is in the message", "the complete transcript is at the end of these instructions")}\n\nTHE EVIDENCE\n\n${evidence(script, research)}`;
   const earlier = chat.trim() === "" ? "" : `THE CONVERSATION SO FAR\n${chat}\n\n`;
   // A fixing or fresh-eyes pass writes rewrites of saved narration straight in: its report says what changed, never "proposed".
   const writes = direct ? "\n\nThis pass writes every edit straight into the script, rewrites of saved narration included (no proposals): say what you changed." : "";
-  const prompt = `${evidence(script, research)}\n\n${current(script, format)}\n\n${earlier}${seen(script, focus)}The producer asks: ${asked}${writes}`;
+  const prompt = `${current(script, format)}\n\n${earlier}${seen(script, focus)}The producer asks: ${asked}${writes}`;
   const ask = (text: string, resume: string | null) => claude.askPatiently({ model: claude.REVISION, system, prompt: text, schema: SCHEMA, label: `Claude sonnet revising${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
   let turn = await ask(prompt, null);
   let cost = turn.costUsd;

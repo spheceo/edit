@@ -2165,6 +2165,58 @@ export async function soundCopy(cache: string, key: string, url: string): Promis
   return local;
 }
 
+/**
+ * Smooth playback's render's sound, from copies on this Mac as an export's is:
+ * each heard cloud clip's original's sound copy where one is here or in the
+ * cloud (an export made it), else its proxy's (made once from the proxy and
+ * shared). Without them the render decoded every clip's sound over the
+ * network through the preview: JJ's Mac, Nov 5, a 92-minute edit's sound took
+ * 26 to 38 minutes "decoding", where an export's from its copies took 2 s.
+ * A media whose copy can't be had is left out (the render reads it as before).
+ */
+export async function playbackSounds(project: Project, start: number, end: number, cache: string, cancelled: () => boolean = () => false): Promise<Record<string, string>> {
+  const sounds: Record<string, string> = {};
+  if (!cloud.enabled()) return sounds;
+  const heard = usedMedia(project, start, end).flatMap((mediaId) => {
+    const media = mediaOf(project, mediaId);
+    const where = media?.cloud;
+    return media !== undefined && media.has_audio && where !== undefined && where !== null ? [[mediaId, where] as const] : [];
+  });
+  const began = Date.now();
+  let made = 0;
+  const copies = new Semaphore(3);
+  await Promise.all(
+    heard.map(async ([mediaId, where]) => {
+      const release = await copies.acquire();
+      try {
+        if (cancelled()) return;
+        const original = localPath(cache, soundKey(where.original));
+        if (isFile(original)) {
+          sounds[mediaId] = original;
+          return;
+        }
+        if ((await cloud.head(soundKey(where.original)).catch(() => null)) !== null) {
+          await fetchKey(soundKey(where.original), original);
+          sounds[mediaId] = original;
+          return;
+        }
+        if (where.proxy === undefined) return;
+        const proxy = await soundCopy(cache, where.proxy, await getUrl(where.proxy, HOUR));
+        if (proxy !== null) {
+          sounds[mediaId] = proxy;
+          made += 1;
+        }
+      } catch (error) {
+        diag.warn("playback", `${project.id}: a sound copy for ${mediaOf(project, mediaId)?.name ?? mediaId}: ${failure(error)}; its sound is read from the cloud`);
+      } finally {
+        release();
+      }
+    }),
+  );
+  if (heard.length > 0) diag.info("playback", `${project.id}: ${Object.keys(sounds).length} of ${heard.length} sounds from copies on this Mac (${made} made from proxies) in ${Math.round((Date.now() - began) / 1000)} s`);
+  return sounds;
+}
+
 // ---------------------------------------------------------------------------
 // Everything else a cloud project uses: the backfill.
 

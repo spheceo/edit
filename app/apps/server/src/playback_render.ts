@@ -37,7 +37,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudBlocks from "./cloud_blocks.ts";
-import { prefetchProject, streamFromCloud } from "./cloud_media.ts";
+import { playbackSounds, prefetchProject, streamFromCloud } from "./cloud_media.ts";
 import * as diag from "./diag.ts";
 import { ApiError, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -431,6 +431,8 @@ async function render(app: App, project: Project, current: Running): Promise<voi
     if (!current.cancelled) diag.warn("playback", `${project.name}: its proxies are read over the preview URL (${diag.messageOf(error)})`);
     return [];
   });
+  // Its sound from copies on this Mac, as an export's, never decoded over the network (playbackSounds).
+  const sounds = plan.audio ? await playbackSounds(project, plan.start, plan.end, app.store.cacheDir(), () => current.cancelled) : {};
   current.preparing = false;
   if (current.cancelled) return;
   const unpin = exportExcerpts.pin(excerpts.map((one) => one.path));
@@ -439,7 +441,7 @@ async function render(app: App, project: Project, current: Running): Promise<voi
   focus.delete(project.id);
   let job: ExportJob;
   try {
-    job = native().ExportJob.start({ project: input, options, plan: at === undefined ? plan : { ...plan, focus: at }, output, cacheDir: app.store.cacheDir(), excerpts, background: true }, (progress) => {
+    job = native().ExportJob.start({ project: input, options, plan: at === undefined ? plan : { ...plan, focus: at }, output, cacheDir: app.store.cacheDir(), sounds, excerpts, background: true }, (progress) => {
       current.progress = progress;
       publishSoon(app, project.id);
     });

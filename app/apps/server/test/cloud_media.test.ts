@@ -658,6 +658,39 @@ test("an export of cloud-only footage mixes from a copy of its sound: made once,
   }
 });
 
+test("smooth playback mixes from sound copies: the original's where the cloud has one, else one made from the proxy, never the original read", async () => {
+  const fixture = home("playback-sound");
+  const { dir, store, cleanup } = fixture;
+  try {
+    const cache = store.cacheDir();
+    const footage = `${dir}/footage.mp4`;
+    const made = Bun.spawnSync([
+      "ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:size=64x36:rate=30:duration=2",
+      "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", footage,
+    ]);
+    expect(made.exitCode).toBe(0);
+    // m1: an export made its original's sound copy before. m2: none yet, only its proxy.
+    const sound = `${dir}/sound.mov`;
+    await cloudMedia.copySound(footage, sound);
+    mock.cloud.put(cloudMedia.soundKey("edit/originals/sha256/aa/one.mp4"), fs.readFileSync(sound));
+    mock.cloud.put("edit/proxies/sha256/bb.mp4", fs.readFileSync(footage));
+    const project = projectWith([
+      { ...media("m1", `${dir}/p1.mp4`), has_audio: true, cloud: { source: "sha256:aa", original: "edit/originals/sha256/aa/one.mp4", proxy: "edit/proxies/sha256/aa.mp4", size: 5 } },
+      { ...media("m2", `${dir}/p2.mp4`), has_audio: true, cloud: { source: "sha256:bb", original: "edit/originals/sha256/bb/two.mp4", proxy: "edit/proxies/sha256/bb.mp4", size: 5 } },
+    ]);
+    project.clips.push({ id: "c1", track: "v1", start: 0, duration: 30, type: "video", media: "m1", source_in: 0, speed: 1 } as Project["clips"][number]);
+    project.clips.push({ id: "c2", track: "v1", start: 30, duration: 30, type: "video", media: "m2", source_in: 0, speed: 1 } as Project["clips"][number]);
+    const sounds = await cloudMedia.playbackSounds(project, 0, 60, cache);
+    expect(sounds.m1).toBe(cloudMedia.localPath(cache, cloudMedia.soundKey("edit/originals/sha256/aa/one.mp4")));
+    expect(sounds.m2).toBe(cloudMedia.localPath(cache, cloudMedia.soundKey("edit/proxies/sha256/bb.mp4")));
+    const streams = Bun.spawnSync(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", sounds.m2!]);
+    expect(streams.stdout.toString().trim()).toBe("audio");
+    expect(mock.calls("/r2/edit/originals/").length).toBe(0);
+  } finally {
+    cleanup();
+  }
+});
+
 test("a Drive file is copied in the cloud when the relay can, with its progress; a failed job falls back to this Mac", async () => {
   const fixture = home("cloud-drive-job");
   const { store, cleanup } = fixture;

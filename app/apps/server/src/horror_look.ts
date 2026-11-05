@@ -16,7 +16,9 @@
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
+import { clipFrom } from "./clips.ts";
 import { iconFile } from "./horror_graphics.ts";
+import { rgbaPng } from "./evidence_highlight.ts";
 import { houseMedia } from "./import.ts";
 import type { Media, Project, VideoClip } from "./model.ts";
 import { join } from "./paths.ts";
@@ -195,4 +197,48 @@ export function mosaicCensors(project: Project): void {
     if (blur === undefined || !(blur.radius > 0) || !((blur.width ?? 0) > 0) || !((blur.height ?? 0) > 0) || (blur.mosaic ?? 0) > 0) continue;
     blur.mosaic = Math.round(Math.min(Math.max(Math.min(blur.width!, blur.height!) / 8, 12 * k), 48 * k));
   }
+}
+
+/**
+ * Horror's desktop wallpaper (its guide's Animation 1, an XP-era desktop):
+ * a green hill rolling under a blue sky with soft clouds, drawn here, Edit's
+ * own picture (nothing of Microsoft's), once per size into `<home>/graphics/`.
+ */
+export function xpWallpaper(home: string, width = 2400, height = 1350): string {
+  const dir = join(home, "graphics", "horror"); fs.mkdirSync(dir, { recursive: true });
+  const path = join(dir, `wallpaper-hill-v1-${width}x${height}.png`);
+  if (fs.existsSync(path)) return path;
+  const mix = (a: number[], b: number[], t: number) => a.map((v, i) => v + (b[i]! - v) * Math.min(1, Math.max(0, t)));
+  const hash = (x: number, y: number) => { const v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); };
+  const blobs = [[0.18, 0.2, 0.16, 0.05], [0.42, 0.13, 0.2, 0.045], [0.75, 0.24, 0.18, 0.05], [0.9, 0.12, 0.12, 0.035], [0.6, 0.33, 0.22, 0.04], [0.08, 0.38, 0.16, 0.035]];
+  fs.writeFileSync(path, rgbaPng(width, height, (px, py) => {
+    const x = px / width; const y = py / height;
+    // The hill's top: a long gentle rise to the right of the middle and a lower shoulder on the left.
+    const crest = 0.6 - 0.14 * Math.exp(-((x - 0.62) ** 2) / 0.09) - 0.05 * Math.exp(-((x - 0.12) ** 2) / 0.03) + 0.01 * Math.sin(x * 9);
+    if (y < crest) {
+      let sky = mix([0.13, 0.4, 0.85], [0.62, 0.82, 0.98], (y / crest) ** 1.3);
+      let cloud = 0;
+      for (const [cx, cy, rx, ry] of blobs) {
+        const d = ((x - cx!) / rx!) ** 2 + ((y - cy!) / ry!) ** 2;
+        cloud += Math.exp(-d * 1.6) * (0.75 + 0.25 * Math.sin(x * 60 + y * 40) * Math.sin(x * 23 - y * 31));
+      }
+      sky = mix(sky, [0.97, 0.98, 1], Math.min(0.85, cloud));
+      return [sky[0]! * 255, sky[1]! * 255, sky[2]! * 255, 255];
+    }
+    const depth = (y - crest) / (1 - crest);
+    let grass = mix([0.48, 0.78, 0.2], [0.16, 0.45, 0.08], depth ** 0.8);
+    // Lit along the crest, a little texture of grass all over.
+    grass = mix(grass, [0.66, 0.88, 0.3], Math.max(0, 0.35 - depth * 3));
+    const n = (hash(Math.floor(px / 2), Math.floor(py / 2)) - 0.5) * 0.06;
+    return [(grass[0]! + n) * 255, (grass[1]! + n) * 255, (grass[2]! + n * 0.5) * 255, 255];
+  }));
+  return path;
+}
+
+/** Faint scan lines over an XP desktop (Animation 1: "with the same grid-like overlay and old YouTube look"). */
+export function desktopLines(project: Project, start: number, end: number): void {
+  const track = { id: freshId(project, "v"), kind: "video" as const, hidden: false, muted: false, locked: false };
+  project.tracks.push(track);
+  project.clips.push(clipFrom({ id: freshId(project, "c"), type: "adjustment", track: track.id, name: "Horror · desktop lines", start, duration: end - start,
+    grade: { scanlines: 0.4 }, fade_in: 6, fade_out: 6 }));
 }

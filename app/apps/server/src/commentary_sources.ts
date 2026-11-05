@@ -71,6 +71,36 @@ async function run(home: string, args: string[], ms = 100_000): Promise<string> 
   } finally { clearTimeout(timer); }
 }
 
+/**
+ * Horror never uses another channel's footage (its guide: "Never use footage
+ * from competitor channels. A competitor is any channel that makes iceberg,
+ * internet mystery, analog horror, lost media or 'disturbing internet'
+ * videos, and that includes every channel in our style references… If
+ * you're unsure whether a channel is a competitor, don't use it."): the
+ * reference channels by name, and any channel or upload named for that kind
+ * of video.
+ */
+export function competitor(channel: unknown, title: unknown = ""): boolean {
+  const name = String(channel ?? "").toLowerCase();
+  if (/abyssal detective|threadbare|\bsirius\b|\bnbody\b|nightmare movies|\bstyks\b/u.test(name)) return true;
+  if (/iceberg|lost media|analog horror|internet myster|disturbing|creepy|unsolved|scary|horror|myster(y|ies)\b|explained\b/u.test(name)) return true;
+  return /\biceberg\b|lost media|analog horror|most disturbing|internet myster/u.test(String(title ?? "").toLowerCase());
+}
+
+/** The channel a YouTube video came from, as research saw it (search_broll or read_broll_source), else null. */
+function knownChannel(app: App, project: string, id: string): { channel: unknown; title: unknown } | null {
+  try {
+    const saved = JSON.parse(fs.readFileSync(join(app.store.home, "research", project, "broll.json"), "utf8")) as Args;
+    const source = saved[`source:${id}`] as Args | undefined;
+    if (source !== undefined) return { channel: source.channel, title: source.title };
+    for (const value of Object.values(saved)) {
+      const found = ((value as Args)?.videos as Args[] | undefined)?.find((v) => v.id === id);
+      if (found !== undefined) return { channel: found.channel, title: found.title };
+    }
+  } catch { /* nothing researched yet */ }
+  return null;
+}
+
 function keep(app: App, project: string, key: string, value: unknown): void {
   const path = join(app.store.home, "research", project, "broll.json");
   fs.mkdirSync(parent(path)!, { recursive: true });
@@ -113,6 +143,11 @@ registerTool("search_broll", async ({ app, args, projectId }) => {
           duration: e.duration, views: e.view_count, thumbnail: `https://i.ytimg.com/vi/${String(e.id)}/hqdefault.jpg`,
         }));
         keep(app, projectId, `query:${String(query)}`, { at: Date.now(), videos });
+        // Horror: another channel's upload about the story is never footage (its guide).
+        if (app.store.get(projectId)?.project.style === "horror") {
+          const theirs = videos.filter((v) => competitor(v.channel, v.title));
+          if (theirs.length > 0) return { query, videos: videos.filter((v) => !theirs.includes(v)), left_out: theirs.map((v) => `${String(v.channel)}: ${String(v.title)} (a channel covering such stories; find the original upload, the person, the news or an archive)`) };
+        }
         return { query, videos };
       } catch (error) { return { query, error: error instanceof Error ? error.message : String(error) }; }
     })));
@@ -176,6 +211,12 @@ registerTool("import_broll", async ({ app, args, projectId }) => {
   ranges.splice(0, ranges.length, ...ranges.filter((r) => !isPost(r.url)));
   // Reuse one original for all ranges from that video; no persistent preview download.
   const sources = [...new Set(ranges.map((r) => youtube.videoId(r.url)!))];
+  if (app.store.get(projectId)?.project.style === "horror") {
+    for (const id of sources) {
+      const seen = knownChannel(app, projectId, id);
+      if (seen !== null && competitor(seen.channel, seen.title)) throw new Error(`${String(seen.channel)} makes videos about such stories: never their footage (the guide). Find the original upload, the person involved, the news station or an archive; nothing imported`);
+    }
+  }
   for (let i = 0; i < sources.length; i += 2) {
     await Promise.all(sources.slice(i, i + 2).map(async (id) => {
     const picks = ranges.filter((r) => youtube.videoId(r.url) === id);

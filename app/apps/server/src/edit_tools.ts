@@ -2325,9 +2325,11 @@ export async function planAssets(app: App, project: Project, operations: Json[])
   if (needs.screens !== undefined && needs.screens.length > 0) {
     const { width, height } = project.settings;
     const k = Math.min(width / 1920, height / 1080);
-    const wallpaper = await diag.timeOnAsync("agent", "desktop: wallpaper", "", () => desktopWallpaper(home, width, height));
+    // Horror's desktop is an XP one (its guide's Animation 1): a drawn hill, the windows of that era.
+    const xp = project.style === "horror";
+    const wallpaper = await diag.timeOnAsync("agent", "desktop: wallpaper", "", async () => (xp ? horrorLook.xpWallpaper(home) : desktopWallpaper(home, width, height)));
     const frames = await diag.timeOnAsync("agent", "desktop: draw windows", "", () =>
-      Promise.all(needs.screens!.map(([app, w, h]) => native().desktopWindow(app, w, h, k * FRAME_SCALE))),
+      Promise.all(needs.screens!.map(([app, w, h]) => native().desktopWindow(app === "file_viewer" || !xp ? app : `xp_${app}`, w, h, k * FRAME_SCALE))),
     );
     const [ids, fresh] = await houseMedia(app, project, [wallpaper, ...frames]);
     made.push(...fresh);

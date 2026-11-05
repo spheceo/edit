@@ -689,7 +689,10 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
           text: note.text,
           start: spec.start + textFrom,
           duration: total - textFrom,
-          style: { font: "Geist", weight: 400, size: px, color: [0.94, 0.94, 0.94, 1], line_height: NOTE_LINE, align: "left", glow: { enabled: true, radius: 8 * k, strength: 0.25 } },
+          // Horror's XP Notepad is a white page: its words black, in a typewriter's face.
+          style: project.style === "horror"
+            ? { font: "Geist Mono", weight: 500, size: px, color: [0.06, 0.06, 0.06, 1], line_height: NOTE_LINE, align: "left", glow: { enabled: false } }
+            : { font: "Geist", weight: 400, size: px, color: [0.94, 0.94, 0.94, 1], line_height: NOTE_LINE, align: "left", glow: { enabled: true, radius: 8 * k, strength: 0.25 } },
           animation: { preset: "typewriter", duration: 1, stagger: Math.max(Math.round(s), 1) },
           ...keysFor(centre[0], centre[1], 1, index, textFrom),
         });

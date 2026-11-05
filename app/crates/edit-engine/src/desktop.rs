@@ -279,9 +279,14 @@ impl Canvas {
 
     /// Text with its block's left edge at `x` and its middle at `y`.
     fn text(&mut self, text: &str, x: f64, y: f64, px: f64, color: [f32; 4]) -> f64 {
+        self.text_weight(text, x, y, px, 400, color)
+    }
+
+    /// Text as `text`, in Geist of `weight`.
+    fn text_weight(&mut self, text: &str, x: f64, y: f64, px: f64, weight: u16, color: [f32; 4]) -> f64 {
         let mut cache = GlyphCache::default();
         let Some(image) =
-            edit_render::text::rasterize(fonts(), &mut cache, &spec(text, px, 400, color, 1.2))
+            edit_render::text::rasterize(fonts(), &mut cache, &spec(text, px, weight, color, 1.2))
         else {
             return 0.0;
         };
@@ -635,6 +640,158 @@ pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<
     canvas.png(true)
 }
 
+/// The XP look's version: a new look, new file names.
+const XP_VERSION: u32 = 1;
+
+/// A window as on a Windows XP desktop (horror's guide, Animation 1: "the
+/// background acts as a sort of Windows desktop where elements can pop up,
+/// such as the retro YouTube player… an old Notepad window, Windows XP-style
+/// dialog boxes, the old Internet Explorer"): the same sizes as the modern
+/// window, so its content sits where the layout puts it, drawn the old way,
+/// a blue title bar rounded at the top with its three buttons, a beige
+/// menu bar and a blue border. The Video Player is Internet Explorer on an
+/// old YouTube page, its controls the old player's (a red progress bar).
+/// Drawn, not copied: no Microsoft or YouTube artwork.
+pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, String> {
+    if window == Window::FileViewer {
+        return frame(window, window.title(), w, h, k);
+    }
+    let mut canvas = Canvas::new(w as usize, h as usize);
+    let beige = hex(0xece9d8);
+    let blue = hex(0x0a3fd6);
+    let radius = 8.0 * k;
+    let bar = TITLE_BAR * k;
+    // The window's blue edge, then the beige inside.
+    canvas.rect(0.0, radius, w, h, blue);
+    let border = 4.0 * k;
+    canvas.rect(border, bar, w - border, h - border, beige);
+    // The title bar: lit at the top, deep blue down, rounded top corners.
+    let rows = bar.ceil() as i64;
+    for row in 0..rows {
+        let y = row as f64;
+        let t = (y / bar.max(1.0)) as f32;
+        let mix = |a: [f32; 4], b: [f32; 4], t: f32| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, 1.0];
+        let color = if t < 0.12 {
+            mix(hex(0x3d95ff), hex(0x0a5ee8), t / 0.12)
+        } else if t < 0.85 {
+            mix(hex(0x0a5ee8), hex(0x0047d5), (t - 0.12) / 0.73)
+        } else {
+            mix(hex(0x0047d5), hex(0x003bc0), (t - 0.85) / 0.15)
+        };
+        let inset = if y < radius {
+            let dy = radius - y - 0.5;
+            radius - (radius * radius - dy * dy).max(0.0).sqrt()
+        } else {
+            0.0
+        };
+        canvas.rect(inset, y, w - inset, (y + 1.0).min(bar), color);
+    }
+    // A thin highlight under the top edge.
+    canvas.rect(radius, 1.0 * k, w - radius, 2.0 * k, [1.0, 1.0, 1.0, 0.35]);
+    let middle = bar / 2.0;
+    let (title, menus): (&str, &[&str]) = match window {
+        Window::VideoPlayer => ("YouTube - Windows Internet Explorer", &["File", "Edit", "View", "Favorites", "Tools", "Help"]),
+        Window::PhotoViewer => ("Windows Picture and Fax Viewer", &["File", "Edit", "View", "Help"]),
+        Window::Notepad => ("Untitled - Notepad", &["File", "Edit", "Format", "View", "Help"]),
+        Window::FileViewer => ("File Viewer", &[]),
+    };
+    // The window's icon: a little page, a picture or a globe.
+    let (ix, icon) = (12.0 * k, 20.0 * k);
+    let iy = middle - icon / 2.0;
+    match window {
+        Window::VideoPlayer => {
+            disc(&mut canvas, ix + icon / 2.0, middle, icon / 2.0, hex(0x2f8fe8));
+            canvas.rect(ix + icon * 0.15, middle - 1.5 * k, ix + icon * 0.85, middle + 1.5 * k, hex(0xf2c94c));
+        }
+        _ => {
+            canvas.rect(ix + icon * 0.15, iy, ix + icon * 0.85, iy + icon, hex(0xfafafa));
+            for line in 0..3 {
+                let y = iy + icon * (0.3 + 0.2 * f64::from(line));
+                canvas.rect(ix + icon * 0.28, y, ix + icon * 0.72, y + 1.2 * k, hex(0x6b7fa8));
+            }
+        }
+    }
+    // The title in white over a dark shadow.
+    canvas.text_weight(title, 40.0 * k + 1.2 * k, middle + 1.2 * k, 18.0 * k, 700, hex(0x0a1e6e));
+    canvas.text_weight(title, 40.0 * k, middle, 18.0 * k, 700, hex(0xffffff));
+    // Minimise and maximise in blue, close in red, each with a white rim.
+    let size = 27.0 * k;
+    for (index, right) in [w - 70.0 * k, w - 40.0 * k, w - 8.0 * k].into_iter().enumerate() {
+        let (x0, y0) = (right - size, middle - size / 2.0);
+        let fill = if index == 2 { hex(0xe0532f) } else { hex(0x2c6cf2) };
+        canvas.rect(x0, y0, x0 + size, y0 + size, hex(0xffffff));
+        canvas.rect(x0 + 1.5 * k, y0 + 1.5 * k, x0 + size - 1.5 * k, y0 + size - 1.5 * k, fill);
+        let (cx, cy, g) = (x0 + size / 2.0, middle, 6.5 * k);
+        let white = hex(0xffffff);
+        match index {
+            0 => canvas.rect(cx - g, cy + g * 0.4, cx + g * 0.2, cy + g * 0.8, white),
+            1 => {
+                canvas.frame(cx - g, cy - g, cx + g, cy + g, 1.6 * k, white);
+                canvas.rect(cx - g, cy - g, cx + g, cy - g + 3.0 * k, white);
+            }
+            _ => {
+                canvas.line((cx - g * 0.8, cy - g * 0.8), (cx + g * 0.8, cy + g * 0.8), 2.4 * k, white);
+                canvas.line((cx - g * 0.8, cy + g * 0.8), (cx + g * 0.8, cy - g * 0.8), 2.4 * k, white);
+            }
+        }
+    }
+    // The menus, black on beige.
+    let menu_middle = (TITLE_BAR + MENU_BAR / 2.0) * k;
+    let mut x = 14.0 * k;
+    for item in menus {
+        let drawn = canvas.text(item, x, menu_middle, 16.0 * k, hex(0x111111));
+        x += drawn + 18.0 * k;
+    }
+    canvas.rect(border, (TITLE_BAR + MENU_BAR) * k, w - border, (TITLE_BAR + MENU_BAR) * k + 1.0 * k, hex(0xaca899));
+    // The content area: a white page, a light grey viewer, the player's black.
+    let [cx, cy, cw, ch] = content_in(window, w, h, k);
+    match window {
+        Window::VideoPlayer => {
+            canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x000000));
+            youtube_controls(&mut canvas, cx, cy + ch, cw, k);
+        }
+        Window::Notepad => {
+            canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xffffff));
+            canvas.frame(cx, cy, cx + cw, cy + ch, k.max(1.0), hex(0x7f9db9));
+        }
+        _ => canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xf3f5f9)),
+    }
+    canvas.png(true)
+}
+
+/// The old YouTube player's controls under its picture: a red progress bar
+/// across the top (part played, its knob), play, the time, a speaker, "HQ"
+/// and full screen, light on a dark band.
+fn youtube_controls(canvas: &mut Canvas, x: f64, y: f64, w: f64, k: f64) {
+    let band = CONTROLS * k;
+    let rows = band.ceil() as i64;
+    for row in 0..rows {
+        let t = row as f32 / rows.max(1) as f32;
+        let v = 0.2 - 0.12 * t;
+        canvas.rect(x, y + row as f64, x + w, (y + row as f64 + 1.0).min(y + band), [v, v, v, 1.0]);
+    }
+    let bar = y + 7.0 * k;
+    let played = w * 0.62;
+    canvas.rect(x, bar - 2.0 * k, x + w, bar + 2.0 * k, hex(0x5a5a5a));
+    canvas.rect(x, bar - 2.0 * k, x + played, bar + 2.0 * k, hex(0xcc0000));
+    disc(canvas, x + played, bar, 5.5 * k, hex(0xf2f2f2));
+    let middle = y + 28.0 * k;
+    let size = 7.0 * k;
+    let light = hex(0xeeeeee);
+    let px = x + 16.0 * k;
+    triangle(canvas, (px, middle - size), (px, middle + size), (px + size * 1.6, middle), light);
+    // A speaker.
+    let sx = px + 34.0 * k;
+    canvas.rect(sx, middle - 3.0 * k, sx + 4.0 * k, middle + 3.0 * k, light);
+    triangle(canvas, (sx + 10.0 * k, middle - 7.0 * k), (sx + 10.0 * k, middle + 7.0 * k), (sx + 4.0 * k, middle), light);
+    canvas.text("1:28 / 1:54", sx + 26.0 * k, middle, 14.0 * k, hex(0xdddddd));
+    // HQ and full screen on the right.
+    let right = x + w - 14.0 * k;
+    canvas.text_weight("HQ", right - 74.0 * k, middle, 13.0 * k, 700, hex(0xdddddd));
+    let f = 8.0 * k;
+    canvas.frame(right - 2.0 * f, middle - f, right, middle + f, 1.8 * k, light);
+}
+
 /// The Video Player's controls along the bottom of its picture: a progress
 /// bar (green, part played, with its knob), then play, previous, stop and next
 /// as filled glyphs, the time, and a speaker with its volume slider.
@@ -809,19 +966,30 @@ fn ensure(path: &Path, make: impl FnOnce() -> Result<Vec<u8>, String>) -> Result
 /// A `kind` window's frame `w` × `h` pixels at scale `k` (its title the
 /// team's name for it), drawn into `<home>/graphics/` if missing.
 pub fn window_file(home: &Path, kind: &str, w: u32, h: u32, k: f64) -> Result<PathBuf, String> {
-    let window = Window::parse(kind).ok_or_else(|| {
-        format!("no window {kind}: photo_viewer, notepad, video_player or file_viewer")
+    // `xp_<kind>`: the same window in horror's era (an XP desktop, its guide's Animation 1).
+    let (xp, name) = match kind.strip_prefix("xp_") {
+        Some(rest) => (true, rest),
+        None => (false, kind),
+    };
+    let window = Window::parse(name).ok_or_else(|| {
+        format!("no window {kind}: photo_viewer, notepad, video_player or file_viewer (xp_ before one for the XP look)")
     })?;
     if w < 40 || h < 40 || w > 8000 || h > 8000 {
         return Err(format!("a window {w} × {h} is out of range"));
     }
     let path = home.join("graphics").join(format!(
-        "desktop-window-{}-v{VERSION}-{w}x{h}-{:08x}.png",
+        "desktop-window-{}{}-v{}-{w}x{h}-{:08x}.png",
+        if xp { "xp-" } else { "" },
         window.slug(),
+        if xp { XP_VERSION } else { VERSION },
         hash(&[&format!("{k:.4}")])
     ));
     ensure(&path, || {
-        frame(window, window.title(), f64::from(w), f64::from(h), k)
+        if xp {
+            xp_frame(window, f64::from(w), f64::from(h), k)
+        } else {
+            frame(window, window.title(), f64::from(w), f64::from(h), k)
+        }
     })?;
     Ok(path)
 }

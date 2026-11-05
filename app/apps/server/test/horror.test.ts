@@ -218,3 +218,21 @@ test("horror's marker is red with torn edges and a glow, inside the screenshot",
   expect(Buffer.from(png.slice(1, 4)).toString()).toBe("PNG");
   expect(() => roughMarkerPng(400, 200, { x: 300, y: 80, width: 200, height: 30 })).toThrow("fit inside");
 });
+
+test("horror's audit: the same clip never twice, a page not a strip, competitors' uploads left out", async () => {
+  const { competitor } = await import("../src/commentary_sources.ts");
+  const p = horror();
+  p.clips.push(clip({ id: "a", type: "video", media: "wide", track: "v1", start: 0, duration: 90, source_in: 4 }));
+  p.clips.push(clip({ id: "b", type: "video", media: "wide", track: "v1", start: 3000, duration: 60, source_in: 5 }));
+  p.media.push(media({ id: "strip", name: "headline.png", kind: "image", path: "/h.png", duration: 0, width: 900, height: 80 }));
+  p.clips.push(clip({ id: "s", type: "video", media: "strip", track: "v2", start: 100, duration: 90, name: "Horror · screenshot" }));
+  p.tracks.push({ id: "v2", kind: "video", hidden: false, muted: false, locked: false });
+  const kinds = issues(p).map((i) => i.kind);
+  expect(kinds).toContain("horror_repeated_clip");
+  expect(kinds).toContain("horror_screenshot_strip");
+  expect(competitor("Nightmare Movies")).toBe(true);
+  expect(competitor("Disturbing Files")).toBe(true);
+  expect(competitor("KTLA 5", "Man rescued from flood")).toBe(false);
+  expect(competitor("booge731", "My Stalker")).toBe(false);
+  expect(competitor("Some Guy", "The Instagram Iceberg Explained")).toBe(true);
+});

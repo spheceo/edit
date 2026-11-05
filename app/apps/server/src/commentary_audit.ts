@@ -200,6 +200,26 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
       for (const [s, e] of over) spans = spans.flatMap(([a, b]): Span[] => e <= a || s >= b ? [[a, b]] : [...(s > a ? [[a, s] as Span] : []), ...(e < b ? [[e, b] as Span] : [])]);
       return spans;
     }));
+    // "The same clip never repeats in a video": any stretch of footage shown twice, however far apart.
+    const fps = p.settings.fps;
+    const footage = live.filter((c): c is Extract<Clip, { type: "video" }> => c.type === "video" && mediaOf(p, c.media)?.kind === "video" && !/backdrop|^Horror · |^Desktop · /u.test(c.name ?? ""));
+    const repeated = new Set<string>();
+    for (let i = 0; i < footage.length; i++) for (let j = i + 1; j < footage.length; j++) {
+      const [a, b] = [footage[i]!, footage[j]!].sort((x, y) => x.start - y.start) as [typeof footage[number], typeof footage[number]];
+      if (a.media !== b.media || repeated.has(b.id)) continue;
+      const shared = Math.min(a.source_in + (a.duration / fps) * a.speed, b.source_in + (b.duration / fps) * b.speed) - Math.max(a.source_in, b.source_in);
+      if (shared < 1) continue;
+      repeated.add(b.id);
+      out.push({ kind: "horror_repeated_clip", clip: b.id, earlier: a.id, start: b.start, seconds: Math.round(shared * 10) / 10, name: mediaOf(p, b.media)?.name,
+        fix: "the guide: \"The same clip never repeats in a video\". Show another moment of the story here (another part of the post, the people named, the place, the news), or end the earlier shot sooner" });
+    }
+    // A page is shown whole and close; a single line cut out of it reads as a modern crop.
+    for (const c of live) {
+      if (c.type !== "video" || c.name !== "Horror · screenshot") continue;
+      const m = mediaOf(p, c.media);
+      if (m !== undefined && m.kind === "image" && m.height < 220) out.push({ kind: "horror_screenshot_strip", clip: c.id, start: c.start, size: `${m.width}x${m.height}`,
+        fix: "capture the page, not a line of it: capture_evidence the article, post or thread without a tight crop, then commentary_card it (a page fills the frame, close on the words: focus [x, y]) and highlight_evidence the words" });
+    }
     const bare = bareSpans.reduce((n, [a, b]) => n + b - a, 0);
     if (bare > p.settings.fps) {
       const at = bareSpans[0]?.[0] ?? 0;

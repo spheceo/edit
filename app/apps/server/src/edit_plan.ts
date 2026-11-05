@@ -446,7 +446,10 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       let spec = screen.readSpec(project, args, start, end, "Desktop · ");
       const skip = (name: string) => name.startsWith("Desktop · ");
       if (args.open !== false) spec = screen.openFrom(spec, screen.footageBefore(project, start, skip), screen.footageAt(project, end, false, skip));
-      return screen.build(project, spec, assets.screen);
+      const built = screen.build(project, spec, assets.screen);
+      // Horror's desktop under the guide's "grid-like overlay", as its screenshots are.
+      if (project.style === "horror") horrorLook.desktopLines(project, start, end);
+      return built;
     }
     case "film_look":
       return looks.filmLook(project, args);

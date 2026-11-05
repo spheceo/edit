@@ -10,7 +10,7 @@ import * as real from "../../src/writer/exact.ts";
 // Hearing is Scribe and Claude: here it moves every word it hears 1 s later, as exact times would.
 const heard: string[] = [];
 let hearing: Promise<void> = Promise.resolve();
-mock.module("../../src/writer/exact.ts", () => ({
+void mock.module("../../src/writer/exact.ts", () => ({
   ...real,
   run: async (script: Script, _dir: string, footage: string, clips: Clip[]) => {
     heard.push(footage);

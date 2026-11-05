@@ -47,6 +47,6 @@ We occasionally run teaching loops off the agents and sometimes we run trial exp
 - Try to write code or pick languages or pick frameworks within languages that allow us to have the most robust application. Meaning, it makes your job a lot easier to see where things go wrong so that they can be easily fixed.
 - Never add a `Co-authored-by` trailer (Cursor, agents, or otherwise). Commit as the user only: `git add`, `git commit`, and `git push` with a normal message body — no co-authors, no extra attribution trailers.
 - When you finish your work simply commit it.
-- We should mainly make nightly releases but only once you get permission.
+- We should mainly make nightly releases but only once you get permission. Once you make the release you must watch it and let me know when it's out.
 - When asked to create skills or when there is a very specific need for creating a skill for future coding agents that work on this project, place it inside of `.agents/skills` (and not in `.claude` or any other specific directory) as this will just be symlinked to there.
 - Do not edit this AGENTS.md file unless explicitly given permission to do so.

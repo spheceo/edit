@@ -102,6 +102,13 @@ export async function installUpdate() {
     useUpdate.setState({ status: body as UpdateStatus });
   } catch (error) {
     useUpdate.setState({ from: null, status: { ...status, phase: "idle" } });
+    // Already up to date: updated meanwhile (from afar, or another window), the pill not yet gone, as this page asks
+    // once a minute (Nov 5, JJ clicked it 29 s after a remote update and was told Edit couldn't update). Asked now
+    // instead: the page reloads into the new version, or the pill goes.
+    if (error instanceof Error && error.message === "Edit is up to date") {
+      void poll();
+      return;
+    }
     useEditor.getState().toastError(error, "update Edit");
     return;
   }

@@ -28,6 +28,27 @@ Sphe's test for the new horror style (the team's "Horror High Quality - Editing 
 14. **The agent called `commentary_look` as a tool**, and the look never went on. The teaching and the audit now name it as an `apply_edit_plan` operation.
 15. **`cover_cut_in` cropped the reels to fill** and added its own film look. In horror it now fits tall reels, which get the blurred backdrop, and adds no look.
 
+## Round 2 (Nov 5): the guide to the letter
+
+Sphe asked whether the first draft followed the guide exactly. It didn't, so I re-read the guide, downloaded its 16 reference images and 31 of its 32 linked moments, and studied them frame by frame. Then I built what the draft lacked:
+
+16. **The guide's animations didn't exist:**
+    - Titles in the references' looks:
+      - Styks' bold over a blurred picture (Animations 2 and 7);
+      - Sirius' Arial dates, serif places, VHS name tags on black, and words on the voice (9);
+      - yellow typed quotes (13).
+    - A red highlighter with torn edges and a glow (4).
+    - Pages filling the frame, close on the words read (6, and the guide's own frames).
+    - Icons drawn by Edit over a word (11), a picture beside typed words (10), and a CC Lens.
+    - An XP desktop, with Internet Explorer on an old YouTube player (1).
+    - Faces as mosaics.
+
+    New pieces: VT323, Tinos and Arimo bundled, `grade.lens`, and `blur.mosaic`.
+17. **The draft's screenshots were thin strips** (one headline, 817×75) and an Instagram sign-in wall. Now capture_evidence takes the whole page, and the audit flags `horror_screenshot_strip`.
+18. **Two rules weren't checked:** "The same clip never repeats" (now `horror_repeated_clip`, any shared second), and competitor footage (left out of B-roll searches and refused at import).
+19. **The fade through black was 24–36 frames.** The references fade about 0.75 s each way, so it's now 40–48.
+20. **The web page wouldn't load:** Vite had cached `@edit/types` from before its `./models` export. Touching `vite.config.ts` made it re-read.
+
 ## Not fixable here
 
 - **Five of the 22 posts can't be had without an Instagram sign-in:**

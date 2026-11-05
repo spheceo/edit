@@ -49,6 +49,11 @@ Sphe asked whether the first draft followed the guide exactly. It didn't, so I r
 19. **The fade through black was 24–36 frames.** The references fade about 0.75 s each way, so it's now 40–48.
 20. **The web page wouldn't load:** Vite had cached `@edit/types` from before its `./models` export. Touching `vite.config.ts` made it re-read.
 
+21. **look_at_media failed on a frame at a video's very end** ("failed to fill whole buffer": an 8.0 s map sampled at 8.0 s). The audit hit the same thing on slowed copies. The reader now backs off a second and holds the last frame.
+22. **Cut-in 18 was refused three times** ("m22 runs out at 13.84 s"). In horror, a picture shot became a Photo Viewer desktop that opened by carrying on the post before it, which had just ended. A horror picture shot is now Animation 5 (the picture in its white outline over a blurred copy of itself). A desktop's player never plays past its footage.
+23. **v2's first pass:** 6 screenshots, none highlighted, and a quarter of the B-roll stock (modern phones, a vintage TV). The audit now flags `horror_unhighlighted_screenshot` and `horror_stock_heavy`.
+24. **"Edit crashed during the imports"** was me: commits to `apps/server/src` restarted the dev server mid-turn four times, and the background imports died with it. Don't touch server code while the agent works on a dev project.
+
 ## Not fixable here
 
 - **Five of the 22 posts can't be had without an Instagram sign-in:**

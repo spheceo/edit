@@ -64,14 +64,14 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
   try {
     const data = store.dataDir(app.store.home);
     // A refusal before the script exists is answered at once, as before.
-    await expect(imports.fromFile(app, data, `${dir}/nowhere.m4a`, null, "Nowhere", null, "started")).rejects.toThrow("can't be opened");
+    await expect(imports.fromFile(app, data, `${dir}/nowhere.m4a`, null, "Nowhere", null, null, "started")).rejects.toThrow("can't be opened");
     expect(store.ids(data)).toHaveLength(0);
 
     const source = `${dir}/call.m4a`;
     expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=20", "-c:a", "aac", "-b:a", "32k", source]).exitCode).toBe(0);
     mock.on("POST", "/v1/transcribe", async () => (await Bun.sleep(800), Response.json(scribeAnswer(["Where", "were", "you?"]))));
     const asked = Date.now();
-    const answered = await imports.fromFile(app, data, source, null, "Started", null, "started");
+    const answered = await imports.fromFile(app, data, source, null, "Started", null, null, "started");
     // Answered before the import is through: it's importing, its slot held.
     expect(Date.now() - asked).toBeLessThan(700);
     expect(answered.status).toBe("processing");
@@ -84,7 +84,7 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
 
     // One that stops does so on the script, with its reason; its slot is let go too.
     mock.on("POST", "/v1/transcribe", () => Response.json({ detail: { message: "quota exceeded" } }, { status: 402 }));
-    const second = await imports.fromFile(app, data, source, null, "Stops later", null, "started");
+    const second = await imports.fromFile(app, data, source, null, "Stops later", null, null, "started");
     expect(second.status).toBe("processing");
     for (let i = 0; i < 200 && imports.importing(second.id); i++) await Bun.sleep(50);
     const stopped = store.read(store.scriptDir(data, second.id));
@@ -96,6 +96,20 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
     expect(retried.status).toBe("processing");
     for (let i = 0; i < 200 && imports.importing(second.id); i++) await Bun.sleep(50);
     expect(store.read(store.scriptDir(data, second.id)).status).toBe("ready");
+
+    // Made with a first build (New project): built once its import is ready, no longer importing by then
+    // (the build refuses a script still importing: JJ's Mac, Nov 3–6, 16 of 16 never built).
+    const built: { id: string; note: string; importing: boolean }[] = [];
+    const hook = imports.hooks.build;
+    imports.hooks.build = (_app, id, note) => void built.push({ id, note, importing: imports.importing(id) });
+    try {
+      const third = await imports.fromFile(app, data, source, null, "Builds after", null, { note: "the first message" }, "started");
+      for (let i = 0; i < 200 && built.length === 0; i++) await Bun.sleep(50);
+      expect(built).toEqual([{ id: third.id, note: "the first message", importing: false }]);
+      expect(store.read(store.scriptDir(data, third.id)).firstBuild).toBeUndefined();
+    } finally {
+      imports.hooks.build = hook;
+    }
   } finally {
     cleanup();
   }

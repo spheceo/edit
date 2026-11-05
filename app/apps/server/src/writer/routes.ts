@@ -248,7 +248,7 @@ export function routes(router: Router<App>): void {
     // Imports: each request holds until its import finishes or pauses for a choice; the page follows it in /api/writer/progress meanwhile.
     .post("/api/writer/scripts/file", async (context) => {
       const given = await body<{ path?: string; article?: string; title?: string; kind?: Kind }>(context);
-      return answer(async () => detail(dataOf(context.app), await imports.fromFile(context.app, dataOf(context.app), String(given.path ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, "started")));
+      return answer(async () => detail(dataOf(context.app), await imports.fromFile(context.app, dataOf(context.app), String(given.path ?? ""), given.article ?? null, given.title ?? null, given.kind ?? null, null, "started")));
     })
     .post("/api/writer/scripts/youtube", async (context) => {
       const given = await body<{ url?: string; article?: string; title?: string; kind?: Kind; build?: string }>(context);

@@ -95,11 +95,14 @@ export type Answer = "started" | "finished";
 function carryOnAlone(app: App, data: string, dir: string, script: Script, done: () => void): void {
   runtime.runFork(
     importScript(app, dir, script).pipe(
+      // Its slot let go first: the build refuses a script still importing, so every first build
+      // started here was refused ("This import is still running") and never ran (JJ's Mac, Nov 3–6:
+      // 16 of 16 New projects' scripts waited for Build to be pressed).
+      Effect.ensuring(Effect.sync(done)),
       Effect.tap((result) => Effect.sync(() => buildWhenReady(app, data, result))),
       // A stop is already on the script, with its reason, and in the log (importScript says it).
       Effect.catch(() => Effect.void),
       Effect.catchCause((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logError(`${jobs.named(script.id, script.title)}: its import ended unexpectedly: ${diag.messageOf(Cause.squash(cause))}`))),
-      Effect.ensuring(Effect.sync(done)),
       inArea("writer"),
     ),
   );
@@ -184,7 +187,7 @@ function newScript(title: string, sourceKind: string, sourceUrl: string, origina
   };
 }
 
-export async function fromFile(app: App, data: string, source: string, link: string | null, title: string | null, kind: Kind | null, answer: Answer = "finished"): Promise<Script> {
+export async function fromFile(app: App, data: string, source: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null, answer: Answer = "finished"): Promise<Script> {
   let path: string;
   try {
     path = fs.realpathSync(source);
@@ -193,7 +196,7 @@ export async function fromFile(app: App, data: string, source: string, link: str
   }
   if (!isFile(path)) throw new Error("That file can't be opened.");
   const name = givenTitle(title) ?? [...(path.split("/").pop() ?? "Untitled").replace(/\.[^.]+$/, "")].slice(0, 180).join("");
-  return start(app, data, newScript(name, "file", path, path), await article(link), kind, null, answer);
+  return start(app, data, newScript(name, "file", path, path), await article(link), kind, then, answer);
 }
 
 /** A title given is kept in place of the video's own, which is looked up otherwise. */

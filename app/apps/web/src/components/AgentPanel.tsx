@@ -47,7 +47,7 @@ import {
   watchClaudeSupport,
   type AgentEntry,
 } from "../lib/agent";
-import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, shortSpan, thinkingWord, type Turn } from "../lib/agentTurns";
+import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, sentLanded, shortSpan, thinkingWord, type Turn, userMessages } from "../lib/agentTurns";
 import { useNow } from "../lib/now";
 import { api, mediaUrl } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
@@ -141,9 +141,9 @@ export function ChatShell({
  * more message of the person's than when it was sent.
  */
 export function useSentNow(entries: AgentEntry[]): { entries: AgentEntry[]; sending: boolean; hold: (text: string, attachments?: AgentEntry["attachments"]) => void; drop: () => void } {
-  const asked = entries.filter((entry) => entry.kind === "user").length;
-  const [pending, setPending] = useState<{ text: string; at: number; asked: number; attachments?: AgentEntry["attachments"] } | null>(null);
-  const landed = pending !== null && asked > pending.asked;
+  const { asked, newest } = userMessages(entries);
+  const [pending, setPending] = useState<{ text: string; at: number; asked: number; newest: number; attachments?: AgentEntry["attachments"] } | null>(null);
+  const landed = pending !== null && sentLanded(entries, pending);
   useEffect(() => {
     if (landed) setPending(null);
   }, [landed]);
@@ -151,7 +151,7 @@ export function useSentNow(entries: AgentEntry[]): { entries: AgentEntry[]; send
   return {
     entries: shown ? [...entries, { id: `pending-${pending.at}`, kind: "user", text: pending.text, at: pending.at, updated: pending.at, ...(pending.attachments !== undefined && pending.attachments.length > 0 ? { attachments: pending.attachments } : {}) }] : entries,
     sending: shown,
-    hold: (text, attachments) => setPending({ text, at: Date.now(), asked, ...(attachments !== undefined ? { attachments } : {}) }),
+    hold: (text, attachments) => setPending({ text, at: Date.now(), asked, newest, ...(attachments !== undefined ? { attachments } : {}) }),
     drop: () => setPending(null),
   };
 }

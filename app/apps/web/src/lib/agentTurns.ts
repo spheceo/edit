@@ -424,3 +424,21 @@ export function conversationEntries<T extends KeptTurn>(chat: T[], createdAt: nu
   if (run.said) entries.push({ id: `live-${at}-said`, kind: "assistant", text: run.said, at });
   return entries;
 }
+
+/** How many of the person's messages a chat holds, and when the newest was sent. */
+export function userMessages(entries: AgentEntry[]): { asked: number; newest: number } {
+  const users = entries.filter((entry) => entry.kind === "user");
+  return { asked: users.length, newest: users.reduce((latest, entry) => Math.max(latest, entry.at ?? 0), 0) };
+}
+
+/**
+ * Whether a message held on screen since it was sent has come back in the
+ * chat: there are more of the person's messages, or a newer one. A chat kept
+ * to its last turns (a thumbnail's 80) drops its oldest as one lands, so the
+ * count alone stays put and the message showed twice for good (Nov 5,
+ * "Officers Traumatized…").
+ */
+export function sentLanded(entries: AgentEntry[], held: { asked: number; newest: number }): boolean {
+  const now = userMessages(entries);
+  return now.asked > held.asked || now.newest > held.newest;
+}

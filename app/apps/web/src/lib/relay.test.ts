@@ -570,6 +570,9 @@ describe("relay cloud endpoints", () => {
       if (url.hostname === "oauth2.googleapis.com") return Response.json({ access_token: "t" });
       return Response.json({ name: "a.mp4", size: "10", md5Checksum: "v1" });
     });
+    // Edit with nothing ticked doesn't copy from the team's Drive (Nov 5), as it doesn't read it.
+    expect((await call("jobs/drive", { file: "FILEabcdefgh", key: "edit/originals/drive/FILEabcdefgh/a.mp4" }, { token: USE_ONLY, env: jobs })).status).toBe(403);
+    expect(found).toBeNull();
     const started = (await (await call("jobs/drive", { file: "FILEabcdefgh", key: "edit/originals/drive/FILEabcdefgh/a.mp4" }, { token: EDITOR, env: jobs })).json()) as { id: string };
     // Another project joining the same copy doesn't make it theirs.
     await call("jobs/drive", { file: "FILEabcdefgh", key: "edit/originals/drive/FILEabcdefgh/a.mp4" }, { token: SUBS, env: jobs });
@@ -723,7 +726,7 @@ describe("relay: the team's Google Drive, its token kept here (Nov 4)", () => {
     // `use` alone isn't work that needs Drive.
     expect((await ask("GET", "www.googleapis.com/drive/v3/files?q=x", { token: USE_ONLY })).status).toBe(403);
     expect(upstream).not.toHaveBeenCalled();
-    for (const path of ["drive/v3/files?q=x", "drive/v3/files/abcdefghijk1?alt=media", "drive/v3/files/abcdefghijk1/export?mimeType=text/html", "drive/v3/files/abcdefghijk1/comments"]) {
+    for (const path of [`drive/v3/files?q=${encodeURIComponent("'abcdefghijk1' in parents and trashed = false")}`, "drive/v3/files/abcdefghijk1?alt=media", "drive/v3/files/abcdefghijk1/export?mimeType=text/html", "drive/v3/files/abcdefghijk1/comments"]) {
       const answer = await ask("GET", `www.googleapis.com/${path}`, { token: SUBS });
       expect(answer.status).toBe(200);
       expect(await answer.text()).not.toContain("ya29");
@@ -733,6 +736,21 @@ describe("relay: the team's Google Drive, its token kept here (Nov 4)", () => {
     // The old handout is gone: an old build is told to update.
     const old = await relay.fetch(new Request("https://relay.test/v1/cloud/google/token", { method: "POST", headers: { authorization: `Bearer ${PERSON}` }, body: "{}" }), env);
     expect(old.status).toBe(410);
+  });
+
+  it("lists only a folder's files or the scripts' Docs for a teammate, never a search of the whole Drive (Nov 5)", async () => {
+    const upstream = stand();
+    const list = (q: string | null, token = SUBS) => ask("GET", `www.googleapis.com/drive/v3/files?pageSize=1000${q === null ? "" : `&q=${encodeURIComponent(q)}`}`, { token });
+    for (const q of [null, "name contains 'contract'", "fullText contains 'invoice'", "'root' in parents and trashed = false", "'abcdefghijk1' in parents and trashed = false or name contains 'x'"]) {
+      expect((await list(q)).status).toBe(403);
+    }
+    expect(upstream.mock.calls.filter(([input]) => !String(input).includes("oauth2"))).toHaveLength(0);
+    // Edit's own searches, as its server builds them.
+    expect((await list("'abcdefghijk1' in parents and trashed = false")).status).toBe(200);
+    expect((await list("name = 'Writer scripts' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false")).status).toBe(200);
+    expect((await list("'writerFolder01' in parents and mimeType = 'application/vnd.google-apps.document' and appProperties has { key='writerScript' and value='abcdef12' }")).status).toBe(200);
+    // An admin may search.
+    expect((await list("name contains 'contract'", ADMIN)).status).toBe(200);
   });
 
   it("gives the YouTube proxy only to someone with a kind of work", async () => {

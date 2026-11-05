@@ -72,10 +72,32 @@ export function routeOf(method: string, path: string, query: URLSearchParams): R
   return null;
 }
 
+/**
+ * The Drive searches Edit makes (drive_import, library, channel_marks, Script
+ * mode's drive.ts and docs.ts): a folder's files, the scripts' Docs folder,
+ * and a script's exported Docs. Nov 5 (the permissions check before a new
+ * teammate): any `q` went through, so anyone with a kind of work could search
+ * everything the team's account sees; now a teammate lists only a folder
+ * they were given the id of (an admin, anything).
+ */
+const SEARCHES = [
+  new RegExp(`^'${ID}' in parents and trashed = false$`),
+  /^name = 'Writer scripts' and mimeType = 'application\/vnd\.google-apps\.folder' and 'root' in parents and trashed = false$/,
+  new RegExp(`^'${ID}' in parents and mimeType = 'application/vnd\\.google-apps\\.document' and appProperties has \\{ key='writerScript' and value='[A-Za-z0-9-]{1,80}' \\}$`),
+];
+
+/** Whether a listing's `q` is one of Edit's searches. */
+export function searchAllowed(query: URLSearchParams): boolean {
+  const q = query.get("q");
+  return q !== null && query.getAll("q").length === 1 && SEARCHES.some((search) => search.test(q));
+}
+
 /** Whether a person's work needs the team's Drive: any capability (editing, scripts, subtitles, ideas), or an admin. */
 export function mayUseDrive(found: Caller): boolean {
   return found.kind === "person" && (found.admin || found.perms.some((perm) => perm.includes(".")));
 }
+
+export const NO_DRIVE = "Your account can't use the team's Google Drive: an admin can give you a kind of work at accounts.spheceo.com.";
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8" } });
@@ -142,10 +164,11 @@ export async function google(request: Request, url: URL, env: GoogleEnv): Promis
   const path = slash < 0 ? "/" : rest.slice(slash);
   const found = await allow(request, env, "use", "google", false, false);
   if (found instanceof Response) return found;
-  if (!mayUseDrive(found)) return json(403, { error: { code: 403, message: "Your account can't use the team's Google Drive: an admin can give you a kind of work at accounts.spheceo.com." } });
+  if (!mayUseDrive(found)) return json(403, { error: { code: 403, message: NO_DRIVE } });
   if (host !== HOST || path.includes("..") || path.includes("//")) return refuse("only Google's Drive API is reached here.");
   const route = routeOf(request.method, path, url.searchParams);
   if (route === null) return refuse(`${request.method} ${path} isn't one of the calls Edit makes.`);
+  if (path === "/drive/v3/files" && route.kind === "read" && !(found.kind === "person" && found.admin) && !searchAllowed(url.searchParams)) return refuse("only a folder's files are listed here, not a search of the whole Drive.");
   if (env.CLOUD_BURST !== undefined && !(await env.CLOUD_BURST.limit({ key: `google:${burstKey(request, found)}` })).success) return json(429, { error: { code: 429, message: "Too many Drive requests at once; try again in a minute." } });
   let token: string;
   try {

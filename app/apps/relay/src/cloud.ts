@@ -26,6 +26,7 @@
  */
 import { allow, burstKey, forbiddenOf, withCaller, type AuthEnv, type Caller, type Permission } from "./auth";
 import { EDIT_CALLS, grantedTo, ideaRefused, isAdmin, LISTABLE, maxExpires, mayWork, PROJECT_WRITES, projectOfKey, reportRefused, shapeOf, UNAVAILABLE, WRITABLE } from "./authz";
+import { mayUseDrive, NO_DRIVE } from "./google";
 import { cancelJob, driveJob, jobStatus, type JobsEnv } from "./jobs";
 import { readable as scriptReadable, scriptKeyRefused, writerCloud } from "./writer_cloud";
 import { mediaUrl, type MediaEnv } from "./media";
@@ -121,6 +122,8 @@ export async function cloud(request: Request, url: URL, env: CloudEnv & AuthEnv)
     if (!r2) return json(503, { error: "Cloud storage is not configured on the relay yet." });
     try {
       if (route === "jobs/drive") {
+        // The copy reads the team's Drive: the same people as /v1/google (Nov 5: `use` alone could copy any file it sees, then read it from R2).
+        if (!mayUseDrive(found)) throw new Forbidden(NO_DRIVE);
         await mayTouch({ found, env }, "write", needKey(body.key));
         const started = await driveJob(body, env, r2);
         if (found.kind === "person" && typeof started.id === "string") await jobOwner(env, started.id, found.sub);

@@ -253,18 +253,20 @@ describe("relay sign-in gate", () => {
     expect(reportRefused(person, "edit/covers/p1.jpg")).toBeNull();
   });
 
-  it("gives voice generation (paid) to editing: any edit style, an admin, or a token from before v2; not subtitles alone", async () => {
+  it("gives voice generation (paid) to editing: any edit style or an admin; not subtitles alone, nor Edit with nothing ticked", async () => {
     useKeys(createLocalJWKSet({ keys: [jwk] }));
     vi.spyOn(console, "log").mockImplementation(() => {});
     const speak = async (claims: Record<string, unknown>) =>
       (await relay.fetch(asked(await token(claims), "https://relay/v1/speech", { method: "POST", body: JSON.stringify({ text: "Hi.", voice_id: "abcdefgh12" }), headers: { "content-type": "application/json" } }), env())).status;
     // v2: subtitles only.
     expect(await speak({ perms: ["use", "video.subtitles"] })).toBe(403);
-    // Any edit style, an admin, or a v1 token (no capability ids yet): past the gate (no key configured here: 503).
+    // Edit with no capability (Nov 5: v2 since, so no token is from before it).
+    expect(await speak({ perms: ["use"] })).toBe(403);
+    expect(await speak({ perms: ["use", "cloud", "ai"] })).toBe(403);
+    // Any edit style or an admin: past the gate (no key configured here: 503).
     expect(await speak({ perms: ["use", "edit.courtroom"] })).not.toBe(403);
     expect(await speak({ perms: ["use", "video.subtitles", "edit.bodycam"] })).not.toBe(403);
     expect(await speak({ perms: ["use"], admin: true })).not.toBe(403);
-    expect(await speak({ perms: ["use", "cloud", "ai"] })).not.toBe(403);
   });
 
   it("asks for a signed-in token on a paid route at the front door", async () => {

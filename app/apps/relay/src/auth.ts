@@ -183,14 +183,12 @@ export async function caller(request: Request, env: AuthEnv, audience = "edit"):
 /**
  * Whether a person may make voice-overs (paid): they come with editing, so an
  * admin or anyone with an `edit.*` capability (manifest.ts); subtitles alone
- * don't. A token from before accounts' contract v2 carries no capability ids
- * at all (only `use` and v1's names): it keeps them until accounts switches
- * and grants each person their preset, so nobody loses them in between.
+ * don't. Nov 5: a token with no capability ids passed too, kept for tokens from
+ * before accounts' contract v2; Edit has been v2 since (accounts' APP_MANIFESTS),
+ * so that only let someone given Edit with nothing ticked spend on voices.
  */
 export function mayVoice(found: Caller): boolean {
-  if (found.kind !== "person") return false;
-  if (found.admin || found.perms.some(isEditing)) return true;
-  return !found.perms.some((one) => one.includes("."));
+  return found.kind === "person" && (found.admin || found.perms.some(isEditing));
 }
 
 /** Who to put in the log line: a person's id, never their token or more than that. */

@@ -118,7 +118,7 @@ export function needs(operations: Json[], project: Project | null = null): Needs
     if (operation.op === "cover_cut_in" && Array.isArray(operation.shots)) {
       for (const shot of operation.shots.map(objectOf)) {
         if (typeof shot.desktop === "object" && shot.desktop !== null) want(objectOf(shot.desktop), objectOf(shot.desktop).open !== false);
-        else if (project !== null && typeof shot.media === "string" && mediaOf(project, shot.media)?.kind === "image") {
+        else if (project !== null && project.style !== "horror" && typeof shot.media === "string" && mediaOf(project, shot.media)?.kind === "image") {
           want({ windows: [{ app: "photo_viewer", media: shot.media }] }, true);
         }
       }

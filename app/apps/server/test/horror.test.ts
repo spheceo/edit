@@ -236,3 +236,20 @@ test("horror's audit: the same clip never twice, a page not a strip, competitors
   expect(competitor("booge731", "My Stalker")).toBe(false);
   expect(competitor("Some Guy", "The Instagram Iceberg Explained")).toBe(true);
 });
+
+test("in horror a picture shot is Animation 5 over its own blurred copy, replaced when covered again", async () => {
+  const { cover } = await import("../src/cutin.ts");
+  const p = horror();
+  p.media.push(media({ id: "vo", name: "vo.wav", kind: "audio", path: "/vo.wav", duration: 20, width: 0, height: 0 }));
+  p.clips.push(clip({ id: "card", track: "v1", start: 300, duration: 300, type: "solid", fill: [0, 0, 0, 1], link: "l9" } as never));
+  p.clips.push(clip({ id: "voice", track: "a1", start: 300, duration: 300, type: "audio", media: "vo", name: "Voice-over" }));
+  p.script = { source: "", blocks: [{ kind: "narration", text: "The photo.", clip: "card", voiceover: "voice" }] } as never;
+  const run = () => cover(p, { cut_in: 1, shots: [{ media: "shot", source_in: 0, name: "the photo" }] } as never, null);
+  run();
+  run();
+  expect(p.clips.filter((c) => (c.name ?? "").endsWith("Horror · picture ground"))).toHaveLength(1);
+  const pictures = p.clips.filter((c) => /Horror · picture$/u.test(c.name ?? ""));
+  expect(pictures).toHaveLength(1);
+  expect((pictures[0] as { frame: { width: number } }).frame.width).toBeGreaterThan(0);
+  expect(p.clips.some((c) => /Desktop/u.test(c.name ?? ""))).toBe(false);
+});

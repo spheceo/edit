@@ -105,7 +105,7 @@ function sourceOf(p: Project, media: string): string {
 export function shots(p: Project, live: Clip[] = p.clips.filter((c) => !trackOf(p, c.track)?.hidden)): { id: string; from: number; to: number }[] {
   const index = new Map(p.tracks.map((t, i) => [t.id, i]));
   // A composition is one shot: its backdrop stands for it while its layers arrive (a list's rows one after another).
-  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve|^Janitor · (YouTube|post|bumper|profile|source card|channel|icon)|^Horror · (screenshot|picture|marker|icon)/u.test(c.name ?? "")) || c.type === "solid");
+  const pictures = live.filter((c) => (c.type === "video" && !/light leak|evidence marker|post highlight|Mark blur|^Dissolve|^Janitor · (YouTube|post|bumper|profile|source card|channel|icon)|^(Cut-in \d+ · )?Horror · (screenshot|picture|marker|icon)/u.test(c.name ?? "")) || c.type === "solid");
   const cuts = [...new Set(pictures.flatMap((c) => [c.start, clipEnd(c)]))].sort((a, b) => a - b);
   const runs: { id: string; from: number; to: number }[] = [];
   for (let i = 0; i + 1 < cuts.length; i++) {

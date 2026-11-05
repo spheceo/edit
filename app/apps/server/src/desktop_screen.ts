@@ -717,6 +717,13 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       pieces.push({ media, source_in: window.spec.source_in, speed: window.spec.speed, from, until: total, fade: 0 });
     }
     for (const piece of pieces) {
+      // Footage that would run out in its window (the opening player carrying
+      // on a post that had just ended: Instagram Reels v2, Nov 5, every plan
+      // with that desktop refused) plays its last stretch instead.
+      if (piece.media.kind === "video") {
+        const needs = ((piece.until - piece.from) / fps) * piece.speed;
+        if (piece.source_in + needs > piece.media.duration) piece.source_in = Math.max(0, piece.media.duration - needs - 0.05);
+      }
       const [x, y, w, h] = shownIn(window, piece.media);
       let crop: Args = {};
       let width = w;

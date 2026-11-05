@@ -7,6 +7,7 @@
 // store update, then optical flow for the shots that asked) is edit_tools.ts's.
 
 import { clipFrom } from "./clips.ts";
+import * as commentaryGraphics from "./commentary_graphics.ts";
 import * as screen from "./desktop_screen.ts";
 import * as framing from "./framing.ts";
 import type { Project } from "./model.ts";
@@ -246,7 +247,7 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
   project.clips = project.clips.filter((clip) => {
     const name = clip.name;
     const ours =
-      typeof name === "string" && (name.startsWith(`${prefix}B-roll`) || name === `${prefix}vertical drop`);
+      typeof name === "string" && (name.startsWith(`${prefix}B-roll`) || name.startsWith(`${prefix}Horror · `) || name === `${prefix}vertical drop`);
     return !(ours && clip.start < spanTo && spanFrom < clipEnd(clip));
   });
 
@@ -298,7 +299,11 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
   const onUpper: boolean[] = [];
   args.shots.forEach((_, index) => onUpper.push(index === 0 ? false : extend[index - 1]! > 0 ? !onUpper[index - 1] : onUpper[index - 1]!));
   // Which shots are Windows screens (a desktop, or a picture in a Photo Viewer on one).
-  const isScreen = args.shots.map((shot) => shot.desktop !== null || (shot.media !== null && mediaOf(project, shot.media)?.kind === "image"));
+  // Horror keeps its XP desktop for a video the story is about ("only… occasionally, mainly for showing
+  // YouTube footage"): a picture there is its Animation 5 (horrorPicture), not a Photo Viewer.
+  const horror = project.style === "horror";
+  const isPicture = args.shots.map((shot) => horror && shot.desktop === null && shot.media !== null && mediaOf(project, shot.media)?.kind === "image");
+  const isScreen = args.shots.map((shot, index) => !isPicture[index] && (shot.desktop !== null || (shot.media !== null && mediaOf(project, shot.media)?.kind === "image")));
   // The B-roll look over the footage shots (never over a desktop, which keeps
   // its colour): one adjustment per run of footage, fading where a desktop follows or ends.
   let look: string | null = null;
@@ -345,6 +350,10 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
     // A Windows screen: the desktop asked for, or a picture in a Photo Viewer
     // on one (a picture is never bare B-roll). It opens from the footage
     // before it, zooming out of a Video Player playing on from there.
+    if (isPicture[index]) {
+      placed.push({ name: shot.name ?? `shot ${index + 1}`, picture: horrorPicture(project, shot.media!, start, end, prefix), start: start / fps, end: end / fps });
+      return;
+    }
     if (isScreen[index]) {
       if (art === null) throw new Error(`shot ${index + 1}: the desktop's pictures weren't prepared (run it through apply_edit_plan)`);
       const asked = shot.desktop ?? { windows: [{ app: "photo_viewer", media: shot.media, label: shot.label }] };
@@ -489,4 +498,26 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
     voiceover,
   };
   return [report, smooth];
+}
+
+/**
+ * Horror's picture shot (its guide's Animation 5: "Images slide up using
+ * position keyframes, with Gaussian blur keyframes applied to the movement.
+ * Each image has a white outline with a glow effect and a drop shadow"):
+ * the picture over a blurred, darkened copy of itself filling the frame.
+ */
+function horrorPicture(project: Project, media: string, start: number, end: number, prefix: string): string[] {
+  const m = mediaOf(project, media)!;
+  const { width: w, height: h } = project.settings;
+  const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+  const cover = Math.max(w / (m.width * fit), h / (m.height * fit)) * 1.08;
+  const ground = freshId(project, "c");
+  project.clips.push(clipFrom({ id: ground, type: "video", name: `${prefix}Horror · picture ground`, media, source_in: 0, start, duration: end - start, track: addTrack(project, "video"), transform: { scale: cover } }));
+  const blur = freshId(project, "c");
+  project.clips.push(clipFrom({ id: blur, type: "adjustment", name: `${prefix}Horror · picture ground blur`, start, duration: end - start, track: addTrack(project, "video"),
+    blur: { radius: 34 * h / 1080 }, grade: { exposure: -0.9, vignette: 0.35 } }));
+  const shown = commentaryGraphics.card(project, { media, start, end, photo: true, backdrop: false });
+  // Named for its cut-in, so covering it again replaces them.
+  for (const id of shown.clips as string[]) { const clip = project.clips.find((c) => c.id === id); if (clip !== undefined) clip.name = `${prefix}${clip.name ?? ""}`; }
+  return [ground, blur, ...(shown.clips as string[])];
 }

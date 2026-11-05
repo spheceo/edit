@@ -427,7 +427,8 @@ async function render(app: App, project: Project, current: Running): Promise<voi
   current.preparing = urls.size > 0;
   publish(app, project.id);
   const excerpts = urls.size === 0 ? [] : await exportExcerpts.prepare(own, plan.start, plan.end, app.store.cacheDir(), urls, keys, () => current.cancelled, { atOnce: PLAYBACK_CELLS_AT_ONCE, behindViewer: true, restMaxMs: 60_000 }).catch((error: unknown) => {
-    diag.warn("playback", `${project.name}: its proxies are read over the preview URL (${diag.messageOf(error)})`);
+    // Stopped for a newer revision: nothing went wrong (JJ's Mac, Nov 5: 15 such warnings in a day).
+    if (!current.cancelled) diag.warn("playback", `${project.name}: its proxies are read over the preview URL (${diag.messageOf(error)})`);
     return [];
   });
   current.preparing = false;

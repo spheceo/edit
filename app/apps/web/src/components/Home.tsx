@@ -1,4 +1,4 @@
-import { Archive, Check, ChevronDown, ChevronRight, ListFilter, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Trash2, TriangleAlert, X } from "lucide-react";
+import { Archive, Check, ChevronDown, ChevronRight, ListFilter, CloudAlert, CloudDownload, CloudOff, CloudUpload, Copy, ExternalLink, FileText, Film, FileVideo, Lock, MessageSquare, Pencil, PenLine, Plus, Replace, RotateCw, Search, Share2, SkipForward, Tag, Trash2, TriangleAlert, X } from "lucide-react";
 import { motion } from "motion/react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
@@ -17,6 +17,8 @@ import { CardTableRow, IdeaTableRow, ideaStage, NewIdea, NoIdeas, useIdeasHome }
 import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
+import { useGrants } from "../writer/can";
+import type { Kind } from "../writer/types";
 import { useKept } from "../lib/kept";
 import { askExportFolder } from "./ExportFolder";
 import { ProblemView } from "./ProblemView";
@@ -855,6 +857,20 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
   // The cloud is only worth a word when something’s off.
   const cloudNews = inCloud && (editor !== null || status?.sync === "conflict" || status?.dirty === true || status?.sync === "offline");
 
+  // Its category (the kind of video its agent edits it as), among the styles this person edits; a Short's format is its own, so it stays one.
+  const account = useAccount((state) => state.account);
+  const allowed = editStyles(account);
+  const styles = STYLES.filter((one) => one.value !== "shorts" && (allowed === null || allowed.has(one.value) || one.value === project.style));
+  const recategorize = async (style: Style) => {
+    if (style === project.style) return;
+    try {
+      const live = await api.project(project.id);
+      await api.saveProject(project.id, live.rev, { ...live.project, style }, clientId);
+      onChanged();
+    } catch (error) {
+      useEditor.getState().toastError(error, `change the category of “${project.name}”`);
+    }
+  };
   const rename = async (name: string) => {
     setRenaming(false);
     if (!name || name === project.name) return;
@@ -895,6 +911,9 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
     // Made from a script: that script, its other mode.
     ...(script !== null ? [{ label: "Open its script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script}`) }] : []),
     { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(true) },
+    ...(project.style !== "shorts" && !project.problem && styles.length > 1
+      ? [{ label: "Category", icon: <Tag size={14} />, submenu: styles.map((one) => ({ label: one.label, checked: one.value === project.style, onSelect: () => void recategorize(one.value) })) }]
+      : []),
     // Shared from here, many projects at once (an export that would wait here goes to the cloud).
     ...(project.problem ? [] : [{ label: "Share for review", icon: <Share2 size={14} />, onSelect: () => void share() }]),
     ...(drive
@@ -1518,6 +1537,12 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
   );
 }
 
+/** A footage script's kinds as Home's Category names them. */
+const KIND_LABEL: Record<Kind, string> = { interrogation: "Interrogation", foia: "Bodycam", courtroom: "Courtroom" };
+
+/** The kind a script's Category stands for (as writer_handoff's styleOf, turned round); a commentary has none. */
+const kindOfStyle = (style: Style | null): Kind | null => (style === "bodycam" ? "foia" : style === "interrogation" || style === "courtroom" ? style : null);
+
 /** A script with no edit yet: opening it opens the script; once written, Start the edit makes its video project. */
 function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, onImport }: { script: WriterScriptRow; importing?: Importing; writing: boolean; sharing: boolean; here: boolean; onChanged: () => void; onImport?: () => void }) {
   const [starting, setStarting] = useState(false);
@@ -1525,6 +1550,24 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
   const [deleting, setDeleting] = useState(false);
   const [why, setWhy] = useState(false);
   const failed = script.runFailed ?? null;
+  // Its category, changed (JJ, Nov 5: a compilation started as Bodycam was Interrogation): the kinds this person writes, a commentary none.
+  const grants = useGrants();
+  const current = kindOfStyle(script.style);
+  const kinds = script.compilation ? grants.compilationKinds : grants.singleKinds;
+  const recategorize = async (kind: Kind) => {
+    if (kind === current) return;
+    try {
+      const writer = await import("../writer/api");
+      await writer.setScriptKind(script.id, kind);
+      onChanged();
+    } catch (error) {
+      useEditor.getState().toastError(error, `change the category of “${script.title}”`);
+    }
+  };
+  const categoryItem: MenuItem[] =
+    current !== null && kinds.length > 1
+      ? [{ label: "Category", icon: <Tag size={14} />, submenu: kinds.map((kind) => ({ label: KIND_LABEL[kind], checked: kind === current, onSelect: () => void recategorize(kind) })) }]
+      : [];
   // Its ⋯ (and right click), as an edit's: open it, and (when this Mac has it) rename or delete it; Later's too.
   const aside = useAside(laterKey("script", script.id), script.title || "Untitled script");
   const items = withAside(
@@ -1539,6 +1582,7 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
       ...(here
         ? ([
             { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(script.title) },
+            ...categoryItem,
             { separator: true },
             { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
           ] satisfies MenuItem[])

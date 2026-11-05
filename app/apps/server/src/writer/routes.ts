@@ -137,6 +137,18 @@ export function routes(router: Router<App>): void {
         return detail(data, edits.rename(data, id(context), String(title ?? "")));
       });
     })
+    .put("/api/writer/scripts/{id}/kind", async (context) => {
+      const { kind } = await body<{ kind?: Kind }>(context);
+      return answer(() => {
+        const data = dataOf(context.app);
+        const script = readFor(data, id(context));
+        // An import or a build writes the script back when it ends, its kind with it.
+        idle(id(context));
+        if (jobs.running(id(context))) throw new Error("Claude is still writing this script.");
+        if (kind !== undefined) can.requireKind(script, kind);
+        return detail(data, edits.setKind(data, id(context), kind));
+      });
+    })
     .put("/api/writer/scripts/{id}/clips", async (context) => {
       const given = await body<{ revision: number; clips: Clip[] }>(context);
       return answer(() => {

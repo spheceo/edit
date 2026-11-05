@@ -62,6 +62,10 @@ export const trelloCards = (list: TrelloList) =>
 export const renameScript = (id: string, title: string) =>
   http<Script>(`/api/writer/scripts/${id}/title`, { ...json({ title }), method: "PUT" });
 
+/** Its category: the kind its next build, revision and edit are made as. */
+export const setScriptKind = (id: string, kind: Kind) =>
+  http<Script>(`/api/writer/scripts/${id}/kind`, { ...json({ kind }), method: "PUT" });
+
 export const resumeImport = (id: string, choice: Choice) =>
   http<Script>(`/api/writer/scripts/${id}/resume`, json(choice));
 

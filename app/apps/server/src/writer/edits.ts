@@ -2,7 +2,7 @@
 // version: the timeline, a respelled word, the heading, a restored version, a
 // proposed rewrite accepted or declined, and starting over.
 
-import type { Clip, Script } from "@edit/types/writer";
+import type { Clip, Kind, Script } from "@edit/types/writer";
 
 import * as chat from "./chat.ts";
 import { settle } from "./revise.ts";
@@ -90,6 +90,22 @@ export function rename(data: string, id: string, title: string): Script {
   // The title heads the script, so its Google Doc is out of date now.
   return store.update(store.scriptDir(data, id), (script) => {
     script.title = given;
+  });
+}
+
+const KINDS: Kind[] = ["interrogation", "foia", "courtroom"];
+
+/**
+ * Its category changed (JJ, Nov 5: a compilation started as Bodycam was
+ * Interrogation): the kind its next build, revision and edit are made as. A
+ * compilation stays one; a commentary has no kind to change. Whether the person
+ * may write that kind is the route's to ask (can.requireKind).
+ */
+export function setKind(data: string, id: string, kind: unknown): Script {
+  if (!KINDS.includes(kind as Kind)) throw new Error("Choose Interrogation, Bodycam or Courtroom.");
+  return store.update(store.scriptDir(data, id), (script) => {
+    if (script.sourceKind === "commentary" || script.commentary != null) throw new Error("A commentary script's category can't be changed.");
+    script.kind = kind as Kind;
   });
 }
 

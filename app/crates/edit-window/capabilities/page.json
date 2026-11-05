@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "page",
+  "description": "Edit's page (served by its own server on this Mac) may move the window from its top bars (data-tauri-drag-region) and nothing else.",
+  "windows": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:*", "http://localhost:*"] },
+  "permissions": ["core:window:allow-start-dragging"]
+}

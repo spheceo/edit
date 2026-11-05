@@ -9,6 +9,8 @@ import { afterFailure, download, downloadRange, fileOf, idOf, reasonOf, startOf,
 import { scratch } from "./helpers/home.ts";
 import { Database } from "bun:sqlite";
 import { status as signInStatus, where as signInWhere } from "../src/youtube_signin.ts";
+import type { App } from "../src/app.ts";
+import { probe } from "../src/writer/youtube.ts";
 
 type Footage = Extract<ScriptBlock, { kind: "footage" }>;
 type Narration = Extract<ScriptBlock, { kind: "narration" }>;
@@ -345,6 +347,49 @@ test("the YouTube sign-in from Chrome is the last resort: an age-restricted vide
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
+    cleanup();
+  }
+});
+
+// Nov 5: New project's check called an age-restricted video undownloadable
+// though Chrome's sign-in was set up; only the download used the sign-in.
+test("New project's check asks an age-restricted video again with the sign-in from Chrome", async () => {
+  const { dir, cleanup } = scratch("youtube-probe-age");
+  const before = { chrome: signInWhere.chrome, setting: process.env.EDIT_YOUTUBE_SIGNIN };
+  try {
+    const script = `${dir}/yt-dlp`;
+    fs.writeFileSync(
+      script,
+      `#!/bin/sh
+case "$*" in *--cookies-from-browser*) echo '{"title":"Officer Thai","channel":"Police","duration":164,"age_limit":18}'; exit 0;; esac
+echo 'ERROR: [youtube] abc: Sign in to confirm your age. This video may be inappropriate for some users.' >&2; exit 1
+`,
+      { mode: 0o755 },
+    );
+    process.env.EDIT_YTDLP = script;
+    const app = { store: { home: dir } } as unknown as App;
+    const url = "https://www.youtube.com/watch?v=2FraE77l4fI";
+
+    // No sign-in: it says how to get one.
+    signInWhere.chrome = `${dir}/no-chrome`;
+    expect((await probe(app, url)).problem).toContain("Sign in to YouTube in Chrome");
+
+    const profile = `${dir}/Chrome/Default`;
+    fs.mkdirSync(profile, { recursive: true });
+    const db = new Database(`${profile}/Cookies`);
+    db.run("CREATE TABLE cookies (host_key TEXT, name TEXT, encrypted_value BLOB)");
+    db.run("INSERT INTO cookies VALUES ('.youtube.com', 'SAPISID', x'00')");
+    db.close();
+    signInWhere.chrome = `${dir}/Chrome`;
+    process.env.EDIT_YOUTUBE_SIGNIN = "1";
+    const got = await probe(app, url);
+    expect(got.title).toBe("Officer Thai");
+    expect(got.durationMs).toBe(164_000);
+    expect(got.problem).toBeNull();
+  } finally {
+    signInWhere.chrome = before.chrome;
+    if (before.setting === undefined) delete process.env.EDIT_YOUTUBE_SIGNIN;
+    else process.env.EDIT_YOUTUBE_SIGNIN = before.setting;
     cleanup();
   }
 });

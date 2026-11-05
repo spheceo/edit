@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import type { App } from "../app.ts";
 import { join } from "../paths.ts";
 import * as edit from "../youtube.ts";
+import { cookieArgs } from "../youtube_signin.ts";
 import { run } from "./proc.ts";
 
 /** A single YouTube watch or short link. Other hosts are refused so yt-dlp is not pointed at an arbitrary site. */
@@ -65,18 +66,29 @@ export async function title(app: App, url: string): Promise<string> {
 }
 
 export async function probe(app: App, url: string): Promise<Probe> {
+  const first = await probeOnce(app, url, []);
+  // An age-restricted (or members-only) video is checked again with the
+  // editor's YouTube sign-in from Chrome, as its download will be (youtube.ts):
+  // without it, the check refused videos the import could have.
+  if (!first.signInWouldHelp) return first.probe;
+  const signIn = cookieArgs();
+  return signIn.length === 0 ? first.probe : (await probeOnce(app, url, signIn)).probe;
+}
+
+async function probeOnce(app: App, url: string, signIn: string[]): Promise<{ probe: Probe; signInWouldHelp: boolean }> {
   let said: string;
   try {
-    said = await ytdlp(app, ["--no-playlist", "--skip-download", "--dump-single-json", "--no-warnings", url], 90_000);
+    said = await ytdlp(app, ["--no-playlist", "--skip-download", "--dump-single-json", "--no-warnings", ...signIn, url], 90_000);
   } catch (error) {
-    const [why, blocking] = probeTrouble(error instanceof Error ? error.message : String(error));
-    return blocking ? { title: "", channel: "", problem: why } : { title: "", channel: "", warning: why };
+    const message = error instanceof Error ? error.message : String(error);
+    const [why, blocking] = probeTrouble(message);
+    return { probe: blocking ? { title: "", channel: "", problem: why } : { title: "", channel: "", warning: why }, signInWouldHelp: SIGN_IN.test(message) };
   }
   let info: Record<string, unknown>;
   try {
     info = JSON.parse(said.trim()) as Record<string, unknown>;
   } catch {
-    return { title: "", channel: "", problem: "YouTube didn't say what this video is." };
+    return { probe: { title: "", channel: "", problem: "YouTube didn't say what this video is." }, signInWouldHelp: false };
   }
   const name = [...(typeof info.title === "string" ? info.title : "YouTube video")].slice(0, 180).join("");
   if (typeof info.title === "string") checked.set(url, [name, Date.now()]);
@@ -84,26 +96,32 @@ export async function probe(app: App, url: string): Promise<Probe> {
   const seconds = typeof info.duration === "number" && info.duration > 0 ? info.duration : null;
   const durationMs = seconds === null ? null : Math.floor(seconds * 1000);
   const live = typeof info.live_status === "string" ? info.live_status : "";
+  // Signed in, YouTube gives an 18+ video's formats: it downloads the same way.
+  const ageLocked = Number(info.age_limit ?? 0) >= 18 && signIn.length === 0;
   const problem =
     info.is_live === true || live === "is_live"
       ? "It's live now; import it once the stream has ended."
       : live === "is_upcoming"
         ? "It hasn't premiered yet."
-        : Number(info.age_limit ?? 0) >= 18
-          ? "It's age-restricted, so it can't be downloaded."
+        : ageLocked
+          ? AGE
           : durationMs === null
             ? "YouTube doesn't give its length."
             : durationMs > 10 * 3_600_000
               ? "It runs over 10 hours."
               : null;
-  return { title: name, channel, durationMs, problem, warning: null };
+  return { probe: { title: name, channel, durationMs, problem, warning: null }, signInWouldHelp: ageLocked };
 }
+
+/** What only a signed-in YouTube gets past (age, members). */
+const SIGN_IN = /confirm your age|age.restricted|inappropriate|members.only|join this channel/i;
+const AGE = "It's age-restricted. Sign in to YouTube in Chrome (Settings → YouTube) to import it.";
 
 /** yt-dlp's failure as a reason a person can act on, and whether it stops the import (a sign-in or connection trouble may not). */
 function probeTrouble(error: string): [string, boolean] {
   const lower = error.toLowerCase();
   if (lower.includes("private video")) return ["It's private.", true];
-  if (lower.includes("confirm your age") || lower.includes("age-restricted") || lower.includes("inappropriate")) return ["It's age-restricted, so it can't be downloaded.", true];
+  if (lower.includes("confirm your age") || lower.includes("age-restricted") || lower.includes("inappropriate")) return [AGE, true];
   if (lower.includes("not a bot") || lower.includes("sign in")) return ["YouTube asked this Mac to sign in, so it couldn't be checked. It should still import through the proxy.", false];
   if (["unavailable", "removed", "does not exist", "terminated"].some((word) => lower.includes(word))) return ["It's no longer available.", true];
   if (lower.includes("premiere") || lower.includes("live event")) return ["It hasn't premiered yet.", true];

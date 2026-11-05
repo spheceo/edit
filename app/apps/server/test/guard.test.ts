@@ -30,6 +30,9 @@ test("failures pass through as they are", async () => {
   ).rejects.toThrow("job crashed (Invalid array length)");
   expect(isBug(new Error("expected"))).toBe(false);
   expect(isBug(new ReferenceError("x is not defined"))).toBe(true);
+  // A connection that dropped, as Bun's fetch throws it: a failure, not a bug.
+  expect(isBug(Object.assign(new TypeError("The socket connection was closed unexpectedly."), { code: "ECONNRESET" }))).toBe(false);
+  expect(isBug(new TypeError("null is not an object (evaluating 'e.clips')"))).toBe(true);
 });
 
 test("a crashed request answers with JSON", async () => {

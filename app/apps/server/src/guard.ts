@@ -14,8 +14,15 @@ import * as diag from "./diag.ts";
 
 const BUGS = [TypeError, RangeError, ReferenceError, SyntaxError, EvalError, URIError];
 
-/** Whether `error` is a bug (the JS counterpart of a panic) rather than a failure. */
+/**
+ * Whether `error` is a bug (the JS counterpart of a panic) rather than a
+ * failure. A network failure is never one, though Bun's fetch throws it as a
+ * TypeError: it carries the system's code ("ECONNRESET", "ConnectionRefused"),
+ * which a bug's TypeError never does (JJ's Mac, Nov 5: R2 closing a preview's
+ * connection answered "this request crashed …; this is a bug in Edit").
+ */
 export function isBug(error: unknown): boolean {
+  if (typeof (error as { code?: unknown } | null)?.code === "string") return false;
   return BUGS.some((kind) => error instanceof kind);
 }
 

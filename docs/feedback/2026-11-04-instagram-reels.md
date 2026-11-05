@@ -36,3 +36,4 @@ Sphe's test for the new horror style (the team's "Horror High Quality - Editing 
   - and the Doc's `DT9 gaQ0DfEI` link has a space in its text.
 
   The import's "go on without" covers them. Instagram cookies from Chrome would get them, but that needs a Keychain prompt on the Mac.
+- **A review shared from the dev server can't open.** Dev Convex (`determined-heron-867`) has `REVIEW_SITE_URL=https://feedback.spheceo.com`, but that site reads only prod, so the dev link said "This link opens nothing." Instead, the finished export was shared from prod Edit (nightly-55) as its own project: https://feedback.spheceo.com/r/YqGI5rhpT4qw_VuT_QKpig. The fix is a dev review site (the feedback worker on dev Convex) with dev's `REVIEW_SITE_URL` pointed at it. That's new infrastructure, so it waits for Sphe.

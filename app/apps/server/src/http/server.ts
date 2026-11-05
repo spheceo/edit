@@ -208,8 +208,11 @@ async function logged(method: string, route: string, path: string, ms: number, r
     diag.record("http", name, ms, failure);
   } else {
     diag.record("http", name, ms, null);
-    // A missing thumbnail or frame is routine; other refusals are worth seeing.
-    if (status !== 404 || method !== "GET") diag.warn("http", `${method} ${failure}`);
+    // A missing thumbnail or frame is routine, and so is Claude Code's GET on an MCP endpoint (its
+    // look for a stream, answered 405 as the protocol has it: 44 warnings a day on JJ's Mac, Nov 5);
+    // other refusals are worth seeing.
+    const routine = method === "GET" && (status === 404 || (status === 405 && path.startsWith("/mcp")));
+    if (!routine) diag.warn("http", `${method} ${failure}`);
   }
   return response;
 }

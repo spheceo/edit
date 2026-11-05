@@ -714,6 +714,7 @@ export interface EditReviewSeam {
   calloutTiming(project: Project, transcripts: Map<string, Transcript>): Json[];
   textLate(project: Project, transcripts: Map<string, Transcript>): unknown[];
   cutMidWord(project: Project, transcripts: Map<string, Transcript>): Json[];
+  narrationCutOff(project: Project, transcripts: Map<string, Transcript>): Json[];
   deadAir(project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): Json[];
   spokenWords(project: Project, transcripts: Map<string, Transcript>): [number, string][];
   lineFrames(lines: string[], heard: [number, string][], from: number, to: number): (number | null)[];
@@ -906,6 +907,8 @@ export interface BrollSeam {
   smoothInBackground(app: App, projectId: string, clipIds: string[]): string[];
   smoothSlowMotion(app: App, projectId: string, clipId: string): Promise<Json>;
   smoothingPending(projectId: string): string[];
+  /** Clips showing a render an older smoother made, smoothed again (broll.ts). */
+  smoothStaleAgain(app: App, projectId: string): Promise<string[]>;
   /** A still as 30 s of steady footage (off macOS, where pictures don't stay images). */
   stillVideo(image: string, dir: string): Promise<string>;
   waitForMaps(app: App, projectId: string, limitMs: number): Promise<void>;

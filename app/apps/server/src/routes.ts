@@ -486,10 +486,18 @@ async function createProject(context: Context): Promise<Response> {
   return json({ rev: live.rev, project: live.project });
 }
 
+/** Projects whose older smoothed renders were looked for this run (once each). */
+const smoothChecked = new Set<string>();
+
 function getProject({ app, params }: Context): Response {
   const id = params.id!;
   const live = liveOr404(app, id);
   app.store.setActive(id);
+  // Slow motion an older smoother rendered (flickering made frames, Nov 5) is smoothed again, in the background.
+  if (!smoothChecked.has(id)) {
+    smoothChecked.add(id);
+    void seams.broll.smoothStaleAgain(app, id).catch((error: unknown) => diag.warn("broll", `smoothing ${id} again: ${diag.messageOf(error)}`));
+  }
   for (const media of live.project.media) {
     // Cloud media are streamed inputs (a loopback URL, never a file here):
     // they still need their thumbnails and waveforms made from that stream

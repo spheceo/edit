@@ -86,6 +86,7 @@ export const hooks = {
   calloutTiming: (project: Project, transcripts: Map<string, Transcript>): Json[] =>
     seams.editReview.calloutTiming(project, transcripts),
   cutMidWord: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.cutMidWord(project, transcripts),
+  narrationCutOff: (project: Project, transcripts: Map<string, Transcript>): Json[] => seams.editReview.narrationCutOff(project, transcripts),
   deadAir: (project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): Json[] =>
     seams.editReview.deadAir(project, transcripts, spans),
   offScript: (project: Project, transcripts: Map<string, Transcript>): Json[] => [...seams.editReview.offScript(project, transcripts), ...seams.editReview.scriptOrder(project)],
@@ -810,6 +811,8 @@ async function removeTime({ app, args, projectId }: ToolCall): Promise<Content[]
 
 /** The most a word's cut is lengthened by: past it, the transcriber's word times are wrong, not the cut. */
 const MOST_ADDED = 1.0;
+/** The most put back before or after a voice-over for the narrator's words it cut off (a phrase). */
+const MOST_NARRATION = 2.5;
 
 /**
  * Lengthens footage cut inside a word (the audit's cut_mid_word) by putting
@@ -829,7 +832,10 @@ async function extendClip({ app, args, projectId }: ToolCall): Promise<Content[]
   if (seconds !== null && !(seconds > 0 && seconds <= MOST_ADDED)) throw new Error(`seconds: more than 0, at most ${MOST_ADDED}`);
   const heard = cachedTranscripts(app, found.project, false);
   // Each cut to lengthen: the clip, its side and the source second to reach.
-  const flagged = (hooks.cutMidWord(found.project, heard) as Args[]).filter((issue) => typeof issue.clip === "string");
+  const wordCuts = (project: Project) => [...(hooks.cutMidWord(project, heard) as Args[]), ...(hooks.narrationCutOff(project, heard) as Args[])];
+  const flagged = wordCuts(found.project).filter((issue) => typeof issue.clip === "string");
+  // Narration cut off a whole phrase can need more than a clipped word does.
+  const narrationCut = new Set(flagged.filter((issue) => issue.kind === "narration_cut_off").map((issue) => `${String(issue.clip)}|${issue.side === "in" ? "in" : "out"}`));
   const wanted = new Map<string, { clip: string; side: "in" | "out"; to: number | null }>();
   for (const issue of flagged) {
     const clip = issue.clip as string;
@@ -874,7 +880,7 @@ async function extendClip({ app, args, projectId }: ToolCall): Promise<Content[]
         const sourceEnd = clip.source_in + (clip.duration / fps) * clip.speed;
         const needed = pass === 0 && seconds !== null ? seconds : reach === null ? 0 : cut.side === "out" ? reach + 0.05 - sourceEnd : clip.source_in - (reach - 0.05);
         const room = cut.side === "out" ? (media?.duration ?? Number.POSITIVE_INFINITY) - sourceEnd : clip.source_in;
-        if (added + needed > MOST_ADDED) {
+        if (added + needed > (narrationCut.has(`${clip.id}|${cut.side}`) ? MOST_NARRATION : MOST_ADDED)) {
           skipped = added === 0 ? `the word runs ${fixed(needed, 2)}s past the cut: its times are off, not the cut` : null;
           break;
         }
@@ -887,7 +893,7 @@ async function extendClip({ app, args, projectId }: ToolCall): Promise<Content[]
         added += frames / fps;
         moved = Math.max(moved, result.moved);
         lengthened = Math.max(lengthened, result.lengthened);
-        const still = (hooks.cutMidWord(project, heard) as Args[]).filter((issue) => issue.clip === clip.id && issue.side === cut.side);
+        const still = wordCuts(project).filter((issue) => issue.clip === clip.id && issue.side === cut.side);
         if (still.length === 0) break;
         const times = still.map((issue) => num(cut.side === "out" ? issue.word_ends : issue.word_starts)).filter((time): time is number => time !== null);
         if (times.length === 0) break;
@@ -1438,6 +1444,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   const extra = isEssay(project.style) ? [
     ...hooks.offScript(project, heard),
     ...hooks.cutMidWord(project, heard),
+    ...hooks.narrationCutOff(project, heard),
     ...soundEffectsLong(project),
     ...soundEffectsLateHit(project),
     ...(markBlurs.offShot(project) as Json[]),
@@ -1450,6 +1457,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...hooks.textLate(project, heard),
     ...hooks.unsubtitledSpeech(project, heard),
     ...hooks.cutMidWord(project, heard),
+    ...hooks.narrationCutOff(project, heard),
     ...hooks.deadAir(project, heard, teasers),
     ...(framing.interrogationIssues(project, parts, (at) => editPlan.cutSounds(project, at)) as Json[]),
     ...seams.faces.punchInsOffFace(project, teasers),

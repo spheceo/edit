@@ -321,3 +321,31 @@ test("a line the narrator carried on past its last written word, without a pause
   expect(matches.get(0)![2].last).toBe(10);
   expect(matches.get(1)![2].first).toBe(11);
 });
+
+test("the narrator's words cut off a voice-over are flagged for extend_clip; words another clip plays are not", async () => {
+  const { narrationCutOff } = await import("../src/edit_review.ts");
+  const timed: [string, number, number][] = [["If", 0.16, 0.26], ["you", 0.34, 0.42], ["haven't", 0.48, 0.7], ["been", 0.72, 0.84], ["living", 0.88, 1.08], ["under", 1.14, 1.34], ["a", 1.4, 1.44], ["rock,", 1.52, 1.9],
+    ["you", 2.12, 2.2], ["know.", 2.26, 2.54], ["than", 2.6, 2.7], ["you", 2.75, 2.8], ["expect.", 2.85, 3.2], ["Next", 4.5, 4.7], ["line", 4.75, 5.0]];
+  const words = timed.map(([text, start, end]) => ({ text, start, end }));
+  const p = { settings: { width: 1920, height: 1080, fps: 30 }, media: [{ id: "vo", name: "vo.wav", path: "/vo.wav", kind: "audio", duration: 10, width: 0, height: 0, fps: 0, has_audio: true }],
+    tracks: [{ id: "a1", kind: "audio", hidden: false, muted: false, locked: false }],
+    clips: [clip({ id: "line", type: "audio", media: "vo", track: "a1", start: 100, duration: 51, source_in: 0.86, name: "Voice-over" }),
+      clip({ id: "next", type: "audio", media: "vo", track: "a1", start: 300, duration: 18, source_in: 4.45, name: "Voice-over" })], script: null } as never;
+  const found = narrationCutOff(p, new Map([["vo", { words } as never]])) as { clip: string; side: string; words: string }[];
+  expect(found).toEqual([
+    expect.objectContaining({ clip: "line", side: "in", words: "If you haven't been" }),
+    expect.objectContaining({ clip: "line", side: "out", words: "than you expect." }),
+  ]);
+});
+
+test("a phrase lost between two voice-overs is flagged once, for the line it runs into", async () => {
+  const { narrationCutOff } = await import("../src/edit_review.ts");
+  const timed: [string, number, number][] = [["one", 0.1, 0.4], ["line.", 0.45, 0.9], ["He", 1.2, 1.3], ["makes", 1.35, 1.6], ["noises", 1.65, 2.0], ["while", 2.05, 2.3], ["filming", 2.35, 2.8]];
+  const words = timed.map(([text, start, end]) => ({ text, start, end }));
+  const p = { settings: { width: 1920, height: 1080, fps: 30 }, media: [{ id: "vo", name: "vo.wav", path: "/vo.wav", kind: "audio", duration: 10, width: 0, height: 0, fps: 0, has_audio: true }],
+    tracks: [{ id: "a1", kind: "audio", hidden: false, muted: false, locked: false }],
+    clips: [clip({ id: "a", type: "audio", media: "vo", track: "a1", start: 0, duration: 28, source_in: 0.05, name: "Voice-over" }),
+      clip({ id: "b", type: "audio", media: "vo", track: "a1", start: 100, duration: 25, source_in: 2.0, name: "Voice-over" })], script: null } as never;
+  const found = narrationCutOff(p, new Map([["vo", { words } as never]])) as { clip: string; side: string; words: string }[];
+  expect(found).toEqual([expect.objectContaining({ clip: "b", side: "in", words: "He makes noises" })]);
+});

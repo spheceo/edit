@@ -357,6 +357,58 @@ export function cutMidWord(project: Project, transcripts: Map<string, Transcript
   return issues;
 }
 
+/** A gap between the narrator's words (s) that ends a phrase. */
+const PHRASE_PAUSE = 0.6;
+
+/**
+ * The narrator's words cut off a voice-over: words of its recording just
+ * before its in point or after its out point that no clip plays, running on
+ * into it without a pause. Both horror drafts (Nov 5) began 0.7 s into the
+ * opening line ("If you haven't been" gone, the narrator having reworded the
+ * script) and lost "He also makes strange noises", "two." and "than you
+ * might expect." elsewhere: whole words, which cut_mid_word doesn't see.
+ * Each with the second its first (or last) word starts (or ends), for
+ * extend_clip.
+ */
+export function narrationCutOff(project: Project, transcripts: Map<string, Transcript>): unknown[] {
+  const fps = fpsOf(project);
+  const issues: unknown[] = [];
+  const voices = project.clips.filter((clip): clip is Extract<Clip, { type: "audio" }> => clip.type === "audio" && project.media.find((media) => media.id === clip.media)?.kind === "audio" && seams.voiceover.isVoiceover(project, clip));
+  const span = (clip: Extract<Clip, { type: "audio" }>): [number, number] => [clip.source_in, clip.source_in + (clip.duration / fps) * clip.speed];
+  const found: { phrase: [number, number]; pause: number; issue: { clip: string; side: string } & Record<string, unknown> }[] = [];
+  for (const clip of voices) {
+    const words = transcripts.get(clip.media)?.words ?? [];
+    if (words.length === 0) continue;
+    const [from, to] = span(clip);
+    const played = (word: { start: number; end: number }) => voices.some((other) => other.media === clip.media && span(other)[0] <= word.start + 0.02 && span(other)[1] >= word.end - 0.02);
+    const firstIn = words.findIndex((word) => word.start >= from - 0.02);
+    const lastIn = words.length - 1 - [...words].reverse().findIndex((word) => word.end <= to + 0.02);
+    if (firstIn < 0 || lastIn < firstIn) continue;
+    const before: string[] = [];
+    let start = firstIn;
+    while (start > 0 && before.length < 12 && words[start]!.start - words[start - 1]!.end < PHRASE_PAUSE && !played(words[start - 1]!) && words[start - 1]!.end <= from + 0.02) {
+      start -= 1;
+      before.unshift(trim(words[start]!.text));
+    }
+    if (before.length > 0) found.push({ phrase: [start, firstIn - 1], pause: words[firstIn]!.start - words[firstIn - 1]!.end, issue: { kind: "narration_cut_off", clip: clip.id, at: clip.start, side: "in", words: before.join(" "), word_starts: round(words[start]!.start * 100) / 100,
+      fix: "extend_clip (no arguments) starts the voice-over before them, moving what follows" } });
+    const after: string[] = [];
+    let end = lastIn;
+    while (end < words.length - 1 && after.length < 12 && words[end + 1]!.start - words[end]!.end < PHRASE_PAUSE && !played(words[end + 1]!) && words[end + 1]!.start >= to - 0.02) {
+      end += 1;
+      after.push(trim(words[end]!.text));
+    }
+    if (after.length > 0) found.push({ phrase: [lastIn + 1, end], pause: words[lastIn + 1]!.start - words[lastIn]!.end, issue: { kind: "narration_cut_off", clip: clip.id, at: clipEnd(clip), side: "out", words: after.join(" "), word_ends: round(words[end]!.end * 100) / 100,
+      fix: "extend_clip (no arguments) plays the voice-over on through them, moving what follows" } });
+  }
+  // A phrase lost between two lines belongs to the one it runs into with the shorter pause, never both (it'd be heard twice).
+  for (const one of found) {
+    const rival = found.find((other) => other !== one && other.issue.clip !== one.issue.clip && other.phrase[0] <= one.phrase[1] && one.phrase[0] <= other.phrase[1]);
+    if (rival === undefined || one.pause < rival.pause || (one.pause === rival.pause && one.issue.side === "in")) issues.push(one.issue);
+  }
+  return issues;
+}
+
 /** Words the house style leaves unsubtitled (throwaway sounds). */
 const FILLER = new Set(["um", "uh", "umm", "uhh", "mm", "hmm", "mhm", "mmhmm", "uhhuh", "ah", "oh", "er", "so", "like", "huh"]);
 

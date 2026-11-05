@@ -534,10 +534,16 @@ async function cutAt(source: string, preview: [string, string] | null, window: W
     command.push(...audio, "-movflags", "+faststart", out);
     let stderr: string;
     let code: number;
+    // A hung ffmpeg would hold a CUTS slot forever: killed after 2 min and the window's own length
+    // (a window read from the cloud comes at about real time at worst).
+    const limitMs = 120_000 + Math.max(window.end - window.start, 0) * 1000;
+    let killed = false;
     try {
       const child = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-      // A hung ffmpeg would hold a CUTS slot forever: kill it after 2 min.
-      const timer = setTimeout(() => child.kill("SIGKILL"), 120_000);
+      const timer = setTimeout(() => {
+        killed = true;
+        child.kill("SIGKILL");
+      }, limitMs);
       timer.unref?.();
       try {
         [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
@@ -547,7 +553,9 @@ async function cutAt(source: string, preview: [string, string] | null, window: W
     } catch (error) {
       throw new Error(`ffmpeg: ${diag.messageOf(error)}`);
     }
-    if (code !== 0) throw new Error(`couldn't cut the window: ${trim(stderr)}`);
+    // Killed, FFmpeg says nothing: the log read "couldn't cut the window: " (JJ's Mac, Nov 5).
+    if (killed) throw new Error(`couldn't cut the window: FFmpeg took over ${Math.round(limitMs / 60_000)} min and was stopped`);
+    if (code !== 0) throw new Error(`couldn't cut the window: ${trim(stderr) || `FFmpeg failed (exit ${code})`}`);
     let size: number;
     try {
       size = fs.statSync(out).size;

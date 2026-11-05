@@ -274,3 +274,11 @@ test("a B-roll import in flight is background work wait knows about", async () =
   progress.end("import", "p-wait", "1");
   expect(progress.summary("p-wait", ["import"])).toBeNull();
 });
+
+test("a YouTube range whose download came back a little short, or whose video ends first, imports what's there", async () => {
+  const { excerptFor } = await import("../src/commentary_sources.ts");
+  expect(excerptFor([{ from: 0, to: 22.93 }], { start: 0 })).toBe(0);
+  expect(excerptFor([{ from: 0, to: 30 }, { from: 0, to: 95.4 }], { start: 0 })).toBe(1);
+  expect(excerptFor([{ from: 10, to: 40 }], { start: 0 })).toBe(-1);
+  expect(excerptFor([{ from: 0, to: 0.3 }], { start: 0 })).toBe(-1);
+});

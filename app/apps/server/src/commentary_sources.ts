@@ -102,6 +102,11 @@ function knownChannel(app: App, project: string, id: string): { channel: unknown
   return null;
 }
 
+/** The excerpt holding a range's start that reaches furthest, else -1 (one a little short of the asked end still serves). */
+export function excerptFor(cut: { from: number; to: number }[], pick: { start: number }): number {
+  return cut.reduce((best, e, i) => (e.from <= pick.start + 0.05 && e.to > pick.start + 0.5 && (best < 0 || e.to > cut[best]!.to) ? i : best), -1);
+}
+
 function keep(app: App, project: string, key: string, value: unknown): void {
   const path = join(app.store.home, "research", project, "broll.json");
   fs.mkdirSync(parent(path)!, { recursive: true });
@@ -233,10 +238,15 @@ registerTool("import_broll", async ({ app, args, projectId }) => {
       const [, ids, errors] = await importMade(app, projectId, cut.flatMap((e) => e.cloud === null ? [] : [e.cloud]), false, "agent");
       if (errors.length > 0) throw new Error(errors.join("; "));
       for (const pick of picks) {
-        const index = cut.findIndex((e) => e.from <= pick.start && e.to >= pick.end - 0.05);
+        // The excerpt holding the range's start, reaching furthest. A download
+        // a little short of the asked end, or a video ending before it (v2's
+        // ranges from 0 all failed this way, Nov 5), gives what's there.
+        const index = excerptFor(cut, pick);
         const excerpt = cut[index]; const media = ids[index];
-        if (excerpt === undefined || media === undefined) throw new Error("the imported excerpt did not cover its requested source range");
-        const found = { ...pick, media, source_in: pick.start - excerpt.from, source_offset: excerpt.from, duration: pick.end - pick.start, verified: false };
+        if (excerpt === undefined || media === undefined) throw new Error(`nothing of ${pick.start}–${pick.end} s came down (the video may be shorter): read_broll_source for its length`);
+        const end = Math.min(pick.end, excerpt.to); const from = Math.max(pick.start, excerpt.from);
+        const found = { ...pick, end, media, source_in: from - excerpt.from, source_offset: excerpt.from, duration: end - from, verified: false,
+          ...(end < pick.end - 0.05 ? { short: `it ends at ${end.toFixed(2)} s, not ${pick.end} s` } : {}) };
         keep(app, projectId, `range:${id}:${pick.start}:${pick.end}`, found);
         results.push(found);
       }

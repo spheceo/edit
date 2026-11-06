@@ -159,7 +159,8 @@ test("implement the feedback: the team's notes go to the agent, are fixed with w
     const end = Date.now() + 5_000;
     while (db.rows[1]!.status !== "queued" && Date.now() < end) await Bun.sleep(20);
     expect(db.rows[1]!.status).toBe("queued");
-    expect(db.paths.some((path) => path.startsWith("reviews:"))).toBe(false);
+    // Only asked whether a review was shared from another Mac (reviews.adopt): nothing claimed or shared.
+    expect(db.paths.filter((path) => path.startsWith("reviews:") && path !== "reviews:open")).toEqual([]);
   } finally {
     cleanup();
   }

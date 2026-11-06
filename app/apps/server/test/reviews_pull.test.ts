@@ -140,3 +140,39 @@ test("a project never shared for review has nothing to pull", async () => {
     cleanup();
   }
 });
+
+// Sphe, Nov 6: JJ's reviews were shared from Mathias's Mac; on Sphe's they
+// couldn't be pulled ("This project hasn't been shared for review").
+test("a review shared from another Mac is taken in from the cloud and pulled here", async () => {
+  const { app, home, cleanup } = fixtureHome("pull-other-mac");
+  const live = app.store.createAs("Cops Realize", "interrogation", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  let running = true;
+  (app as unknown as { agents: unknown }).agents = { chat: () => ({ running }), send: async () => {} };
+  try {
+    const note = { noteId: "n1", reviewId: "r9", sourceId: id, parentId: null, anchor: { kind: "time", ms: 45_000 }, status: "open", fromApp: false, version: 2, author: "JJ", text: "audio in both ears", createdAt: 1, updatedAt: 1 };
+    convex({
+      "reviews:changes": () => ({ notes: [note], cursor: 1, more: false }),
+      "reviews:open": () => [{ sourceId: id, reviewId: "r9", url: "https://feedback.test/r/other", approved: null }],
+      "reviews:get": () => ({ versions: [
+        { n: 1, meta: { timeline: "t1", fps: 30, durationMs: 60_000, clipMap: [["c1", 0, 900]] } },
+        { n: 2, meta: { timeline: "t2", fps: 30, durationMs: 61_000, clipMap: [["c1", 0, 930]] } },
+      ] }),
+      "reviews:claim": (args) => ({ claimed: args.noteIds }),
+    });
+    const message = await reviews.pullFeedback(app, id);
+    expect(message).toContain("[n1]");
+    expect(message).toContain("audio in both ears");
+    const shared = reviews.read(home).shared[id];
+    expect(shared).toMatchObject({ reviewId: "r9", url: "https://feedback.test/r/other" });
+    expect(shared?.versions.map((one) => [one.n, one.timeline, one.path, one.clips.length])).toEqual([[1, "t1", "", 1], [2, "t2", "", 1]]);
+    // v2 has a comment: the fix goes up as v3.
+    expect(reviews.shareReplacesLatest(shared!.versions.length, reviews.onLatest(home, id).length)).toBe(false);
+    await reviews.unfixed(app, id, "n1", "answered");
+    running = false;
+    const end = Date.now() + 5_000;
+    while (Date.now() < end && (await reviews.pullFeedback(app, id).catch((error: Error) => error.message)).includes("being fixed already")) await Bun.sleep(20);
+  } finally {
+    cleanup();
+  }
+});

@@ -1612,6 +1612,8 @@ export async function fixReady(app: App, project: string, reviewId: string, note
   const home = app.store.home;
   const live = app.store.get(project);
   if (live === null) throw new Error("the project isn't on this computer any more");
+  // Shared from another Mac: its versions taken in, so the fix replaces or follows the latest by the rule.
+  await adopt(app, project).catch((error: unknown) => diag.warn("review", `${live.project.name}: taking in its review from the cloud: ${diag.messageOf(error)}`));
   // Asked again after a share failed, with nothing new to fix ("Share v2 again"): straight to the share.
   if (noteIds.length === 0) {
     if (!reshare) throw new Error("there were no notes to fix");
@@ -1654,6 +1656,46 @@ export async function fixReady(app: App, project: string, reviewId: string, note
 }
 
 /**
+ * A review shared from another Mac, taken in here from the cloud (its link and
+ * versions, each version's clip map from its meta; its export isn't here, so
+ * its path is ""), so this Mac fixes and shares it as the one that shared it
+ * does: pull_feedback works, and the fix replaces the latest version or comes
+ * as the next by the same rule. Sphe, Nov 6: four of JJ's reviews, shared from
+ * Mathias's Mac, couldn't be pulled on this one ("This project hasn't been
+ * shared for review"). Undefined when the project has no review.
+ */
+export async function adopt(app: App, projectId: string): Promise<Shared | undefined> {
+  const home = app.store.home;
+  const have = read(home).shared[projectId];
+  if (have !== undefined) return have;
+  const rows = (await cloud.query("reviews:open", {})) as { sourceId?: string; reviewId?: string; url?: string; approved?: Shared["approved"] }[];
+  const row = (Array.isArray(rows) ? rows : []).find((one) => one.sourceId === projectId);
+  if (row === undefined || typeof row.reviewId !== "string" || typeof row.url !== "string") return undefined;
+  const review = (await cloud.query("reviews:get", { sourceId: projectId })) as { versions?: { n?: unknown; deleted?: unknown; meta?: Record<string, unknown> | null }[] } | null;
+  const live = app.store.get(projectId);
+  const fallbackFps = live === null ? 30 : fpsOf(live.project);
+  const versions: Version[] = [];
+  for (const one of review?.versions ?? []) {
+    if (typeof one.n !== "number" || one.deleted === true) continue;
+    const meta = one.meta ?? {};
+    versions.push({
+      n: one.n,
+      timeline: typeof meta.timeline === "string" ? meta.timeline : "",
+      path: "",
+      fps: typeof meta.fps === "number" ? meta.fps : fallbackFps,
+      durationMs: typeof meta.durationMs === "number" ? meta.durationMs : 0,
+      clips: Array.isArray(meta.clipMap) ? (meta.clipMap as [string, number, number][]) : [],
+    });
+  }
+  const shared: Shared = { reviewId: row.reviewId, url: row.url, versions, approved: row.approved ?? null };
+  update(home, (state) => {
+    state.shared[projectId] ??= shared;
+  });
+  diag.info("review", `${projectId}: its review (${row.url}, v${versions.map((one) => one.n).join(", v")}) was shared from another Mac: taken in here`);
+  return read(home).shared[projectId];
+}
+
+/**
  * The feedback, pulled now because the team asked in the chat ("implement the
  * new feedback"; Sphe, Nov 2: feedback sat on feedback.spheceo.com and there
  * was no way to just tell the agent to pull it): the team's own notes left in
@@ -1675,7 +1717,7 @@ export async function pullFeedback(app: App, projectId: string, again = false): 
   const said: string[] = [];
   // The team's own notes first: they don't wait on the review.
   const own = await editNotes.take(app, projectId, again);
-  const shared = read(home).shared[projectId];
+  const shared = read(home).shared[projectId] ?? (await adopt(app, projectId));
   let mine: Note[] = [];
   let taken = 0;
   let before = timelineHash(live.project);

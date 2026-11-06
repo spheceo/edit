@@ -17,7 +17,7 @@ import { CardTableRow, IdeaTableRow, ideaStage, NewIdea, NoIdeas, useIdeasHome }
 import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
-import { useGrants } from "../writer/can";
+import { CAN, useGrants } from "../writer/can";
 import type { Kind } from "../writer/types";
 import { useKept } from "../lib/kept";
 import { askExportFolder } from "./ExportFolder";
@@ -1919,6 +1919,7 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
   const account = useAccount((state) => state.account);
   const allowed = editStyles(account);
   const writes = writesScripts(account);
+  const grants = useGrants();
   const [title, setTitle] = useState("");
   const [mode, setMode] = useState<"write" | "edit">(writes ? "write" : "edit");
   const [text, setText] = useState("");
@@ -1935,7 +1936,13 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
   const input = text.trim();
   const links = input.match(LINK) ?? [];
   const writing = mode === "write";
-  const styles = STYLES.filter((option) => (writing ? option.value === "commentary" || WRITER_KIND[option.value] !== undefined : allowed === null || allowed.has(option.value)));
+  // Only the kinds this person may write or edit, as the server allows them.
+  const writable = (style: Style): boolean => {
+    if (style === "commentary") return grants.has(CAN.commentary);
+    const kind = WRITER_KIND[style];
+    return kind !== undefined && (grants.singleKinds.includes(kind) || grants.compilationKinds.includes(kind));
+  };
+  const styles = STYLES.filter((option) => (writing ? writable(option.value) : allowed === null || allowed.has(option.value)));
   const kind = styles.some((option) => option.value === style) ? style : (styles[0]?.value ?? "bodycam");
   const commentary = writing && kind === "commentary";
 

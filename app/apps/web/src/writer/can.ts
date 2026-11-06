@@ -47,13 +47,13 @@ export function grantsOf(perms: string[], admin: boolean): Grants {
 
 /**
  * The signed-in person's grants (none until the account is known). As the
- * server's kinds.ts reads them: an admin, or a token from before the kinds
- * (no dotted id), may do everything.
+ * server's kinds.ts reads them: an admin may do everything; anyone else only
+ * their kinds (`use` alone opens nothing).
  */
 export function useGrants(): Grants {
   const account = useAccount((state) => state.account);
   if (account === null || account.person === null) return grantsOf([], false);
-  return grantsOf(account.perms, account.admin || !account.perms.some((perm) => perm.includes(".")));
+  return grantsOf(account.perms, account.admin);
 }
 
 /** The kind of work a script is, as can.rs names it. */

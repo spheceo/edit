@@ -15,11 +15,10 @@ export function useAccount(): readonly [AccountStatus | null, (next: AccountStat
     if (account === null) void loadAccount();
   }, [account]);
   if (account === null) return [null, () => {}] as const;
-  const legacy = !account.perms.some((perm) => perm.includes("."));
   const status: AccountStatus = {
     signedIn: account.signed_in,
     person: account.person
-      ? { sub: account.person.email, email: account.person.email, name: account.person.name, image: account.person.image, perms: account.perms, admin: account.admin || legacy }
+      ? { sub: account.person.email, email: account.person.email, name: account.person.name, image: account.person.image, perms: account.perms, admin: account.admin }
       : null,
     signingIn: account.signing_in,
     signInUrl: null,

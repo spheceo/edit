@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, noteIdOf, posterSecond, read, restoreArchived, shareable, waiting, type Note, type Version } from "../src/reviews.ts";
+import { boxStills, changes, clearOthers, fixMessage, frameNow, fullKeyOf, givenUp, heard, MAX_ATTEMPTS, noteIdOf, posterSecond, putOff, read, restoreArchived, shareable, waiting, type Note, type Version } from "../src/reviews.ts";
 import { insertTime } from "../src/project.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import * as tools from "../src/tools.ts";
@@ -219,4 +219,24 @@ test("an agent's note id: a start only one note has, and a reply, both mean the 
   expect(noteIdOf(home, "p1", "s575epqw")).toBe("s57parent0000000000000000000000");
   // Too short to say which: left as given (the review then says there's no such note).
   expect(noteIdOf(home, "p1", "s575")).toBe("s575");
+});
+
+test("feedback_unfixed takes a note that can't be done, never one the turn didn't get to", () => {
+  // Nov 6, JJ's four reviews: 69 of 110 notes left like these, so none went back to the agent.
+  for (const reason of [
+    "Not done: Michael's image timing not yet adjusted.",
+    "Not done: map clip c1079 still stops early.",
+    "Not done: Edit's tools dropped out mid-turn and the rebuild wasn't reached.",
+    "Not changed this turn: the subtitle wording still needs editing.",
+    "Could not find which lines: the edit tools timed out while I was scanning the subtitles.",
+    "Not checked this turn: the volume still needs listening to.",
+  ])
+    expect(putOff(reason)).toBe(true);
+  for (const reason of [
+    "Conflicts with other notes on the intro (17, 8 and 42), so the intro is kept as those notes asked.",
+    "Not sure what to improve on this pause (timing, wording or look?), so it's left as it is. Please say what's off.",
+    "There's no photo of Krista and Bart in the project, and image search isn't available while fixing review notes.",
+    "The provided Drive URL was rejected by import_media; the patrol-car source is not in the project.",
+  ])
+    expect(putOff(reason)).toBe(false);
 });

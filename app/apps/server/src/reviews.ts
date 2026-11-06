@@ -2028,6 +2028,8 @@ export async function shareFixes(app: App, project: string, reviewId: string | n
     update(home, (state) => {
       state.unshared = { ...state.unshared, [project]: true };
     });
+    // Said here too: the page's message alone left the log silent (Nov 6, four shares failed with nothing logged).
+    diag.warn("review", `${name}: Ready for changes: sharing v${next} failed: ${diag.messageOf(error)}`);
     await progress(reviewId, { state: "failed", error: `The fixes are in, but sharing v${next} failed: ${diag.messageOf(error)}` });
   } finally {
     clearInterval(ticker);
@@ -2154,10 +2156,28 @@ registerTool("feedback_done", async ({ app, args, projectId }: ToolCall) => {
   );
 });
 
+/**
+ * A reason that says the note wasn't got to, not that it can't be done ("Not
+ * done: zoom-out freeze not yet fixed", "not reached this turn"). Nov 6, JJ's
+ * four reviews on Sphe's Mac: the agents fixed 41 of 110 notes and left the
+ * other 69 with feedback_unfixed reasons like these. An unfixed note counts as
+ * answered, so none went back to them and the round would have shared with
+ * most of the notes untouched.
+ */
+export function putOff(reason: string): boolean {
+  return /^\W*not (done|changed|checked|fixed|reached|adjusted)\b|this turn|\bnot (yet|reached)\b|wasn['’]?t reached|\bstill (needs?|to (do|be)|open)\b|didn['’]?t get to|ran out of|next turn|for later|\btimed? ?out\b|dropped out|needs? doing/i.test(reason);
+}
+
 registerTool("feedback_unfixed", async ({ app, args, projectId }: ToolCall) => {
   const note = str(args.note);
   const given = str(args.reason);
   if (note === null || given === null) throw new Error("note (its id) and reason are required");
+  if (putOff(given)) {
+    throw new Error(
+      "that reason says the note isn't done yet, not that it can't be done: fix it now, in this turn, and call feedback_done. " +
+        "feedback_unfixed is only for a note that can't or shouldn't be done in this video (say what stops it: no such footage, the reviewer must choose, it would break another note). A tool that failed: call it again.",
+    );
+  }
   const own = editNotes.idOf(note);
   if (own !== null) {
     await editNotes.left(app, projectId, own, given.slice(0, 1900));

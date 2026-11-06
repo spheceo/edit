@@ -73,6 +73,27 @@ v2 was shared from prod Edit (14:41): https://feedback.spheceo.com/r/c8ydd2_h4Ar
 
 v2, corrected, is at the same link (14:45).
 
+## Round 4 (Nov 6): the team's 22 timed notes on v2
+
+32. **What the notes asked of the product** (25b36291):
+    - **Instagram:** capture_evidence takes Instagram's sign-in wall off, so profiles and posts come through whole, and `full_page` with `scroll` glides a card down them.
+    - **Markers:** blur_marks no longer treats our own highlighter ink as another channel's mark.
+    - **Words:** they come up a short phrase at a time, typed and big. Titles are white. Words sit above pictures.
+    - **9:16 videos:** shown whole over their blurred copy instead of zoomed to fill.
+    - **XP desktop:** the picture window is Paint, and the Notepad is measured in the font it types in.
+    - **Audits:** a graphic arriving over a post's own sound, words across a cut, and words left up alone too long.
+33. **The script's comments were the links the lines needed** (the 2:30 study, the posts at 4:44 and 6:45). The paste had lost them. Pulled from the Doc and given to the agent with the notes.
+34. **The agent stopped halfway, four turns running**, each ending with a "Still open" list. Three causes:
+    - **Restarts:** other sessions' saves in the shared checkout restarted the dev server mid-turn. The runner read a slow `/api/health` as idle, and didn't count a cut turn waiting to resume, or Edit's own follow-up in the second before it starts. All three now hold the restart (e4fb4dd4, 32289d82).
+    - **No follow-up on chat:** a review's notes were sent back when a turn skipped them; notes typed into the chat weren't. Now a turn that ends listing what it didn't get to is sent back, while each pass leaves fewer (d4b773db).
+    - **A misread heading:** the first version read "Done this turn" as not done (b06debb2).
+35. **X answered capture_evidence with a 403**, because it refuses a HeadlessChrome user agent, so the study (an X post) never came through. Captures now present Chrome's own user agent (a82526ce).
+36. **"14:11 + 14:38 - Here it blurs the whole text to highlight":** blur_marks laid about 13 blurs over each captured page: the headline, byline, nav and caption. A page capture_evidence took, and its retro copy, is now never blurred for marks; a still of footage still is (9f63307d).
+37. **"8:07 + 9:10 - The text is behind the image":** the agent first read this backwards. Then it laid profiles over the old picture cards, two up at once. The audit now flags `horror_cards_stacked`, and the skills say a profile replaces the card it's laid over and a marker goes on words, never a profile's photos (0adb84f7).
+38. **My own slip:** the dev server's env file is bash-only, and sourcing it from zsh left `EDIT_HOME` unset. A server briefly pointed at prod's data before the lock refused it.
+
+Another session's nightly-60 held port 7700 and prod's data, so this round ran on a dev server on 7701 (web 5174). v2's fix was shared from that prod Edit to the same link (14:37).
+
 ## Not fixable here
 
 - **Five of the 22 posts can't be had without an Instagram sign-in:**

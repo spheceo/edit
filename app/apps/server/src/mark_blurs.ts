@@ -248,7 +248,7 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
     // lay over the sharp card above (N3on v1's band across the card at 0:50).
     if (BLURRED_ALREADY.test(clip.name ?? "") || OURS.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
-    if (media === undefined || ours.has(media.id) || !watermarks.looksForMarks(media)) continue;
+    if (media === undefined || ours.has(media.id) || !watermarks.looksForMarks(media) || watermarks.captured(project, media)) continue;
     // A photo in one of our windows is never patched with a blur: it reads as a
     // smudge on the window (Jones JJ, Helpful Son, Oct 31: "We need to remove the
     // blur on the top left of this file view"; "Remove the blur on the top of the

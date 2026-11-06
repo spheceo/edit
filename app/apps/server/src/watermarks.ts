@@ -183,6 +183,20 @@ export function ours(project: Project): Set<string> {
   return reusedMedia(project);
 }
 
+/**
+ * A page capture_evidence took (an article, a post, a profile), or the retro copy a card shows of one: the page is
+ * what the video shows, its outlet's name and its words included, never another channel's mark to hide (Nov 6, the
+ * horror edit's news and Instagram cards: blur_marks laid 13 blurs over a page, its headline and byline among them,
+ * "Here it blurs the whole text to highlight").
+ */
+export function captured(project: Project, media: Media): boolean {
+  if (media.kind !== "image") return false;
+  if (/[/\\]captures[/\\]source-\d+\.png$/u.test(media.path)) return true;
+  const original = /^retro-(m\d+)-\d+x\d+\./u.exec(media.name)?.[1];
+  const from = original === undefined ? undefined : project.media.find((one) => one.id === original);
+  return from !== undefined && from !== media && captured(project, from);
+}
+
 /** Whether a media is one marks are looked for on: found photos and footage, not Edit's own pictures. */
 export function looksForMarks(media: Media): boolean {
   // The commentary brand kit (search_broll's): the bumper's own Subscribe button was blurred as another channel's call to action.
@@ -261,7 +275,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
     if (/^(Cut-in \d+ · )?(Horror · |Janitor · evidence marker)/u.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
     // Found photos and footage only: Edit's own pictures (desktop windows, wallpaper, frames) carry no one's mark.
-    if (media === undefined || ours.has(media.id)) continue;
+    if (media === undefined || ours.has(media.id) || captured(project, media)) continue;
     const footage = isFootage(media);
     if (!footage && (media.kind !== "image" || /^(desktop|map|frame|board|paper|ink|post|icon|wallpaper)-/u.test(media.name))) continue;
     const marks = marksOf(project, media);

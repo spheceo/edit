@@ -131,3 +131,19 @@ test("the commentary brand kit is never looked at for another outlet's marks", a
   expect(looksForMarks({ ...media("l"), name: "light-leak-c8525c4032a9.mp4" })).toBe(false);
   expect(looksForMarks(image("thumbnail.jpg"))).toBe(true);
 });
+
+test("a page capture_evidence took, and the retro copy a card shows, is never blurred for marks; a still of footage is (Nov 6)", async () => {
+  const { captured } = await import("../src/watermarks.ts");
+  const p = project();
+  const image = (id: string, name: string, path: string): Media => ({ ...media(id), name, path, kind: "image" });
+  const page = image("m10", "source-1793863813328.png", "/Users/x/.edit/research/p1/captures/source-1793863813328.png");
+  const card = image("m11", "retro-m10-1920x1400.png", "/Users/x/.edit/graphics/horror/p1-retro-m10-1920x1400.png");
+  const still = image("m12", "frame-of-a-video.png", "/Users/x/Movies/frame.png");
+  const stillCard = image("m13", "retro-m12-1920x1080.png", "/Users/x/.edit/graphics/horror/p1-retro-m12-1920x1080.png");
+  p.media.push(page, card, still, stillCard);
+  expect(captured(p, page)).toBe(true);
+  expect(captured(p, card)).toBe(true);
+  expect(captured(p, still)).toBe(false);
+  expect(captured(p, stillCard)).toBe(false);
+  expect(captured(p, p.media[0]!)).toBe(false);
+});

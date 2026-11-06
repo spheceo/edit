@@ -172,6 +172,28 @@ function writeJson(path: string, value: unknown): void {
 
 const loadLedger = (data: string): Ledger => readJson<Ledger>(ledgerPath(data), { scripts: {} });
 
+/**
+ * The ledger to look in, never to change: parsed again only when its file
+ * has changed (inode, size, mtime in ns). Each lookup parsed the whole file
+ * (Nov 7, Sphe's Mac: 2.6 MB, looked up per script by Home's routes), and
+ * with Edit's other state it held the server 7–20 s at a time.
+ */
+let seen: { path: string; stamp: string; ledger: Ledger } | null = null;
+function ledgerNow(data: string): Ledger {
+  const path = ledgerPath(data);
+  let stamp = "none";
+  try {
+    const stats = fs.statSync(path, { bigint: true });
+    stamp = `${stats.ino}:${stats.size}:${stats.mtimeNs}`;
+  } catch {
+    return { scripts: {} };
+  }
+  if (seen !== null && seen.path === path && seen.stamp === stamp) return seen.ledger;
+  const ledger = loadLedger(data);
+  seen = { path, stamp, ledger };
+  return ledger;
+}
+
 /** Footage cleared from this Mac once the cloud held it, or left there by a pull, by script: still the script's files in the cloud. */
 const storagePath = (data: string) => join(data, "cloud", "storage.json");
 export const purgedNames = (data: string, id: string): string[] => readJson<Record<string, string[]>>(storagePath(data), {})[id] ?? [];
@@ -202,10 +224,10 @@ export function deleted(data: string, id: string): void {
 }
 
 /** The cloud's rev of this script, as this Mac last saw it; null if it never reached the cloud. */
-export const revOf = (data: string, id: string): number | null => loadLedger(data).scripts[id]?.rev ?? null;
+export const revOf = (data: string, id: string): number | null => ledgerNow(data).scripts[id]?.rev ?? null;
 
 /** A script file's key and size in the cloud, as this Mac last synced it. */
-export const fileKey = (data: string, id: string, name: string): Kept | null => loadLedger(data).scripts[id]?.files[name] ?? null;
+export const fileKey = (data: string, id: string, name: string): Kept | null => ledgerNow(data).scripts[id]?.files[name] ?? null;
 
 /**
  * Writer's own record of what each script is in the cloud, taken once when

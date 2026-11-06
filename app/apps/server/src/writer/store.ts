@@ -139,6 +139,41 @@ export function summary(script: Script, dir?: string): Summary {
 }
 
 /** Every script here, newest change first; footage a commentary was written from carries that commentary's title. */
+/**
+ * A script's row and the scripts its commentary uses, read again only when
+ * its script.json or chat.json has changed (inode, size, mtime in ns). Every
+ * list parsed every script (Nov 7, Sphe's Mac: 89 scripts, 217 MB of JSON),
+ * and Home asks for it every few seconds (the scripts and the handoff): with
+ * Edit's other state it held the server 7–20 s at a time.
+ */
+const listedCache = new Map<string, { stamp: string; row: Summary; title: string; sources: string[] }>();
+
+function stampOf(path: string): string {
+  try {
+    const stats = fs.statSync(path, { bigint: true });
+    return `${stats.ino}:${stats.size}:${stats.mtimeNs}`;
+  } catch {
+    return "none";
+  }
+}
+
+function listedIn(dir: string): { row: Summary; title: string; sources: string[] } | null {
+  const stamp = `${stampOf(join(dir, "script.json"))}|${stampOf(join(dir, "chat.json"))}`;
+  const had = listedCache.get(dir);
+  if (had !== undefined && had.stamp === stamp) return had;
+  let script: Script;
+  try {
+    script = read(dir);
+  } catch {
+    listedCache.delete(dir);
+    return null;
+  }
+  const sources = (script.commentary?.sources ?? []).flatMap((source) => (source.origin.startsWith("writer:") ? [source.origin.slice("writer:".length)] : []));
+  const kept = { stamp, row: summary(script, dir), title: script.title, sources };
+  listedCache.set(dir, kept);
+  return kept;
+}
+
 export function list(data: string, archived: (id: string) => Summary["archive"] | undefined = () => undefined): Summary[] {
   const root = scriptsRoot(data);
   fs.mkdirSync(root, { recursive: true });
@@ -146,18 +181,13 @@ export function list(data: string, archived: (id: string) => Summary["archive"] 
   const usedBy = new Map<string, string>();
   for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    let script: Script;
-    try {
-      script = read(join(root, entry.name));
-    } catch {
-      continue;
-    }
-    for (const source of script.commentary?.sources ?? []) {
-      const id = source.origin.startsWith("writer:") ? source.origin.slice("writer:".length) : null;
-      if (id !== null && !usedBy.has(id)) usedBy.set(id, script.title);
-    }
-    const row = summary(script, join(root, entry.name));
-    const archive = archived(script.id);
+    const dir = join(root, entry.name);
+    const listed = listedIn(dir);
+    if (listed === null) continue;
+    for (const id of listed.sources) if (!usedBy.has(id)) usedBy.set(id, listed.title);
+    // A copy: callers add to their rows.
+    const row = { ...listed.row };
+    const archive = archived(row.id);
     if (archive) row.archive = archive;
     rows.push(row);
   }

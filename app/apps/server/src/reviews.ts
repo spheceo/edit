@@ -447,8 +447,10 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
   sharing.set(projectId, "exporting");
   let path: string;
   try {
-    // A map shot still rendering would export as its first frame.
-    await seams.broll.waitForMaps(app, projectId, 60_000).catch((error: unknown) => {
+    // A map shot still rendering would export as its first frame. Waited for as long as slowed shots are: a
+    // minute failed a Ready for changes share whose map had just been started again (Nov 6, Female Police Captain).
+    sharing.set(projectId, "waiting for map shots");
+    await seams.broll.waitForMaps(app, projectId, 20 * 60_000).catch((error: unknown) => {
       if (!seams.isUnavailable(error)) throw error;
     });
     haltShare(projectId);

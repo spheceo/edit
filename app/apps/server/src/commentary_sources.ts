@@ -26,7 +26,7 @@ registerTool("capture_evidence", async ({ app, args, projectId }) => {
   if (typeof args.url !== "string") throw new Error("url is required");
   const dir = join(app.store.home, "research", projectId, "captures"); fs.mkdirSync(dir, { recursive: true });
   const path = join(dir, `source-${Date.now()}.png`);
-  const result = await capture(args.url, path, typeof args.phrase === "string" ? args.phrase : "", typeof args.selector === "string" ? args.selector : "");
+  const result = await capture(args.url, path, typeof args.phrase === "string" ? args.phrase : "", typeof args.selector === "string" ? args.selector : "", args.full_page === true);
   const [, ids, errors] = await importPaths(app, projectId, [path], false, "agent");
   const media = ids[0]; if (media === undefined) throw new Error(errors.join("; "));
   keep(app, projectId, `capture:${media}`, { ...result, media, captured: Date.now() });

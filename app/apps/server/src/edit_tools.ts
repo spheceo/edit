@@ -652,6 +652,7 @@ async function coverCutIn(call: ToolCall): Promise<Content[]> {
     // Horror: tall reels over their own blurred copy, as after a plan.
     horrorLook.fillReels(project);
     horrorLook.mosaicCensors(project);
+    horrorLook.textOnTop(project);
     return covered;
   });
   report.smoothing_started = hooks.smoothInBackground(app, projectId, smooth);

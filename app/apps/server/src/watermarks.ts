@@ -187,7 +187,8 @@ export function ours(project: Project): Set<string> {
 export function looksForMarks(media: Media): boolean {
   // The commentary brand kit (search_broll's): the bumper's own Subscribe button was blurred as another channel's call to action.
   if (/^(background|avatar|subscribe|light-leak|background-motion)-[0-9a-f]{12}\./u.test(media.name)) return false;
-  return isFootage(media) || (media.kind === "image" && !/^(desktop|map|frame|board|paper)-/u.test(media.name));
+  // Edit's own pictures (the highlighter's ink, a post's bars, horror's icons and wallpaper) carry no one's mark.
+  return isFootage(media) || (media.kind === "image" && !/^(desktop|map|frame|board|paper|ink|post|icon|wallpaper)-/u.test(media.name));
 }
 
 /** Starts looking at a media for marks in the background (once at a time per file). */
@@ -255,11 +256,14 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
     if (clip.type !== "video" || trackOf(project, clip.track)?.hidden === true) continue;
     // A video or post shown as its page shows it (commentary_youtube, commentary_tweet): its length and title are the point, not a mark.
     if (/^Janitor · (YouTube|post|bumper|channel|icon)/u.test(clip.name ?? "")) continue;
+    // Edit's own marks on a picture (the highlighter's ink, horror's graphics) are no one else's: v2's red
+    // highlights were taken for "a red rough-edged banner" and blurred off the headlines they marked.
+    if (/^(Cut-in \d+ · )?(Horror · |Janitor · evidence marker)/u.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
     // Found photos and footage only: Edit's own pictures (desktop windows, wallpaper, frames) carry no one's mark.
     if (media === undefined || ours.has(media.id)) continue;
     const footage = isFootage(media);
-    if (!footage && (media.kind !== "image" || /^(desktop|map|frame|board|paper)-/u.test(media.name))) continue;
+    if (!footage && (media.kind !== "image" || /^(desktop|map|frame|board|paper|ink|post|icon|wallpaper)-/u.test(media.name))) continue;
     const marks = marksOf(project, media);
     if (marks === null) {
       if (cacheFile(media) !== null) {

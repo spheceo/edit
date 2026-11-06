@@ -203,9 +203,13 @@ function horrorPage(p: Project, a: Args, m: NonNullable<ReturnType<typeof mediaO
   if (shownH < h * 0.98 && a.backdrop !== false) made.push(push(p, { type: "adjustment", name: "Horror · card backdrop", start, duration: d,
     blur: { radius: 5 * k }, grade: { exposure: -1.05, vignette: 0.45 }, fade_in: 8, fade_out: 8 }));
   const settle = Math.min(20, Math.floor(d / 3)); const push_ = Math.min(Math.max(number(a, "push", 1.06), 1), 1.4);
+  // scroll: the page glides from its top to its bottom, as someone scrolling it (the team, Nov 6: "We should scroll through this instagram profile").
+  const scrolling = a.scroll === true && room > 0;
   const page = push(p, { type: "video", media: m.id, source_in: 0, start, duration: d, name: "Horror · screenshot", fade_in: 6, fade_out: 8,
-    transform: { scale, x, y },
-    keyframes: { y: [...arrival(y + 34 * k, y, settle), key(d - 1, y * push_)], x: [key(0, x), key(d - 1, x * push_)], scale: [key(0, scale), key(d - 1, scale * push_)] } });
+    transform: { scale, x, y: scrolling ? room : y },
+    keyframes: scrolling
+      ? { y: [{ ...key(0, room), handle_out: { speed: 0, influence: 0.35 } }, { ...key(d - 1, -room), handle_in: { speed: 0, influence: 0.35 } }] }
+      : { y: [...arrival(y + 34 * k, y, settle), key(d - 1, y * push_)], x: [key(0, x), key(d - 1, x * push_)], scale: [key(0, scale), key(d - 1, scale * push_)] } });
   made.push(page);
   return { photo: page, clips: made, full: true, ...(m.id !== given ? { shown: m.id, note: "the screenshot's retro copy (same size: highlight rects stay in its original pixels)" } : {}) };
 }

@@ -208,6 +208,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   // Horror: every tall reel shown full frame stands over its own blurred copy (horror_look.ts).
   horrorLook.fillReels(project);
   horrorLook.mosaicCensors(project);
+  horrorLook.textOnTop(project);
   // Text placed or relabelled (a quote, a caption's speaker): one colour per
   // person across the video, as add_subtitles leaves it.
   if (

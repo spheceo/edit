@@ -34,6 +34,8 @@ const FEATHER = 10;
 export const NAME = "Mark blur";
 /** Pictures shown only blurred (a card's backdrop): their marks can't be read. */
 const BLURRED_ALREADY = /card backdrop$/u;
+/** Edit's own marks on a picture: never another channel's (v2's highlights were blurred off their headlines). */
+const OURS = /^(Cut-in \d+ · )?(Horror · (marker|icon)|Janitor · evidence marker)/u;
 /** Our windows' photos (a File Viewer's, a Photo Viewer's, an inset, a Windows screen's). */
 const IN_WINDOW = /^(File Viewer ·|Photo Viewer|Photo inset)|Desktop ·/u;
 
@@ -244,7 +246,7 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
     if (clip.type !== "video" || (only !== null && !only.has(clip.id)) || trackOf(project, clip.track)?.hidden === true) continue;
     // A card's backdrop is its own picture blurred already: a mark's blur on it
     // lay over the sharp card above (N3on v1's band across the card at 0:50).
-    if (BLURRED_ALREADY.test(clip.name ?? "")) continue;
+    if (BLURRED_ALREADY.test(clip.name ?? "") || OURS.test(clip.name ?? "")) continue;
     const media = mediaOf(project, clip.media);
     if (media === undefined || ours.has(media.id) || !watermarks.looksForMarks(media)) continue;
     // A photo in one of our windows is never patched with a blur: it reads as a

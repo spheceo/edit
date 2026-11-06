@@ -235,6 +235,40 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
     if (shown > 0 && stockFrames / shown > 0.25) out.push({ kind: "horror_stock_heavy", start: stockish[0]!.start, share: Math.round((stockFrames / shown) * 100) / 100,
       sources: [...new Set(stockish.map((c) => mediaOf(p, c.media)?.name))].slice(0, 8),
       fix: `${Math.round((stockFrames / shown) * 100)}% of the B-roll is stock: the guide wants the story's own footage for 75–90% (the post itself, the account, the people, the place, the news); keep stock for wide establishing shots, matching the era (no modern phones in an older story)` });
+    // The team's notes on v2 (Nov 6), as checks.
+    const narr = live.filter((c) => c.type === "audio" && ((c.name ?? "").startsWith("Voice-over") || (p.script?.blocks ?? []).some((b) => b.kind === "narration" && b.voiceover === c.id)));
+    const source = live.filter((c) => c.type === "audio" && !trackOf(p, c.track)?.muted && mediaOf(p, c.media)?.kind === "video");
+    const speaking = (frame: number) => narr.some((c) => c.start <= frame && clipEnd(c) > frame);
+    const sourceSound = (frame: number) => source.some((c) => c.start <= frame && clipEnd(c) > frame && (c as { volume_db?: number }).volume_db !== undefined && ((c as { volume_db: number }).volume_db > -30));
+    const graphic = /^(Cut-in \d+ · )?Horror · (picture|screenshot|card backdrop|.* title|title line|profile lines|icon|icon word)$/u;
+    const arriving = live.filter((c) => graphic.test(c.name ?? "") && c.name !== "Horror · title backdrop");
+    // "Animation appears while b-roll is still playing, we haven't switched to our voice over yet."
+    const early = new Set<number>();
+    for (const c of arriving) {
+      if (early.has(c.start) || speaking(c.start) || !sourceSound(c.start)) continue;
+      const voiceAt = narr.filter((v) => v.start > c.start).sort((x, y) => x.start - y.start)[0]?.start;
+      early.add(c.start);
+      out.push({ kind: "horror_graphic_over_source", clip: c.id, start: c.start, ...(voiceAt === undefined ? {} : { narration_starts: voiceAt }),
+        fix: "it arrives while a post still plays its own sound: start it with the narration that's about it (narration_starts), not before" });
+    }
+    // "We switch the background while our text is still visible, makes it look unpolished."
+    const stack = new Map(p.tracks.map((t, i) => [t.id, i]));
+    const shots = live.filter((c) => c.type === "video" && !/^(Cut-in \d+ · )?(Horror|Desktop|Janitor) · |backdrop/u.test(c.name ?? ""));
+    const topAt = (frame: number) => shots.filter((c) => c.start <= frame && clipEnd(c) > frame).sort((x, y) => (stack.get(y.track) ?? 0) - (stack.get(x.track) ?? 0))[0]?.id ?? null;
+    for (const c of live) {
+      if (c.type !== "text" || !/Horror · .* title$/u.test(c.name ?? "") || c.duration < 12) continue;
+      const first = topAt(c.start + 2);
+      const cut = Array.from({ length: Math.floor((c.duration - 6) / 3) }, (_, i) => c.start + 4 + i * 3).find((f) => topAt(f) !== first);
+      if (cut !== undefined) out.push({ kind: "horror_text_across_cut", clip: c.id, start: c.start, cut_near: cut, text: (c as { text?: string }).text,
+        fix: "the picture under the words changes while they're up: end the words before the cut, or start them on the new shot" });
+    }
+    // "By now it's getting boring for viewers because they see the text for 20s+."
+    for (const c of live) {
+      const desk = /Desktop · wallpaper$/u.test(c.name ?? "");
+      const words = c.type === "text" && /Horror · (.* title|profile lines)$/u.test(c.name ?? "");
+      if ((desk && c.duration > 12 * fps) || (words && c.duration > 8 * fps)) out.push({ kind: "horror_text_long", clip: c.id, start: c.start, seconds: Math.round(c.duration / fps),
+        fix: desk ? "a Notepad (or any window) held this long is just words: open a picture or a video beside it (the person's photo in a Paint window, the post itself), or end it sooner" : "words alone this long: give the line a picture (the post, the page, the person) and keep the words short" });
+    }
     const bare = bareSpans.reduce((n, [a, b]) => n + b - a, 0);
     if (bare > p.settings.fps) {
       const at = bareSpans[0]?.[0] ?? 0;

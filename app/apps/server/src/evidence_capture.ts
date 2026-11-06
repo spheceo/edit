@@ -6,7 +6,42 @@ import { join } from "./paths.ts";
 import * as seams from "./seams.ts";
 
 export interface Capture { url: string; title: string; width: number; height: number; path: string; }
-export async function capture(url: string, path: string, phrase = "", selector = ""): Promise<Capture> {
+/**
+ * Takes a sign-in or cookie wall off the page as loaded (a dialog, or a fixed
+ * panel over most of it, saying "Log in", "Sign up", "See photos…") and lets
+ * it scroll again. What's under it is the real page: Instagram shows a
+ * profile's bio, counts and grid, and a post with its caption, under its
+ * "See photos, videos and more" dialog (v2, Nov 6: every profile capture was
+ * that dialog, so the edit showed b-roll where "we should show his instagram
+ * profile").
+ */
+export const UNWALL = `(() => {
+  const walls = /log in|sign up|see photos|see more from|continue with|sign in|accept all|allow all|cookies|create new account/i;
+  const area = innerWidth * innerHeight;
+  const covering = (el) => { const r = el.getBoundingClientRect(); return r.width * r.height > area * 0.15; };
+  let removed = 0;
+  for (const el of [...document.querySelectorAll('[role="dialog"], [aria-modal="true"]')]) {
+    const said = el.innerText || '';
+    if (!walls.test(said) || said.length > 400) continue;
+    let top = el;
+    while (top.parentElement && top.parentElement !== document.body && getComputedStyle(top.parentElement).position === 'fixed') top = top.parentElement;
+    top.remove(); removed++;
+  }
+  for (const el of [...document.querySelectorAll('body *')]) {
+    const style = getComputedStyle(el);
+    if (style.position !== 'fixed' && style.position !== 'sticky') continue;
+    const text = el.innerText || '';
+    const r = el.getBoundingClientRect();
+    // The page itself pinned in place while a wall is up (Instagram's profile, its top bar saying "Log In"): let go, never removed.
+    if (text.length > 400) { el.style.setProperty('position', 'relative', 'important'); continue; }
+    // A wall (a few words), or the dimmed backdrop behind one (most of the screen, next to no words of its own).
+    if ((covering(el) && walls.test(text)) || (r.width * r.height > area * 0.6 && text.trim().length < 40)) { el.remove(); removed++; }
+  }
+  for (const el of [document.documentElement, document.body]) { el.style.setProperty('overflow', 'auto', 'important'); el.style.setProperty('position', 'static', 'important'); }
+  return removed;
+})()`;
+
+export async function capture(url: string, path: string, phrase = "", selector = "", fullPage = false): Promise<Capture> {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error("capture needs a public https source URL");
   const browser = seams.broll.chrome(); if (browser === null) throw new Error("evidence capture needs Chrome installed");
@@ -56,6 +91,8 @@ export async function capture(url: string, path: string, phrase = "", selector =
     if (navigation.errorText) throw new Error(`the source page did not load: ${String(navigation.errorText)}`);
     await ready; if (readyTimer !== null) clearTimeout(readyTimer);
     await Bun.sleep(1500);
+    await call("Runtime.evaluate", { expression: UNWALL, returnByValue: true });
+    await Bun.sleep(300);
     const result = await call("Runtime.evaluate", { awaitPromise: true, expression: `(async () => {
       const phrase = ${JSON.stringify(phrase)}; const selector = ${JSON.stringify(selector)};
       let element = null;
@@ -82,10 +119,19 @@ export async function capture(url: string, path: string, phrase = "", selector =
     await Bun.sleep(500);
     const rect = data.rect as { x: number; y: number; width: number; height: number } | null;
     if (rect && (rect.width < 20 || rect.height < 20)) throw new Error("the source element is outside the capture viewport");
-    const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, ...(rect ? { clip: { ...rect, scale: 1 } } : {}) });
+    // The whole page (a profile to scroll through), down to 4200 px: its later walls taken off as they load.
+    let whole: { x: number; y: number; width: number; height: number } | null = null;
+    if (fullPage && rect === null) {
+      await call("Runtime.evaluate", { awaitPromise: true, expression: `(async () => { for (let y = 0; y < 4200; y += 700) { scrollTo(0, y); await new Promise(r => setTimeout(r, 350)); } scrollTo(0, 0); await new Promise(r => setTimeout(r, 500)); })()` });
+      await call("Runtime.evaluate", { expression: UNWALL, returnByValue: true });
+      const size = await call("Runtime.evaluate", { expression: "Math.min(document.documentElement.scrollHeight, 4200)", returnByValue: true });
+      const height = Number((size.result as { value?: number } | undefined)?.value ?? 1400);
+      whole = { x: 0, y: 0, width: 1920, height: Math.max(1400, Math.round(height)) };
+    }
+    const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: whole !== null, ...(whole ? { clip: { ...whole, scale: 1 } } : rect ? { clip: { ...rect, scale: 1 } } : {}) });
     if (typeof shot.data !== "string") throw new Error("Chrome returned no screenshot");
     fs.writeFileSync(path, Buffer.from(shot.data, "base64"));
-    return { path, url: String(data.url), title: String(data.title), width: rect?.width ?? 1920, height: rect?.height ?? 1400 };
+    return { path, url: String(data.url), title: String(data.title), width: whole?.width ?? rect?.width ?? 1920, height: whole?.height ?? rect?.height ?? 1400 };
   } finally {
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error("capture closed")); }
     socket?.close(); child.kill();

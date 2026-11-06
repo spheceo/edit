@@ -55,7 +55,6 @@ function span(a: Args, what: string): [number, number] {
 }
 
 const WHITE = [1, 1, 1, 1];
-const RED = [0.93, 0.06, 0.06, 1];
 /** Sirius' quote yellow ("he's fine; he's having fun"). */
 const YELLOW = [1, 0.93, 0.12, 1];
 
@@ -131,7 +130,8 @@ export function title(p: Project, a: Args, fallback: Look = "bold"): Args {
   const w = p.settings.width; const h = p.settings.height; const k = h / 1080;
   if (typeof a.text !== "string" || a.text.trim() === "") throw new Error("a horror title needs text");
   const kind = lookOf(a.look, fallback);
-  const style: Args = { ...look(kind, h, typeof a.size === "number" ? a.size : null), ...(a.color === "red" ? { color: RED } : a.color === "yellow" ? { color: YELLOW } : {}) };
+  // White: the team (Nov 6), of red titles over footage, "Text should be white, looks cleaner".
+  const style: Args = { ...look(kind, h, typeof a.size === "number" ? a.size : null), ...(a.color === "yellow" ? { color: YELLOW } : {}) };
   // As written: Styks keeps "Bye /R9K/", Nightmare Movies writes "BANNED FROM BROADCAST"; a name tag is always capitals.
   const words = kind === "vhs" ? a.text.trim().toUpperCase() : a.text.trim();
   const [bw, bh] = blockSize(words, style);
@@ -152,7 +152,7 @@ export function title(p: Project, a: Args, fallback: Look = "bold"): Args {
     const at = Array.isArray(a.words_at) ? a.words_at.filter((f): f is number => typeof f === "number") : [];
     const count = words.split(/\s+/u).filter(Boolean).length;
     if (at.length !== count || at.some((f, i) => f < from || f >= end || (i > 0 && f < at[i - 1]!))) throw new Error(`motion "words" needs words_at: one timeline frame per word (${count}), in order, inside the title's frames (the voice's word times from get_edit_context)`);
-    wordTimes = at.map((f) => f - from); animation = { preset: "words", duration: 1, stagger: 1 };
+    return phrases(p, words, at, end, kind, typeof a.size === "number" ? a.size : null, x, y, made);
   }
   const rise = motion === "rise";
   const id = push(p, { type: "text", name: `Horror · ${kind} title`, text: words, start: from, duration: dd, fade_in: rise ? 8 : 0, fade_out: Math.min(9, Math.floor(dd / 4)),
@@ -167,6 +167,40 @@ export function title(p: Project, a: Args, fallback: Look = "bold"): Args {
       keyframes: { y: [...arrival(y - bh / 2 - (subStyle.size as number) * 0.35 + 46 * k, y - bh / 2 - (subStyle.size as number) * 0.35, settle)] } }));
   }
   return { text: id, clips: made, look: kind };
+}
+
+/**
+ * Words on the voice (Animation 9), as Sirius does them: the line in short
+ * phrases ("go to the back of car", "open the door", "lift out 5 year old
+ * son"), each typed on alone at its first word and replacing the last, so
+ * each can be big (the team, Nov 6: "the words should appear like this, one
+ * after another instead of all of them. It allows us to make each word
+ * bigger"). A phrase is up to four words, broken after punctuation first.
+ */
+function phrases(p: Project, words: string, at: number[], end: number, kind: Look, size: number | null, x: number, y: number, made: string[]): Args {
+  const h = p.settings.height;
+  const list = words.split(/\s+/u).filter(Boolean);
+  const groups: number[][] = [];
+  let current: number[] = [];
+  list.forEach((word, i) => {
+    current.push(i);
+    const pause = i + 1 < list.length ? at[i + 1]! - at[i]! : 0;
+    if (current.length >= 4 || /[,.;:!?"”]$/u.test(word) || pause > 18) { groups.push(current); current = []; }
+  });
+  if (current.length > 0) groups.push(current);
+  const style = { ...look(kind, h, size ?? (kind === "caption" ? 72 : null)) };
+  const ids: string[] = [];
+  groups.forEach((group, n) => {
+    const start = at[group[0]!]!;
+    const until = n + 1 < groups.length ? at[groups[n + 1]![0]!]! : end;
+    if (until - start < 2) return;
+    const text = group.map((i) => list[i]).join(" ");
+    const id = push(p, { type: "text", name: `Horror · ${kind} title`, text, start, duration: until - start, fade_out: n + 1 === groups.length ? Math.min(6, Math.floor((until - start) / 3)) : 0,
+      style, transform: { x, y }, animation: { preset: "typewriter", duration: 2, stagger: 0.7 } });
+    ids.push(id);
+  });
+  made.push(...ids);
+  return { text: ids[0] ?? null, clips: made, look: kind, phrases: groups.length };
 }
 
 /** A chapter title (Animation 7): bold over the picture blurred behind it, a small line above when given. */

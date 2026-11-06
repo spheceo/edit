@@ -191,8 +191,11 @@ test("horror's titles take the guide's looks: a chapter over a blur, a date at t
   expect(tagged.style.background).toBeDefined();
   expect(tagged.animation.preset).toBe("typewriter");
   expect(tagged.transform.x).toBeLessThan(-500);
-  const spoken = title(p, { start: 400, end: 500, text: "arranged to meet", look: "caption", motion: "words", words_at: [400, 410, 420] });
-  expect((p.clips.find((c) => c.id === spoken.text) as { word_times: number[] }).word_times).toEqual([0, 10, 20]);
+  // A short phrase at a time, each alone (Sirius' "go to the back of car", "open the door").
+  const spoken = title(p, { start: 400, end: 560, text: "he would go to the back of the car, open the door", look: "caption", motion: "words", words_at: [400, 405, 410, 415, 420, 425, 430, 435, 440, 470, 475, 480] });
+  const parts = p.clips.filter((c) => (spoken.clips as string[]).includes(c.id)) as { text: string; start: number; duration: number }[];
+  expect(parts.map((c) => c.text)).toEqual(["he would go to", "the back of the", "car,", "open the door"]);
+  expect(parts.every((c, i) => i === 0 || c.start === parts[i - 1]!.start + parts[i - 1]!.duration)).toBe(true);
   expect(() => title(p, { start: 400, end: 500, text: "two words", motion: "words", words_at: [400] })).toThrow("words_at");
 });
 
@@ -297,4 +300,40 @@ test("an older smoothed render is traced to the source frame it began at; nothin
   const frames = [frame(10), frame(60), frame(120), frame(180)];
   expect(nearestFrame(frame(118), frames)).toBe(2);
   expect(nearestFrame(frame(250), frames)).toBeNull();
+});
+
+test("the team's notes on v2: titles white, words above pictures, a tall video whole, Edit's own ink never a watermark", async () => {
+  const { title } = await import("../src/horror_graphics.ts");
+  const { textOnTop } = await import("../src/horror_look.ts");
+  const { looksForMarks } = await import("../src/watermarks.ts");
+  const p = horror();
+  const made = title(p, { start: 0, end: 90, text: "very weird territory", color: "red" });
+  expect((p.clips.find((c) => c.id === made.text) as { style: { color: number[] } }).style.color).toEqual([1, 1, 1, 1]);
+  // A quote placed first, a photo after on a higher track: the quote is lifted over it.
+  p.clips.push(clip({ id: "photo", type: "video", media: "shot", track: "top", start: 0, duration: 90, name: "Horror · picture" }));
+  p.tracks.push({ id: "top", kind: "video", hidden: false, muted: false, locked: false });
+  textOnTop(p);
+  const order = p.tracks.map((t) => t.id);
+  expect(order.indexOf(p.clips.find((c) => c.id === made.text)!.track)).toBeGreaterThan(order.indexOf("top"));
+  // A 9:16 reel zoomed to fill the frame is shown whole over its blurred copy.
+  p.clips.push(clip({ id: "zoomed", type: "video", media: "reel", track: "v1", start: 200, duration: 60, transform: { scale: 3.16, x: 0, y: 0, rotation: 0 } } as never));
+  fillReels(p);
+  expect((p.clips.find((c) => c.id === "zoomed") as { transform: { scale: number } }).transform.scale).toBe(1);
+  expect(p.clips.some((c) => c.name === "Horror · reel backdrop" && c.start === 200)).toBe(true);
+  expect(looksForMarks(media({ id: "i", name: "ink-1793864105363-0.png", kind: "image", path: "/i.png", duration: 0, width: 100, height: 100 }))).toBe(false);
+});
+
+test("the audit catches a graphic arriving over a post's own sound, words across a cut, and words left up too long", () => {
+  const p = horror();
+  p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false }, { id: "t", kind: "video", hidden: false, muted: false, locked: false });
+  p.clips.push(clip({ id: "post", type: "video", media: "wide", track: "v1", start: 0, duration: 100 }));
+  p.clips.push(clip({ id: "postsound", type: "audio", media: "wide", track: "a1", start: 0, duration: 100, volume_db: 0 } as never));
+  p.clips.push(clip({ id: "next", type: "video", media: "reel", track: "v1", start: 100, duration: 200 }));
+  p.clips.push(clip({ id: "vo", type: "audio", media: "wide", track: "a1", start: 100, duration: 200, name: "Voice-over" } as never));
+  p.clips.push(clip({ id: "early", type: "text", track: "t", start: 80, duration: 60, name: "Horror · bold title", text: "too soon" } as never));
+  p.clips.push(clip({ id: "long", type: "text", track: "t", start: 150, duration: 300, name: "Horror · bold title", text: "on and on" } as never));
+  const found = issues(p).map((i) => `${i.kind}:${String(i.clip)}`);
+  expect(found).toContain("horror_graphic_over_source:early");
+  expect(found).toContain("horror_text_across_cut:early");
+  expect(found).toContain("horror_text_long:long");
 });

@@ -649,7 +649,7 @@ pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<
 }
 
 /// The XP look's version: a new look, new file names.
-const XP_VERSION: u32 = 1;
+const XP_VERSION: u32 = 2;
 
 /// A window as on a Windows XP desktop (horror's guide, Animation 1: "the
 /// background acts as a sort of Windows desktop where elements can pop up,
@@ -710,8 +710,8 @@ pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, Strin
             &["File", "Edit", "View", "Favorites", "Tools", "Help"],
         ),
         Window::PhotoViewer => (
-            "Windows Picture and Fax Viewer",
-            &["File", "Edit", "View", "Help"],
+            "untitled - Paint",
+            &["File", "Edit", "View", "Image", "Colors", "Help"],
         ),
         Window::Notepad => (
             "Untitled - Notepad",
@@ -827,9 +827,10 @@ pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, Strin
         (TITLE_BAR + MENU_BAR) * k + 1.0 * k,
         hex(0xaca899),
     );
-    // The content area: a white page, a light grey viewer, the player's black.
-    let [cx, cy, cw, ch] = content_in(window, w, h, k);
+    // The content area: a white page, Paint's canvas, the player's black.
+    let [cx, cy, cw, ch] = xp_content_in(window, w, h, k);
     match window {
+        Window::PhotoViewer => paint_tools(&mut canvas, w, h, k, [cx, cy, cw, ch]),
         Window::VideoPlayer => {
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x000000));
             youtube_controls(&mut canvas, cx, cy + ch, cw, k);
@@ -841,6 +842,100 @@ pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, Strin
         _ => canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xf3f5f9)),
     }
     canvas.png(true)
+}
+
+/// Paint's toolbox down its left and colour box along its bottom (1080p pixels).
+pub const PAINT_LEFT: f64 = 62.0;
+pub const PAINT_BOTTOM: f64 = 58.0;
+
+/// An XP window's content area: as `content_in`, but Paint's canvas sits
+/// between its toolbox and its colour box (the team, Nov 6: a profile
+/// picture "in another pop up, a old windows-xp styled photo editor, or maybe
+/// just the old paint app").
+pub fn xp_content_in(window: Window, w: f64, h: f64, k: f64) -> [f64; 4] {
+    let [x, y, cw, ch] = content_in(window, w, h, k);
+    if window != Window::PhotoViewer {
+        return [x, y, cw, ch];
+    }
+    let left = (PAINT_LEFT - INSET) * k;
+    let bottom = (PAINT_BOTTOM - INSET) * k;
+    [x + left, y, cw - left, ch - bottom]
+}
+
+/// Paint's toolbox (two columns of tool buttons) and its colour box (two rows of colours and the current pair).
+fn paint_tools(canvas: &mut Canvas, w: f64, h: f64, k: f64, [cx, cy, cw, ch]: [f64; 4]) {
+    // The canvas's grey surround, then the white canvas itself.
+    canvas.rect(INSET * k, cy, w - INSET * k, h - INSET * k, hex(0x808080));
+    canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xffffff));
+    canvas.rect(INSET * k, cy, cx - 2.0 * k, h - INSET * k, hex(0xece9d8));
+    let size = 20.0 * k;
+    let ink = hex(0x404040);
+    for row in 0..8 {
+        for col in 0..2 {
+            let x = INSET * k + 6.0 * k + f64::from(col) * (size + 4.0 * k);
+            let y = cy + 8.0 * k + f64::from(row) * (size + 4.0 * k);
+            canvas.rect(x, y, x + size, y + size, hex(0xffffff));
+            canvas.frame(x, y, x + size, y + size, k.max(1.0), hex(0x9d9d9d));
+            // A small mark for each tool: a dot, a line, a square.
+            match (row + col) % 3 {
+                0 => disc(canvas, x + size / 2.0, y + size / 2.0, 3.0 * k, ink),
+                1 => canvas.line(
+                    (x + 5.0 * k, y + size - 5.0 * k),
+                    (x + size - 5.0 * k, y + 5.0 * k),
+                    1.6 * k,
+                    ink,
+                ),
+                _ => canvas.frame(
+                    x + 5.0 * k,
+                    y + 5.0 * k,
+                    x + size - 5.0 * k,
+                    y + size - 5.0 * k,
+                    1.4 * k,
+                    ink,
+                ),
+            }
+        }
+    }
+    let colours = [
+        0x000000, 0x808080, 0x800000, 0x808000, 0x008000, 0x008080, 0x000080, 0x800080, 0x808040,
+        0x004040, 0x0080ff, 0x004080, 0x8000ff, 0x804000, 0xffffff, 0xc0c0c0, 0xff0000, 0xffff00,
+        0x00ff00, 0x00ffff, 0x0000ff, 0xff00ff, 0xffff80, 0x00ff80, 0x80ffff, 0x8080ff, 0xff0080,
+        0xff8040,
+    ];
+    let top = cy + ch + 10.0 * k;
+    let swatch = 16.0 * k;
+    let left = INSET * k + 46.0 * k;
+    canvas.rect(
+        INSET * k,
+        cy + ch,
+        w - INSET * k,
+        h - INSET * k,
+        hex(0xece9d8),
+    );
+    canvas.rect(
+        INSET * k + 8.0 * k,
+        top,
+        INSET * k + 38.0 * k,
+        top + 2.0 * swatch + 2.0 * k,
+        hex(0xffffff),
+    );
+    canvas.rect(
+        INSET * k + 12.0 * k,
+        top + 4.0 * k,
+        INSET * k + 26.0 * k,
+        top + 18.0 * k,
+        hex(0x000000),
+    );
+    for (index, colour) in colours.iter().enumerate() {
+        let (col, row) = (index % 14, index / 14);
+        let x = left + col as f64 * (swatch + 2.0 * k);
+        let y = top + row as f64 * (swatch + 2.0 * k);
+        if x + swatch > w - INSET * k {
+            continue;
+        }
+        canvas.rect(x, y, x + swatch, y + swatch, hex(*colour));
+        canvas.frame(x, y, x + swatch, y + swatch, k.max(1.0), hex(0x808080));
+    }
 }
 
 /// The old YouTube player's controls under its picture: a red progress bar

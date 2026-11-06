@@ -26,6 +26,7 @@ import { clipFrom } from "./clips.ts";
 import * as markers from "./markers.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import type { Mark } from "./watermarks.ts";
+import { widthOf } from "./commentary_graphics.ts";
 import { native } from "./native/index.ts";
 import { addTrack, clipEnd, fps as fpsOf, freshId, mediaOf } from "./project.ts";
 import { round, trim } from "./rust.ts";
@@ -40,6 +41,9 @@ const APPS: AppKind[] = ["video_player", "photo_viewer", "notepad"];
 const TOP = 43 + 31 + 2;
 const INSET = 10;
 const CONTROLS = 46;
+/** XP Paint's toolbox and colour box (desktop.rs PAINT_LEFT, PAINT_BOTTOM), horror's picture window. */
+const PAINT_LEFT = 62;
+const PAINT_BOTTOM = 58;
 /** Window frames are drawn this many times their size on screen, so the camera's zoom keeps them crisp. */
 export const FRAME_SCALE = 2;
 /** The desktop is this many frames wide and tall: room for the camera to travel. */
@@ -214,18 +218,21 @@ export function readSpec(project: Project, given: Args, start: number, end: numb
 }
 
 /** The laid-out size [width, height] of `text` at `px` (the addon measures; Geist 400). */
-function measure(text: string, px: number): [number, number] {
-  return native().textBlock(text, px, 400, NOTE_LINE);
+function measure(text: string, px: number, mono = false): [number, number] {
+  if (!mono) return native().textBlock(text, px, 400, NOTE_LINE);
+  // Horror's Notepad types in Geist Mono, wider than Geist: measured in it, or its lines ran out of the window (v2, 3:31).
+  const lines = text.split("\n");
+  return [Math.max(...lines.map((line) => widthOf(line, "Geist Mono", 500, px))), lines.length * px * NOTE_LINE];
 }
 
 /** A note wrapped to `width`: words onto lines, the lines after the first indented under its text. */
-function wrap(note: string, px: number, width: number): string {
+function wrap(note: string, px: number, width: number, mono = false): string {
   const words = note.split(/\s+/u).filter((word) => word !== "");
   const lines: string[] = [];
   let line = "-";
   for (const word of words) {
     const tried = `${line} ${word}`;
-    if (line !== "-" && line !== "  " && measure(tried, px)[0] > width) {
+    if (line !== "-" && line !== "  " && measure(tried, px, mono)[0] > width) {
       lines.push(line);
       line = `  ${word}`;
     } else {
@@ -256,15 +263,19 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
     const media = window.media === null ? undefined : mediaOf(project, window.media);
     const fallback = window.app === "notepad" ? 0.36 : window.app === "video_player" ? 0.4 : 0.24;
     const w = Math.round((window.width ?? fallback) * W);
-    const contentW = w - 2 * INSET * k;
+    // Horror's picture window is XP's Paint: its canvas between the toolbox and the colour box (desktop.rs xp_content_in).
+    const paint = project.style === "horror" && window.app === "photo_viewer";
+    const left = (paint ? PAINT_LEFT : INSET) * k;
+    const contentW = w - left - INSET * k;
     let contentH: number;
     const notes: Laid["notes"] = [];
     if (window.app === "notepad") {
       const px = NOTE_SIZE * k;
       let total = 0;
       for (const line of window.lines) {
-        const text = wrap(line, px, contentW - 2 * NOTE_PAD * k);
-        const [bw, bh] = measure(text, px);
+        const mono = project.style === "horror";
+        const text = wrap(line, px, contentW - 2 * NOTE_PAD * k, mono);
+        const [bw, bh] = measure(text, px, mono);
         notes.push({ text, w: bw, h: bh });
         total += bh + NOTE_GAP * k;
       }
@@ -275,11 +286,11 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
       const aspect = media === undefined ? 4 / 3 : Math.min(Math.max(media.width / Math.max(media.height, 1), 0.62), 1.9);
       contentH = contentW / aspect;
     }
-    const bottom = (window.app === "video_player" ? CONTROLS + INSET : INSET) * k;
+    const bottom = (window.app === "video_player" ? CONTROLS + INSET : paint ? PAINT_BOTTOM : INSET) * k;
     const h = Math.round(contentH + TOP * k + bottom);
     // The same place for the same window on every screen (the user, Oct 31: "roughly the same position").
     const slot = SLOTS[index % SLOTS.length]!;
-    return { window, w, h, contentW, contentH, notes, cx: (window.x ?? slot[0]) * DW, cy: (window.y ?? slot[1]) * DH };
+    return { window, w, h, left, contentW, contentH, notes, cx: (window.x ?? slot[0]) * DW, cy: (window.y ?? slot[1]) * DH };
   });
   const keepInside = (one: (typeof sized)[number]) => {
     one.cx = Math.min(Math.max(one.cx, one.w / 2 + gap), DW - one.w / 2 - gap);
@@ -321,7 +332,7 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
       h: one.h,
       cx: one.cx,
       cy: one.cy,
-      content: [one.cx - one.w / 2 + INSET * k, one.cy - one.h / 2 + TOP * k, one.contentW, one.contentH],
+      content: [one.cx - one.w / 2 + one.left, one.cy - one.h / 2 + TOP * k, one.contentW, one.contentH],
       notes: one.notes,
     }),
   );

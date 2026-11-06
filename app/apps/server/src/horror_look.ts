@@ -150,6 +150,18 @@ export function fillReels(project: Project): void {
   const old = new Set(project.clips.filter((c) => c.name === REEL_BACKDROP || c.name === REEL_BLUR).map((c) => c.track));
   project.clips = project.clips.filter((c) => c.name !== REEL_BACKDROP && c.name !== REEL_BLUR);
   project.tracks = project.tracks.filter((t) => !old.has(t.id) || project.clips.some((c) => c.track === t.id));
+  // A tall video zoomed in to fill the frame is shown whole instead, over its
+  // blurred copy (the team, Nov 6: "for all the 9:16 videos it's better to
+  // have the full height and then blur… in the background, instead of fully
+  // zooming in till we reach the 16:9 ratio"). A move of its own (a push-in) stays.
+  for (const c of project.clips) {
+    if (c.type !== "video" || (c.name ?? "").includes("Horror ·") || (c.name ?? "").includes("Desktop ·") || c.frame != null) continue;
+    const m = project.media.find((x) => x.id === c.media);
+    if (m === undefined || m.kind !== "video" || m.height < m.width * 1.1) continue;
+    const t = c.transform ?? {};
+    const moved = ["scale", "x", "y"].some((key) => (c.keyframes?.[key as "scale"]?.length ?? 0) > 0);
+    if (!moved && (t.scale ?? 1) > 1.6 && Math.abs(t.x ?? 0) < w * 0.25 && Math.abs(t.y ?? 0) < h * 0.5) c.transform = { ...t, scale: 1, x: 0, y: 0 };
+  }
   const reels = project.clips.filter((c): c is VideoClip => {
     if (c.type !== "video" || (c.name ?? "").startsWith("Horror ·") || (c.name ?? "").startsWith("Janitor ·")) return false;
     const m = project.media.find((x) => x.id === c.media);
@@ -241,4 +253,28 @@ export function desktopLines(project: Project, start: number, end: number): void
   project.tracks.push(track);
   project.clips.push(clipFrom({ id: freshId(project, "c"), type: "adjustment", track: track.id, name: "Horror · desktop lines", start, duration: end - start,
     grade: { scanlines: 0.4 }, fade_in: 6, fade_out: 6 }));
+}
+
+/**
+ * Horror's words always over its pictures: a title, a quote or a profile's
+ * lines (and the blur that moves with it) lifted above every picture it
+ * overlaps (v2, Nov 6: two quotes sat behind the photos placed after them).
+ */
+export function textOnTop(project: Project): void {
+  if (project.style !== "horror") return;
+  const order = () => new Map(project.tracks.map((t, i) => [t.id, i]));
+  const words = project.clips.filter((c) => c.type === "text" && /^(Cut-in \d+ · )?Horror · /u.test(c.name ?? ""));
+  for (const text of words) {
+    const at = order();
+    const end = text.start + text.duration;
+    const above = project.clips.some((c) => c.type === "video" && c.start < end && c.start + c.duration > text.start && (at.get(c.track) ?? 0) > (at.get(text.track) ?? 0));
+    if (!above) continue;
+    const lift = (clip: Project["clips"][number]) => {
+      const track = { id: freshId(project, "v"), kind: "video" as const, hidden: false, muted: false, locked: false };
+      project.tracks.push(track);
+      clip.track = track.id;
+    };
+    lift(text);
+    for (const blur of project.clips.filter((c) => c.type === "adjustment" && c.parent === text.id)) lift(blur);
+  }
 }

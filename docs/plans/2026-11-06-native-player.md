@@ -6,9 +6,11 @@ The plan agreed with Sphe on Nov 6. Order: **nightly-59 → keep footage on the 
 
 | Step | State |
 |---|---|
-| 1. nightly-59 | Committed, not pushed: waiting for Sphe's yes |
-| 2. Keep footage on the Mac | Agreed in principle; Sphe will say when to make the change |
-| 3. Native player | Start with the measurement below once Sphe says go |
+| 1. nightly-59 | Shipping with everything below (Sphe, Nov 6: "build this out end to end then ship a nightly") |
+| 2. Keep footage on the Mac | Done (`e160dc1a`): scripts' footage under the same cap as Edit's |
+| 2b. Exports made ahead | Done (`2865ca73`): proven on the engine, 0.3 s re-export of a made one |
+| 3. Native player | Done in Edit.app (`e20244a8`): scrub 6.7 ms, play 1.9 ms a frame on local footage |
+| 4. Hardware + CPU encoding | Not built: measured below, a trial for later |
 
 ### nightly-59 holds
 
@@ -157,7 +159,7 @@ On real footage on this M1 (a 720p courtroom clip scaled to 1080p, so softer tha
    - Render final-quality chunks in the background while the Mac is idle, so Export only makes the few chunks that changed.
    - Costs: disk (about 65 MB a minute at 8.7 Mbps, so about 7 GB for a 112-min edit, inside the cache cap) and the encoder kept busy in the background.
 2. **The native player** removes smooth-playback renders, which compete with exports for the one encoder.
-3. **Hardware and CPU encoding together:** chunks given to both, about 1.5–1.8× on the video stage. Trial it first, with quality measured on bodycam footage.
+3. **Hardware and CPU encoding together** (not built, Nov 6: on real edit content with this M1 busy, the hardware did 124 fps and x264 veryfast 44, so splitting chunks adds about a third at most while loading every core, as made JJ's Mac laggy in nightly-50; idle it was 1.8×. With exports made ahead taking most of the wait, it waits for a trial on a quiet Mac and a low-priority x264): chunks given to both, about 1.5–1.8× on the video stage. Trial it first, with quality measured on bodycam footage.
 4. **HEVC with speed-over-quality** for previews or proxies only, after a trial.
 
 ### Imports (JJ's Mac, Nov 3–6)

@@ -18,6 +18,31 @@ function load<T>(key: string, initial: T): T {
   return initial;
 }
 
+const WHO = "edit.kept.who";
+
+/**
+ * What's kept is the signed-in account's alone: when someone else signs in on
+ * this Mac (or their kinds change), it all goes, so nothing of the last
+ * account's shows. True when it went because the account changed.
+ */
+export function keepFor(who: string): boolean {
+  let was: string | null = null;
+  try {
+    was = sessionStorage.getItem(WHO);
+  } catch {
+    // No session storage: memory only.
+  }
+  if (was === who) return false;
+  memory.clear();
+  try {
+    for (const key of Object.keys(sessionStorage)) if (key.startsWith("edit.kept.")) sessionStorage.removeItem(key);
+    sessionStorage.setItem(WHO, who);
+  } catch {
+    // As above.
+  }
+  return was !== null;
+}
+
 /**
  * State that outlives the screen: coming back shows what was there at once
  * (state A), and the fresh answer replaces it when it comes (state B), never a

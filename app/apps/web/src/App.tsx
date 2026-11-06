@@ -13,10 +13,13 @@ import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
 import { useConnection } from "./lib/api";
 import { watchPresence } from "./lib/presence";
-import { usePath } from "./lib/route";
+import { useAccount, writesScripts } from "./lib/account";
+import { makesIdeas } from "./lib/ideas";
+import { navigate, usePath } from "./lib/route";
 
 export function App() {
   const path = usePath();
+  const account = useAccount((state) => state.account);
   // How long the window has been idle, for diagnostics (lib/presence.ts).
   useEffect(() => watchPresence(), []);
   const projectId = path.match(/^\/p\/([\w-]+)/)?.[1];
@@ -27,6 +30,11 @@ export function App() {
   // Thumbnails (Nov 2): /thumbnails (the list) and /thumbnails/<id> (one, with its conversation).
   const thumbId = path.match(/^\/thumbnails\/([\w-]+)/)?.[1];
   // /thumbnails (the list) is Home's Thumbnails, in its panel (Sphe, Nov 2), so it's Home's screen too.
+  // A page outside the account's work (its address typed, or kept from another account) is Home.
+  const outside = account !== null && ((scripts && !writesScripts(account)) || ((ideaId !== undefined || thumbId !== undefined || path === "/ideas" || path === "/thumbnails") && !makesIdeas(account)));
+  useEffect(() => {
+    if (outside) navigate("/", true);
+  }, [outside]);
   const screen = projectId ?? (scripts ? "scripts" : ideaId !== undefined ? `idea-${ideaId}` : thumbId !== undefined ? `thumb-${thumbId}` : "home");
   return (
     // The kit: respect reduced motion (movement goes, fades stay).

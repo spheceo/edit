@@ -70,6 +70,16 @@ export function readFor(data: string, id: string): Script {
   return script;
 }
 
+/** Whether the signed-in person may see script `id` (one that isn't here: no): work under way on this Mac is listed only for them. */
+export function seesScript(data: string, id: string): boolean {
+  try {
+    readFor(data, id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Refuses while an import or a job runs on the script. */
 export function idle(id: string, what = "This import is still running."): void {
   if (imports.importing(id)) throw bad(what);
@@ -538,9 +548,9 @@ export function routes(router: Router<App>): void {
       if (path === null) throw notFound("No such clip.");
       return serveFile(context.request, path);
     })
-    .get("/api/writer/progress", () => json(imports.progress()))
+    .get("/api/writer/progress", ({ app }) => json(imports.progress().filter((one) => seesScript(dataOf(app), one.id))))
     .get("/api/writer/cloud", () => json(cloud.statusNow()))
-    .get("/api/writer/activity", () => json(activity.list()))
+    .get("/api/writer/activity", ({ app }) => json(activity.list().filter((one) => one.script === null || seesScript(dataOf(app), one.script))))
     // Brings an archived script's footage back; followed as a build.
     .post("/api/writer/scripts/{id}/restore", (context) =>
       answer(() => {

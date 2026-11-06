@@ -205,7 +205,7 @@ export function buildRouter(): Router<App> {
       const visible = new Set(app.store.visible().map(project => project.id));
       const edits = (app.exports.activity?.() ?? []).filter(job => visible.has(job.id));
       // Script shares join the same queue. Only the ones running: a share has no file, and a settled one is not kept (it would linger in this process and show up in the activity check).
-      const shares = writerReviews.shareQueue().map(share => ({
+      const shares = writerReviews.shareQueue().filter(share => writer.seesScript(writer.dataOf(app), share.id)).map(share => ({
         id: share.id,
         name: share.name,
         path: "",

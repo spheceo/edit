@@ -3,6 +3,8 @@
 
 import { create } from "zustand";
 
+import { keepFor } from "./kept";
+
 export interface Account {
   signed_in: boolean;
   /** The accounts site answers: signing in is offered. */
@@ -39,6 +41,19 @@ export const makesVideos = (account: Account | null): boolean => everything(acco
 export const writesScripts = (account: Account | null): boolean => everything(account) || account!.perms.some((perm) => perm.startsWith("scripts."));
 
 export const useAccount = create<{ account: Account | null; waiting: boolean }>(() => ({ account: null, waiting: false }));
+
+/** Who's signed in and what they may do, as one string: another means another account's view. */
+export function whoOf(account: Account): string {
+  if (account.person === null) return "nobody";
+  return [account.person.sub || account.person.email, account.admin ? "admin" : "", ...[...account.perms].sort()].join("|");
+}
+
+// Another account signed in on this Mac (or new kinds given): the page starts
+// over, so it shows only what this account may see, nothing kept from the last.
+useAccount.subscribe((state, previous) => {
+  if (state.account === null || state.account === previous.account) return;
+  if (keepFor(whoOf(state.account))) window.location.reload();
+});
 
 export async function loadAccount(): Promise<Account | null> {
   try {

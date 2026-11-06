@@ -2,7 +2,7 @@ import { Archive, Check, ChevronDown, ChevronRight, ListFilter, CloudAlert, Clou
 import { motion } from "motion/react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-import { editStyles, useAccount, writesScripts } from "../lib/account";
+import { editStyles, makesVideos, useAccount, writesScripts } from "../lib/account";
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { shareChip } from "../lib/export-face";
 import { hasImportLinks, importPaste } from "../lib/import-input";
@@ -128,12 +128,18 @@ export function Home() {
   const ideasAllowed = makesIdeas(account);
   const [ideasHome, refreshIdeas, ideasError] = useIdeasHome(ideasAllowed);
   const [ideaOpen, setIdeaOpen] = useState(false);
-  // The places this person works in: Ideas (and Thumbnails) with the permission, Scripts when they write them, Edits always.
-  const places: Spot[] = [...(ideasAllowed ? (["ideas"] as const) : []), ...(writesScripts(account) || scripts.length > 0 ? (["scripts"] as const) : []), "edits"];
+  // The places this person works in, and only those (Sphe, Nov 6: "almost a tunnel vision"): Ideas (and Thumbnails)
+  // with the permission, Scripts when they write them, Edits when they make videos (or have edits they may open).
+  const makes = makesVideos(account);
+  const hasEdits = (projects?.length ?? 0) > 0 || (cloud?.projects?.length ?? 0) > 0;
+  const edits = makes || hasEdits || (!ideasAllowed && !writesScripts(account) && scripts.length === 0);
+  const places: Spot[] = [...(ideasAllowed ? (["ideas"] as const) : []), ...(writesScripts(account) || scripts.length > 0 ? (["scripts"] as const) : []), ...(edits ? (["edits"] as const) : [])];
+  // New project: only for someone who writes scripts or makes videos.
+  const mayCreate = makes || writesScripts(account);
   // One place at a time, remembered on this browser; /ideas is Home on its Ideas (the idea page's way back).
   // /thumbnails is Home on its Thumbnails (a thumbnail's way back), as /ideas is on its Ideas.
   const [where, setWhere] = useState<Where>(() => (window.location.pathname === "/ideas" ? "ideas" : window.location.pathname === "/thumbnails" ? "thumbnails" : savedWhere()));
-  const shownWhere: Where = (placeOf(where).place !== null && !places.includes(placeOf(where).place!)) || (where === "thumbnails" && !ideasAllowed) ? "edits" : where;
+  const shownWhere: Where = (placeOf(where).place !== null && !places.includes(placeOf(where).place!)) || (where === "thumbnails" && !ideasAllowed) ? (places[0] ?? "edits") : where;
   const thumbnail = useMakeThumbnail();
   // Yours, or everyone's (remembered on this browser); nobody signed in has nothing of their own.
   const [mineOnly, setMineOnly] = useState(() => localStorage.getItem(MINE) !== "0");
@@ -481,11 +487,11 @@ export function Home() {
                 <Button variant="light" busy={thumbnail.making} onClick={thumbnail.make}>
                   <Plus size={15} strokeWidth={2.2} /> New thumbnail
                 </Button>
-              ) : (
+              ) : mayCreate ? (
                 <Button variant="light" onClick={() => setCreating(true)}>
                   <Plus size={15} strokeWidth={2.2} /> New project
                 </Button>
-              )}
+              ) : null}
             </div>
           </header>
           <div className={cx("flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pt-3 pb-6")}>
@@ -542,7 +548,7 @@ export function Home() {
                 <Loader size={32} />
               </div>
             ) : nothingAtAll ? (
-              <FirstEdit cloudOn={Boolean(cloud?.on)} onNew={() => setCreating(true)} />
+              <FirstEdit cloudOn={Boolean(cloud?.on)} onNew={mayCreate ? () => setCreating(true) : null} />
             ) : listed > 0 ? (
               <>
                 <HomeList groups={groups} solo={solo} cross={cross} lengthLabel={inIdeas ? "Views" : "Length"} />
@@ -667,19 +673,23 @@ function savedWhere(): Where {
 }
 
 /** An empty Home: the way to the first edit. */
-function FirstEdit({ cloudOn, onNew }: { cloudOn: boolean; onNew: () => void }) {
+function FirstEdit({ cloudOn, onNew }: { cloudOn: boolean; onNew: (() => void) | null }) {
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={spring} className="mt-[14vh] flex flex-col items-center text-center">
       <Tile size={64} />
-      <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.02em]">Make your first edit</h1>
+      <h1 className="mt-6 text-[22px] font-semibold tracking-[-0.02em]">{onNew === null ? "Nothing here for your account yet" : "Make your first edit"}</h1>
       <p className="mt-2 max-w-[360px] text-muted">
-        {cloudOn
+        {onNew === null
+          ? "An admin gives you the work you do at accounts.spheceo.com."
+          : cloudOn
           ? "Projects are kept in the team’s cloud, so anyone can pick one up where you left off. Import footage, cut it, and let an agent build the polish."
           : "Projects live on this machine. Import footage, cut it, and let an agent build the polish."}
       </p>
-      <Button className="mt-6" variant="light" onClick={onNew}>
-        <Plus size={15} strokeWidth={2.2} /> New project
-      </Button>
+      {onNew !== null && (
+        <Button className="mt-6" variant="light" onClick={onNew}>
+          <Plus size={15} strokeWidth={2.2} /> New project
+        </Button>
+      )}
     </motion.div>
   );
 }
@@ -1919,6 +1929,8 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
   const account = useAccount((state) => state.account);
   const allowed = editStyles(account);
   const writes = writesScripts(account);
+  // Edit from a script: only for someone who makes full edits (a style of theirs).
+  const edits = allowed === null || allowed.size > 0;
   const grants = useGrants();
   const [title, setTitle] = useState("");
   const [mode, setMode] = useState<"write" | "edit">(writes ? "write" : "edit");
@@ -2103,7 +2115,7 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
           <input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="What the video is called" className={field} />
         </label>
 
-        {writes && (
+        {writes && edits && (
           <div className="flex h-[30px] w-fit gap-0.5 rounded-lg border border-line bg-black p-0.5">
             {(
               [

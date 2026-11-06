@@ -262,6 +262,19 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
       if (cut !== undefined) out.push({ kind: "horror_text_across_cut", clip: c.id, start: c.start, cut_near: cut, text: (c as { text?: string }).text,
         fix: "the picture under the words changes while they're up: end the words before the cut, or start them on the new shot" });
     }
+    // "8:07 + 9:10 - The text is behind the image": a profile laid over the card already there, both up at once (Nov 6,
+    // the agent's fix added commentary_profile at 7:57 and 8:27 and left the old picture cards under them).
+    const cards = live.filter((c) => c.type === "video" && /^(Cut-in \d+ · )?Horror · (picture|screenshot)$/u.test(c.name ?? "")).sort((x, y) => x.start - y.start);
+    const stacked = new Set<string>();
+    for (const [i, a] of cards.entries()) {
+      for (const b of cards.slice(i + 1)) {
+        if (b.start >= clipEnd(a)) break;
+        if (stacked.has(b.id) || Math.min(clipEnd(a), clipEnd(b)) - b.start < 12) continue;
+        stacked.add(b.id);
+        out.push({ kind: "horror_cards_stacked", clip: b.id, under: a.id, start: b.start, end: Math.min(clipEnd(a), clipEnd(b)),
+          fix: "two cards are up at once, one over the other: delete or trim the one this replaces (with its backdrop, ground and marker), so one picture, page or profile is on screen at a time" });
+      }
+    }
     // "By now it's getting boring for viewers because they see the text for 20s+."
     for (const c of live) {
       const desk = /Desktop · wallpaper$/u.test(c.name ?? "");

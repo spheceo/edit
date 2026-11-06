@@ -337,3 +337,14 @@ test("the audit catches a graphic arriving over a post's own sound, words across
   expect(found).toContain("horror_text_across_cut:early");
   expect(found).toContain("horror_text_long:long");
 });
+
+test("the audit catches two cards up at once: a profile laid over the old card it replaced (Nov 6, \"the text is behind the image\")", () => {
+  const p = horror();
+  p.tracks.push({ id: "t2", kind: "video", hidden: false, muted: false, locked: false });
+  p.clips.push(clip({ id: "old", type: "video", media: "shot", track: "v1", start: 0, duration: 178, name: "Horror · picture" }));
+  p.clips.push(clip({ id: "profile", type: "video", media: "shot", track: "t2", start: 0, duration: 144, name: "Horror · picture" }));
+  // One after the other, crossing for a few frames, is a cut, not a stack.
+  p.clips.push(clip({ id: "after", type: "video", media: "shot", track: "t2", start: 172, duration: 90, name: "Horror · screenshot" }));
+  const found = issues(p).filter((i) => i.kind === "horror_cards_stacked").map((i) => `${String(i.clip)}<${String(i.under)}`);
+  expect(found).toEqual(["profile<old"]);
+});

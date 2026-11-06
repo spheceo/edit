@@ -7,6 +7,12 @@ JJ's review (feedback.spheceo.com/r/omql-7MoSpwLhJ8ViuE3ow, project p17938083037
 1. **"Audio only in the left ear" (0:44, 12:40, v2 0:45) was left unfixed: Edit had no channel control.** An audio clip now has `channel` (left or right), which plays that side of its source in both ears, in both the export's mix and the preview. The plan's `both_ears` op measures which side carries the sound and sets it for a whole source. The music-and-sound skill says when to use it.
 2. **The round was shared half done.** The turn compacted 2 minutes in, fixed 7, ended with "this round is not finished", and followFix took the end of the turn as done. Now a turn that ends with notes unanswered sends them back to the agent (up to four sends, while each send gets some answered). Only then is anything shared. Any note still unanswered is left on the review saying so, never "Queued for Edit". The fix message asks for every note in the one turn.
 
-## Still to do (no release yet, Sphe, Nov 6)
+## Before nightly-59 (Sphe, Nov 6)
 
 The notes need a Mac on a build with the fixes above: the 22 untouched on v1, the 2 on v2, the 3 audio ones, and a single click back on the viewers left with none (frames 437, 12322, 37951, 42533). Then share as v3.
+
+## The round on nightly-60 (Sphe's Mac, Nov 6, with JJ's other three)
+
+Sphe asked for this review and three more of JJ's (Female Police Captain ria0huFRqGapbrsO9Ig34Q, Predator Teacher ndYdvC7G6ZmRHyOat6dbwg, Cops Surprise Predator Son & Dad kZZJlPlalisDKuzoGeAyzA) to be done on his Mac, all at once.
+
+3. **pull_feedback refused on any Mac but the one that shared the review** ("This project hasn't been shared for review"). All four were shared from Mathias's Mac. A Ready for changes taken on another Mac also always shared as a new version, because that Mac knew none of the versions. Now a Mac takes the review in from the cloud (`reviews.adopt`: the link, plus each version's timeline, fps, length and clip map from its meta). Test: reviews_pull "a review shared from another Mac…". Shipped in nightly-60. At 17:38 the four pulled 26, 22, 55 and 7 notes in parallel.

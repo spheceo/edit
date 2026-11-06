@@ -113,6 +113,63 @@ The results decide whether live playback replaces smooth-playback renders, or wh
 - Edit's timeline and Script mode both use it, and a browser falls back cleanly.
 - It ships in a nightly only with Sphe's yes.
 
+## Using the whole chip for exports (measured Nov 6)
+
+### Where a full export's time goes
+
+From JJ's 11 full exports, Nov 4–6, on an M4 Pro (12 cores, 24 GB), each taking 15–33 min:
+
+| Stage | Time | What limits it |
+|---|---|---|
+| Footage ready (excerpts cut from cloud originals, 6 at once, stream copy) | 2.5–16.5 min | Network (R2 round trip about 0.2 s from Dubai) |
+| Video | 4–16 min | The hardware encoder: about 75% of the video stage is waiting on it |
+| Sound | 40–60 s | Fine |
+| Join | about 13 s | Fine |
+
+The proof that waiting at export can mostly go: re-exporting "Cops Realize…" with its chunks and excerpts already made took **2 min 47 s instead of 31 min 52 s**.
+
+### The hardware encoder is already maxed
+
+Measured on this Mac (M1, `scratchpad/encbench`), with 1080p H.264 at Edit's High bitrate:
+- **The API makes no difference.** AVAssetWriter (Edit today), VideoToolbox driven directly, BGRA or NV12 input, and speed-over-quality all ran at about 200 fps. So did two or three sessions at once: Pro chips have one encode engine (M1 Pro through M4 Pro), while Max chips have two.
+- **JJ's M4 Pro** works out to about 230 fps in his exports.
+- **HEVC with speed-over-quality** reached 296 fps against 185, but that's a quality trade to trial, and it's not H.264.
+
+### The CPU cores sit idle, and they can encode too
+
+On real footage on this M1 (a 720p courtroom clip scaled to 1080p, so softer than bodycam):
+
+| Encoder | Speed |
+|---|---|
+| Hardware | 188 fps |
+| x264 "veryfast" | 268 fps |
+| x264 "faster" | 214 fps |
+| Hardware and x264 veryfast at once | **346 fps (1.8×)** |
+
+- **Mixing works.** A hardware chunk and an x264 chunk (with `repeat-headers=1`), joined by the concat stream copy Edit already uses, decoded with no errors in FFmpeg (software and hardware) and in AVFoundation (all 900 frames, frame 700 matching the source).
+- **Quality at the same requested 8.7 Mbps:** x264 measured SSIM 31.2 dB against the hardware's 25.7 dB, but it used more of the bitrate (8.3 Mbps against the hardware's 5.5).
+- **Still to trial** on JJ's Mac with a real noisy bodycam project: noise slows x264 down, and an export's other CPU work competes with it.
+
+### Levers, biggest first
+
+1. **Have exports ready before Export is pressed.**
+   - Cut a project's excerpts in the background while it's being edited, instead of when Export is pressed. That saves 2.5–16.5 min per export, and with footage kept on the Mac they're mostly there already.
+   - Render final-quality chunks in the background while the Mac is idle, so Export only makes the few chunks that changed.
+   - Costs: disk (about 65 MB a minute at 8.7 Mbps, so about 7 GB for a 112-min edit, inside the cache cap) and the encoder kept busy in the background.
+2. **The native player** removes smooth-playback renders, which compete with exports for the one encoder.
+3. **Hardware and CPU encoding together:** chunks given to both, about 1.5–1.8× on the video stage. Trial it first, with quality measured on bodycam footage.
+4. **HEVC with speed-over-quality** for previews or proxies only, after a trial.
+
+### Imports (JJ's Mac, Nov 3–6)
+
+Mostly network:
+- **Uploads:** 3,107 to the cloud, 17 h in all (in the background, several at once; p50 3.3 s, the longest 53 min).
+- **Transcription:** 3.4 h (p90 94 s).
+- **Proxies:** 1.5 h (p50 18 s). This is also encoder work, so it could use the CPU too.
+- **YouTube downloads:** 1.5 h (p50 94 s, the longest 18 min).
+
+Still to look into: upload bandwidth, and whether uploads hold up anything the person waits on.
+
 ## Open items
 
 - **React #185 at turn end:** find it from nightly-59's logged location.

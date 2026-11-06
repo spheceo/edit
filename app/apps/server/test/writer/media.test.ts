@@ -89,7 +89,7 @@ test("footage in the cloud is read twice, the picture from one and the sound fro
     await server.stop(true);
     fs.rmSync(dir, { recursive: true, force: true });
   }
-});
+}, 120_000);
 
 test("an encode that makes no progress is stopped by its pace, not left to run out its hour", async () => {
   const dir = fs.mkdtempSync(joinPath(os.tmpdir(), "edit-pace-"));

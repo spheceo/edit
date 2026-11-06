@@ -24,7 +24,10 @@ beforeAll(() => {
   reviews.followEveryForTests(20);
 });
 
-beforeEach(() => reviews.resetCheckInForTests());
+beforeEach(async () => {
+  await reviews.settledForTests();
+  reviews.resetCheckInForTests();
+});
 
 afterAll(() => {
   reviews.followEveryForTests(5_000);

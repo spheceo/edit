@@ -1503,6 +1503,12 @@ export function busyHere(app: App): boolean {
   }
 }
 
+/** Tests: until an earlier test's fix or share has ended (else it ends in the next test's home and cloud, Nov 6). */
+export async function settledForTests(most = 10_000): Promise<void> {
+  const end = Date.now() + most;
+  while ((readying.size > 0 || sharing.size > 0) && Date.now() < end) await Bun.sleep(10);
+}
+
 /** Tests: forget what earlier check-ins learnt. */
 export function resetCheckInForTests(): void {
   asked = false;

@@ -84,7 +84,13 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
         const response = await fetcher(url, { headers: { Range: `bytes=${start}-${end - 1}` }, signal: abort.signal });
         // 503 is the dev server answering while `edit serve` restarts.
         if (response.status === 503 && attempt < RETRIES) throw new Error("restarting");
-        if (response.status !== 200 && response.status !== 206) throw new Error(`HTTP ${response.status} reading ${url} (bytes ${start}-${end - 1})`);
+        if (response.status !== 200 && response.status !== 206) {
+          const failed = new Error(`HTTP ${response.status} reading ${url} (bytes ${start}-${end - 1})`);
+          // A file that isn't there (or isn't theirs) stays so: asking again only floods the log
+          // (JJ's Mac, Nov 3: a deleted script's preview asked for 6,632 times in five minutes).
+          if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) throw Object.assign(failed, { final: true });
+          throw failed;
+        }
         const total = Number(response.headers.get("content-range")?.split("/")[1] ?? (response.status === 200 ? response.headers.get("content-length") : NaN));
         if (Number.isFinite(total)) sizes.set(url, total);
         const body = new Uint8Array(await response.arrayBuffer());
@@ -99,7 +105,7 @@ export function rangeReader(url: string, fetcher: Fetch = (input, init) => fetch
       } catch (error) {
         clearTimeout(timer);
         network.failures++;
-        if (attempt >= RETRIES) throw abort.signal.aborted ? new Error(`${abort.signal.reason} reading ${url}`) : error;
+        if (attempt >= RETRIES || (error as { final?: boolean }).final === true) throw abort.signal.aborted ? new Error(`${abort.signal.reason} reading ${url}`) : error;
         await wait(attempt);
       }
     }

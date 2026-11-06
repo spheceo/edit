@@ -68,6 +68,23 @@ describe("block range reads", () => {
     expect(ranges).toEqual([`bytes=0-${BLOCK - 1}`, `bytes=${BLOCK}-${2 * BLOCK - 1}`, `bytes=${2 * BLOCK}-${file.length - 1}`]);
   });
 
+  it("doesn't ask again for a file that isn't there, and does for a failing server", async () => {
+    vi.useFakeTimers();
+    try {
+      const gone = vi.fn(async () => Response.json({ error: "That script is missing." }, { status: 404 }));
+      await expect(rangeReader("/file", gone).getSize()).rejects.toThrow("HTTP 404");
+      expect(gone).toHaveBeenCalledTimes(1);
+      let calls = 0;
+      const flaky = vi.fn(async (url: string, init: RequestInit) => (++calls < 3 ? new Response("", { status: 500 }) : server()(url, init)));
+      const size = rangeReader("/file", flaky).getSize();
+      await vi.runAllTimersAsync();
+      expect(await size).toBe(file.length);
+      expect(flaky).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("slices a whole-file answer from a server without range support", async () => {
     const reader = rangeReader("/file", server(false));
     await reader.getSize();

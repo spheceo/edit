@@ -62,7 +62,10 @@ export function detail(data: string, script: Script): Script {
 /** The script `id` read for the signed-in person: refused when its kind isn't theirs. */
 export function readFor(data: string, id: string): Script {
   if (!store.idOk(id)) throw notFound("Unknown script.");
-  const script = store.read(store.scriptDir(data, id));
+  const dir = store.scriptDir(data, id);
+  // Deleted (or never here): a 404, which the page's preview reads don't ask again for, not a 500 they retry.
+  if (!isFile(join(dir, "script.json"))) throw notFound("That script is missing.");
+  const script = store.read(dir);
   can.requireScript(script);
   return script;
 }

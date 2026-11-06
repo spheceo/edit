@@ -64,6 +64,10 @@ function onBattery(): boolean {
   return result.status === 0 && result.stdout.includes("'Battery Power'");
 }
 
+function agentsWorking(app: App): boolean {
+  return (app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() === true;
+}
+
 /** Makes `id`'s export ahead if it's worth it now; why not, when it isn't (for the log and tests). */
 export function tryNow(app: App, id: string): string | null {
   const registry = app.exports as Partial<Ahead>;
@@ -73,6 +77,8 @@ export function tryNow(app: App, id: string): string | null {
   const project = live.project;
   if (duration(project) <= 0 || !project.clips.some((clip) => clip.type === "video")) return "nothing to export";
   if (hooks.onBattery()) return "on battery";
+  // Its footage downloads and encoding would slow every agent's frames (Nov 6: four review fixes, each look at the edit 1–3 minutes).
+  if (agentsWorking(app)) return "an agent is working";
   let pending: string[] = [];
   try {
     pending = seams.broll.smoothingPending(id, project);
@@ -101,8 +107,9 @@ function changed(app: App, id: string): void {
   const timer = resting.get(id);
   if (timer !== undefined) clearTimeout(timer);
   const registry = app.exports as Partial<Ahead>;
-  // Being made of an older picture: stopped (what it made is kept, and reused by the next).
-  if (registry.aheadFor?.() === id) void registry.stopAhead?.(id);
+  // Being made of an older picture, or of any while an agent works: stopped (what it made is kept, and reused by the next).
+  const making = registry.aheadFor?.() ?? null;
+  if (making !== null && (making === id || agentsWorking(app))) void registry.stopAhead?.(making);
   const wait = (): void => {
     const later = setTimeout(() => {
       resting.delete(id);
@@ -115,7 +122,7 @@ function changed(app: App, id: string): void {
       }
       if (why === null) diag.info("export", `${app.store.get(id)?.project.name ?? id}: making its export ahead, for the next export or share`);
       // Busy, smoothing or making another's: looked at again after another rest.
-      else if (why === "the Mac is busy" || why === "slowed shots still smoothing" || why === "making another's") wait();
+      else if (why === "the Mac is busy" || why === "slowed shots still smoothing" || why === "making another's" || why === "an agent is working") wait();
     }, hooks.restMs);
     later.unref?.();
     resting.set(id, later);

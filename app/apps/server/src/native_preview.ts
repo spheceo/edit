@@ -11,39 +11,10 @@
 import type { App } from "./app.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import { PLAYBACK_ROUTE } from "./cloud_playback.ts";
-import * as diag from "./diag.ts";
 import { json } from "./http/errors.ts";
+import { fetchWhole } from "./local_previews.ts";
 import type { Project } from "./model.ts";
 import { isFile } from "./paths.ts";
-
-/** Whole previews fetched at once for the native preview. */
-const AT_ONCE = 2;
-const waiting: { key: string; local: string }[] = [];
-const fetching = new Set<string>();
-
-function fetchNext(): void {
-  while (fetching.size < AT_ONCE) {
-    const next = waiting.shift();
-    if (next === undefined) return;
-    if (fetching.has(next.local) || isFile(next.local)) continue;
-    fetching.add(next.local);
-    const started = performance.now();
-    void cloudMedia.fetchKey(next.key, next.local)
-      .then(() => diag.info("preview", `${next.key}: here for the native preview in ${diag.human(performance.now() - started)}`))
-      .catch((error: unknown) => diag.warn("preview", `${next.key}: not fetched for the native preview: ${diag.messageOf(error)}`))
-      .finally(() => {
-        fetching.delete(next.local);
-        fetchNext();
-      });
-  }
-}
-
-/** Queues `key`'s whole preview into `local`, once. */
-function fetchWhole(key: string, local: string): void {
-  if (fetching.has(local) || waiting.some((one) => one.local === local)) return;
-  waiting.push({ key, local });
-  fetchNext();
-}
 
 /**
  * Each picture media's file for the native preview: its made preview, else

@@ -38,6 +38,7 @@ import { call, ORIGIN } from "./mcp/index.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import type { Clip, ExportOptions, Marker, Media, Project } from "./model.ts";
 import { isEssay } from "./model.ts";
+import * as localPreviews from "./local_previews.ts";
 import { native, withProject, withProjectAsync, type EncodedImage, type ProjectInput, type SheetSpec } from "./native/index.ts";
 import { dirname, resolve as resolvePath } from "node:path";
 
@@ -163,6 +164,9 @@ function onLive<T>(found: Live, work: (input: ProjectInput) => T): T {
 /** A render of the live project; the cloud stills it reads are fetched first if the cache dropped them. */
 async function onLiveAsync<T>(app: App, found: Live, work: (input: ProjectInput) => Promise<T>): Promise<T> {
   await seams.cloudMedia.restoreStills(app, found.project);
+  // Cloud previews read from their whole copies here, once they've come (local_previews.ts).
+  const local = localPreviews.localized(app.store.cacheDir(), found.project);
+  if (local !== null) return work({ json: JSON.stringify(local) });
   return withProjectAsync(found.project.id, found.rev, () => JSON.stringify(found.project), work);
 }
 
@@ -1182,10 +1186,13 @@ async function withReview(app: App, project: Project, input: ProjectInput, frame
           encode: "agent",
           sheet: sheetSpec({}, frames.map((frame) => frame / fps)),
         });
+      const local = localPreviews.localized(app.store.cacheDir(), project);
       const sheet =
-        "ref" in input
-          ? await withProjectAsync(input.ref.id, input.ref.rev, () => jsonForSerde(project), work)
-          : await work(input);
+        local !== null
+          ? await work({ json: jsonForSerde(local) })
+          : "ref" in input
+            ? await withProjectAsync(input.ref.id, input.ref.rev, () => jsonForSerde(project), work)
+            : await work(input);
       const rendered = sheet[0];
       if (rendered === undefined) throw new Error("nothing was rendered");
       content.push(...imageContent(rendered, `Review frames, left to right then down: ${debugInts(frames)}`));
@@ -2362,7 +2369,7 @@ export async function planAssets(app: App, project: Project, operations: Json[])
     for (const [mediaId, spans] of Object.entries(needs.ears)) {
       const media = project.media.find((own) => own.id === mediaId);
       if (media === undefined) continue;
-      sides[mediaId] = await diag.timeOnAsync("agent", "both_ears: measure", media.name, () => ears.liveSide(media.path, spans));
+      sides[mediaId] = await diag.timeOnAsync("agent", "both_ears: measure", media.name, () => ears.liveSide(localPreviews.pathOf(app.store.cacheDir(), media), spans));
     }
     assets.sides = sides;
   }

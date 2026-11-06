@@ -146,7 +146,7 @@ export function title(p: Project, a: Args, fallback: Look = "bold"): Args {
   // Over a blurring picture the words come once it has gone soft.
   const from = blurBehind ? Math.min(start + 6, end - 12) : start; const dd = end - from;
   const settle = Math.min(18, Math.floor(dd / 3));
-  let animation: Args | undefined; let wordTimes: number[] | undefined;
+  let animation: Args | undefined;
   if (motion === "type") animation = { preset: "typewriter", duration: 4, stagger: number(a, "stagger", 1.2) };
   if (motion === "words") {
     const at = Array.isArray(a.words_at) ? a.words_at.filter((f): f is number => typeof f === "number") : [];
@@ -156,7 +156,7 @@ export function title(p: Project, a: Args, fallback: Look = "bold"): Args {
   }
   const rise = motion === "rise";
   const id = push(p, { type: "text", name: `Horror · ${kind} title`, text: words, start: from, duration: dd, fade_in: rise ? 8 : 0, fade_out: Math.min(9, Math.floor(dd / 4)),
-    style, transform: { x, y }, ...(animation ? { animation } : {}), ...(wordTimes ? { word_times: wordTimes } : {}),
+    style, transform: { x, y }, ...(animation ? { animation } : {}),
     ...(rise ? { keyframes: { y: [...arrival(y + 46 * k, y, settle), key(dd - 1, y - 6 * k)] } } : {}) });
   made.push(id);
   if (rise) made.push(motionBlur(p, id, from, dd, x, y, bw, bh, settle));

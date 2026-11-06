@@ -1108,6 +1108,14 @@ function parseOr(text: string | Uint8Array): Json {
  * measured (application/json); or what went wrong (text).
  */
 export function mapShot(token: string, headers: Headers, body: Uint8Array): number {
+  // Tiles still coming in before the first frame: progress, so a slow first view isn't taken for a stalled render
+  // (Nov 7, Sphe's Mac: Female Police Captain's map, every try killed at 150 s while its tiles came 2–4 s each).
+  if (headers.get("x-map-phase") === "loading") {
+    const job = mapJobs.get(token);
+    if (job === undefined) return 404;
+    job.progress = timing.now();
+    return 204;
+  }
   if (headers.get("x-map-phase") === "ready") {
     const job = mapJobs.get(token);
     const ready = job?.ready ?? null;

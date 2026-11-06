@@ -248,6 +248,13 @@ test("the map page, its frames and its picture come back through the routes", as
     expect(frame.status).toBe(204);
     expect(framesHad(frames, 3)).toEqual([2]);
     expect((await ask("POST", "/api/maps/tok/frame/x", { body: "" }))!.status).toBe(400);
+    // Tiles still coming in count as progress, and answer nothing else.
+    const job = broll.state.mapJobs.get("tok")!;
+    delete job.progress;
+    expect((await ask("POST", "/api/maps/tok", { headers: { "x-map-phase": "loading" } }))!.status).toBe(204);
+    expect(typeof job.progress).toBe("number");
+    expect(picture).toBeNull();
+    expect((await ask("POST", "/api/maps/gone", { headers: { "x-map-phase": "loading" } }))!.status).toBe(404);
     const phase = (await ask("POST", "/api/maps/tok", { headers: { "x-map-phase": "ready", "content-type": "application/json" }, body: '{"track":[[1,2,3,4]]}' }))!;
     expect(phase.status).toBe(204);
     expect(ready).toEqual({ track: [[1, 2, 3, 4]] });

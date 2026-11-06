@@ -167,6 +167,14 @@ Cesium.RequestScheduler.maximumRequestsPerServer = 48;
   scene.screenSpaceCameraController.enableCollisionDetection = false;
   const tileset = await Cesium.createGooglePhotorealistic3DTileset({ onlyUsingWithGoogleGeocoder: true }, { showCreditsOnScreen: true, maximumScreenSpaceError: 4, enableCollision: false });
   scene.primitives.add(tileset);
+  // Tiles coming in say so (every 10 s at most), so Edit doesn't take a slow first view for a stalled render.
+  let beat = 0;
+  tileset.tileLoad.addEventListener(() => {
+    const now = Date.now();
+    if (now - beat < 10000) return;
+    beat = now;
+    fetch(location.href, { method: "POST", headers: { "x-map-phase": "loading" } }).catch(() => {});
+  });
   // The camera centres on the building it marks (its outline's middle), not
   // the address's point: on a big lot they're far apart and the building sat
   // off in a corner (Sabrina Limon's railroad shop).

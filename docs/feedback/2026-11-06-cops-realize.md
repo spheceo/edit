@@ -29,4 +29,4 @@ The four projects' footage was imported on Mathias's Mac, so every frame the age
 
 On nightly-61 the server answered health in 13–52 s: /api/projects/status built and sorted every project's whole chat twice (54 chats, 6.5 MB) every few seconds, and so did each followed fix. The agents' tools didn't connect (Cops Realize, six times), whole previews took 3–4 min, and Son & Dad's share upload had R2 close its sockets. Whether a turn runs is now read without building the chat (agent.ts `turn`); health 0.03–2.75 s after.
 
-Also on the way: Cops Realize's chat was flagged by the model's safeguards (Sonnet and Opus) every turn, so it was reset (the old chat kept in ~/Documents/edit-chat-backups); three flaky tests fixed so just check passes on a loaded Mac (f8592da8, 2fa4d3d0's media timeout, 37c4d0b4's lint).
+Also on the way: Cops Realize's chat was flagged by the model's safeguards (Sonnet and Opus) every turn, so it was reset (the old chat kept in ~/Documents/edit-chat-backups); three flaky tests fixed so just check passes on a loaded Mac (f8592da8, c2c034dc's media timeout, 37c4d0b4's lint).

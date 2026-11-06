@@ -62,6 +62,8 @@ const FIX_TURN_MS = 3 * 60 * 60_000;
 const RETRY_MS = 30 * 60_000;
 /** …this many times in all; then it's left for the team (the audit, Oct 23: a new Opus turn every 30 minutes, forever). */
 export const MAX_ATTEMPTS = 2;
+/** Times one Ready for changes sends a note to the agent while its turns end without answering it. */
+const FIX_TRIES = 4;
 /** Changed stretches closer than this (frames: a second) are one band. */
 const JOIN_SECONDS = 1;
 
@@ -928,6 +930,7 @@ export function fixMessage(project: Project, shared: Shared | undefined, notes: 
     `${asked ? "Open" : "(Edit, automatically) New"} feedback on this edit's review${shared === undefined ? "" : ` (${shared.url})`}: ${notes.length} note${notes.length === 1 ? "" : "s"}. ` +
     "Load the feedback skill and fix them across the video, the team's words being what they want. " +
     'After each note, call feedback_done {note: "<its id>", summary: "<one line: what you changed>"}; for one you can\'t or shouldn\'t do, feedback_unfixed {note, reason}; a question (kind: question) gets feedback_answer {note, answer} and no change. A kind names the change wanted (a blur, a mute, music…): keep to it; "everywhere" means across the whole video. ' +
+    "Answer every note in this turn, however many there are: work through them all, one after another, and end the turn only when each has its feedback_done, feedback_unfixed or feedback_answer (Edit sends back any you leave and shares nothing until they're answered). " +
     `Then mute_house_words once if subtitles changed, and finish with a line per note${asked ? "; when this turn ends Edit exports the edit and shares it on the review as the next version, so don't export or share it yourself" : ""}.\n` +
     `${UNTRUSTED_OPEN}\n` +
     lines.join("\n") +
@@ -1815,7 +1818,18 @@ export function onLatest(home: string, project: string): Note[] {
  * goes as v3 and fixes those comments as well"). `round`: comments that came
  * in during the fix, sent to the agent after it (twice at most).
  */
-async function followFix(app: App, project: string, reviewId: string | null, noteIds: string[], before: string, every = followMs, round = 0, reshare = false): Promise<void> {
+async function followFix(
+  app: App,
+  project: string,
+  reviewId: string | null,
+  noteIds: string[],
+  before: string,
+  every = followMs,
+  round = 0,
+  reshare = false,
+  sent: Record<string, number> = {},
+  last: string[] | null = null,
+): Promise<void> {
   const home = app.store.home;
   const panel = seams.agentPanel(app);
   const mine = noteIds.flatMap((id) => (read(home).notes[id] ? [read(home).notes[id]!] : []));
@@ -1843,6 +1857,57 @@ async function followFix(app: App, project: string, reviewId: string | null, not
     await progress(reviewId, { state: "failed", error: `v${approved.version} was approved meanwhile, so nothing was shared.` });
     return;
   }
+  // Notes the turn ended without answering (no feedback_done, feedback_unfixed
+  // or feedback_answer) go back to the agent before anything's shared (Nov 6,
+  // JJ's Cops Realize: the turn compacted 2 minutes in, fixed 7 of 31 notes,
+  // said "this round is not finished", and v2 went up with the other 22
+  // untouched). Each is sent FIX_TRIES times at most, and only while the last
+  // send got some answered; what's still unanswered then is left on the page,
+  // saying so, never shown as queued.
+  const notesNow = read(home).notes;
+  const unanswered = noteIds.filter((id) => {
+    const note = notesNow[id];
+    return note !== undefined && note.status === "open" && note.fix === undefined && note.unfixed === undefined;
+  });
+  if (unanswered.length > 0) {
+    const stuck = last !== null && last.every((id) => unanswered.includes(id));
+    const again = stuck ? [] : unanswered.filter((id) => (sent[id] ?? 1) < FIX_TRIES);
+    if (again.length > 0) {
+      const state = read(home);
+      const left = again.flatMap((id) => (state.notes[id] ? [state.notes[id]!] : []));
+      update(home, (saved) => {
+        for (const id of again) {
+          const own = saved.notes[id];
+          if (own === undefined) continue;
+          own.claimed = Date.now();
+          own.attempts = (own.attempts ?? 0) + 1;
+        }
+      });
+      const replies = Object.values(state.notes).filter((note) => note.project === project && note.parentId !== null);
+      reviewGuard.reviewTurnNext(project);
+      await panel.send(
+        project,
+        `(Edit, automatically) Your turn ended with ${again.length} of the ${noteIds.length} notes unanswered: no feedback_done, feedback_unfixed or feedback_answer for them, so nothing is shared yet. ` +
+          "Fix every one of them now, in this turn, and answer each; don't end the turn with a list of what's left.\n" +
+          fixMessage(after.project, state.shared[project], left, replies, await boxStills(home, project, state.shared[project], left)),
+        null,
+        null,
+      );
+      diag.info("review", `${after.project.name}: Ready for changes: the turn left ${unanswered.length} of ${noteIds.length} note(s) unanswered; sent ${again.length} back to the agent`);
+      const tried = { ...sent };
+      for (const id of again) tried[id] = (tried[id] ?? 1) + 1;
+      await progress(reviewId, { stage: `Fixing the ${again.length} note${again.length === 1 ? "" : "s"} still open`, done: noteIds.length - unanswered.length });
+      await followFix(app, project, reviewId, noteIds, before, every, round, reshare, tried, again);
+      return;
+    }
+    const tries = Math.max(...unanswered.map((id) => sent[id] ?? 1));
+    diag.warn("review", `${after.project.name}: Ready for changes: ${unanswered.length} note(s) still unanswered after ${tries} tr${tries === 1 ? "y" : "ies"}; left open on the review`);
+    for (const id of unanswered) {
+      await unfixed(app, project, id, `Edit's agent didn't get to this note (asked ${tries} time${tries === 1 ? "" : "s"}): ask again with Ready for changes.`).catch((error: unknown) =>
+        diag.warn("review", `${after.project.name}: leaving ${id} open: ${diag.messageOf(error)}`),
+      );
+    }
+  }
   // Comments on the latest version that came in during the fix: fixed before it's shared.
   const unseen = onLatest(home, project).filter((note) => note.status === "open" && !noteIds.includes(note.id) && note.fix === undefined && note.unfixed === undefined);
   if (unseen.length > 0 && round < 2) {
@@ -1857,7 +1922,7 @@ async function followFix(app: App, project: string, reviewId: string | null, not
       diag.info("review", `${after.project.name}: Ready for changes: ${more.length} comment(s) came in meanwhile, sent to the agent too`);
       const all = [...noteIds, ...more.map((note) => note.id)];
       noteFix(home, project, { reviewId, noteIds: all, before, at: Date.now(), ...(reshare ? { reshare } : {}) });
-      await followFix(app, project, reviewId, all, before, every, round + 1, reshare);
+      await followFix(app, project, reviewId, all, before, every, round + 1, reshare, sent);
       return;
     }
   }

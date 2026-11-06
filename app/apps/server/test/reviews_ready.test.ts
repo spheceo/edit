@@ -428,3 +428,53 @@ test("a share whose export goes without a word (its process died, the event lost
     cleanup();
   }
 }, 30_000);
+
+// Nov 6, JJ's Cops Realize: the turn fixed 7 of 31 notes, ended saying "this
+// round is not finished", and v2 was shared with the other 22 untouched.
+test("a turn that ends with notes unanswered is sent back for them before anything's shared; one never answered is left saying so", async () => {
+  const { app, home, cleanup } = fixtureHome("ready-unanswered");
+  const live = app.store.createAs("Cops", "bodycam", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  let running = false;
+  const sent: string[] = [];
+  idle(app, {
+    chat: () => ({ running }),
+    send: async (project: string, text: string) => {
+      sent.push(text);
+      running = true;
+      setTimeout(() => {
+        // The first turn answers n1 only; the next answers n2 and never n3.
+        const which = sent.length === 1 ? ["n1"] : sent.length === 2 ? ["n2"] : [];
+        void Promise.all(which.map((one) => reviews.unfixed(app, project, one, "answered"))).then(() => (running = false));
+      }, 30);
+    },
+  });
+  try {
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: {}, shared: { [id]: { reviewId: "r1", url: "u", versions: [{ n: 1, timeline: "t", path: "/nowhere.mp4", fps: 30, durationMs: 10_000, clips: [] }] } } }));
+    const note = (n: string, text: string) => ({ noteId: n, reviewId: "r1", sourceId: id, parentId: null, anchor: { kind: "time", ms: 1000 }, status: "open", fromApp: false, version: 1, author: "JJ", text, createdAt: 1, updatedAt: 1 });
+    const calls = convex({
+      "reviews:checkIn": () => ({ chosen: true, requests: [request(id)] }),
+      "reviews:changes": () => ({ notes: [note("n1", "one"), note("n2", "two"), note("n3", "three")], cursor: 1, more: false }),
+      "reviews:open": () => [{ sourceId: id, reviewId: "r1", approved: null }],
+      "reviews:takeFix": () => ({ ok: true, sourceId: id, title: "Cops", version: 1, noteIds: ["n1", "n2", "n3"] }),
+      "reviews:claim": (args) => ({ claimed: args.noteIds }),
+      "reviews:fixProgress": () => ({ ok: true }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([id]);
+    const said = () => calls.filter((call) => call.path === "reviews:fixProgress").map((call) => call.args);
+    const end = Date.now() + 15_000;
+    while (!said().some((one) => one.state === "failed" || one.state === "done") && Date.now() < end) await Bun.sleep(20);
+    // Sent back twice: n2 and n3, then n3 alone; a send that answered nothing ends it.
+    expect(sent).toHaveLength(3);
+    expect(sent[1]).toContain("Your turn ended with 2 of the 3 notes unanswered");
+    expect(sent[1]).toContain("[n2]");
+    expect(sent[1]).not.toContain("[n1]");
+    expect(sent[2]).toContain("[n3]");
+    expect(sent[2]).not.toContain("[n2]");
+    const left = calls.filter((call) => call.path === "reviews:status" && call.args.noteId === "n3");
+    expect(left).toHaveLength(1);
+    expect(String(left[0]!.args.details)).toContain("didn't get to this note");
+  } finally {
+    cleanup();
+  }
+});

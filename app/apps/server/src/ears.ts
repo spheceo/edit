@@ -61,8 +61,11 @@ export async function liveSide(path: string, spans: [number, number][] = []): Pr
     total += take;
   }
   const keep = parts.length > 0 ? `aselect='${parts.join("+")}',` : "";
+  // Read no further than the last stretch it hears: the whole file was decoded, and a long one streamed from the cloud
+  // ran past the five minutes allowed (Nov 6, Cops Realize: five both_ears plans killed, "received signal 15").
+  const until = spans.length > 0 ? Math.max(...spans.map(([from, seconds]) => from + seconds)) + 1 : null;
   const child = Bun.spawn(
-    [tools.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "info", ...remote, "-i", path, "-map", "0:a:0", "-vn", "-af", `${keep}astats`, "-f", "null", "-"],
+    [tools.ffmpeg(), "-hide_banner", "-nostdin", "-loglevel", "info", ...remote, ...(until === null ? [] : ["-t", until.toFixed(3)]), "-i", path, "-map", "0:a:0", "-vn", "-af", `${keep}astats`, "-f", "null", "-"],
     { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
   );
   const timer = setTimeout(() => child.kill(), 5 * 60_000);

@@ -97,6 +97,8 @@ export function staticAsset(pathname: string, from: Assets = assets()): Response
       503,
     );
   }
-  const cache = served.startsWith("assets/") ? "public, max-age=31536000, immutable" : "no-cache";
+  // The shell is never kept: WebKit reused a "no-cache" index.html from before a rebuild in Edit.app's window
+  // (Nov 6), whose scripts were gone, and the page never started. Hashed assets are named by their content.
+  const cache = served.startsWith("assets/") ? "public, max-age=31536000, immutable" : served === "index.html" ? "no-store" : "no-cache";
   return new Response(file, { headers: { "content-type": mimeOf(served), "cache-control": cache } });
 }

@@ -263,7 +263,8 @@ test("the UI's files, its shell for SPA routes, and fonts", async () => {
     expect([shell.status, await shell.text(), shell.headers.get("cache-control")]).toEqual([
       200,
       "<html>shell</html>",
-      "no-cache",
+      // Never kept: a page from before a rebuild named scripts that were gone.
+      "no-store",
     ]);
     expect(shell.headers.get("content-type")).toBe("text/html");
     const script = (await respond(app, routes, request("/assets/app-1.js"), null))!;

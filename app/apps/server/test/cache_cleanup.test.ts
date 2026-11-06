@@ -404,3 +404,32 @@ test("past the budget, an excerpt an export is reading stays; it goes once let g
     expect(fs.existsSync(path)).toBe(false);
   } finally { cleanup(); }
 });
+
+test("exports made ahead: the two made last stay under three days old; older or more go, never the one being made again", () => {
+  const { app, store, cleanup } = fixtureHome("cache-ahead");
+  try {
+    const cache = store.cacheDir();
+    const day = 24 * 3600 * 1000;
+    const made = (id: string, at: number) => {
+      fs.mkdirSync(`${cache}/ahead`, { recursive: true });
+      for (const path of [`${cache}/ahead/${id}.mp4`, `${cache}/ahead/${id}.mp4.json`]) {
+        fs.writeFileSync(path, "x");
+        fs.utimesSync(path, at / 1000, at / 1000);
+      }
+    };
+    const now = Date.now();
+    made("newest", now - 1000);
+    made("second", now - 2000);
+    made("third", now - 3000);
+    made("old", now - 4 * day);
+    made("remaking", now - 5 * day);
+    // Being made again: it copies its unchanged chunks out of its last one.
+    (app.exports as unknown as { aheadFor: () => string | null }).aheadFor = () => "remaking";
+    cleanCache(app, false);
+    const left = fs.readdirSync(`${cache}/ahead`).filter((name) => name.endsWith(".mp4")).sort();
+    expect(left).toEqual(["newest.mp4", "remaking.mp4", "second.mp4"]);
+    expect(fs.existsSync(`${cache}/ahead/third.mp4.json`)).toBe(false);
+  } finally {
+    cleanup();
+  }
+});

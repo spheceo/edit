@@ -37,7 +37,7 @@ import { playbackPath } from "./cloud_playback.ts";
 import { Semaphore } from "./media.ts";
 import * as diag from "./diag.ts";
 import * as drive from "./drive.ts";
-import { beingRead } from "./exports.ts";
+import { aheadFile, beingRead } from "./exports.ts";
 import * as retention from "./export_retention.ts";
 import * as later from "./later.ts";
 import { exportRoots } from "./export_folder.ts";
@@ -63,6 +63,8 @@ const RECENT = 2 * DAY;
 const COPY_RECENT = 6 * 3600 * 1000;
 /** A Drive download (its original in the cloud) not read by an export for this long goes. */
 const DOWNLOADED = 3 * DAY;
+/** Exports made ahead (export_ahead.ts) kept: the ones made last. */
+const AHEAD_KEPT = 2;
 /** The disk's free space below which old projects' previews go (safety valve only). */
 const FREE_FLOOR = FREE_FLOOR_BYTES;
 /** A project open this lately keeps all of its cache (an edit in progress). */
@@ -557,6 +559,31 @@ export function cleanCache(
       if (age(path, now) >= DOWNLOADED) remove(path);
     }
   }
+  // Exports made ahead (export_ahead.ts), each about as big as the export: the
+  // two made last stay while they're under three days old; the one being made
+  // is never touched (its `.json` comes only once it's done, so it's not listed).
+  {
+    const aheadDir = join(cache, "ahead");
+    const made = safeList(aheadDir)
+      .filter((name) => name.endsWith(".mp4.json"))
+      .map((name) => {
+        try {
+          return { path: join(aheadDir, name.slice(0, -".json".length)), at: fs.statSync(join(aheadDir, name)).mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter((one): one is { path: string; at: number } => one !== null)
+      .sort((a, b) => b.at - a.at);
+    // The project whose export is being made again now: it copies its unchanged chunks out of the last one.
+    const making = makingAhead(app);
+    for (const [index, one] of made.entries()) {
+      if (index < AHEAD_KEPT && now - one.at < DOWNLOADED) continue;
+      if (making !== null && one.path === aheadFile(cache, making)) continue;
+      remove(one.path);
+      remove(`${one.path}.json`);
+    }
+  }
   // Research images no project links any more (research.ts's pool).
   const pooled = research.prunePool(app.store.home, dryRun);
   if (pooled > 0) {
@@ -624,6 +651,17 @@ export function cleanCache(
         }
       };
       for (const sub of CLOUD_EVICTABLE) collect(join(cache, "cloud", sub));
+      // Exports made ahead go before footage a project still edits from: made again from it if they're wanted.
+      for (const name of safeList(join(cache, "ahead"))) {
+        if (!name.endsWith(".mp4.json")) continue;
+        const path = join(cache, "ahead", name.slice(0, -".json".length));
+        const making = makingAhead(app);
+        if (making !== null && path === aheadFile(cache, making)) continue;
+        try {
+          const stat = fs.statSync(path);
+          candidates.push({ path, at: stat.mtimeMs, bytes: stat.size, worked: Number.NEGATIVE_INFINITY });
+        } catch { /* gone */ }
+      }
       candidates.sort((a, b) => a.worked - b.worked || a.at - b.at);
       for (const candidate of candidates) {
         if (over <= 0) break;
@@ -652,6 +690,15 @@ export function cleanCache(
     }
   }
   return report;
+}
+
+/** The project whose export is being made ahead now (exports.ts `aheadFor`); none where there are no exports (tests). */
+function makingAhead(app: App): string | null {
+  try {
+    return (app.exports as { aheadFor?: () => string | null }).aheadFor?.() ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

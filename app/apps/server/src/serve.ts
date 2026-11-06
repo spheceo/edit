@@ -30,6 +30,7 @@ import * as archive from "./archive.ts";
 import * as firstPrompt from "./first_prompt.ts";
 import * as researchCloud from "./research_cloud.ts";
 import * as playbackRender from "./playback_render.ts";
+import * as exportAhead from "./export_ahead.ts";
 import * as remoteAsk from "./remote_ask.ts";
 import * as reviews from "./reviews.ts";
 import * as retryAfterUpdate from "./retry_after_update.ts";
@@ -252,6 +253,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   if (!trials) optional("retry after update", () => retryAfterUpdate.start(app));
   // Smooth playback: the open edit rendered small in the background, out of the way of exports.
   optional("playback", () => playbackRender.start(app));
+  // Exports made ahead: once a project's edits rest, its next share's export is made in the background, so the share reuses it.
+  if (!trials) optional("export ahead", () => exportAhead.start(app));
   // Projects archived on Repack: their big files freed here, and restores asked for done.
   if (!trials) optional("archive", () => archive.start(app));
   // Script mode: Writer's scripts on this Mac brought in once, and its background work.

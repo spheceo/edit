@@ -49,6 +49,7 @@ import { onScreen } from "./review.ts";
 import { fixed, jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
+import { deepFreeze } from "./store.ts";
 import * as tools from "./tools.ts";
 import { putOff } from "./put_off.ts";
 
@@ -134,7 +135,19 @@ function empty(): State {
   return { cursor: 0, shared: {}, notes: {} };
 }
 
-export function read(home: string): State {
+/** The file as last read or written here, by its stamp (inode, size, mtime in ns). */
+let kept: { path: string; stamp: string; state: State } | null = null;
+
+function stampOf(path: string): string {
+  try {
+    const stats = fs.statSync(path, { bigint: true });
+    return `${stats.ino}:${stats.size}:${stats.mtimeNs}`;
+  } catch {
+    return "none";
+  }
+}
+
+function parse(home: string): State {
   // A file that won't read is set aside, never read as empty and written over (files.readState).
   const raw = readState(join(home, FILE), (message) => diag.warn("review", message));
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return empty();
@@ -142,13 +155,35 @@ export function read(home: string): State {
   return { ...empty(), ...given, shared: given.shared ?? {}, notes: given.notes ?? {} };
 }
 
-function write(home: string, state: State): void {
-  writeAtomic(join(home, FILE), JSON.stringify(state));
+/**
+ * The saved state, to read, never to change (`update` changes it): parsed
+ * again only when the file has changed. Every look parsed the whole file
+ * (Nov 7, Sphe's Mac: 790 KB, read dozens of times a second by the status,
+ * check-ins and four followed fixes), and the server spent most of its time
+ * in JSON.parse: health took 6–10 s, uploads had R2 close their sockets, and
+ * map shots timed out loading.
+ */
+export function read(home: string): State {
+  const path = join(home, FILE);
+  const stamp = stampOf(path);
+  if (kept !== null && kept.path === path && kept.stamp === stamp) return kept.state;
+  const state = parse(home);
+  // No file yet: a fresh empty state each time, never kept.
+  if (stamp === "none") return state;
+  // Tests freeze it, so code that changes what it reads (rather than through `update`) fails there, not quietly in the cache.
+  kept = { path, stamp, state: process.env.NODE_ENV === "test" ? deepFreeze(structuredClone(state)) : state };
+  return kept.state;
 }
 
-/** Changes the saved state (read, change, write: one at a time in this process). */
+function write(home: string, state: State): void {
+  const path = join(home, FILE);
+  writeAtomic(path, JSON.stringify(state));
+  kept = { path, stamp: stampOf(path), state };
+}
+
+/** Changes the saved state (read, change, write: one at a time in this process), on a fresh copy so a change that throws leaves what's read as it was. */
 function update<T>(home: string, change: (state: State) => T): T {
-  const state = read(home);
+  const state = parse(home);
   const out = change(state);
   write(home, state);
   return out;

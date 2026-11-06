@@ -6,7 +6,7 @@ test("a turn's last message: the items it says it didn't get to, under a heading
   const ending = [
     "I worked through the notes, but the picture-over-text fix and several other notes are still open.",
     "",
-    "**Done**",
+    "**Done this turn**",
     "- **1:30:** the stones jump is re-pointed to the right moment.",
     "- **2:30:** the linked study is shown as a card with a marker on it.",
     "",

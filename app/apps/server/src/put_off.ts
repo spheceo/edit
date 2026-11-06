@@ -27,7 +27,8 @@ export function leftOver(text: string): string[] {
     if (!bullet) {
       // A heading (its own line, bold or ending in a colon) starts a section: one that says "not done" collects its items.
       if (/^\*\*[^*]+\*\*:?$|^#+\s|:$/.test(line)) {
-        under = putOff(line) || /^\W*(not done|still open|open|left|what['’]?s left|to do)\b/i.test(line);
+        // By its first words: "Not done or not working", "Still open", never "Done this turn" (Nov 6: its "this turn" read as put off).
+        under = /^\W*(not\b|still (open|to do)|open\b|left\b|what['’]?s left|to do\b|remaining\b|unfinished\b|didn['’]?t\b)/i.test(line);
         continue;
       }
       if (putOff(line)) loose.push(line);

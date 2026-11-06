@@ -982,7 +982,9 @@ class Preview {
         const length = (end - start) / fps - late;
         if (length <= 0) continue;
         const buffer = audio.createBuffer(pcm.channels.length, pcm.channels[0].length, pcm.sampleRate);
-        pcm.channels.forEach((channel, index) => buffer.copyToChannel(channel, index));
+        // One side in both ears when the clip says so, as the export's mix (mix.rs OneSide).
+        const side = clip.channel === "left" ? pcm.channels[0] : clip.channel === "right" ? (pcm.channels[1] ?? pcm.channels[0]) : null;
+        pcm.channels.forEach((channel, index) => buffer.copyToChannel(side ?? channel, index));
         const source = audio.createBufferSource();
         source.buffer = buffer;
         source.playbackRate.value = 1; // Worker PCM is already stretched, with pitch preserved.

@@ -846,6 +846,8 @@ pub struct AudioSegment {
     pub fade_out: f64,
     /// Stretches silenced, in seconds of the source (see `Mute`).
     pub mutes: Vec<Mute>,
+    /// Only this side of the source, in both ears (the clip's `channel`).
+    pub channel: Option<SoundChannel>,
 }
 
 impl AudioSegment {
@@ -927,6 +929,7 @@ pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {
                 speed,
                 volume_db,
                 mutes,
+                channel,
             } => Some(AudioSegment {
                 clip: clip.id.clone(),
                 media: media.clone(),
@@ -940,6 +943,7 @@ pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {
                 fade_in: clip.fade_in as f64 / fps,
                 fade_out: clip.fade_out as f64 / fps,
                 mutes: mutes.clone(),
+                channel: *channel,
             }),
             _ => None,
         })
@@ -1388,6 +1392,7 @@ mod tests {
                 speed: 1.0,
                 volume_db: -3.0,
                 mutes: Vec::new(),
+                channel: None,
             },
         });
         let segments = audio_segments(&project);

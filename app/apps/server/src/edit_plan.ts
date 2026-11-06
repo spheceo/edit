@@ -86,6 +86,8 @@ export interface Assets {
   mapMeasured?: (mediaId: string) => graphics.Measured | null;
   /** Horror: each screenshot's retro copy, by the original's media id (horror_look.ts). */
   retro?: Record<string, string>;
+  /** both_ears: the side each source's sound is on (null: both already), by media id (ears.ts). */
+  sides?: Record<string, "left" | "right" | null>;
 }
 
 export interface Shutter {
@@ -101,6 +103,8 @@ export interface Needs {
   shutter: boolean;
   /** Window frames the Windows screens need drawn ([app, width, height]); the wallpaper with them. */
   screens?: [screen.AppKind, number, number][];
+  /** both_ears without a side: the sources to measure, by media id, and the stretches their clips play ([from, seconds]). */
+  ears?: Record<string, [number, number][]>;
 }
 
 export function needs(operations: Json[], project: Project | null = null): Needs {
@@ -128,6 +132,20 @@ export function needs(operations: Json[], project: Project | null = null): Needs
       if (drawn !== null && !sizes.some(([app, w, h]) => app === "file_viewer" && w === drawn[0] && h === drawn[1])) sizes.push(["file_viewer", drawn[0], drawn[1]]);
     }
     if (operation.op === "evidence_board" && operation.shutters !== false) out.shutter = true;
+    if (operation.op === "both_ears" && project !== null && (operation.side === undefined || operation.side === null)) {
+      let clips: Clip[] = [];
+      try {
+        clips = earsClips(project, operation.select);
+      } catch {
+        // The op's own error to give.
+      }
+      const fps = fpsOf(project);
+      for (const clip of clips) {
+        if (clip.type !== "audio") continue;
+        const spans = (out.ears ??= {})[clip.media] ??= [];
+        spans.push([clip.source_in, (clip.duration / fps) * clip.speed]);
+      }
+    }
   }
   if (sizes.length > 0) out.screens = sizes;
   return out;
@@ -544,15 +562,65 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
       return markers.edit(project, args);
     case "blur_marks":
       return markBlurs.blurMarks(project, args);
+    case "both_ears":
+      return bothEars(project, args, assets.sides ?? {});
     default:
       // A transition's kind given as its own op ("red_flash" in the intro skill's words).
       if (["drop", "flash", "red_flash", "dip", "open", "light_leak", "burn"].includes(String(op))) {
         throw new Error(`unknown op ${op}: it's a transition, {"op": "transition", "kind": "${op}", "at": <frame>}`);
       }
       throw new Error(
-        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, blur_bars, ease_vignettes, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, blur_marks, tidy_tracks`,
+        `unknown op ${op}; use add, update, delete, keyframes, cover_cut_in, desktop, file_viewer, film_look, fill_frame, blur_bars, ease_vignettes, red_quote, annotate, call, transition, evidence_board, evidence_card, date_title, place_label, title_collage, desktop_profile, intro_captions, photo_inset, countdown, map_pin, split_screen, fast_forward, disclaimer, text_slam, timeline_bar, markers, blur_marks, both_ears, tidy_tracks`,
       );
   }
+}
+
+/** The audio clips a both_ears selector means: those picked, and the sound linked to a picked picture. */
+function earsClips(project: Project, select: unknown): Clip[] {
+  const ids = new Set(selected(project, select));
+  const links = new Set(project.clips.filter((clip) => ids.has(clip.id) && typeof clip.link === "string").map((clip) => clip.link!));
+  return project.clips.filter((clip) => clip.type === "audio" && (ids.has(clip.id) || (typeof clip.link === "string" && links.has(clip.link))));
+}
+
+/**
+ * Footage heard in one ear played in both (JJ, Nov 6: "we only have audio in
+ * the left ear"): each selected sound (or a selected picture's sound) plays
+ * the side of its source that carries it in both ears, the side measured
+ * (ears.ts) unless `side` says it ("left", "right"; "both" puts the source's
+ * own stereo back). A source already heard on both sides is left as it is.
+ */
+function bothEars(project: Project, args: Args, sides: Record<string, "left" | "right" | null>): Json {
+  const given = str(args.side);
+  if (given !== null && !["left", "right", "both"].includes(given)) throw new Error('side is "left", "right" or "both" (or leave it out: the side with the sound is found)');
+  const clips = earsClips(project, args.select);
+  if (clips.length === 0) throw new Error("no sound among the selected clips (pick audio clips, or pictures with their sound linked)");
+  const changed: string[] = [];
+  const already: string[] = [];
+  const found: Record<string, string> = {};
+  for (const clip of clips) {
+    if (clip.type !== "audio") continue;
+    let side: "left" | "right" | null;
+    if (given !== null) side = given === "both" ? null : (given as "left" | "right");
+    else {
+      if (!(clip.media in sides)) throw new Error(`the sides of ${clip.media} weren't measured (run both_ears through apply_edit_plan)`);
+      side = sides[clip.media]!;
+      found[clip.media] = side ?? "both sides already";
+      if (side === null) {
+        already.push(clip.id);
+        continue;
+      }
+    }
+    const own = clip as Clip & { channel?: "left" | "right" };
+    if ((own.channel ?? null) === side) continue;
+    if (side === null) delete own.channel;
+    else own.channel = side;
+    changed.push(clip.id);
+  }
+  return {
+    clips: changed.sort(compareStrings),
+    ...(Object.keys(found).length > 0 ? { sound_on: found } : {}),
+    ...(already.length > 0 ? { already_both: already.length } : {}),
+  };
 }
 
 /** A clip's keyframes, in serde's shape: sorted by param, left out when there are none. */

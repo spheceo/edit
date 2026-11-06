@@ -9,6 +9,7 @@ import type { Mute } from "./Mute";
 import type { PhotoFrame } from "./PhotoFrame";
 import type { Rgba } from "./Rgba";
 import type { Shake } from "./Shake";
+import type { SoundChannel } from "./SoundChannel";
 import type { TextAnimation } from "./TextAnimation";
 import type { TextStyle } from "./TextStyle";
 import type { Transform } from "./Transform";
@@ -32,7 +33,13 @@ frame?: PhotoFrame, blend?: BlendMode, } | { "type": "audio", media: string, sou
  * Stretches of the source silenced (a swear word): seconds of the
  * media, like source_in, each ramped over MUTE_FADE_SECONDS outside it.
  */
-mutes?: Array<Mute>, } | { "type": "text", text: string, style: TextStyle, transform: Transform, animation: TextAnimation, opacity: number, 
+mutes?: Array<Mute>, 
+/**
+ * Plays only this side of the source, in both ears: footage whose
+ * sound is in one ear (JJ, Nov 6: "we only have audio in the left ear").
+ * None: the source's own stereo.
+ */
+channel?: SoundChannel, } | { "type": "text", text: string, style: TextStyle, transform: Transform, animation: TextAnimation, opacity: number, 
 /**
  * Frames from the clip start at which each word appears (the `words` preset).
  */

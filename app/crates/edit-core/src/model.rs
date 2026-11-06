@@ -616,6 +616,15 @@ pub struct Mute {
     pub to: f64,
 }
 
+/// One side of a stereo source (an audio clip's `channel`).
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum SoundChannel {
+    Left,
+    Right,
+}
+
 /// How long a mute takes to fade out and back in, outside its stretch
 /// (seconds): a cosine ramp, as Repack's renderer does.
 pub const MUTE_FADE_SECONDS: f64 = 0.012;
@@ -702,6 +711,12 @@ pub enum ClipContent {
         /// media, like source_in, each ramped over MUTE_FADE_SECONDS outside it.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         mutes: Vec<Mute>,
+        /// Plays only this side of the source, in both ears: footage whose
+        /// sound is in one ear (JJ, Nov 6: "we only have audio in the left ear").
+        /// None: the source's own stereo.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        channel: Option<SoundChannel>,
     },
     Text {
         text: String,
@@ -2895,9 +2910,20 @@ mod validation_tests {
             speed: 1.0,
             volume_db: 0.0,
             mutes: Vec::new(),
+            channel: None,
         })
         .unwrap();
         assert!(!silent.contains("mutes"));
+        assert!(!silent.contains("channel"));
+        let left: ClipContent =
+            serde_json::from_str(r#"{"type":"audio","media":"m","channel":"left"}"#).unwrap();
+        assert!(matches!(
+            left,
+            ClipContent::Audio {
+                channel: Some(SoundChannel::Left),
+                ..
+            }
+        ));
     }
 
     #[test]

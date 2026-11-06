@@ -19,7 +19,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use edit_core::{mute_gain, AudioSegment, Mute, MUTE_FADE_SECONDS};
+use edit_core::{mute_gain, AudioSegment, Mute, SoundChannel, MUTE_FADE_SECONDS};
 
 pub const RATE: usize = 48_000;
 /// Frames mixed at a time (4 s: 1.5 MB of stereo float).
@@ -359,8 +359,30 @@ impl<'a> Volume<'a> {
     }
 }
 
+/// A source with one of its sides in both ears (an audio clip's `channel`).
+struct OneSide {
+    inner: Box<dyn Source>,
+    side: SoundChannel,
+}
+
+impl Source for OneSide {
+    fn read(&mut self, out: &mut [f32]) -> Result<usize, String> {
+        let frames = self.inner.read(out)?;
+        for frame in out.as_chunks_mut::<2>().0.iter_mut().take(frames) {
+            let [left, right] = *frame;
+            let kept = if self.side == SoundChannel::Right {
+                right
+            } else {
+                left
+            };
+            *frame = [kept, kept];
+        }
+        Ok(frames)
+    }
+}
+
 /// Opens the decoder for a part: native at speed 1 where AVFoundation reads
-/// the file, FFmpeg otherwise.
+/// the file, FFmpeg otherwise, with only one side heard when the clip says so.
 struct Sources {
     native: bool,
     /// Each file's sound, opened once (None: AVFoundation can't read it).
@@ -378,6 +400,14 @@ impl Sources {
     }
 
     fn open(&mut self, part: &Part) -> Result<Box<dyn Source>, String> {
+        let inner = self.decoder(part)?;
+        Ok(match part.segment.channel {
+            Some(side) => Box::new(OneSide { inner, side }),
+            None => inner,
+        })
+    }
+
+    fn decoder(&mut self, part: &Part) -> Result<Box<dyn Source>, String> {
         let segment = &part.segment;
         #[cfg(target_os = "macos")]
         // AVFoundation only reads local files: a cloud original's URL is FFmpeg's.
@@ -1374,6 +1404,7 @@ mod tests {
             fade_in: 0.0,
             fade_out: 0.0,
             mutes: vec![],
+            channel: None,
         }
     }
 
@@ -1467,6 +1498,29 @@ mod tests {
         let right = out[(1.4 * RATE as f64) as usize * 2 + 1];
         assert!((right - 0.25 * volume * 0.5).abs() < 2e-3, "{right}");
         assert_eq!(left(&out, 1.75), 0.0, "silent after it");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn one_side_plays_in_both_ears() {
+        let dir = temp_dir("side");
+        let path = ramp(&dir, "ramp.wav");
+        for native in [true, false] {
+            let mut left_only = segment(0.0, 1.0, 5.0);
+            left_only.channel = Some(SoundChannel::Left);
+            let out = mixed_with(native, &[part(&path, left_only)], RATE);
+            let at = (0.5 * RATE as f64) as usize * 2;
+            assert!((out[at] - 0.55).abs() < 2e-4, "{native}: {}", out[at]);
+            assert!(
+                (out[at + 1] - out[at]).abs() < 1e-6,
+                "{native}: the right ear hears the left"
+            );
+            let mut right_only = segment(0.0, 1.0, 5.0);
+            right_only.channel = Some(SoundChannel::Right);
+            let out = mixed_with(native, &[part(&path, right_only)], RATE);
+            assert!((out[at] - 0.25).abs() < 1e-4, "{native}: {}", out[at]);
+            assert!((out[at + 1] - 0.25).abs() < 1e-4, "{native}");
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 

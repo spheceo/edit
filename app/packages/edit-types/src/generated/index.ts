@@ -52,6 +52,7 @@ export type * from "./ShakeEnvelope";
 export type * from "./ShakeMotion";
 export type * from "./ShakePreset";
 export type * from "./Shape";
+export type * from "./SoundChannel";
 export type * from "./Style";
 export type * from "./TextAlign";
 export type * from "./TextAnimation";

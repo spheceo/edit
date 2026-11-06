@@ -31,6 +31,7 @@ import * as watermarks from "./watermarks.ts";
 import { ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { houseMedia, houseMediaSaved, importPaths } from "./import.ts";
+import * as ears from "./ears.ts";
 import * as horrorLook from "./horror_look.ts";
 import * as markers from "./markers.ts";
 import { call, ORIGIN } from "./mcp/index.ts";
@@ -2354,6 +2355,15 @@ export async function planAssets(app: App, project: Project, operations: Json[])
       if (found !== null && found.length > 0) marks[media.id] = found;
     }
     assets.screen = { wallpaper: wall, frames: keyed, marks };
+  }
+  if (needs.ears !== undefined) {
+    const sides: Record<string, ears.Side | null> = {};
+    for (const [mediaId, spans] of Object.entries(needs.ears)) {
+      const media = project.media.find((own) => own.id === mediaId);
+      if (media === undefined) continue;
+      sides[mediaId] = await diag.timeOnAsync("agent", "both_ears: measure", media.name, () => ears.liveSide(media.path, spans));
+    }
+    assets.sides = sides;
   }
   const [retro, aged] = await horrorLook.retroScreenshots(app, project, operations as Record<string, unknown>[]);
   made.push(...(await horrorLook.drawnIcons(app, project, operations as Record<string, unknown>[])));

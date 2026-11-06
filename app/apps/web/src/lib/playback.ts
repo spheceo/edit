@@ -1,13 +1,14 @@
 // Workers decode source frames and PCM. Web Audio owns the timeline clock;
 // the shared WASM compositor still evaluates and renders each complete scene.
 import init, { createEngine, type Engine } from "../engine/pkg/edit_wasm";
-import { fetchRetrying, mediaHost, mediaUrl } from "./api";
+import { api, fetchRetrying, mediaHost, mediaUrl } from "./api";
 import { Decoder, videoTime } from "./decoder";
 import { addContext, note, recordTiming } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
 import { clipEnd, paramAt, projectDuration, validateProject } from "./edit";
 import { peopleProblem } from "./people";
 import { mutePoints } from "./mutes";
+import { nativeAvailable, nativePreview } from "./nativePreview";
 import { SmoothStream } from "./smoothStream";
 import { savedFrame, saveFrame } from "./storage";
 import type { Clip, Media, Project, Sections, Track } from "./types";
@@ -72,6 +73,28 @@ const STAND_IN_REACH = 3;
 
 class Preview {
   engine: Engine | null = null;
+  /**
+   * Edit.app's window draws the picture (lib/nativePreview.ts): the page's
+   * engine still reads the edit (its sections, the pictures a frame needs) but
+   * draws nothing, and no video is decoded here; the playhead and the sound
+   * are the page's as ever. Off in a browser, in full screen (the window's
+   * layer isn't in the full-screen one), and after the window fails a frame
+   * five times running (the page draws again, as before).
+   */
+  native = false;
+  /** The window can't draw it this session (it failed, or refused to open). */
+  private nativeRefused = false;
+  /** Full screen, or anything else the window's layer can't show under: the page draws. */
+  private nativeAllowed = true;
+  /** The edit or what its pictures are decoded from changed since the window had them. */
+  private nativeStale = true;
+  /** What each media is decoded from in the window, for this project and these versions (`nativeKey`). */
+  private nativeSources: { cache: string; sources: Record<string, string> } | null = null;
+  private nativeKey = "";
+  private nativeBusy = false;
+  private nativeWanted: number | null = null;
+  private nativeDrawn: number | null = null;
+  private nativeFailures = 0;
   sections: Sections | null = null;
   error: string | null = null;
   /** The error is the engine refusing the project (cleared when it takes one). */
@@ -206,6 +229,8 @@ class Preview {
    * live (a smooth playback that goes stale while playing pauses there).
    */
   setSmooth(url: string | null) {
+    // The window draws the edit live, at the screen's rate: no render to play.
+    if (this.native) url = null;
     if (url === this.smooth) return;
     this.smooth = url;
     this.stream?.close();
@@ -316,6 +341,8 @@ class Preview {
       this.engineStale = false;
       for (const [media, levels] of this.peaks) if (levels instanceof Uint8Array) engine.setPeaks(media, levels);
       this.readSections();
+      await this.openNative(generation);
+      if (generation !== this.generation) return;
       this.setBuffering(false);
       this.notify();
       this.invalidate();
@@ -338,6 +365,126 @@ class Preview {
     this.renderedFrame = null;
     if (this.canvas && !this.engine && !this.attaching) void this.attach(this.canvas);
     else this.invalidate();
+  }
+
+  /** Edit.app's window takes the drawing, when it can (`native`). */
+  private async openNative(generation: number) {
+    if (this.native || this.nativeRefused || !this.nativeAllowed || !nativeAvailable()) return;
+    try {
+      const opened = await nativePreview.open();
+      if (generation !== this.generation) return;
+      if (!opened) {
+        this.nativeRefused = true;
+        return;
+      }
+      this.native = true;
+      this.nativeStale = true;
+      this.nativeDrawn = null;
+      this.nativeFailures = 0;
+      this.framed = false;
+      this.setSmooth(null);
+      recordTiming("preview: native", 0);
+    } catch (error) {
+      this.nativeRefused = true;
+      note("warn", "preview", `the window's own preview didn't open: ${error}`);
+    }
+  }
+
+  /** The page draws again: the window failed (`refuse`), or can't show it now (full screen). */
+  private leaveNative(refuse: string | null) {
+    if (!this.native) return;
+    this.native = false;
+    if (refuse !== null) {
+      this.nativeRefused = true;
+      note("warn", "preview", `the window's own preview stopped (${refuse}): the page draws it`);
+    }
+    void nativePreview.close().catch(() => {});
+    this.nativeBusy = false;
+    this.renderedFrame = null;
+    this.copied.clear();
+    this.notify();
+    this.invalidate();
+  }
+
+  /** Whether the window may draw the picture now (not in full screen). */
+  setNativeAllowed(allowed: boolean) {
+    if (allowed === this.nativeAllowed) return;
+    this.nativeAllowed = allowed;
+    if (!allowed) this.leaveNative(null);
+    else if (this.engine) void this.openNative(this.generation).then(() => { this.notify(); this.invalidate(); });
+  }
+
+  /** The window's sources for this project, asked again when its media or their versions change. */
+  private nativeSourcesFor(project: Project, versions: Record<string, string>) {
+    const key = `${project.id}|${project.media.map((media) => `${media.id}:${media.path}:${versions[media.id] ?? ""}`).join(",")}`;
+    if (key === this.nativeKey) return;
+    this.nativeKey = key;
+    api.nativeSources(project.id).then((found) => {
+      if (this.nativeKey !== key) return;
+      const before = JSON.stringify(this.nativeSources?.sources ?? null);
+      this.nativeSources = found;
+      if (JSON.stringify(found.sources) !== before) {
+        this.nativeStale = true;
+        this.invalidate();
+      }
+      // A cloud preview still streamed comes down whole behind it (the server's native_preview.ts): asked again until it's here.
+      if (Object.values(found.sources).some((source) => source.startsWith("http"))) {
+        setTimeout(() => {
+          if (this.nativeKey !== key || this.project?.id !== project.id) return;
+          this.nativeKey = "";
+          this.nativeSourcesFor(project, versions);
+        }, 15_000);
+      }
+    }).catch((error: unknown) => {
+      if (this.nativeKey === key) this.nativeKey = "";
+      note("warn", "preview", `the window's preview sources: ${error}`);
+    });
+  }
+
+  /** The edit into the window, once it and its sources are known; at most once a frame. */
+  private syncNative() {
+    if (!this.nativeStale || !this.project || this.nativeSources === null) return;
+    if (!this.nativeKey.startsWith(`${this.project.id}|`)) return;
+    this.nativeStale = false;
+    this.nativeDrawn = null;
+    const { cache, sources } = this.nativeSources;
+    void nativePreview.project(projectJson(this.project), sources, cache).catch((error: unknown) => this.nativeFailed(error));
+  }
+
+  /** The playhead's frame drawn by the window; one at a time, the newest asked for next. */
+  private drawNative() {
+    if (!this.project || this.error) return;
+    this.syncNative();
+    if (this.nativeStale) return;
+    const wanted = Math.floor(playhead.frame);
+    this.nativeWanted = wanted;
+    if (this.nativeBusy || wanted === this.nativeDrawn) return;
+    this.nativeBusy = true;
+    // The badge only for a frame that's slow, not each one asked for.
+    const slow = setTimeout(() => this.setBuffering(true), 150);
+    nativePreview.frame(wanted).then(() => {
+      clearTimeout(slow);
+      this.nativeBusy = false;
+      if (!this.native) return;
+      this.nativeDrawn = wanted;
+      this.nativeFailures = 0;
+      this.setBuffering(false);
+      if (!this.framed) { this.framed = true; this.notify(); }
+      if (this.nativeWanted !== wanted) this.drawNative();
+    }, (error: unknown) => {
+      clearTimeout(slow);
+      this.nativeBusy = false;
+      this.nativeFailed(error);
+    });
+  }
+
+  private nativeFailed(error: unknown) {
+    if (!this.native) return;
+    this.nativeFailures++;
+    if (this.nativeFailures === 1) note("warn", "preview", `the window's preview: ${error}`);
+    if (this.nativeFailures >= 5) { this.leaveNative(String(error)); return; }
+    this.nativeStale = true;
+    setTimeout(() => this.invalidate(), 250);
   }
 
   /** The GPU device went away (see Engine.isLost): start over on the same canvas. */
@@ -419,6 +566,9 @@ class Preview {
   }
 
   detach() {
+    this.leaveNative(null);
+    this.nativeKey = "";
+    this.nativeSources = null;
     this.setBuffering(false);
     this.remember();
     this.canvas = null;
@@ -526,6 +676,8 @@ class Preview {
       this.resetClock();
     }
     this.engineStale = true;
+    this.nativeStale = true;
+    if (nativeAvailable()) this.nativeSourcesFor(project, proxyVersions);
     this.notify();
     this.invalidate();
   }
@@ -740,10 +892,11 @@ class Preview {
       playhead.frame = Math.max(0, this.duration - 1); this.pause(); return;
     }
     this.syncEngine();
-    const scene = { frame: Math.floor(frame), sources: this.sceneSources(Math.floor(frame)) };
+    // The window decodes its own pictures: here only the sound's readiness counts.
+    const scene = { frame: Math.floor(frame), sources: this.native ? [] : this.sceneSources(Math.floor(frame)) };
     const { sources } = scene;
-    this.warm(scene.frame, sources);
-    if (!this.runningClock && (!this.picturesReady(sources) || !this.audioReady(frame, 0.5))) {
+    if (!this.native) this.warm(scene.frame, sources);
+    if (!this.runningClock && ((!this.native && !this.picturesReady(sources)) || !this.audioReady(frame, 0.5))) {
       this.setBuffering(true);
       return;
     }
@@ -1037,6 +1190,7 @@ class Preview {
 
   /** `scene`: the sources a playback tick already looked up (and warmed) for its frame. */
   private draw(scene?: { frame: number; sources: PictureSource[] }) {
+    if (this.native) { this.syncEngine(); this.drawNative(); return; }
     if (!this.engine || !this.project || this.error) return;
     // The rendered video shows this frame: nothing to decode or draw live.
     if (this.smoothShown) { this.syncEngine(); return; }
@@ -1159,6 +1313,7 @@ addContext("Preview", () => ({
   stuck: preview.stuck,
   playhead: Math.floor(playhead.frame),
   playing: playhead.playing,
+  native: preview.native,
   ...preview.diagnostics,
 }));
 document.addEventListener("visibilitychange", () => {

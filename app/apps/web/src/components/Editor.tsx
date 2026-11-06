@@ -103,7 +103,8 @@ export function Editor({ id }: { id: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-black">
+    // `editor-root`: see-through while Edit.app's window draws the viewer's picture under the page (index.css `native-preview`).
+    <div className="editor-root flex h-full flex-col bg-black">
       <TopBar onShare={() => setSharing(true)} />
       <CloudBanner />
       <MissingBanner />

@@ -859,9 +859,82 @@ impl FrameRenderer {
     }
 }
 
+/// A scene's video pictures for the native preview (`crate::player`): each
+/// video layer's clip and its frame, decoded at the size it's shown in a
+/// `shown` picture from `sources` (a media's preview file, else its own path),
+/// through `pool` so playing on decodes forward and a jump seeks.
+pub(crate) struct PreviewPictures {
+    pool: ReaderPool,
+}
+
+/// A clip's decoded picture: its clip, width, height and BGRA pixels.
+pub(crate) type Picture = (String, u32, u32, Vec<u8>);
+
+impl PreviewPictures {
+    pub(crate) fn new() -> Self {
+        // A few readers per file: two layers of one source, and the way back after a jump.
+        Self {
+            pool: ReaderPool::new(12, 3),
+        }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.pool.clear();
+    }
+
+    /// `(clip, width, height, BGRA pixels)` for each video layer of `scene`.
+    pub(crate) fn decode(
+        &mut self,
+        project: &Project,
+        scene: &Scene,
+        shown: (u32, u32),
+        sources: &std::collections::HashMap<String, PathBuf>,
+    ) -> Result<Vec<Picture>, String> {
+        let mut requests = Vec::new();
+        let mut clips = Vec::new();
+        for layer in &scene.layers {
+            if let Layer::Video {
+                clip,
+                media,
+                source_time,
+                ..
+            } = layer
+            {
+                let found = project
+                    .media(media)
+                    .ok_or_else(|| format!("unknown media {media}"))?;
+                let path = sources
+                    .get(media)
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from(&found.path));
+                requests.push((
+                    Source::new(
+                        found,
+                        path,
+                        decode_size(found, shown.0, shown.1),
+                        Order::Bgra,
+                    ),
+                    *source_time,
+                ));
+                clips.push(clip.clone());
+            }
+        }
+        let threads = if requests.len() > 2 { 4 } else { 1 };
+        let decoded = decode_all(&mut self.pool, &requests, threads)?;
+        Ok(clips
+            .into_iter()
+            .zip(&requests)
+            .zip(decoded)
+            .map(|((clip, (source, _)), pixels)| {
+                (clip, source.key.width, source.key.height, pixels)
+            })
+            .collect())
+    }
+}
+
 /// Gives the renderer the sound levels this frame's waveforms read: each
 /// media's peaks from the media cache (missing ones are tried again next frame).
-fn feed_peaks(renderer: &mut Renderer, project: &Project, scene: &Scene, cache: &Path) {
+pub(crate) fn feed_peaks(renderer: &mut Renderer, project: &Project, scene: &Scene, cache: &Path) {
     for layer in &scene.layers {
         let Layer::Waveform { sources, .. } = layer else {
             continue;

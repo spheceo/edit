@@ -22,6 +22,8 @@
 
 #[cfg(target_os = "macos")]
 mod events;
+#[cfg(target_os = "macos")]
+mod preview;
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -82,7 +84,20 @@ fn run(url: &str, server: Option<(Server, u16)>, watch_stdin: bool) -> ! {
         std::thread::spawn(move || keep_serving(&server, &closing, port));
     }
     let local = url.clone();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // The native preview: the page's viewer drawn by the engine in a layer under it.
+    #[cfg(target_os = "macos")]
+    let builder =
+        builder
+            .manage(preview::Previews::default())
+            .invoke_handler(tauri::generate_handler![
+                preview::preview_open,
+                preview::preview_place,
+                preview::preview_project,
+                preview::preview_frame,
+                preview::preview_close,
+            ]);
+    let app = builder
         .setup(move |app| {
             if watch_stdin {
                 let handle = app.handle().clone();
@@ -128,6 +143,8 @@ fn run(url: &str, server: Option<(Server, u16)>, watch_stdin: bool) -> ! {
                     NewWindowResponse::Deny
                 })
                 .build()?;
+            #[cfg(target_os = "macos")]
+            preview::check(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -288,6 +288,8 @@ export const api = {
   cancelShare: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/share/cancel`),
   /** Smooth playback (playback_render.ts): what's rendered, and asking for the edit as it is now. */
   playback: (id: string) => request<PlaybackStatus>("GET", `/api/projects/${id}/playback`),
+  /** What Edit.app's native preview decodes each picture from, and the media cache (routes.ts `nativeSources`). */
+  nativeSources: (id: string) => request<{ cache: string; sources: Record<string, string> }>("GET", `/api/projects/${id}/native-sources`),
   /** `frame`: the playhead, whose chunk is rendered first. */
   renderPlayback: (id: string, frame?: number) => request<PlaybackStatus>("POST", `/api/projects/${id}/playback`, frame === undefined ? undefined : { frame }),
   /** Sets who a voice is (its role decides its colour); returns the updated transcript. */

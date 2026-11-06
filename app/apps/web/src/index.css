@@ -173,6 +173,18 @@
   }
 }
 
+/* Edit.app's window draws the viewer's picture in a layer under the page
+   (lib/nativePreview.ts): the page is see-through down to it there. The
+   window behind is black, as the editor's own background, so nothing else
+   changes colour. Outside the layers, so it wins over the editor's bg-black
+   (the viewer clears index.html's own background on <html>). */
+html.native-preview,
+html.native-preview body,
+html.native-preview #root,
+html.native-preview .editor-root {
+  background: transparent;
+}
+
 .tabular {
   font-variant-numeric: tabular-nums;
 }

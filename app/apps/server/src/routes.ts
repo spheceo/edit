@@ -16,6 +16,7 @@ import * as problemReports from "./problem_reports.ts";
 import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
+import { nativeSources } from "./native_preview.ts";
 import { PLAYBACK_ROUTE, previewable } from "./cloud_playback.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
@@ -158,6 +159,7 @@ export function buildRouter(): Router<App> {
       return response;
     })
     .get("/api/projects/{id}/media/{media}/{kind}", mediaFile)
+    .get("/api/projects/{id}/native-sources", (context) => nativeSources(context.app, liveOr404(context.app, context.params.id!).project))
     .get("/api/projects/{id}/frame/{frame}", framePng)
     .get("/api/projects/{id}/cover/{frame}", coverJpeg)
     .post("/api/projects/{id}/export", startExport)

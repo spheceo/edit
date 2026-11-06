@@ -8,6 +8,7 @@ import { paramAt, projectDuration, setParam } from "../lib/edit";
 import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
 import { viewerMenu } from "../lib/menus";
 import { playhead, preview } from "../lib/playback";
+import { nativePreview } from "../lib/nativePreview";
 import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
@@ -60,6 +61,7 @@ export function Viewer() {
   const [buffering, setBuffering] = useState(false);
   const [stuck, setStuck] = useState(false);
   const [framed, setFramed] = useState(preview.framed);
+  const [native, setNative] = useState(preview.native);
   const fullscreen = useFullscreen();
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -86,7 +88,7 @@ export function Viewer() {
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); setSmoothShown(preview.smoothShown); });
+    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); setSmoothShown(preview.smoothShown); setNative(preview.native); });
     void preview.attach(canvas);
     preview.attachVideo(videoRef.current);
     return () => {
@@ -124,13 +126,14 @@ export function Viewer() {
   const hasClips = (project?.clips.length ?? 0) > 0;
   const agentBusy = useAgent((state) => state.project === projectId && state.running);
   useEffect(() => {
-    if (projectId === null || dirty || !hasClips || agentBusy) return;
+    // Edit.app's window draws the edit live: no render to wait for.
+    if (projectId === null || dirty || !hasClips || agentBusy || native) return;
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;
     const timer = setTimeout(() => {
       api.renderPlayback(projectId, Math.floor(playhead.frame)).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     }, SMOOTH_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [projectId, rev, dirty, hasClips, agentBusy, playback]);
+  }, [projectId, rev, dirty, hasClips, agentBusy, playback, native]);
 
   useEffect(() => {
     if (project) preview.setProject(project, versions);
@@ -153,6 +156,42 @@ export function Viewer() {
     return () => observer.disconnect();
   }, []);
 
+  // Full screen is the page's to draw: the window's layer isn't in the full-screen one.
+  useEffect(() => { preview.setNativeAllowed(!fullscreen); }, [fullscreen]);
+  // The window's layer under the viewer, where the picture is (lib/nativePreview.ts), shown once
+  // its first frame is drawn and the screen's fade-in is over; the page turns see-through there.
+  const nativeShown = native && framed && !error && !fullscreen;
+  useEffect(() => {
+    if (!native) return;
+    const root = document.documentElement;
+    root.classList.add("native-preview");
+    // index.html paints <html> itself (inline, before the app loads): see-through too.
+    const painted = root.style.getPropertyValue("background");
+    root.style.setProperty("background", "transparent");
+    const wrap = wrapRef.current!;
+    const opened = performance.now();
+    let last = "";
+    let frame = 0;
+    const place = () => {
+      frame = requestAnimationFrame(place);
+      const box = wrap.getBoundingClientRect();
+      // After the screen's 160 ms fade-in, so the picture doesn't show ahead of the page around it.
+      const visible = nativeShown && performance.now() - opened > 200;
+      const key = `${box.left},${box.top},${box.width},${box.height},${visible}`;
+      if (key === last) return;
+      last = key;
+      // The viewer's top corners: its box's radius (12 px) inside its 1 px border.
+      void nativePreview.place({ x: box.left, y: box.top, width: box.width, height: box.height }, 11, visible).catch(() => {});
+    };
+    place();
+    return () => {
+      cancelAnimationFrame(frame);
+      root.classList.remove("native-preview");
+      root.style.setProperty("background", painted);
+      void nativePreview.place({ x: 0, y: 0, width: 1, height: 1 }, 0, false).catch(() => {});
+    };
+  }, [native, nativeShown]);
+
   const empty = project && project.clips.length === 0;
   const job = useEditor((state) => state.scriptJob);
   const importing = job !== null && job.state !== "done" ? importProgress(job) : null;
@@ -164,11 +203,12 @@ export function Viewer() {
       onPointerMove={fullscreen ? wake : undefined}
       className={fullscreen
         ? cx("relative flex bg-black", hidden && "cursor-none")
-        : "flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-panel"}
+        : cx("flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line", native ? "bg-transparent" : "bg-panel")}
     >
-      <div ref={(element) => { wrapRef.current = element; setWrap(element); }} className="relative min-h-0 flex-1 bg-black">
+      <div ref={(element) => { wrapRef.current = element; setWrap(element); }} className={cx("relative min-h-0 flex-1", native ? "bg-transparent" : "bg-black")}>
         {/* Fullscreen is for watching: a click plays or pauses instead of moving the selection. */}
-        <canvas ref={canvasRef} className="absolute inset-0 size-full"
+        {/* Drawn by Edit.app's window under the page when `native` (still here for its clicks and drags). */}
+        <canvas ref={canvasRef} className={cx("absolute inset-0 size-full", native && "opacity-0")}
           onPointerDown={(event) => { if (fullscreen) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
           onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
         />
@@ -227,7 +267,7 @@ export function Viewer() {
       </div>
       <div className={fullscreen
         ? cx("absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur transition-opacity duration-300", hidden && "pointer-events-none opacity-0")
-        : undefined}>
+        : native ? "bg-panel" : undefined}>
         <Transport fullscreen={fullscreen} />
       </div>
     </section>

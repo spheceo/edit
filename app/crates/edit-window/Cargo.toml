@@ -17,6 +17,13 @@ tauri = { version = "2", features = [] }
 # in the build through tao, with this feature on.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["exception"] }
+# The native preview (src/preview.rs): the engine draws the edit into a layer under the page.
+edit-engine = { path = "../edit-engine" }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSValue", "NSGeometry", "objc2-core-foundation"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "CFString"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGColor", "CGColorSpace"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSView", "NSResponder", "NSGraphics", "objc2-core-foundation", "objc2-quartz-core"] }
 
 # Signals the server and what it started (its process group) when the window quits.
 [target.'cfg(unix)'.dependencies]

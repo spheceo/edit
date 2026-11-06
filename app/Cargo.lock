@@ -916,8 +916,14 @@ dependencies = [
 name = "edit-window"
 version = "0.0.0"
 dependencies = [
+ "edit-engine",
  "libc",
  "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
+ "objc2-quartz-core",
  "tauri",
  "tauri-build",
 ]

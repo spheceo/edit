@@ -1,5 +1,28 @@
 # Preview decoding
 
+## Edit.app draws the picture itself
+
+In Edit.app's window the viewer's picture is drawn by the engine, not the page
+(docs/plans/2026-11-06-native-player.md). `crates/edit-engine/src/player.rs`
+evaluates the frame as the page's engine did, decodes its pictures with the
+export's readers (the Mac's video decoder; a reader just behind a frame decodes
+forward, anything else seeks) and presents onto a Core Animation layer under the
+page (`crates/edit-window/src/preview.rs`). The page turns see-through over the
+viewer (`native-preview` on `<html>`), so everything it draws over the picture
+stays on top, and asks for each frame (`lib/nativePreview.ts`); it keeps the
+playhead, the sound and its engine (sections, checks), but decodes no video and
+asks for no smooth-playback render. Each picture comes from its preview file, a
+cloud one's whole copy, else its footage on the Mac, else the server's loopback
+stream while the whole file comes down (`apps/server/src/native_preview.ts`).
+Full screen, a browser, or five failed frames in a row: the page draws as below.
+Measured Nov 6 on the 16-Year-Old (local footage, M1): scrubbing drew every
+position, 6.7 ms each (p50), and playing drew every frame at 1.9 ms (p50).
+
+To see it without screen access: `EDIT_PREVIEW_TRACE=1` says each placement and
+draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,
+play and pause by itself, and `EDIT_PREVIEW_SHOT=<file.png>` then saves the
+window's own picture (an app may capture its own windows without permission).
+
 ## Smooth playback
 
 The viewer plays and scrubs a render of the edit when one shows what's on screen

@@ -20,3 +20,13 @@ Sphe asked for this review and three more of JJ's (Female Police Captain ria0huF
 ### Fix 4: notes put off with feedback_unfixed, and silent share failures (5b1161bb)
 
 After the network fix the four turns ran 8–11 min and ended with 41 of 110 notes fixed; the other 69 got feedback_unfixed reasons like "Not done: Michael's image timing not yet adjusted" and "not reached this turn". An unfixed note counts as answered, so followFix sent none back, and then all four shares failed before exporting, with the error only on the review page (the disk had ~0 free by 19:19; the share's room check refuses up front). Fix: feedback_unfixed refuses a reason that says the note wasn't got to (`putOff`; all 69 of tonight's refused, none of the 9 genuine reasons on other reviews), the feedback skill says so, and a failed share is logged. On nightly-60 (no fix yet) the four were asked again in the chat with pull_feedback {again: true} at 20:04; 11 GB of stale build caches were freed for the exports (26 GB free).
+
+### Fix 5: frames from whole previews here (9d1c2cd8, nightly-61)
+
+The four projects' footage was imported on Mathias's Mac, so every frame the agents looked at streamed from R2 in blocks: a contact sheet 3 min 32 s, a render_frame 3 min 06 s, a plan's review frames 3 min 31 s, ~90% of the turns' tool time (Son & Dad's 2 notes took a 57 min 51 s turn). Each cloud preview is now fetched whole when a turn starts (four at a time) and the agent's renders read it (local_previews.ts); exports made ahead wait while an agent works. Measured on Son & Dad: 6 frames streamed failed after 8 min 52 s, from the whole previews 1.5 s.
+
+### Fix 6: Home's status held the server (d5425c15, nightly-62)
+
+On nightly-61 the server answered health in 13–52 s: /api/projects/status built and sorted every project's whole chat twice (54 chats, 6.5 MB) every few seconds, and so did each followed fix. The agents' tools didn't connect (Cops Realize, six times), whole previews took 3–4 min, and Son & Dad's share upload had R2 close its sockets. Whether a turn runs is now read without building the chat (agent.ts `turn`); health 0.03–2.75 s after.
+
+Also on the way: Cops Realize's chat was flagged by the model's safeguards (Sonnet and Opus) every turn, so it was reset (the old chat kept in ~/Documents/edit-chat-backups); three flaky tests fixed so just check passes on a loaded Mac (f8592da8, 2fa4d3d0's media timeout, 37c4d0b4's lint).

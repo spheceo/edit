@@ -1,11 +1,20 @@
-// A script's footage lives in the cloud, not on this Mac (Oct 29, the user:
-// "things shouldn't take up storage on the local devices… everything on the
-// cloud!"). A script left alone for half an hour has its recordings shared
-// with Edit's originals first if they aren't yet (handoff.ts: a script
-// brought in from Writer, or one whose share failed), then every footage file
-// the cloud holds is deleted here: one the script's own sync keeps on R2 at
-// the same size and time (its ledger), or one in Edit's originals
-// (`edit-shared.json`). The preview then plays from the cloud (cloud.stream);
+// A script's footage is kept in the cloud (Oct 29, the user: "things
+// shouldn't take up storage on the local devices… everything on the
+// cloud!"), and on this Mac only as much as its room allows (Sphe, Nov 6:
+// the same capped rule as Edit's own footage, "this doesnt mean we clog
+// storage with multi gb fotage right?"). Until then a script left alone for
+// half an hour lost its footage here however much room the disk had, and the
+// edit made from it read it back from R2 for every picture and export (JJ's
+// Mac: the agent waited 47 minutes in 2.5 days on pictures decoded from the
+// cloud). Now a round adds up the scripts' footage and Edit's cache, and only
+// while they're past their budget (storage.ts `localBudgetBytes`: a quarter
+// of the room, at most 50 GB) or the disk is nearly full does footage go,
+// the scripts left alone longest first. A script that goes has its
+// recordings shared with Edit's originals first if they aren't yet
+// (handoff.ts: a script brought in from Writer, or one whose share failed),
+// then every footage file the cloud holds is deleted here: one the script's
+// own sync keeps on R2 at the same size and time (its ledger), or one in
+// Edit's originals (`edit-shared.json`). The preview then plays from the cloud (cloud.stream);
 // work that needs a file brings it back first (`bringBack`), from the cloud,
 // else from its YouTube or Drive link. What only this Mac has (a reused
 // case's pieces, a commentary's clip footage, a file from the producer's
@@ -20,6 +29,7 @@ import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { idle, inArea, runPromise, runtime } from "../effect/runtime.ts";
 import { isFile, join } from "../paths.ts";
+import { FREE_FLOOR_BYTES, localBudgetBytes } from "../storage.ts";
 import * as archive from "./archive.ts";
 import * as cloud from "./cloud.ts";
 import * as handoff from "./handoff.ts";
@@ -30,7 +40,7 @@ import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
 import { recordings } from "./transcription.ts";
 
-/** A script untouched this long, and footage this old, is left to the cloud. */
+/** A script untouched this long, and footage this old, may be left to the cloud when room is short. */
 const IDLE_MS = 30 * 60_000;
 const EVERY_MS = 10 * 60_000;
 
@@ -225,20 +235,100 @@ type Said = Map<string, string>;
 const sayOnce = (said: Said, error: FootageStays) =>
   said.get(error.id) === error.message ? Effect.void : Effect.sync(() => said.set(error.id, error.message)).pipe(Effect.andThen(Effect.logWarning(`${error.id.slice(0, 8)}: its footage stays here: ${error.message}`)));
 
-/** One round over every script: the bytes freed; folders with no script are gathered into `strays`. */
-const round = (data: string, said: Said, strays: Set<string>) =>
-  Effect.forEach(
-    store.ids(data),
-    (id) =>
-      freeOne(data, id).pipe(
+/** Bytes of every file under `path` (0 when absent). */
+function bytesUnder(path: string): number {
+  let total = 0;
+  const stack = [path];
+  for (let at = stack.pop(); at !== undefined; at = stack.pop()) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(at, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const one = join(at, entry.name);
+      if (entry.isDirectory()) stack.push(one);
+      else
+        try {
+          total += fs.lstatSync(one).size;
+        } catch {
+          // Gone meanwhile.
+        }
+    }
+  }
+  return total;
+}
+
+/** The scripts' footage here, in bytes. */
+function scriptsFootage(data: string): number {
+  let total = 0;
+  for (const id of store.ids(data)) {
+    const dir = store.scriptDir(data, id);
+    for (const name of footageFiles(dir, true)) {
+      try {
+        total += fs.statSync(join(dir, name)).size;
+      } catch {
+        // Gone meanwhile.
+      }
+    }
+  }
+  return total;
+}
+
+/**
+ * How many bytes of footage must go for the scripts' footage and Edit's cache
+ * (`cache`) to fit their budget, with the disk past its floor; 0 or less when
+ * they fit.
+ */
+export function overBudget(data: string, cache: string, freeBytes = freeAt(cache)): number {
+  const used = scriptsFootage(data) + bytesUnder(cache);
+  return Math.max(used - localBudgetBytes({ freeBytes, cacheBytes: used }), FREE_FLOOR_BYTES - freeBytes);
+}
+
+function freeAt(path: string): number {
+  try {
+    const stat = fs.statfsSync(path);
+    return stat.bavail * stat.bsize;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/** When a script was last changed (0 when it can't be read: tried first, and said why). */
+function changedAt(data: string, id: string): number {
+  try {
+    return store.read(store.scriptDir(data, id)).updatedAt;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * One round over every script: while `over` bytes must still go, the idle
+ * footage of the scripts left alone longest; the bytes freed. Folders with no
+ * script are gathered into `strays` whether or not anything must go.
+ */
+const round = (data: string, said: Said, strays: Set<string>, over: number) =>
+  Effect.gen(function* () {
+    const order = store.ids(data).map((id) => ({ id, at: changedAt(data, id) })).sort((a, b) => a.at - b.at);
+    let freed = 0;
+    for (const { id } of order) {
+      if (!isFile(join(store.scriptDir(data, id), "script.json"))) {
+        strays.add(id);
+        continue;
+      }
+      if (freed >= over) continue;
+      freed += yield* freeOne(data, id).pipe(
         Effect.tap(() => Effect.sync(() => said.delete(id))),
         Effect.catchTags({
           NoScriptHere: (stray) => Effect.sync(() => strays.add(stray.id)).pipe(Effect.as(0)),
           FootageStays: (stays) => sayOnce(said, stays).pipe(Effect.as(0)),
         }),
-      ),
-    { concurrency: 1 },
-  ).pipe(Effect.map((bytes) => bytes.reduce((sum, one) => sum + one, 0)));
+      );
+    }
+    return freed;
+  });
 
 // Nov 4, JJ's Mac: 12,032 such folders, every one a clone of one deleted
 // script (Writer's sync kept "this Mac's version" of it every 30 s for days,
@@ -324,14 +414,14 @@ export const clearStrays = (data: string, projects: string, strays: Iterable<str
 const named = (ids: string[]): string => `${ids.slice(0, 10).map((id) => id.slice(0, 8)).join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}`;
 
 /** Rounds a couple of minutes after Edit starts, then every ten, for as long as Edit runs. */
-const rounds = (data: string, projects: string) =>
+const rounds = (data: string, projects: string, cache: string) =>
   Effect.gen(function* () {
     const said: Said = new Map();
     let told = 0;
     yield* idle(2 * 60_000);
     for (;;) {
       const strays = new Set<string>();
-      const freed = yield* round(data, said, strays);
+      const freed = yield* round(data, said, strays, overBudget(data, cache));
       if (freed > 0) yield* Effect.logInfo(`${(freed / 1e9).toFixed(2)} GB of scripts' footage left to the cloud`);
       const cleared = yield* clearStrays(data, projects, strays);
       if (cleared.length > 0) yield* Effect.logInfo(`cleared ${cleared.length} folder${cleared.length === 1 ? "" : "s"} among the scripts with no script.json, which nothing needed (${named(cleared)})`);
@@ -344,26 +434,19 @@ const rounds = (data: string, projects: string) =>
   }).pipe(inArea("writer"));
 
 /**
- * Leaves idle scripts' footage to the cloud a couple of minutes after Edit
- * starts, then every ten; and a script's the moment a sync puts it there (the
- * user, Oct 30: a preview kept here only while it's made, "deleted at once"
- * once the cloud has it): only files the cloud holds as they are here go.
+ * Leaves the idle scripts' footage to the cloud as room runs short, a couple
+ * of minutes after Edit starts and then every ten (`cache` is Edit's cache,
+ * counted with it): only files the cloud holds as they are here go. A preview
+ * was deleted the moment the cloud had it (the user, Oct 30); now it stays
+ * while there's room, so the edit made from the script plays and exports it
+ * from this Mac.
  */
-export function start(data: string, projects: string): void {
-  cloud.onPushed((id) => {
-    void runPromise(
-      freeOne(data, id, Date.now(), 0).pipe(
-        Effect.tap((bytes) => (bytes > 0 ? Effect.logInfo(`${id.slice(0, 8)}: ${Math.round(bytes / 1e6)} MB left to the cloud as soon as it was there`) : Effect.void)),
-        Effect.catchTags({ NoScriptHere: () => Effect.void, FootageStays: (stays) => Effect.logWarning(`${stays.id.slice(0, 8)}: its footage stays here: ${stays.message}`) }),
-        inArea("writer"),
-      ),
-    );
-  });
-  runtime.runFork(rounds(data, projects));
+export function start(data: string, projects: string, cache: string): void {
+  runtime.runFork(rounds(data, projects, cache));
 }
 
-/** One round, as the loop runs it, for tests: the bytes freed, and the folders found with no script. */
-export function roundForTests(data: string, said: Said = new Map()): Promise<{ freed: number; strays: string[] }> {
+/** One round, as the loop runs it, for tests: the bytes freed (while `over` must go), and the folders found with no script. */
+export function roundForTests(data: string, said: Said = new Map(), over = Number.POSITIVE_INFINITY): Promise<{ freed: number; strays: string[] }> {
   const strays = new Set<string>();
-  return runPromise(round(data, said, strays).pipe(Effect.map((freed) => ({ freed, strays: [...strays] })), inArea("writer")));
+  return runPromise(round(data, said, strays, over).pipe(Effect.map((freed) => ({ freed, strays: [...strays] })), inArea("writer")));
 }

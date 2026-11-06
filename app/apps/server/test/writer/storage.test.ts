@@ -7,7 +7,7 @@ import type { Script } from "@edit/types/writer";
 
 import * as cloud from "../../src/writer/cloud.ts";
 import * as diag from "../../src/diag.ts";
-import { free, roundForTests } from "../../src/writer/storage.ts";
+import { free, overBudget, roundForTests } from "../../src/writer/storage.ts";
 import * as store from "../../src/writer/store.ts";
 
 const ID = "7d0e4c1a-2b3f-4a5e-8c9d-0f1e2d3c4b5a";
@@ -83,4 +83,31 @@ test("a round tells a folder with no script from a script whose footage can't go
   expect(diag.lines(10_000).some((line) => line.message.includes(`${stray.slice(0, 8)}: its footage stays here`))).toBe(false);
   // Nothing of the stray's is touched.
   expect(fs.readFileSync(join(store.scriptDir(data, stray), "piece.mp4"), "utf8")).toBe("kept");
+});
+
+test("scripts' footage stays while there's room, and goes oldest first only past the budget", async () => {
+  // Two idle scripts in the cloud, one left alone longer.
+  const [data, dir] = setUp({ "proxy.mp4": 1000 }, ["proxy.mp4"], [], { updatedAt: Date.now() - 3 * HOUR });
+  const other = "8e1f5d2b-3c4a-4b6f-9d0e-1f2a3b4c5d6e";
+  const otherDir = store.scriptDir(data, other);
+  fs.mkdirSync(otherDir, { recursive: true });
+  const script = JSON.parse(fs.readFileSync(join(dir, "script.json"), "utf8")) as Script;
+  store.write(otherDir, { ...script, id: other, originalPath: join(otherDir, "original.mp4"), updatedAt: Date.now() - HOUR });
+  fs.writeFileSync(join(otherDir, "proxy.mp4"), Buffer.alloc(1000));
+  fs.utimesSync(join(otherDir, "proxy.mp4"), (Date.now() - HOUR) / 1000, (Date.now() - HOUR) / 1000);
+  const ledger = JSON.parse(fs.readFileSync(join(data, "cloud", "ledger.json"), "utf8"));
+  ledger.scripts[other] = { rev: 2, body: "", files: { "proxy.mp4": { key: `writer/scripts/${other}/proxy.mp4`, size: 1000, mtime: Math.floor(fs.statSync(join(otherDir, "proxy.mp4")).mtimeMs) } } };
+  fs.writeFileSync(join(data, "cloud", "ledger.json"), JSON.stringify(ledger));
+  // Room to spare: nothing goes (it used to, half an hour after each was left alone).
+  expect((await roundForTests(data, new Map(), 0)).freed).toBe(0);
+  expect(fs.existsSync(join(dir, "proxy.mp4")) && fs.existsSync(join(otherDir, "proxy.mp4"))).toBe(true);
+  // 500 bytes too many: the script left alone longest goes, the other stays.
+  expect((await roundForTests(data, new Map(), 500)).freed).toBe(1000);
+  expect(fs.existsSync(join(dir, "proxy.mp4"))).toBe(false);
+  expect(fs.existsSync(join(otherDir, "proxy.mp4"))).toBe(true);
+  // The budget: the footage and the cache against a quarter of the room, the disk past its floor.
+  const cache = join(data, "cache-here");
+  fs.mkdirSync(cache, { recursive: true });
+  expect(overBudget(data, cache, 100e9)).toBeLessThan(0);
+  expect(overBudget(data, cache, 0.5e9)).toBeGreaterThan(0);
 });

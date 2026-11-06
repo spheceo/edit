@@ -758,6 +758,35 @@ test("opus builds the edit; once it's built, a revision is sonnet's, through a n
   }
 });
 
+test("a turn that ends listing what it didn't get to is sent back to it, only while each pass leaves fewer (Nov 6)", async () => {
+  const { home, project, agents, asked, queries } = claudeProject("claude-notes-left");
+  try {
+    await agents.send(project, "The team's notes: 1:21 profile, 1:58 words, 2:58 white text", null, null);
+    const chat = agents.withChat(project);
+    const ends = (n: number, text: string) => {
+      chat.entries.push({ id: `a${n}`, kind: "assistant", text, at: 0, updated: 0 });
+      queries[n]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+      queries[n]!.end();
+    };
+    ends(0, "**Done**\n- 1:21 profile\n\n**Still open:**\n- 1:58 words: not done\n- 2:58 white text: not done");
+    await Bun.sleep(1100);
+    await settle();
+    expect(asked[1]!.prompt).toStartWith("(Edit, automatically) Your turn ended with 2 of what was asked still open:\n- 1:58 words: not done\n- 2:58 white text");
+    // One fewer: asked again.
+    ends(1, "**Still open:**\n- 2:58 white text: not done");
+    await Bun.sleep(1100);
+    await settle();
+    expect(asked[2]!.prompt).toStartWith("(Edit, automatically) Your turn ended with 1 of");
+    // No fewer: left to the user.
+    ends(2, "**Still open:**\n- 2:58 white text: not done");
+    await Bun.sleep(1100);
+    await settle();
+    expect(asked.length).toBe(3);
+  } finally {
+    home.cleanup();
+  }
+});
+
 test("an edit shared for review is built, as is one a kept chat shows was done", () => {
   const { home, project, agents } = claudeProject("claude-built-elsewhere");
   try {

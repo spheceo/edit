@@ -50,6 +50,7 @@ import { fixed, jsonForSerde } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
 import * as tools from "./tools.ts";
+import { putOff } from "./put_off.ts";
 
 const FILE = "reviews.json";
 /** How often Repack is asked for new notes while Edit runs. */
@@ -2156,17 +2157,7 @@ registerTool("feedback_done", async ({ app, args, projectId }: ToolCall) => {
   );
 });
 
-/**
- * A reason that says the note wasn't got to, not that it can't be done ("Not
- * done: zoom-out freeze not yet fixed", "not reached this turn"). Nov 6, JJ's
- * four reviews on Sphe's Mac: the agents fixed 41 of 110 notes and left the
- * other 69 with feedback_unfixed reasons like these. An unfixed note counts as
- * answered, so none went back to them and the round would have shared with
- * most of the notes untouched.
- */
-export function putOff(reason: string): boolean {
-  return /^\W*not (done|changed|checked|fixed|reached|adjusted)\b|this turn|\bnot (yet|reached)\b|wasn['’]?t reached|\bstill (needs?|to (do|be)|open)\b|didn['’]?t get to|ran out of|next turn|for later|\btimed? ?out\b|dropped out|needs? doing/i.test(reason);
-}
+export { putOff };
 
 registerTool("feedback_unfixed", async ({ app, args, projectId }: ToolCall) => {
   const note = str(args.note);

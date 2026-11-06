@@ -25,6 +25,7 @@ import { INSTRUCTIONS, toolReference } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
 import { compareStrings, takeChars, charCount } from "./rust.ts";
+import { leftOver } from "./put_off.ts";
 import { BUILD_MODEL, REVISION_MODEL } from "@edit/types/models";
 
 import * as claudeUsage from "./claude_usage.ts";
@@ -1306,7 +1307,7 @@ export class Agents implements seams.AgentPanel {
     const whole = chat.entries
       .slice(asked + 1)
       .some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
-    if (!whole) return;
+    if (!whole) return void this.notesLeft(project, generation, chat, asked, mine);
     let left: { note: string; count: number } | null;
     try {
       left = agentHooks.unfinished(project);
@@ -1320,6 +1321,40 @@ export class Agents implements seams.AgentPanel {
     this.followedUp.set(project, { generation, sent: (mine?.sent ?? 0) + 1, count: left.count });
     diag.info("agent", `${project}: the edit left ${left.count} flags; asking for them (${(mine?.sent ?? 0) + 1} of ${MAX_FOLLOW_UPS})`);
     const note = left.note;
+    void (async () => {
+      await timing.sleep(1000);
+      const later = this.withChat(project);
+      if (later.running || later.halted || later.generation !== generation) return;
+      try {
+        await this.sendTurn(project, note, null, null, generation);
+      } catch (thrown) {
+        diag.warn("agent", `following up ${project}: ${diag.messageOf(thrown)}`);
+      }
+    })();
+  }
+
+  /**
+   * A turn answering the user's message that ended listing what it didn't get
+   * to ("Still open:", "not done") is sent back to them by Edit, as a review's
+   * unanswered notes are: Nov 6, the horror edit, the team's 22 notes in one
+   * message, and two turns in a row stopped after 6–8 minutes with half of them
+   * listed as still open. Only while each pass leaves fewer; a sub-agent's
+   * chat and Edit's own messages before the user's first don't count.
+   */
+  private notesLeft(project: string, generation: number, chat: Chat, asked: number, mine: { sent: number; count: number } | null): void {
+    // A review's notes are followed up by reviews.ts (each note answered or sent back), not here.
+    if (asked < 0 || reviewGuard.inReviewTurn(project)) return;
+    const last = [...chat.entries].reverse().find((item) => item.kind === "assistant");
+    if (last === undefined || chat.entries.indexOf(last) < asked) return;
+    const left = leftOver(last.text);
+    if (left.length === 0) return;
+    if (mine !== null && left.length > mine.count * 0.8) return;
+    this.followedUp.set(project, { generation, sent: (mine?.sent ?? 0) + 1, count: left.length });
+    diag.info("agent", `${project}: the turn left ${left.length} of the user's asks open; asking for them (${(mine?.sent ?? 0) + 1} of ${MAX_FOLLOW_UPS})`);
+    const note =
+      `(Edit, automatically) Your turn ended with ${left.length} of what was asked still open:\n${left.map((item) => `- ${takeChars(item, 300)}`).join("\n")}\n\n` +
+      "Do every one of them now, in this turn, in order; don't end the turn with a list of what's left. " +
+      "Leave one only when it can't be done in this video, and say in a line what stops it (no such footage, the team must choose, it would break another note), not that it wasn't got to. A tool that failed: call it again, or the next best way.";
     void (async () => {
       await timing.sleep(1000);
       const later = this.withChat(project);

@@ -8,7 +8,7 @@ import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "..
 import { preview } from "../lib/playback";
 import { flushSave, useEditor } from "../lib/store";
 import { rate } from "../lib/types";
-import { CAN, useGrants } from "../writer/can";
+import { useGrants } from "../writer/can";
 import { askExportFolder } from "./ExportFolder";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, Modal, Select } from "./ui";
@@ -32,9 +32,9 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [starting, setStarting] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
-  // Deleting the link is asked first (it can't be undone), and needs “Share for review”.
+  // Deleting the link is asked first (it can't be undone).
   const [deleting, setDeleting] = useState<"ask" | "running" | null>(null);
-  const mayDelete = useGrants().has(CAN.share);
+  const mayDelete = useGrants().shares;
   // A channel's watermark on the export (Sphe, Nov 2: "a checkbox to include the watermark and we pick the channel"):
   // the channels are the Watermarks folder's pictures; the project's last choice is the server's (review.watermark).
   const [channels, setChannels] = useState<{ id: string; code: string; name: string }[] | null>(null);

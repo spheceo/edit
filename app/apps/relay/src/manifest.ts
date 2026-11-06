@@ -41,8 +41,7 @@ export const SCRIPT_CAPABILITIES = [
   { id: "scripts.courtroom", label: "Courtroom", description: "One case's hearing into a courtroom script, including one hearing split across several videos.", group: "Scripts from footage" },
   { id: "scripts.courtroom-compilation", label: "Courtroom compilations", description: "Several cases' hearings in one courtroom script.", group: "Scripts from footage" },
   { id: "scripts.commentary", label: "Commentary", description: "A voiceover essay from articles, videos and Docs, with clips found and placed.", group: "Other scripts" },
-  { id: "review.share", label: "Share for review", description: "Make review links, see and fix reviewers' notes, approve, and export to Google Docs.", group: "Sharing and teaching" },
-  { id: "review.lessons", label: "Teach the scripts from feedback", description: "Turn reviewers' feedback into lessons and keep them. Lessons are shared by every Mac and change everyone's builds.", group: "Sharing and teaching" },
+  { id: "review.lessons", label: "Teach the scripts from feedback", description: "Turn reviewers' feedback into lessons and keep them. Lessons are shared by every Mac and change everyone's builds.", group: "Teaching" },
 ];
 
 /** Ideas (Oct 31 2026): a case repackaged into titles and a thumbnail guide, sent to the board. Interrogation, and bodycam (Nov 1). */
@@ -76,7 +75,7 @@ export function manifest() {
     presets: [
       { id: "subtitles", label: "Subtitles only", capabilities: [CAPABILITIES.subtitles] },
       { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.commentary, CAPABILITIES.horror, CAPABILITIES.shorts, CAPABILITIES.subtitles] },
-      { id: "writer", label: "Script writer", capabilities: ["scripts.interrogation", "scripts.interrogation-compilation", "review.share"] },
+      { id: "writer", label: "Script writer", capabilities: ["scripts.interrogation", "scripts.interrogation-compilation"] },
       { id: "ideas", label: "Repackager", capabilities: IDEA_CAPABILITIES.map((one) => one.id) },
       { id: "full", label: "Everything", capabilities: [...Object.values(CAPABILITIES), ...SCRIPT_CAPABILITIES.map((one) => one.id), ...IDEA_CAPABILITIES.map((one) => one.id)] },
     ],

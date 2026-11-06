@@ -3,8 +3,9 @@
 // them, with the ids Writer gave them), read from the token's `perms` as
 // kinds.ts reads Edit's. A script of a kind someone can't write is hidden from
 // them: not listed, not opened, not used as a source, no agent work on it.
-// Review links, approving, fixing notes and Doc exports need `review.share`;
-// teaching from feedback needs `review.lessons`.
+// Sharing for review (links, approving, fixing notes, Doc exports) is anyone's
+// who's signed in, on the scripts they may see (Sphe, Nov 6); teaching from
+// feedback needs `review.lessons`.
 
 import type { Kind, Script, Summary } from "@edit/types/writer";
 
@@ -18,7 +19,6 @@ export const FOIA_COMPILATION = "scripts.foia-compilation";
 export const COURTROOM = "scripts.courtroom";
 export const COURTROOM_COMPILATION = "scripts.courtroom-compilation";
 export const COMMENTARY = "scripts.commentary";
-export const SHARE = "review.share";
 export const LESSONS = "review.lessons";
 
 /** Whether the signed-in person has `id` (everything for an admin, or no one signed in, as kinds.ts says). */
@@ -58,7 +58,6 @@ const DOING: Record<string, string> = {
   [COURTROOM]: "write courtroom scripts",
   [COURTROOM_COMPILATION]: "write courtroom compilations",
   [COMMENTARY]: "write commentary scripts",
-  [SHARE]: "share scripts for review",
   [LESSONS]: "teach Script mode from feedback",
 };
 

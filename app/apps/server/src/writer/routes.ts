@@ -305,13 +305,11 @@ export function routes(router: Router<App>): void {
     // Sharing for review on feedback.spheceo.com, and the notes reviewers leave there.
     .post("/api/writer/scripts/{id}/share/cancel", (context) =>
       answer(() => {
-        can.require(can.SHARE);
         return { cancelled: reviews.cancelShare(id(context)) };
       }),
     )
     .post("/api/writer/scripts/{id}/share", (context) =>
       answer(async () => {
-        can.require(can.SHARE);
         const data = dataOf(context.app);
         readFor(data, id(context));
         // It runs on its own, as an edit's share does (JJ, Nov 1): refused at once says so, else the script says it's sharing.
@@ -326,7 +324,6 @@ export function routes(router: Router<App>): void {
     )
     .post("/api/writer/scripts/{id}/review/compress", (context) =>
       answer(async () => {
-        can.require(can.SHARE);
         readFor(dataOf(context.app), id(context));
         return detail(dataOf(context.app), await reviews.compress(context.app, dataOf(context.app), id(context)));
       }),
@@ -334,14 +331,12 @@ export function routes(router: Router<App>): void {
     // Deletes the script's review link for good: reviewers lose the page and their notes (asked first in the Review dialog).
     .delete("/api/writer/scripts/{id}/review", (context) =>
       answer(async () => {
-        can.require(can.SHARE);
         readFor(dataOf(context.app), id(context));
         return detail(dataOf(context.app), await reviews.removeLink(dataOf(context.app), id(context)));
       }),
     )
     .post("/api/writer/scripts/{id}/review/replace", (context) =>
       answer(async () => {
-        can.require(can.SHARE);
         readFor(dataOf(context.app), id(context));
         notWhileWriting(id(context));
         return detail(dataOf(context.app), await reviews.replaceLatest(context.app, dataOf(context.app), id(context)));
@@ -352,7 +347,6 @@ export function routes(router: Router<App>): void {
     .put("/api/writer/scripts/{id}/review/approval", async (context) => {
       const given = await body<{ approve?: boolean }>(context);
       return answer(async () => {
-        can.require(can.SHARE);
         const data = dataOf(context.app);
         readFor(data, id(context));
         if (given.approve === false) await reviews.unapprove(data, id(context));
@@ -363,7 +357,6 @@ export function routes(router: Router<App>): void {
     // Fixes a script's open notes now, by hand: on any computer, not only the fixing one.
     .post("/api/writer/scripts/{id}/review/fix", (context) =>
       answer(() => {
-        can.require(can.SHARE);
         const data = dataOf(context.app);
         readFor(data, id(context));
         const approved = reviews.approval(data, id(context));
@@ -383,7 +376,6 @@ export function routes(router: Router<App>): void {
     .post("/api/writer/scripts/{id}/review/notes", async (context) => {
       const given = await body<{ text?: string; details?: reviews.NoteDetails }>(context);
       return answer(async () => {
-        can.require(can.SHARE);
         readFor(dataOf(context.app), id(context));
         await reviews.addNote(dataOf(context.app), id(context), String(given.text ?? ""), given.details ?? {});
         return { ok: true };
@@ -400,7 +392,6 @@ export function routes(router: Router<App>): void {
     .post("/api/writer/scripts/{id}/review/notes/{note}/check", async (context) => {
       const given = await body<{ verdict?: string; text?: string }>(context);
       return answer(async () => {
-        can.require(can.SHARE);
         readFor(dataOf(context.app), id(context));
         await reviews.check(dataOf(context.app), context.params.note ?? "", String(given.verdict ?? ""), given.text ?? null);
         return { ok: true };
@@ -408,7 +399,6 @@ export function routes(router: Router<App>): void {
     })
     .delete("/api/writer/scripts/{id}/review/notes/{note}", (context) =>
       answer(async () => {
-        can.require(can.SHARE);
         readFor(dataOf(context.app), id(context));
         await reviews.deleteNote(dataOf(context.app), context.params.note ?? "");
         return { ok: true };
@@ -418,7 +408,6 @@ export function routes(router: Router<App>): void {
     .post("/api/writer/scripts/{id}/docs", async (context) => {
       const given = await body<{ draft?: boolean; docx?: string }>(context);
       return answer(() => {
-        can.require(can.SHARE);
         readFor(dataOf(context.app), id(context));
         return docs.exportDoc(dataOf(context.app), id(context), given.draft === true, String(given.docx ?? ""));
       });

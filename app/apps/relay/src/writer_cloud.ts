@@ -7,9 +7,10 @@
  * Script mode and Edit's script list already hide the rest on the Mac (Nov 4,
  * Sphe: "if we've given someone X permissions, their account literally cannot
  * access anything else"; reading had been open to anyone who may use Edit).
- * Writing needs script work of the script's own kind, the shared lessons
- * `review.lessons`, and reviews `review.share` (Edit's manifest lists them,
- * ids unchanged).
+ * Writing needs script work of the script's own kind, and the shared lessons
+ * `review.lessons` (Edit's manifest lists them, ids unchanged). Sharing a
+ * script for review is anyone's who may write it (Sphe, Nov 6: "anyone signed
+ * in should be able to share for review"; it had needed `review.share`).
  *
  *   /v1/cloud/writer/r2/url | multipart/create | multipart/urls | multipart/complete | multipart/abort | head | delete | list
  *   /v1/cloud/writer/convex   {kind, path: "writer:…" | "reviews:…" | "edit:getMedia|putMedia", args?}
@@ -32,7 +33,8 @@ const CONVEX_KINDS = new Set(["query", "mutation", "action"]);
 /**
  * The functions Script mode calls, and what each needs beyond `use`: `script`
  * = the work the script is (its kind, from its summary), `any` = some kind of
- * script work, `admin`, or a capability id. Nothing else is reachable.
+ * script work, `admin`, `review` = who may write the script (its review, by
+ * its sourceId), or a capability id. Nothing else is reachable.
  */
 export const WRITER_FUNCTIONS: Record<string, string> = {
   "writer:listScripts": "read",
@@ -44,22 +46,22 @@ export const WRITER_FUNCTIONS: Record<string, string> = {
   "reviews:changes": "read",
   "reviews:get": "read",
   "reviews:checkIn": "read",
-  "reviews:publish": "review.share",
-  "reviews:approve": "review.share",
-  "reviews:unapprove": "review.share",
-  "reviews:claim": "review.share",
-  "reviews:release": "review.share",
-  "reviews:resolve": "review.share",
-  "reviews:reply": "review.share",
-  "reviews:note": "review.share",
-  "reviews:deleteNote": "review.share",
-  "reviews:takeFix": "review.share",
-  "reviews:declineFix": "review.share",
-  "reviews:fixProgress": "review.share",
-  "reviews:check": "review.share",
-  "reviews:setMeta": "review.share",
-  "reviews:compress": "review.share",
-  "reviews:remove": "review.share",
+  "reviews:publish": "review",
+  "reviews:approve": "review",
+  "reviews:unapprove": "review",
+  "reviews:claim": "review",
+  "reviews:release": "review",
+  "reviews:resolve": "review",
+  "reviews:reply": "review",
+  "reviews:note": "review",
+  "reviews:deleteNote": "review",
+  "reviews:takeFix": "review",
+  "reviews:declineFix": "review",
+  "reviews:fixProgress": "review",
+  "reviews:check": "review",
+  "reviews:setMeta": "review",
+  "reviews:compress": "review",
+  "reviews:remove": "review",
   "edit:getMedia": "read",
   "edit:putMedia": "any",
 };
@@ -366,7 +368,7 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
   const args = { ...((body.args as Record<string, unknown> | undefined) ?? {}) };
   if (needs === "any" && !anyWork(grants)) return refuse("write scripts");
   if (needs === "admin" && !grants.admin) return refuse("do that: it's for admins");
-  if (needs.includes(".") && !has(grants, needs)) return refuse(needs !== "review.share" ? "do that" : body.path === "reviews:remove" ? "delete review links" : "share or fix reviews");
+  if (needs.includes(".") && !has(grants, needs)) return refuse("do that");
   if (needs === "script" && !grants.admin) {
     // A commit says what it is; a delete is checked against what the script is in the cloud.
     let summary: unknown = args.summary;

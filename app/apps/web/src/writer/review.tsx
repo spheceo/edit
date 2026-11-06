@@ -4,7 +4,7 @@ import { CommentsPanel, hoverNote } from "./comments";
 import { approveReview, cancelScriptShare, compressReview, deleteReviewLink, fixNotes, getScript, restoreScript, message, onReviews, reviewCounts, reviewNotes, scriptAudit, shareScript } from "./api";
 import { makeDoc } from "./docs-dialog";
 import type { BuildStatus, Cite, DocFile, Paragraph, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, Script } from "./types";
-import { CAN, useGrants } from "./can";
+import { useGrants } from "./can";
 import { Dialog, Icon } from "./ui";
 import { formatBytes } from "../lib/time";
 
@@ -199,7 +199,7 @@ const docReady = (script: Script) => (script.commentary ? !!script.commentary.dr
  * dialog's option rows). The fuller Doc window stays on the More menu.
  */
 function DocExportRow({ script, onChange }: { script: Script; onChange: (script: Script) => void }) {
-  const mayShare = useGrants().has(CAN.share);
+  const mayShare = useGrants().shares;
   const doc = script.docExport;
   const behind = !!doc && doc.revision !== script.revision;
   const ready = docReady(script);
@@ -225,7 +225,7 @@ function DocExportRow({ script, onChange }: { script: Script; onChange: (script:
   };
 
   const hint = !mayShare
-    ? "Exporting needs “Share for review”: ask an admin."
+    ? "Sign in to export."
     : problem
       ? problem
       : !ready
@@ -328,8 +328,8 @@ export function ReviewDialog({
   const sawShare = useRef(false);
   const change = useRef(onChange);
   change.current = onChange;
-  // Sharing, approving and fixing need review.share; reading the notes doesn't.
-  const mayShare = useGrants().has(CAN.share);
+  // Sharing, approving and fixing: anyone signed in; reading the notes: anyone.
+  const mayShare = useGrants().shares;
   // What a reviewer would flag, checked before it's shared, as Edit's audit is before an export.
   const [flags, setFlags] = useState<string[]>([]);
   useEffect(() => {
@@ -536,7 +536,7 @@ export function ReviewDialog({
                 <Icon name="check" size={13} /> Up on the link
               </span>
             )}
-            {!progress && !problem && !stopped && !(landed && link) && !mayShare && <span className="faint">Sharing, approving and fixing need “Share for review”: ask an admin.</span>}
+            {!progress && !problem && !stopped && !(landed && link) && !mayShare && <span className="faint">Sign in to share.</span>}
           </span>
           {spinning && shownStage !== "making this v1" && (
             <button type="button" className="ghost" disabled={cancelling} onClick={() => void stopShare()}>

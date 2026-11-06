@@ -167,7 +167,7 @@ export function CommentsPanel({
   /** The latest version shared. */
   version?: number;
   shared: boolean;
-  /** May write (review.share): leave, answer and delete notes. */
+  /** May write (signed in): leave, answer and delete notes. */
   canWrite: boolean;
   /** Words picked in the script for the next comment, or none (a general comment). */
   draft?: Draft | null;

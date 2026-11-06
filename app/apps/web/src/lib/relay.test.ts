@@ -28,7 +28,7 @@ beforeAll(async () => {
   SUBS = await sign({ perms: ["use", "video.subtitles"], admin: false }, "person-s");
   EDITOR = await sign({ perms: ["use", "edit.bodycam", "video.subtitles"], admin: false });
   ADMIN = await sign({ perms: ["use"], admin: true }, "person-a");
-  WRITER = await sign({ perms: ["use", "scripts.interrogation", "review.share"], admin: false }, "person-w");
+  WRITER = await sign({ perms: ["use", "scripts.interrogation"], admin: false }, "person-w");
   USE_ONLY = await sign({ perms: ["use", "cloud", "drive"], admin: false }, "person-u");
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
@@ -157,13 +157,10 @@ describe("relay cloud endpoints", () => {
     expect((await call("convex", { kind: "query", path: "reviews:get", args: {} })).status).toBe(200);
     const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).args.app).toBe("edit");
-    // Deleting a review link for good (Sphe, Nov 1): only who may share reviews, or an admin; always Edit's review.
+    // Deleting a review link for good (Sphe, Nov 1): anyone signed in (Nov 6, it needed “Share for review”); always Edit's review.
     const remove = (token: string) => call("convex", { kind: "mutation", path: "reviews:remove", args: { app: "writer", sourceId: "p1" } }, { token });
-    const before = upstream.mock.calls.length;
-    for (const token of [PERSON, EDITOR, USE_ONLY]) expect((await remove(token)).status).toBe(403);
-    expect(upstream.mock.calls.length).toBe(before);
     expect((await call("convex", { kind: "query", path: "reviews:remove", args: {} }, { token: ADMIN })).status).toBe(403);
-    for (const token of [WRITER, ADMIN]) {
+    for (const token of [PERSON, EDITOR, USE_ONLY, WRITER, ADMIN]) {
       expect((await remove(token)).status).toBe(200);
       const [, sent] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
       expect(JSON.parse(String(sent.body))).toMatchObject({ path: "reviews:remove", args: { app: "edit", sourceId: "p1" } });
@@ -201,12 +198,12 @@ describe("relay cloud endpoints", () => {
     expect((await writer("convex", { kind: "mutation", path: "writer:commitScript", args: { summary: { kind: "interrogation" } } }, EDITOR)).status).toBe(403);
     // A delete is judged by what the script is in the cloud.
     expect((await writer("convex", { kind: "mutation", path: "writer:deleteScript", args: { scriptId: "a" } }, WRITER)).status).toBe(200);
-    // Reviews: shared by who may share, always as Writer.
+    // Reviews: shared by who writes the script (no “Share for review” needed since Nov 6), always as Writer.
     expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit", sourceId: "a" } }, EDITOR)).status).toBe(403);
     expect((await writer("convex", { kind: "mutation", path: "reviews:publish", args: { app: "edit", sourceId: "a" } }, WRITER)).status).toBe(200);
     const [, init] = upstream.mock.calls.at(-1) as unknown as [string, RequestInit];
     expect(JSON.parse(String(init.body)).args.app).toBe("writer");
-    // A script's review link is deleted by who may share reviews, as Writer's.
+    // A script's review link is deleted by who writes the script, as Writer's.
     expect((await writer("convex", { kind: "mutation", path: "reviews:remove", args: { app: "edit", sourceId: "s1" } }, EDITOR)).status).toBe(403);
     expect((await writer("convex", { kind: "mutation", path: "reviews:remove", args: { app: "edit", sourceId: "s1" } }, USE_ONLY)).status).toBe(403);
     expect((await writer("convex", { kind: "mutation", path: "reviews:remove", args: { app: "edit", sourceId: "s1" } }, WRITER)).status).toBe(200);
@@ -311,7 +308,8 @@ describe("relay cloud endpoints", () => {
   it("publishes Script mode's capabilities with Edit's, their ids unchanged", async () => {
     const answer = await relay.fetch(new Request("https://relay.test/.well-known/spheceo-app.json"), env);
     const ids = ((await answer.json()) as { capabilities: { id: string }[] }).capabilities.map((one) => one.id);
-    for (const id of ["edit.bodycam", "scripts.interrogation", "scripts.commentary", "review.share", "review.lessons"]) expect(ids).toContain(id);
+    for (const id of ["edit.bodycam", "scripts.interrogation", "scripts.commentary", "review.lessons"]) expect(ids).toContain(id);
+    expect(ids).not.toContain("review.share");
   });
 
   it("only touches keys under edit/", async () => {
@@ -463,7 +461,7 @@ describe("relay cloud endpoints", () => {
     await call("convex", { kind: "query", path: "edit:listMedia", args: { caller: { sub: "x", admin: true, perms: [] } } }, { token: SUBS, env: on });
     expect(argsOf()).toMatchObject({ caller: { sub: "person-s", admin: false, perms: ["use", "video.subtitles"] }, token: "service-token" });
     await call("writer/convex", { kind: "query", path: "writer:listScripts" }, { token: WRITER, env: on });
-    expect(argsOf().caller).toEqual({ sub: "person-w", admin: false, perms: ["use", "scripts.interrogation", "review.share"] });
+    expect(argsOf().caller).toEqual({ sub: "person-w", admin: false, perms: ["use", "scripts.interrogation"] });
     const refused = await call("convex", { kind: "query", path: "edit:listLater", args: {} }, { token: SUBS, env: on });
     expect(refused.status).toBe(403);
     expect(await refused.json()).toEqual({ error: "This project isn't available to your account." });
@@ -604,18 +602,18 @@ describe("relay cloud endpoints", () => {
     expect((await call("r2/list", { prefix: "edit/" }, { token: ADMIN })).status).toBe(200);
   });
 
-  it("a deleted review link's files are deleted by who may share reviews, only once Repack's review is gone (Nov 1)", async () => {
+  it("a deleted review link's files are deleted by anyone signed in, only once Repack's review is gone (Nov 1)", async () => {
     const files = ["edit/reviews/p1/v1/edit.mp4", "edit/reviews/p1/v1/poster.jpg"];
     // The review still there: only an admin.
     cloudWith(null, { reviewId: "r1" });
     expect((await call("r2/delete", { keys: files }, { token: WRITER })).status).toBe(403);
     expect((await call("r2/list", { prefix: "edit/reviews/p1/" }, { token: WRITER })).status).toBe(403);
-    // Gone: who may share reviews deletes and lists its files, nothing beyond them.
+    // Gone: anyone signed in deletes and lists its files (Nov 6: it needed “Share for review”), nothing beyond them.
     const { paths } = cloudWith(null, null);
     expect((await call("r2/delete", { keys: files }, { token: WRITER })).status).toBe(200);
     expect(paths()).toContain("reviews:get");
     expect((await call("r2/list", { prefix: "edit/reviews/p1/" }, { token: WRITER })).status).toBe(200);
-    expect((await call("r2/delete", { keys: files })).status).toBe(403);
+    expect((await call("r2/delete", { keys: files })).status).toBe(200);
     expect((await call("r2/delete", { keys: [...files, "edit/reviews/p2/v1/edit.mp4"] }, { token: WRITER })).status).toBe(403);
     expect((await call("r2/delete", { keys: ["edit/originals/drive/f/a.mp4"] }, { token: WRITER })).status).toBe(403);
     expect((await call("r2/list", { prefix: "edit/reviews/" }, { token: WRITER })).status).toBe(403);

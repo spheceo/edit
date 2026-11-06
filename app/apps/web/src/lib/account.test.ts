@@ -6,7 +6,7 @@ const signedIn = (perms: string[], admin = false) => ({ person: { email: "a@b.c"
 
 describe("what the signed-in person may do", () => {
   it("someone who only writes scripts makes no videos, so Home sends them to Scripts", () => {
-    const writer = signedIn(["use", "scripts.foia-compilation", "review.share"]);
+    const writer = signedIn(["use", "scripts.foia-compilation"]);
     expect([makesVideos(writer), writesScripts(writer)]).toEqual([false, true]);
     expect(editStyles(writer)).toEqual(new Set());
   });

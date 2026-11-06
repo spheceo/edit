@@ -26,7 +26,6 @@ import * as machine from "../machine.ts";
 import { isFile, join } from "../paths.ts";
 import * as relay from "../relay.ts";
 import { blocksOf, outline, targetMs, type Block, type Range } from "./blocks.ts";
-import * as can from "./can.ts";
 import * as cloud from "./cloud.ts";
 import * as commentary from "./commentary.ts";
 import * as fixing from "./fixing.ts";
@@ -874,7 +873,7 @@ async function checkIn(app: App, data: string): Promise<void> {
   const now = answer.chosen === true;
   if (now !== chosen) diag.info("writer", now ? "this Mac is the fixing computer: it takes Ready for changes" : "this Mac isn't the fixing computer");
   chosen = now;
-  if (!chosen || !can.has(can.SHARE)) return;
+  if (!chosen) return;
   const requests = (Array.isArray(answer.requests) ? answer.requests : []) as Record<string, unknown>[];
   if (requests.length === 0) return;
   // The notes it fixes are read from what this Mac has heard: hear them first.

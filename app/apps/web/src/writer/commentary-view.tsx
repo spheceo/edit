@@ -193,7 +193,7 @@ export function CommentaryEditor({
   // Teaching Writer from feedback needs review.lessons: without it there's no Feedback tab.
   const grants = useGrants();
   const mayTeach = grants.has(CAN.lessons);
-  const mayShare = grants.has(CAN.share);
+  const mayShare = grants.shares;
   // Words picked in the script for a comment (the review page's anchor), and the button offering it.
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [offer, setOffer] = useState<{ draft: CommentDraft; x: number; y: number } | null>(null);

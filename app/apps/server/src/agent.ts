@@ -298,7 +298,7 @@ export class Agents implements seams.AgentPanel {
    * then cut it again (Nov 6).
    */
   hasRunningTurns(): boolean {
-    return [...this.chats.values()].some((chat) => chat.running) || this.carryingOn();
+    return [...this.chats.values()].some((chat) => chat.running) || this.queued.size > 0 || this.carryingOn();
   }
 
   private carryingOn(): boolean {
@@ -327,6 +327,8 @@ export class Agents implements seams.AgentPanel {
   private authRetried = new Set<string>();
   /** Each project's automatic follow-ups for the user's last message: its generation, how many, the flags left at the last. */
   private followedUp = new Map<string, { generation: number; sent: number; count: number }>();
+  /** Chats Edit's own next turn is about to start in (a follow-up, the fresh-eyes pass): running, as far as a restart goes. */
+  private queued = new Set<string>();
   /** Projects whose chat goes when their turn ends (`new_chat`). */
   private resetAfter = new Set<string>();
   private dir: string;
@@ -1321,14 +1323,25 @@ export class Agents implements seams.AgentPanel {
     this.followedUp.set(project, { generation, sent: (mine?.sent ?? 0) + 1, count: left.count });
     diag.info("agent", `${project}: the edit left ${left.count} flags; asking for them (${(mine?.sent ?? 0) + 1} of ${MAX_FOLLOW_UPS})`);
     const note = left.note;
+    this.followLater(project, note, generation);
+  }
+
+  /**
+   * Edit's own follow-up, a second on: counted as a running turn meanwhile
+   * (`queued`), or a dev server restart lands in the gap and cuts it (Nov 6).
+   */
+  private followLater(project: string, note: string, generation: number): void {
+    this.queued.add(project);
     void (async () => {
-      await timing.sleep(1000);
-      const later = this.withChat(project);
-      if (later.running || later.halted || later.generation !== generation) return;
       try {
+        await timing.sleep(1000);
+        const later = this.withChat(project);
+        if (later.running || later.halted || later.generation !== generation) return;
         await this.sendTurn(project, note, null, null, generation);
       } catch (thrown) {
         diag.warn("agent", `following up ${project}: ${diag.messageOf(thrown)}`);
+      } finally {
+        this.queued.delete(project);
       }
     })();
   }
@@ -1355,16 +1368,7 @@ export class Agents implements seams.AgentPanel {
       `(Edit, automatically) Your turn ended with ${left.length} of what was asked still open:\n${left.map((item) => `- ${takeChars(item, 300)}`).join("\n")}\n\n` +
       "Do every one of them now, in this turn, in order; don't end the turn with a list of what's left. " +
       "Leave one only when it can't be done in this video, and say in a line what stops it (no such footage, the team must choose, it would break another note), not that it wasn't got to. A tool that failed: call it again, or the next best way.";
-    void (async () => {
-      await timing.sleep(1000);
-      const later = this.withChat(project);
-      if (later.running || later.halted || later.generation !== generation) return;
-      try {
-        await this.sendTurn(project, note, null, null, generation);
-      } catch (thrown) {
-        diag.warn("agent", `following up ${project}: ${diag.messageOf(thrown)}`);
-      }
-    })();
+    this.followLater(project, note, generation);
   }
 
   /**
@@ -1435,12 +1439,15 @@ export class Agents implements seams.AgentPanel {
     this.upsert(project, entry({ id: card, kind: "subagent", text: "Fresh-eyes final pass", status: "running", detail: key }));
     this.save(project);
     diag.info("agent", `${project}: the edit is done; a fresh-eyes final pass starts as a sub-agent`);
+    this.queued.add(key);
     void (async () => {
       await timing.sleep(1000);
       try {
         await this.sendTurn(key, FRESH_EYES, null, null, null);
       } catch (thrown) {
         this.subFinished(key, diag.messageOf(thrown));
+      } finally {
+        this.queued.delete(key);
       }
     })();
   }

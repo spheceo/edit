@@ -769,6 +769,10 @@ test("a turn that ends listing what it didn't get to is sent back to it, only wh
       queries[n]!.end();
     };
     ends(0, "**Done**\n- 1:21 profile\n\n**Still open:**\n- 1:58 words: not done\n- 2:58 white text: not done");
+    await settle();
+    // In the second before the follow-up starts, the turn still counts as running: no restart lands in the gap.
+    expect(agents.withChat(project).running).toBe(false);
+    expect(agents.hasRunningTurns()).toBe(true);
     await Bun.sleep(1100);
     await settle();
     expect(asked[1]!.prompt).toStartWith("(Edit, automatically) Your turn ended with 2 of what was asked still open:\n- 1:58 words: not done\n- 2:58 white text");

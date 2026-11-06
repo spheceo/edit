@@ -84,6 +84,10 @@ export async function capture(url: string, path: string, phrase = "", selector =
       pending.set(id, { resolve, reject, timer }); socket!.send(JSON.stringify({ id, method, params }));
     });
     await call("Page.enable");
+    // Chrome's own user agent, without "Headless": X answers a HeadlessChrome one with a 403, so a linked post never
+    // came through (Nov 6, the study the horror script linked as a comment).
+    const version = await call("Browser.getVersion");
+    if (typeof version.userAgent === "string") await call("Network.setUserAgentOverride", { userAgent: version.userAgent.replace("HeadlessChrome", "Chrome") });
     await call("Emulation.setDeviceMetricsOverride", { width: 1920, height: 1400, deviceScaleFactor: 1, mobile: false });
     let readyTimer: ReturnType<typeof setTimeout> | null = null;
     const ready = new Promise<void>((resolve) => { pageLoaded = resolve; readyTimer = setTimeout(resolve, 15_000); });

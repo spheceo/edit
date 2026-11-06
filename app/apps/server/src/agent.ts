@@ -11,6 +11,7 @@
 // `ask` is the one-off question other packages use (speakers.ts names voices
 // with it): no chat, no tools.
 
+import * as localPreviews from "./local_previews.ts";
 import * as fs from "node:fs";
 
 import { attachedText, pictures as attachedPictures, savedAttached, type Attached, type Picture } from "./chat_attachments.ts";
@@ -290,9 +291,22 @@ class Lock {
 }
 
 export class Agents implements seams.AgentPanel {
-  /** Remote updates wait for all agent turns to finish. */
+  /**
+   * Remote updates (and the dev server's restarts) wait for all agent turns to finish, a cut one still to carry on
+   * included: for up to 20 s after a restart (serve.ts waits for sign-in) it is only noted in `RUNNING`, and a restart
+   * then cut it again (Nov 6).
+   */
   hasRunningTurns(): boolean {
-    return [...this.chats.values()].some((chat) => chat.running);
+    return [...this.chats.values()].some((chat) => chat.running) || this.carryingOn();
+  }
+
+  private carryingOn(): boolean {
+    try {
+      const noted = JSON.parse(fs.readFileSync(join(this.dir, RUNNING), "utf8")) as { at?: unknown; projects?: unknown };
+      return typeof noted.at === "number" && nowMs() - noted.at <= RESUME_WITHIN_MS && Array.isArray(noted.projects) && noted.projects.length > 0;
+    } catch {
+      return false;
+    }
   }
 
   /** The projects whose agent turn is running now. */
@@ -644,7 +658,10 @@ export class Agents implements seams.AgentPanel {
     context = "",
     attached: Attached[] = [],
   ): Promise<void> {
-    if (this.store.get(projectOf(project)) === null) throw new Error("no such project");
+    const live = this.store.get(projectOf(project));
+    if (live === null) throw new Error("no such project");
+    // Its cloud previews come down whole while the agent reads the project, so its frames read files here (local_previews.ts).
+    localPreviews.fetchAll(this.store.cacheDir(), live.project);
     let sending = this.sending.get(project);
     if (sending === undefined) {
       sending = new Lock();

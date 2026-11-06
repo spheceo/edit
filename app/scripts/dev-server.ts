@@ -69,13 +69,19 @@ async function stop(): Promise<void> {
   }
 }
 
-/** What the server is in the middle of (Claude on a thumbnail, an export…), by its /api/health; none when it doesn't answer. */
+/**
+ * What the server is in the middle of (Claude on a thumbnail, an export…), by its /api/health. One that doesn't answer
+ * (loaded, or still starting and about to carry on a cut turn) is taken as busy, not idle: Nov 6, an edit's turn was cut
+ * four times in 18 minutes by other sessions' saves landing while health was slow. A server that stays silent is a hang,
+ * and the check below starts it again; one that isn't running has nothing to cut off.
+ */
 async function busy(): Promise<string[]> {
+  if (child === null) return [];
   try {
-    const answer = (await (await fetch(HEALTH, { signal: AbortSignal.timeout(3000) })).json()) as { busy?: unknown };
+    const answer = (await (await fetch(HEALTH, { signal: AbortSignal.timeout(5000) })).json()) as { busy?: unknown };
     return Array.isArray(answer.busy) ? answer.busy.filter((one): one is string => typeof one === "string") : [];
   } catch {
-    return [];
+    return ["a server that isn't answering"];
   }
 }
 

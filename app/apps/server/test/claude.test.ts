@@ -260,6 +260,8 @@ test("a restart carries on the turns its quit cut short, in the same conversatio
 
     // The new process: the chat read back from disk.
     const after = agentsWith(home);
+    // Before it carries on (serve.ts waits up to 20 s for sign-in), the cut turn counts as running: no restart cuts it again.
+    expect(after.agents.hasRunningTurns()).toBe(true);
     after.agents.resumeInterrupted();
     await settle();
     // Noted again: the turn carrying on is running.
@@ -295,6 +297,7 @@ test("a restart carries on the turns its quit cut short, in the same conversatio
     // Closed hours ago: nothing starts by itself.
     fs.writeFileSync(noted, JSON.stringify({ at: Date.now() - 3 * 3_600_000, projects: [project] }));
     const later = agentsWith(home);
+    expect(later.agents.hasRunningTurns()).toBe(false);
     later.agents.resumeInterrupted();
     await settle();
     expect(later.asked.length).toBe(0);

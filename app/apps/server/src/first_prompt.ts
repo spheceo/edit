@@ -64,7 +64,7 @@ export async function sendReady(app: App): Promise<void> {
       if (job !== null && job.state !== "done") continue;
       if (live.project.script !== undefined && live.project.script !== null && !seams.script.laidOut(live.project)) continue;
       const panel = seams.agentPanel(app);
-      if ((panel.chat(project) as { running?: boolean }).running === true) continue;
+      if ((panel.turn?.(project) ?? (panel.chat(project) as { running?: boolean })).running === true) continue;
       try {
         await app.store.mayWrite(project);
         await panel.send(project, text, null, null);

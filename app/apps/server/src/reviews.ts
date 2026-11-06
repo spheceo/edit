@@ -1542,7 +1542,7 @@ export async function checkIn(app: App): Promise<string[]> {
     const project = request.sourceId;
     const name = request.title || project;
     const live = app.store.get(project);
-    const busy = readying.has(project) || sharing.has(project) || (live !== null && (seams.agentPanel(app).chat(project) as { running?: boolean }).running === true);
+    const busy = readying.has(project) || sharing.has(project) || (live !== null && turnOf(app, project).running === true);
     // A busy project waits for a later check-in: not a reason to hand it back.
     if (busy) {
       waits(request.reviewId, `${live?.project.name ?? name}: Ready for changes waits: the project is busy`);
@@ -1895,7 +1895,7 @@ async function followFix(
       await progress(reviewId, { stage: answered < mine.length ? `Fixing note ${answered + 1} of ${mine.length}` : "Checking the fixes", done: answered });
     }
     // Ended when it's stopped running for two looks in a row (a follow-up turn may start between).
-    quiet = (panel.chat(project) as { running?: boolean }).running === true ? 0 : quiet + 1;
+    quiet = turnOf(app, project).running === true ? 0 : quiet + 1;
     if (quiet >= 2) break;
   }
   if (Date.now() - began >= FIX_TURN_MS) throw new Error("the agent's turn ran for three hours without ending");
@@ -2277,10 +2277,16 @@ export function projectStatus(app: App): Record<string, Status> {
   return out;
 }
 
+/** A project's turn as the agent panel keeps it: cheaply where it can (`turn`), else from its chat. */
+function turnOf(app: App, project: string): { running?: boolean; entries?: readonly { kind?: string; tool?: string; text?: string }[] } {
+  const panel = seams.agentPanel(app);
+  return panel.turn !== undefined ? panel.turn(project) : (panel.chat(project) as { running?: boolean; entries?: { kind?: string; tool?: string; text?: string }[] });
+}
+
 /** Whether the project's agent is on a turn. */
 function working(app: App, project: string): boolean {
   try {
-    return (seams.agentPanel(app).chat(project) as { running?: boolean }).running === true;
+    return turnOf(app, project).running === true;
   } catch {
     return false;
   }
@@ -2288,9 +2294,9 @@ function working(app: App, project: string): boolean {
 
 /** A whole edit (or a round of feedback) has run to its end in the project's chat, and nothing is running now. */
 function finished(app: App, project: string): boolean {
-  let chat: { running?: boolean; entries?: { kind?: string; tool?: string; text?: string }[] };
+  let chat: ReturnType<typeof turnOf>;
   try {
-    chat = seams.agentPanel(app).chat(project) as typeof chat;
+    chat = turnOf(app, project);
   } catch {
     return false;
   }

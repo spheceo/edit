@@ -237,7 +237,7 @@ export async function requeueAfterTurn(app: App, projectId: string, ids: string[
   let quiet = 0;
   while (Date.now() - began < LONGEST_MS) {
     await new Promise((resolve) => setTimeout(resolve, followMs));
-    quiet = (panel.chat(projectId) as { running?: boolean }).running === true ? 0 : quiet + 1;
+    quiet = (panel.turn?.(projectId) ?? (panel.chat(projectId) as { running?: boolean })).running === true ? 0 : quiet + 1;
     if (quiet >= 2) break;
   }
   const rows = ((await cloud.query("edit:listNotes", { projectId })) as AppNote[]).filter((note) => ids.includes(note.id) && note.status === "sent");

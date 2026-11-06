@@ -596,6 +596,18 @@ export class Agents implements seams.AgentPanel {
     }
   }
 
+  /**
+   * Whether a project's turn is running and its entries as kept, read only,
+   * without building its chat: Home's status asks of every project every few
+   * seconds, and copying and sorting 54 chats (6.5 MB) twice each held the
+   * server ~2.5 s a time (Nov 6, Sphe's Mac: health took 13–52 s, the agents'
+   * tools didn't connect, downloads stalled).
+   */
+  turn(project: string): { running: boolean; entries: readonly Entry[] } {
+    const chat = this.withChat(project);
+    return { running: chat.running, entries: chat.entries };
+  }
+
   chat(project: string): Json {
     const chat = this.withChat(project);
     return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, model_name: this.modelName(project), auth_retry: this.legacyClaudeRetry(project) });

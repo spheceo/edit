@@ -865,6 +865,8 @@ export interface AgentPanel extends Agents {
   models(refresh: boolean): Promise<Json>;
   /** A project's chat: its entries, whether a turn is running, its model and effort. */
   chat(project: string): Json;
+  /** Whether a project's turn is running and its entries, read without building its chat (agent.ts `turn`). */
+  turn?(project: string): { running: boolean; entries: readonly { kind?: string; tool?: string; text?: string }[] };
   /** Sends the user's (or Edit's: the script's research) message to a project's chat, starting its turn. */
   send(project: string, text: string, model: string | null, effort: string | null, context?: string, attached?: Attached[]): Promise<void>;
   /** Stops a project's running turn. */

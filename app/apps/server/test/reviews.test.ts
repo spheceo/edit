@@ -240,3 +240,27 @@ test("feedback_unfixed takes a note that can't be done, never one the turn didn'
   ])
     expect(putOff(reason)).toBe(false);
 });
+
+test("Home's status reads each project's turn without building its chat", async () => {
+  const { fixtureHome } = await import("./helpers/home.ts");
+  const { projectStatus } = await import("../src/reviews.ts");
+  const { app, cleanup } = fixtureHome("status-turn");
+  try {
+    const a = app.store.createAs("A", "bodycam", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const b = app.store.createAs("B", "bodycam", { width: 1920, height: 1080, fps: 30 }).project.id;
+    // Nov 6: 54 chats copied and sorted twice each, every few seconds, held the server 2.5 s a time.
+    (app as { agents: unknown }).agents = {
+      chat: () => {
+        throw new Error("the whole chat was built");
+      },
+      turn: (project: string) =>
+        project === a ? { running: true, entries: [] } : { running: false, entries: [{ kind: "tool", tool: "skill", text: "feedback" }] },
+    };
+    (app as { exports: unknown }).exports = { running: () => false };
+    const status = projectStatus(app);
+    expect(status[a]).toMatchObject({ working: true, complete: false });
+    expect(status[b]).toMatchObject({ working: false, complete: true });
+  } finally {
+    cleanup();
+  }
+});

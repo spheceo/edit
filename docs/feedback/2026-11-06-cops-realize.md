@@ -39,3 +39,12 @@ Also on the way: Cops Realize's chat was flagged by the model's safeguards (Sonn
 - A share's version goes up once its review copy is up; the full-quality file follows behind. Uploads go in 16 MiB parts, eight at a time: every 64 MiB part was cut at ~60 s.
 
 Shared: Son & Dad v2 01:31, Predator Teacher v2 05:03, Cops Realize v3 and Female Police Captain v2 05:21. Still to do: the server still stalls for seconds at a time under load (health up to ~5–26 s); it needs a JS-level profile to find what's left.
+
+## Nov 7: JJ's new notes, on nightly-67
+
+- **Cops Realize's 9 new notes waited half an hour (bf94d1b9).** JJ's Mac took Ready for changes, stopped with "already taken by another run", and held the claim until it ran out. Now notes that a Mac claims but hasn't heard are handed straight back. Test: reviews_ready "notes it claimed but hasn't heard…". The notes were then fixed here, and v4 was shared at 13:04.
+- **Female Police Captain v2 wouldn't play in Chrome** ("PIPELINE_ERROR_DECODE: Failed to send audio packet"). The review copy online was 160,099 bytes larger than one made again from the same export and pieces. The copy made again decodes cleanly. v2 was replaced in place at 15:06 and plays from 0:00, 0:10, 10:00, 30:00 and 50:00. Why the 05:17 copy came out wrong isn't known. The share's check compares lengths, not whether the sound decodes.
+- **Predator Teacher's Download file for v3 never went up (ce0586db).** Edit restarted on JJ's Mac with 0.7 of 4.9 GB up, and nothing sent the rest. The full-quality upload is now a job in jobs.json, so after a restart it carries on from the parts already up. Test: reviews_full.
+- **Predator Teacher's two notes the agent put off:**
+  - *"Seems like we've muted our volume" (~10:28):* the footage itself (00.mp4, ce0be3…) has no audio packets for 3988.8–3991.3 s, 3992.6–3993.7 s and 3994.0–3994.8 s, so it's the same in the excerpt and the original. The agent cut 4.8 s of the dead stretch and kept the subtitles.
+  - *"This is the suspect speaking":* the voices put Jeremy's short reactions ("Okay…", "Oh, wow…", "That's a lot…") under Morris, the detective, at ~31:23 and ~40:04. The agent first said the suspect never speaks there and relabeled officers "(off camera)". It was corrected in the chat, and its first share was stopped. The lesson for the subtitle skill: a one- or two-word answer to a detective is usually the person being questioned.

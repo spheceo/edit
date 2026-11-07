@@ -35,9 +35,14 @@ import { stableStringify } from "./stable.ts";
 import { validId } from "./store.ts";
 
 const MIB = 1024 * 1024;
-/** A file's parts: 64 MiB, four in flight (≤ 320 MiB in memory). */
-export const FILE_PART = 64 * MIB;
-const FILE_PARALLEL = 4;
+/**
+ * A file's parts: 16 MiB, eight in flight (≤ 144 MiB in memory). A part has to
+ * finish well inside a minute: from Sphe's Mac each connection to R2 carried
+ * ~0.5 MB/s on Nov 7, and every 64 MiB part was cut at ~60 s ("The socket
+ * connection was closed unexpectedly"), so a 0.7 GB review copy never got up.
+ */
+export const FILE_PART = 16 * MIB;
+const FILE_PARALLEL = 8;
 /** A stream's parts: 32 MiB, two in flight plus the one being read (≤ 96 MiB). */
 export const STREAM_PART = 32 * MIB;
 const STREAM_PARALLEL = 2;

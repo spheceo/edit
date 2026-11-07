@@ -1701,10 +1701,22 @@ export async function fixReady(app: App, project: string, reviewId: string, note
     await shareAgain(app, project, reviewId);
     return;
   }
-  const claimed = ((await cloud.mutation("reviews:claim", { noteIds, by: app.machine, machine: machine.id() })) as { claimed?: string[] }).claimed ?? [];
+  const answer = (await cloud.mutation("reviews:claim", { noteIds, by: app.machine, machine: machine.id() })) as { claimed?: string[]; reason?: string };
+  const claimed = answer.claimed ?? [];
   const state = read(home);
   const mine = claimed.map((id) => state.notes[id]).filter((note): note is Note => note !== undefined);
-  if (mine.length === 0) throw new Error("the notes were already taken by another run");
+  if (mine.length === 0) {
+    // Claimed but not heard here: handed straight back, so the notes aren't held
+    // for half an hour with no one on them (Nov 7, Cops Realize: JJ's Mac took
+    // Ready for changes on 9 new notes, stopped with this, and no run could take
+    // them until the claim ran out).
+    if (claimed.length > 0) await cloud.mutation("reviews:release", { noteIds: claimed, by: app.machine }).catch(() => {});
+    throw new Error(
+      claimed.length > 0
+        ? `${claimed.length} note(s) were claimed but aren't heard on this computer yet; handed back`
+        : `the notes were already taken by another run${answer.reason === undefined ? "" : ` (${answer.reason})`}`,
+    );
+  }
   update(home, (saved) => {
     for (const note of mine) {
       const own = saved.notes[note.id];

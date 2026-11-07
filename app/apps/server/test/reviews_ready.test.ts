@@ -159,6 +159,37 @@ test("a request whose project is busy here waits: never declined, never taken", 
   }
 });
 
+// Nov 7, Cops Realize: JJ's Mac took Ready for changes on 9 new notes and
+// stopped with "already taken by another run"; the claim stayed, so no run
+// (Sphe's pull_feedback either) could take them for half an hour.
+test("notes it claimed but hasn't heard are handed straight back, and the request fails saying so", async () => {
+  const { app, home, cleanup } = fixtureHome("ready-unheard");
+  const live = app.store.createAs("Cops", "bodycam", { width: 1920, height: 1080, fps: 30 });
+  const id = live.project.id;
+  const sent: string[] = [];
+  idle(app, { send: async (_project: string, text: string) => void sent.push(text) });
+  try {
+    fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: {}, shared: { [id]: { reviewId: "r1", url: "https://feedback.test/r/x", versions: [{ n: 1, timeline: "t", path: "/nowhere.mp4", fps: 30, durationMs: 10_000, clips: [] }] } } }));
+    const calls = convex({
+      "reviews:checkIn": () => ({ chosen: true, requests: [request(id)] }),
+      "reviews:changes": () => ({ notes: [], cursor: 0, more: false }),
+      "reviews:open": () => [{ sourceId: id, reviewId: "r1", approved: null }],
+      "reviews:takeFix": () => ({ ok: true, sourceId: id, title: "Cops", version: 1, noteIds: ["n1", "n2"] }),
+      "reviews:claim": (args) => ({ claimed: args.noteIds }),
+      "reviews:release": () => ({ released: [] }),
+      "reviews:fixProgress": () => ({ ok: true }),
+    });
+    expect(await reviews.checkIn(app)).toEqual([id]);
+    const end = Date.now() + 10_000;
+    while (!calls.some((call) => call.path === "reviews:fixProgress" && call.args.state === "failed") && Date.now() < end) await Bun.sleep(20);
+    expect(calls.find((call) => call.path === "reviews:release")?.args).toMatchObject({ noteIds: ["n1", "n2"] });
+    expect(calls.find((call) => call.path === "reviews:fixProgress" && call.args.state === "failed")?.args.error).toContain("handed back");
+    expect(sent).toEqual([]);
+  } finally {
+    cleanup();
+  }
+});
+
 test("asked of this computer it takes the request, follows the agent's turn and, with nothing changed, says so without sharing", async () => {
   const { app, home, cleanup } = fixtureHome("ready-chosen");
   const live = app.store.createAs("Judge", "courtroom", { width: 1920, height: 1080, fps: 30 });

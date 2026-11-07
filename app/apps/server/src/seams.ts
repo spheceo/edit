@@ -874,7 +874,8 @@ export interface AgentPanel extends Agents {
   /** Forgets a project's chat (and its conversation). */
   reset(project: string): void;
   /** Forgets it once the turn now running ends (the agent's `new_chat`), so its last words are seen. */
-  resetAfterTurn?(project: string): void;
+  resetAfterTurn?(project: string): void;  /** The person changed the model menu (model_choice.ts): open chats show who answers next. */
+  choiceChanged?(): void;
 }
 
 /** The app's agents as the panel (and the script's research turn) use them. */

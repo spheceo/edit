@@ -656,7 +656,7 @@ export async function write(dir: string, script: Script, writing: Writing, signa
   const pacing: Pacing = writing.pace ? (commentary.pacing ?? "channel") : "channel";
   const ask = async (text: string, resume: string | null) => {
     try {
-      return await claude.askPatiently({ model: claude.OPUS, system, prompt: text, schema: PLAN_SCHEMA, label: `Claude opus writing a commentary${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
+      return await claude.askPatiently({ model: claude.OPUS, effort: claude.effort(), system, prompt: text, schema: PLAN_SCHEMA, label: `Claude opus writing a commentary${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
     } catch (error) {
       throw tooLong(error);
     }
@@ -778,9 +778,10 @@ export async function revise(dir: string, script: Script, request: string, lesso
   system += `\n\nSOURCES\n\n${evidence(sources)}`;
   const prompt = `THE SCRIPT, as a plan with each paragraph's ID\n${JSON.stringify(planWithIds(draft), null, 2)}\n\n${request.trim()}`;
   const corpus = new Corpus(sources);
+  const pick = claude.revision();
   const ask = async (text: string, resume: string | null) => {
     try {
-      return await claude.askPatiently({ model: claude.REVISION, system, prompt: text, schema: REVISE_SCHEMA, label: `Claude sonnet revising a commentary${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
+      return await claude.askPatiently({ model: pick.model, effort: pick.effort, system, prompt: text, schema: REVISE_SCHEMA, label: `${pick.label} revising a commentary${resume ? " (repair turn)" : ""}`, ...(resume ? { resume } : {}), ...(signal ? { signal } : {}) });
     } catch (error) {
       throw tooLong(error);
     }

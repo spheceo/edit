@@ -10,7 +10,7 @@
 // Words quoted into the chat (chatQuotes.ts) sit in the island until sent.
 
 import { AnimatePresence, motion } from "motion/react";
-import { AlertCircle, ArrowUp, FileText, Film, Image as ImageIcon, Music, Plus, Square, X } from "lucide-react";
+import { AlertCircle, ArrowUp, Check, FileText, Film, Image as ImageIcon, Music, Plus, Square, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { create } from "zustand";
 
@@ -21,6 +21,8 @@ import { useSettled } from "../lib/settled";
 import { formatBytes } from "../lib/time";
 import { useEditor } from "../lib/store";
 import { ClaudeMark } from "./ClaudeMark";
+import { DEFAULT_EFFORT, EFFORTS, effortName, modelFor, REVISION_MODELS } from "@edit/types/models";
+import { loadModelChoice, pickModel, useModelChoice } from "../lib/models";
 import { cx, ProgressRing } from "./ui";
 
 /** The card's edge, and the island's: a shade under the app's line (Sphe, Nov 3: "a slightly darker border"). */
@@ -43,6 +45,7 @@ export function ChatComposer({
   running,
   disabled,
   modelName,
+  revising,
   placeholder,
   onSend,
   onStop,
@@ -57,7 +60,10 @@ export function ChatComposer({
 }: {
   running: boolean;
   disabled: boolean;
-  modelName: string;
+  /** Who answers next, where the chat knows better than the menu's rule (the editor's: the server says). */
+  modelName?: string;
+  /** This chat has the model menu: whether its next turn is a revision (the model's the person's pick) or a build (always Opus). Without it, `modelName` alone (thumbnails). */
+  revising?: boolean;
   placeholder: string;
   /** The words (the quotes in front of them), the files that made it in, and the quotes. */
   onSend: (message: string, files: ChatFile[], quotes: ChatQuote[]) => void;
@@ -257,8 +263,8 @@ export function ChatComposer({
               />
             </>
           )}
-          {/* A grey pill, its words light enough to read (Sphe, Nov 3). */}
-          <ModelPill name={modelName} />
+          {/* A grey pill, its words light enough to read (Sphe, Nov 3); a chat with the model menu opens it there. */}
+          {revising === undefined ? <ModelPill name={modelName ?? ""} /> : <ModelMenu name={modelName} revising={revising} />}
           {hint !== undefined && hint !== "" && <span className="ml-auto truncate text-[11.5px] text-faint">{hint}</span>}
           {showStop ? (
             <button
@@ -452,28 +458,120 @@ export function SentFiles({ files }: { files: { name: string; kind: FileKind; ur
  * revises it: Sphe, Nov 4) the old name rolls up and out as the new one rolls
  * in, and the pill eases to the new width.
  */
-function ModelPill({ name }: { name: string }) {
-  const ease = [0.2, 0, 0, 1] as const;
+/** The model's name, rolling to the next when it changes. */
+function RollingName({ name }: { name: string }) {
   return (
-    <motion.span
-      layout
-      transition={{ layout: { duration: 0.3, ease } }}
-      className="flex h-7 items-center gap-1.5 overflow-hidden rounded-full bg-white/[0.08] px-2.5 text-[11.5px] font-medium text-secondary"
-      title="Edit picks the model: Opus builds, Sonnet revises"
-    >
-      {/^(Opus|Sonnet|Haiku|Fable|Claude)\b/u.test(name) && <ClaudeMark size={12} />}
-      <AnimatePresence mode="popLayout" initial={false}>
-        <motion.span
-          key={name}
-          className="whitespace-nowrap"
-          initial={{ y: 12, opacity: 0, filter: "blur(3px)" }}
-          animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
-          exit={{ y: -12, opacity: 0, filter: "blur(3px)" }}
-          transition={{ duration: 0.3, ease }}
-        >
-          {name}
-        </motion.span>
-      </AnimatePresence>
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.span
+        key={name}
+        className="whitespace-nowrap"
+        initial={{ y: 12, opacity: 0, filter: "blur(3px)" }}
+        animate={{ y: 0, opacity: 1, filter: "blur(0px)" }}
+        exit={{ y: -12, opacity: 0, filter: "blur(3px)" }}
+        transition={{ duration: 0.3, ease: EASE }}
+      >
+        {name}
+      </motion.span>
+    </AnimatePresence>
+  );
+}
+
+const EASE = [0.2, 0, 0, 1] as const;
+
+/** Who answers, where nobody picks it (thumbnails: always Opus). */
+function ModelPill({ name }: { name: string }) {
+  return (
+    <motion.span layout transition={{ layout: { duration: 0.3, ease: EASE } }} className="flex h-7 items-center gap-1.5 overflow-hidden rounded-full bg-white/[0.08] px-2.5 text-[11.5px] font-medium text-secondary">
+      {/\b(Opus|Sonnet|Haiku|Fable|Claude)\b/u.test(name) && <ClaudeMark size={12} />}
+      <RollingName name={name} />
     </motion.span>
+  );
+}
+
+/**
+ * Who answers and how hard it thinks, and the menu to change them (prototype
+ * B in a box, Sphe, Nov 7): the revisions' model with Claude's mark, then the
+ * thinking levels, Medium marked as the default. While the chat is being built
+ * the models aren't offered (a build is always Opus's). One pick for every
+ * chat on this computer (lib/models.ts).
+ */
+function ModelMenu({ name: given, revising }: { name?: string; revising: boolean }) {
+  const [open, setOpen] = useState(false);
+  const choice = useModelChoice();
+  const name = given || modelFor(revising, choice).name;
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => void loadModelChoice(), []);
+  useEffect(() => {
+    if (!open) return;
+    const away = (event: PointerEvent) => {
+      if (!box.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", escape, true);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", escape, true);
+    };
+  }, [open]);
+  const row = "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[12.5px] text-fg transition-colors hover:bg-menu-hover";
+  const tick = (on: boolean) => <span className="flex w-3.5 shrink-0 justify-center">{on && <Check size={13} strokeWidth={2.6} />}</span>;
+  return (
+    <div ref={box} className="relative">
+      <motion.button
+        type="button"
+        layout
+        transition={{ layout: { duration: 0.3, ease: EASE } }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((was) => !was)}
+        className={cx(
+          "flex h-7 items-center gap-1.5 overflow-hidden rounded-full px-2.5 text-[11.5px] font-medium transition-colors",
+          open ? "bg-white/[0.14] text-fg" : "bg-white/[0.08] text-secondary hover:bg-white/[0.14] hover:text-fg",
+        )}
+      >
+        <ClaudeMark size={12} />
+        <RollingName name={name} />
+        <span className="text-[#5b5b64]">·</span>
+        <RollingName name={effortName(choice.effort)} />
+      </motion.button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            role="menu"
+            initial={{ opacity: 0, y: 4, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 4, scale: 0.97 }}
+            transition={{ duration: 0.16, ease: EASE }}
+            style={{ transformOrigin: "20% 100%" }}
+            className="absolute bottom-[calc(100%+8px)] left-0 z-50 w-[216px] rounded-xl border border-line bg-raised p-[5px] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+          >
+            {revising && (
+              <>
+                {REVISION_MODELS.map((model) => (
+                  <button key={model.id} type="button" role="menuitemradio" aria-checked={choice.revision === model.id} className={row} onClick={() => void pickModel({ revision: model.id })}>
+                    {tick(choice.revision === model.id)}
+                    <ClaudeMark size={13} />
+                    {model.name}
+                  </button>
+                ))}
+                <div className="mx-0.5 my-[5px] h-px bg-line" />
+              </>
+            )}
+            {EFFORTS.map((effort) => (
+              <button key={effort} type="button" role="menuitemradio" aria-checked={choice.effort === effort} className={row} onClick={() => void pickModel({ effort })}>
+                {tick(choice.effort === effort)}
+                {effortName(effort)}
+                {effort === DEFAULT_EFFORT && <span className="ml-auto text-[11px] text-faint">Default</span>}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

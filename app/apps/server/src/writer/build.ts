@@ -486,10 +486,10 @@ export async function buildInSteps(script: Script, note: string, research: Resea
   return built(draft, answer, failure, answer?.costUsd ?? 0, stats);
 }
 
-/** How hard a fast build's Opus thinks, the same in every phase so the cache holds: `WRITER_FAST_EFFORT`, or medium. */
+/** How hard a fast build's Opus thinks, the same in every phase so the cache holds: `WRITER_FAST_EFFORT` (comparisons), or the person's pick in the model menu. */
 function fastEffort(): NonNullable<claude.Question["effort"]> {
   const given = process.env.WRITER_FAST_EFFORT;
-  return given === "low" || given === "high" || given === "xhigh" || given === "max" ? given : "medium";
+  return given === "low" || given === "medium" || given === "high" || given === "xhigh" || given === "max" ? given : claude.effort();
 }
 
 /** The fast build, everyone's; `WRITER_SCRIPT_BUILD=steps` asks for the build in steps instead (for comparisons). */

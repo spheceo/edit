@@ -16,6 +16,7 @@ import * as models from "@edit/types/models";
 
 import { join } from "./paths.ts";
 import * as claudeUsage from "./claude_usage.ts";
+import * as modelChoice from "./model_choice.ts";
 import * as planLimit from "./plan_limit.ts";
 import { trim } from "./rust.ts";
 import { VERSION } from "./version.ts";
@@ -33,18 +34,15 @@ export function sdk(): Promise<typeof Sdk> {
   return loading;
 }
 
-/** The model the agent starts on: Claude Code's `opus` (the newest Opus, 5.5 now). */
+/** The model the agent builds on: Claude Code's `opus` (the newest Opus, 5.5 now). */
 export const DEFAULT_MODEL = "opus";
-/**
- * The model for an edit's revisions once it's built (Sphe, Nov 4: "initial
- * script builds are on opus then when the script or edit is build we switch
- * to sonnet 5.5 for revisons"): half Opus's price on the person's plan, where
- * the team's 5-hour limits ran out that week.
- */
-export const REVISION_MODEL = models.REVISION_MODEL.id;
+/** The model a built edit's revisions run on: the person's pick in the chat's model menu (model_choice.ts). */
+export const revisionModel = (): string => modelChoice.current().revision;
+/** How hard every chat thinks: the person's pick in the menu, medium until they pick. */
+export const effort = (): Options["effort"] => modelChoice.current().effort;
 
-/** Edit's own default thinking level: its edits are mostly the house style applied again and again, which medium does as well as high in far less time. */
-const DEFAULT_EFFORT = "medium";
+/** Edit's own default thinking level, for the agent panel's catalog. */
+const DEFAULT_EFFORT = models.DEFAULT_EFFORT;
 
 /** How long a CLI's `--version` or sign-in check may take before it's taken as not working. */
 export const CHECK_MS = 20_000;

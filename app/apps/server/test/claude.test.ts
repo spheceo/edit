@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 
 import { agentHooks, Agents, editToolsFailed, readChat, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
+import * as modelChoice from "../src/model_choice.ts";
 import * as toolChanges from "../src/tool_changes.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { media } from "./helpers/model.ts";
@@ -710,7 +711,7 @@ test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in 
   }
 });
 
-test("opus builds the edit; once it's built, a revision is sonnet's, through a new chat (Sphe, Nov 4)", async () => {
+test("opus builds the edit; once it's built, a revision is on the model menu's pick (Opus until picked), through a new chat (Sphe, Nov 7)", async () => {
   const { home, project, agents, asked, queries } = claudeProject("claude-revision-model");
   try {
     await agents.send(project, "Start the edit", null, null);
@@ -742,18 +743,26 @@ test("opus builds the edit; once it's built, a revision is sonnet's, through a n
     }
     expect(chat.built).not.toBeNull();
     expect(JSON.parse(fs.readFileSync(home.store.chatPath(project), "utf8")).built).toBe(chat.built);
+    expect(agents.chat(project)).toMatchObject({ model_name: "Opus 5.5", revising: true, effort: null });
+    expect(agents.turnModel(project, "Make the intro shorter")).toBe("claude-opus-5-5");
+    // Sonnet picked in the menu (kept in the home): the revisions are Sonnet's, at the picked level.
+    modelChoice.save({ revision: "claude-sonnet-5-5", effort: "high" });
+    expect(JSON.parse(fs.readFileSync(`${home.home}/models.json`, "utf8"))).toEqual({ revision: "claude-sonnet-5-5", effort: "high" });
     expect(agents.chat(project)).toMatchObject({ model_name: "Sonnet 5.5" });
     // A new chat on the built edit still revises it.
     agents.reset(project);
     expect(agents.withChat(project).entries).toEqual([]);
-    expect(agents.turnModel(project, "Make the intro shorter")).toBe(claude.REVISION_MODEL);
-    expect(claude.REVISION_MODEL).toBe("claude-sonnet-5-5");
+    expect(agents.turnModel(project, "Make the intro shorter")).toBe("claude-sonnet-5-5");
+    await agents.send(project, "Make the intro shorter", null, null);
+    expect(asked.at(-1)!.options.model).toBe("claude-sonnet-5-5");
+    expect(asked.at(-1)!.options.effort).toBe("high");
     // Asking for it again from the start is a build.
     expect(agents.turnModel(project, "Redo the whole edit from the top")).toBe("opus");
     expect(agents.turnModel(project, "start over on this edit")).toBe("opus");
     // The fresh-eyes pass is a revision.
-    expect(agents.turnModel(`${project}~review`)).toBe(claude.REVISION_MODEL);
+    expect(agents.turnModel(`${project}~review`)).toBe("claude-sonnet-5-5");
   } finally {
+    modelChoice.save({});
     home.cleanup();
   }
 });

@@ -26,9 +26,10 @@ import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
 import { compareStrings, takeChars, charCount } from "./rust.ts";
 import { leftOver } from "./put_off.ts";
-import { BUILD_MODEL, REVISION_MODEL } from "@edit/types/models";
+import { nameOf } from "@edit/types/models";
 
 import * as claudeUsage from "./claude_usage.ts";
+import * as modelChoice from "./model_choice.ts";
 import * as planLimit from "./plan_limit.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
@@ -255,9 +256,6 @@ export const FRESH_EYES =
   "What the team catches most: narration or the room's voice starting before the picture changes; a glimpse or a half-second clip; a cover (an audio section, a pause, an overlay) fading to show what's under it; a zoom that jumps at a cut; the same photo in cut-in after cut-in; a picture before the words that name it; the date title (the date first) and the countdown (from the date to the tape); a click off its pop-up; music too loud under the intro or changing mid-line; the ending (the last page held and faded, nothing after it).";
 
 
-/** A model's name as the chat shows it ("Sonnet 5.5"). */
-const nameOf = (model: string): string => (model === REVISION_MODEL.id ? REVISION_MODEL.name : BUILD_MODEL.name);
-
 /** A message asking for the edit again from the start: a build, on Opus, even once the edit is built. */
 const REBUILD = /\b(re-?do|re-?build|restart|start over|start again)\b[^.?!]*\bedit\b|\bfrom scratch\b/iu;
 
@@ -363,6 +361,7 @@ export class Agents implements seams.AgentPanel {
   ) {
     this.dir = join(home, "agent");
     claudeUsage.use(home);
+    modelChoice.use(home);
     this.claudeSupport = new ClaudeSupport(home, () => this.resumeAfterClaudeLogin(), () => {
       this.ready = null;
       this.emit("", { event: "claude", support: this.claudeSupport.status() });
@@ -610,7 +609,7 @@ export class Agents implements seams.AgentPanel {
 
   chat(project: string): Json {
     const chat = this.withChat(project);
-    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, model_name: this.modelName(project), auth_retry: this.legacyClaudeRetry(project) });
+    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, model_name: this.modelName(project), revising: this.revising(project), auth_retry: this.legacyClaudeRetry(project) });
   }
 
   /** The agent's `new_chat` (the user asked for one): this chat goes when the turn now running ends. */
@@ -713,7 +712,7 @@ export class Agents implements seams.AgentPanel {
       const current = chat.generation;
       this.emit(project, { event: "status", running: true });
       // Who answers this turn, as the composer shows it (it rolls over from Opus to Sonnet once the edit is built).
-      this.emit(project, { event: "model", model_name: nameOf(chat.model ?? this.turnModel(project, text)) });
+      this.emit(project, { event: "model", model_name: nameOf(chat.model ?? this.turnModel(project, text)), revising: this.revising(project, text) });
       try {
         await this.prepareTurn(project, text, model, effort, current, replay, context, attached);
       } catch (error) {
@@ -802,7 +801,7 @@ export class Agents implements seams.AgentPanel {
       // driven by review notes, which nobody's watching, gets a tighter one (the audit, Oct 23).
       ...(reviewGuard.inReviewTurn(project) ? { maxTurns: REVIEW_MAX_TURNS, maxBudgetUsd: REVIEW_MAX_USD } : { maxTurns: MAX_TURNS }),
     };
-    const level = chat.effort ?? "medium";
+    const level = chat.effort ?? claude.effort() ?? "medium";
     if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];
     if (chat.thread !== null) options.resume = chat.thread;
     // A resumed session keeps the tool schemas it read: tell it once what this build changed (tool_changes.ts).
@@ -1393,14 +1392,29 @@ export class Agents implements seams.AgentPanel {
    * again from scratch is a build.
    */
   turnModel(project: string, text = ""): string {
-    if (project.endsWith(`${SUB}review`) || reviewGuard.inReviewTurn(project)) return claude.REVISION_MODEL;
-    if (REBUILD.test(text)) return claude.DEFAULT_MODEL;
-    return this.isBuilt(project) ? claude.REVISION_MODEL : claude.DEFAULT_MODEL;
+    return this.revising(project, text) ? claude.revisionModel() : claude.DEFAULT_MODEL;
   }
 
-  /** The chat shows who answers next ("Opus 5.5", then "Sonnet 5.5"). */
+  /** Whether the next turn is a revision, on the person's pick (else a build, on Opus): the model menu offers the pick only then. */
+  revising(project: string, text = ""): boolean {
+    if (project.endsWith(`${SUB}review`) || reviewGuard.inReviewTurn(project)) return true;
+    if (REBUILD.test(text)) return false;
+    return this.isBuilt(project);
+  }
+
+  /** The chat shows who answers next ("Opus 5.5", then the pick for revisions). */
   modelName(project: string): string {
     return nameOf(this.withChat(project).model ?? this.turnModel(project));
+  }
+
+  /** Tells the chat who answers next. */
+  private emitModel(project: string): void {
+    this.emit(project, { event: "model", model_name: this.modelName(project), revising: this.revising(project) });
+  }
+
+  /** The person changed the model menu: every open chat shows who answers next. */
+  choiceChanged(): void {
+    for (const project of this.chats.keys()) this.emitModel(project);
   }
 
   /** Whether the project's edit is built (see `turnModel`). */
@@ -1421,8 +1435,8 @@ export class Agents implements seams.AgentPanel {
     if (chat.built !== null) return;
     chat.built = Date.now();
     this.save(project);
-    diag.info("agent", `${project}: the edit is built; its revisions are ${REVISION_MODEL.name}'s`);
-    this.emit(project, { event: "model", model_name: this.modelName(project) });
+    diag.info("agent", `${project}: the edit is built; its revisions are ${nameOf(claude.revisionModel())}'s`);
+    this.emitModel(project);
   }
 
   /**

@@ -18,6 +18,7 @@ import { ApiError, bad, notFound } from "./http/errors.ts";
 import { badShape, readBytes, readJson, type RouteContext, type Router } from "./http/router.ts";
 import * as library from "./library.ts";
 import * as listening from "./listen.ts";
+import * as modelChoice from "./model_choice.ts";
 import { playheadContext } from "./playhead.ts";
 import { handlerFor, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import type { AudioClip } from "./model.ts";
@@ -431,6 +432,17 @@ async function claudeSetupRoute(context: RouteContext<App>): Promise<Response> {
   return sortedJson(panel.claudeSetup(action));
 }
 
+/** The person's pick in the chats' model menu: GET reads it, PUT saves `{revision, effort}` (model_choice.ts). */
+async function modelChoiceRoute(context: RouteContext<App>): Promise<Response> {
+  modelChoice.use(context.app.store.home);
+  if (context.request.method === "GET") return sortedJson(modelChoice.current());
+  const given = await readJson(context);
+  if (typeof given !== "object" || given === null || Array.isArray(given)) throw bad("expected {revision, effort}");
+  const saved = modelChoice.save({ ...modelChoice.current(), ...given });
+  seams.agentPanel(context.app).choiceChanged?.();
+  return sortedJson(saved);
+}
+
 async function agentModelsRoute(context: RouteContext<App>): Promise<Response> {
   const refresh = refreshQuery(context);
   try {
@@ -560,6 +572,8 @@ export function routes(router: Router<App>): void {
   router.get("/api/agent/claude", claudeSetupRoute);
   router.post("/api/agent/claude", claudeSetupRoute);
   router.get("/api/agent/models", agentModelsRoute);
+  router.get("/api/models", modelChoiceRoute);
+  router.put("/api/models", modelChoiceRoute);
   router.get("/api/projects/{id}/agent", agentChatRoute);
   router.post("/api/projects/{id}/agent", agentSendRoute);
   router.post("/api/projects/{id}/agent/retry-claude", agentRetryClaudeRoute);

@@ -15,6 +15,7 @@ import { startCleaning } from "./cache_cleanup.ts";
 import * as cloud from "./cloud.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
+import * as modelChoice from "./model_choice.ts";
 import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
@@ -209,6 +210,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   });
   holdDataLock(store.home);
   cloud.keepUploadJournalsIn(join(store.home, "uploads"));
+  modelChoice.use(store.home);
   const ip = tailscaleIp();
   const app = createApp({
     store,

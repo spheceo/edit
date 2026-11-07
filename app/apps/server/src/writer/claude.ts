@@ -8,7 +8,7 @@
 
 import type * as Sdk from "@anthropic-ai/claude-agent-sdk";
 
-import { REVISION_MODEL } from "@edit/types/models";
+import { nameOf } from "@edit/types/models";
 
 import { baseOptions, findClaude, sdk } from "../claude.ts";
 import * as claudeUsage from "../claude_usage.ts";
@@ -17,18 +17,26 @@ import { claudeTurn } from "../memory.ts";
 import { join } from "../paths.ts";
 import * as planLimit from "../plan_limit.ts";
 import * as live from "./live.ts";
+import * as modelChoice from "../model_choice.ts";
 import { THIS_MACHINE } from "../machine.ts";
 
 /** The model every build and check that reads the whole script uses: Opus 5.5, pinned (revisions are `REVISION`). */
 export const OPUS = "claude-opus-5-5";
 export const SONNET = "claude-sonnet-5-5";
 export const HAIKU = "claude-haiku-5-5";
+/** How hard the script's chat thinks, its builds and revisions alike: the person's pick in the model menu (model_choice.ts). */
+export const effort = (): NonNullable<Question["effort"]> => modelChoice.current().effort;
+
 /**
- * A built script's revisions, its fresh-eyes pass included (Sphe, Nov 4:
- * "initial script builds are on opus then when the script or edit is build we
- * switch to sonnet 5.5 for revisons"): the build stays Opus's.
+ * Who carries out a revision of a built script, its fresh-eyes pass included:
+ * the person's pick in the model menu (Opus 5.5 or Sonnet 5.5) at their
+ * thinking level; the build is always Opus's. Read once per revision, so its
+ * repair turns stay on the session's model. `label` names it for the usage log.
  */
-export const REVISION = REVISION_MODEL.id;
+export function revision(): { model: string; effort: NonNullable<Question["effort"]>; label: string } {
+  const { revision: model, effort } = modelChoice.current();
+  return { model, effort, label: `Claude ${nameOf(model).split(" ")[0]!.toLowerCase()}` };
+}
 
 /** A failure, and whether asking again a minute later could help. */
 export class Trouble extends Error {

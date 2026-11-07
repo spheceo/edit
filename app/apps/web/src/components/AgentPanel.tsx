@@ -794,6 +794,7 @@ function Markdown({ text }: { text: string }) {
 function Composer({ disabled, projectId }: { disabled: boolean; projectId: string | undefined }) {
   const running = useAgent((state) => state.running);
   const modelName = useAgent((state) => state.chatModel ?? state.modelName);
+  const revising = useAgent((state) => state.revising);
   const notes = useNotes((state) => queued(state.notes).length);
   const resetAsked = useEditor((state) => state.resetAsked);
   const upload = useMemo(() => (projectId === undefined ? undefined : { upload: projectUploader(projectId) }), [projectId]);
@@ -806,7 +807,8 @@ function Composer({ disabled, projectId }: { disabled: boolean; projectId: strin
       tray={tray.length > 0 ? tray : undefined}
       running={running}
       disabled={disabled}
-      modelName={modelName ?? ""}
+      modelName={modelName ?? undefined}
+      revising={revising}
       placeholder="Start the editing workflow, or ask for a change…"
       // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
       onSend={(message, files) => void sendToAgent(message, playhead.frame, files)}

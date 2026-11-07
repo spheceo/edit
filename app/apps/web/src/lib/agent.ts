@@ -116,8 +116,10 @@ interface AgentState {
   activityAt: number;
   /** The model Edit runs the agent on ("Opus 5.5"), shown in the composer; it isn't chosen there. */
   modelName: string | null;
-  /** Who answers this project's next turn: Opus while the edit is built, then Sonnet for its revisions (the server's `model_name`). */
+  /** Who answers this project's next turn: Opus while the edit is built, then the model menu's pick for its revisions (the server's `model_name`). */
   chatModel: string | null;
+  /** The next turn is a revision, so the model menu offers the pick (the server's `revising`). */
+  revising: boolean;
   /** A sub-agent's chat being viewed in place of the main one (the fresh-eyes pass): Back returns. */
   sub: SubChat | null;
 }
@@ -141,6 +143,7 @@ export const useAgent = create<AgentState>(() => ({
   activityAt: 0,
   modelName: readSetting("edit.agent.modelName"),
   chatModel: null,
+  revising: false,
   sub: null,
 }));
 
@@ -179,7 +182,7 @@ async function loadModelName() {
 }
 
 /** Chats already seen this session, so reopening the panel or a project is instant. */
-const chats = new Map<string, { entries: AgentEntry[]; running: boolean; chatModel?: string | null }>();
+const chats = new Map<string, { entries: AgentEntry[]; running: boolean; chatModel?: string | null; revising?: boolean }>();
 /** A pre-update failed message is adopted once; the server also saves a receipt. */
 const retriedAuth = new Set<string>();
 let openedSerial = 0;
@@ -196,12 +199,12 @@ export async function openAgent(project: string) {
   const state = useAgent.getState();
   if (state.project !== project) {
     const cached = chats.get(project);
-    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false, chatModel: cached?.chatModel ?? null, sub: null });
+    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false, chatModel: cached?.chatModel ?? null, revising: cached?.revising ?? false, sub: null });
   }
   const [status, chat] = await Promise.all([
     fetchRetrying("/api/agent").then((response) => json<AgentStatus>(response)),
     fetchRetrying(`/api/projects/${project}/agent`).then((response) =>
-      json<{ entries: AgentEntry[]; running: boolean; model_name?: string; auth_retry?: string | null }>(response),
+      json<{ entries: AgentEntry[]; running: boolean; model_name?: string; revising?: boolean; auth_retry?: string | null }>(response),
     ),
   ]).catch(() => [null, null] as const);
   if (useAgent.getState().project !== project || serial !== openedSerial) return;
@@ -217,6 +220,7 @@ export async function openAgent(project: string) {
     entries: [...chat.entries, ...pending],
     running: chat.running || pending.length > 0,
     chatModel: chat.model_name ?? null,
+    revising: chat.revising === true,
   });
   if (status.ready) loadModelName().catch(() => {});
   if (status.ready && chat.auth_retry && !chat.running) {
@@ -340,14 +344,14 @@ export function applyAgentEvent(event: { project: string; event: string; [key: s
       useAgent.setState({ entries: [], running: false });
       break;
     case "model":
-      useAgent.setState({ chatModel: typeof event.model_name === "string" ? event.model_name : null });
+      useAgent.setState({ chatModel: typeof event.model_name === "string" ? event.model_name : null, revising: event.revising === true });
       break;
   }
   const after = useAgent.getState();
-  chats.set(after.project!, { entries: after.entries, running: after.running, chatModel: after.chatModel });
+  chats.set(after.project!, { entries: after.entries, running: after.running, chatModel: after.chatModel, revising: after.revising });
 }
 
 // Remember every loaded chat (including optimistic sends) for instant reopening.
 useAgent.subscribe((state) => {
-  if (state.project && state.loaded) chats.set(state.project, { entries: state.entries, running: state.running, chatModel: state.chatModel });
+  if (state.project && state.loaded) chats.set(state.project, { entries: state.entries, running: state.running, chatModel: state.chatModel, revising: state.revising });
 });

@@ -5,7 +5,10 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 
 import type { App } from "../src/app.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
+import * as fs from "node:fs";
+
 import { routes } from "../src/media_tools.ts";
+import * as modelChoice from "../src/model_choice.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
 
@@ -70,7 +73,7 @@ test("the agent panel's routes", async () => {
     const ask = asker(app);
     const project = app.store.create("p", { width: 1920, height: 1080, fps: 30 }).project.id;
     expect((await ask("GET", "/api/projects/nope/agent")).json()).toEqual({ error: "no such project" });
-    expect((await ask("GET", `/api/projects/${project}/agent`)).text).toBe('{"auth_retry":null,"effort":null,"entries":[],"model":null,"model_name":"Opus 5.5","running":false}');
+    expect((await ask("GET", `/api/projects/${project}/agent`)).text).toBe('{"auth_retry":null,"effort":null,"entries":[],"model":null,"model_name":"Opus 5.5","revising":false,"running":false}');
     expect((await ask("POST", `/api/projects/${project}/agent/retry-claude`, { user: "not-a-failed-message" })).json()).toEqual({ ok: true, resumed: false });
     const empty = await ask("POST", `/api/projects/${project}/agent`, { text: "  " });
     expect(empty.status).toBe(400);
@@ -78,6 +81,22 @@ test("the agent panel's routes", async () => {
     expect((await ask("POST", `/api/projects/${project}/agent/reset`)).text).toBe('{"ok":true}');
     expect((await ask("POST", `/api/projects/${project}/agent/stop`)).text).toBe('{"ok":true}');
   } finally {
+    cleanup();
+  }
+});
+
+test("the model menu's pick: Opus at medium until picked, kept in the home, anything unknown taken as the default", async () => {
+  const { app, home, cleanup } = fixtureHome("routes-models");
+  try {
+    const ask = asker(app);
+    expect((await ask("GET", "/api/models")).text).toBe('{"effort":"medium","revision":"claude-opus-5-5"}');
+    expect((await ask("PUT", "/api/models", { revision: "claude-sonnet-5-5" })).json()).toEqual({ effort: "medium", revision: "claude-sonnet-5-5" });
+    expect((await ask("PUT", "/api/models", { effort: "max" })).json()).toEqual({ effort: "max", revision: "claude-sonnet-5-5" });
+    expect(JSON.parse(fs.readFileSync(`${home}/models.json`, "utf8"))).toEqual({ revision: "claude-sonnet-5-5", effort: "max" });
+    expect((await ask("PUT", "/api/models", { revision: "gpt-6", effort: "ultra" })).json()).toEqual({ effort: "medium", revision: "claude-opus-5-5" });
+    expect((await ask("PUT", "/api/models", ["x"])).status).toBe(400);
+  } finally {
+    modelChoice.save({});
     cleanup();
   }
 });

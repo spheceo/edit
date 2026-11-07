@@ -94,6 +94,15 @@ v2, corrected, is at the same link (14:45).
 
 Another session's nightly-60 held port 7700 and prod's data, so this round ran on a dev server on 7701 (web 5174). v2's fix was shared from that prod Edit to the same link (14:37).
 
+39. **My check missed eight notes.** Sphe asked whether every note was in. I had checked most of them in frames and taken the agent's word for the rest. Compared against the old v2, three were still wrong:
+    - **"6:45 - Here we shouldn't use b-roll but show his profile instead on insta":** case 3 (Pacman Master) ran 79 s on a short film and case 2's race footage. The script gave him no link. The audit now flags `horror_broll_run`, a stretch with none of the story's own posts, pages or cards. The skill says a case with no link still gets its account, searched for. The agent found @pacman.master9 and rebuilt the case from his reels, profile, a post and his Linktree. His "art performance" post wasn't found online.
+    - **"5:03-5:10 - The audio cut isn't completely clean here at the end":** the narration's "…his biggest fan." was cut 60 ms after the word, with its tail still at -23 dB, and the reel's sound came in on it. In horror, a post's sound now eases at its cuts (6 frames out, 4 in) and the narration by 2, unless the same recording carries straight on (64f2a484, a4ac27e0).
+    - **A card trimmed short of its ground** left a bare blur for 2 s at 8:01. A still card now runs on to its ground's end when nothing else is there; otherwise the ground is trimmed (a4ac27e0).
+40. **R2 uploads failed for hours overnight** ("could not reach R2", connection closed), on this share and the team's. The first share retried until 01:24, the second until 05:20.
+41. **A version replaced in place kept its old length** in reviews.json (04bee083).
+
+v2 with every note is at the same link (14:37, replaced 05:20 on Nov 7).
+
 ## Not fixable here
 
 - **Five of the 22 posts can't be had without an Instagram sign-in:**

@@ -7,6 +7,7 @@ import type { BuildStatus, Cite, DocFile, Paragraph, ReviewApproval, ReviewBlock
 import { useGrants } from "./can";
 import { Dialog, Icon } from "./ui";
 import { formatBytes } from "../lib/time";
+import { THIS_MACHINE } from "../lib/platform";
 
 /**
  * Review on a Repack link (reviews.rs): Share, the notes reviewers leave,
@@ -644,7 +645,7 @@ export function ReviewDialog({
         {mayShare && link && fixesHere !== null && !approved && (
           <p className="faint review-auto">
             {fixesHere
-              ? "When a reviewer clicks Ready for changes, Claude fixes the notes on this Mac and shares the next version."
+              ? `When a reviewer clicks Ready for changes, Claude fixes the notes on ${THIS_MACHINE} and shares the next version.`
               : "When a reviewer clicks Ready for changes, the fixing computer chosen on accounts.spheceo.com fixes the notes and shares the next version."}
           </p>
         )}
@@ -688,7 +689,7 @@ export function ArchivedBanner({ script, working, onJob, onProblem }: { script: 
       <span>
         <b>Footage archived</b> by {archive.by || "Repack"}, {when(archive.at)}
         {archive.freedBytes > 0 ? `, freeing ${formatBytes(archive.freedBytes)}` : ""}. The script and its words are kept; it reads but can't be edited until the footage is back.
-        {archive.missing.length > 0 && <span className="bad"> Missing after the last restore (from this Mac's disk): {archive.missing.join(", ")}.</span>}
+        {archive.missing.length > 0 && <span className="bad"> Missing after the last restore (from {THIS_MACHINE}'s disk): {archive.missing.join(", ")}.</span>}
       </span>
       <button type="button" className="primary sm" disabled={working || archive.restoring} onClick={() => void restore()}>
         {working || archive.restoring ? "Restoring…" : "Restore footage"}

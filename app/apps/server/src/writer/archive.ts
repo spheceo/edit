@@ -24,6 +24,7 @@ import { importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
 import * as storage from "./storage.ts";
 import * as store from "./store.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 type State = { archived?: { at?: number; by?: string; freedBytes?: number } | null; restore?: unknown };
 type Local = { purgedFor?: number | null; restoredFor?: number | null; restoring?: boolean; missing?: string[] };
@@ -117,5 +118,5 @@ async function restore(app: App, data: string, id: string, job: jobs.Job): Promi
   // Repack's row: no longer asked back, and the footage is here again.
   await cloud.convex("mutation", "writer:clearRestore", { scriptId: id }).catch(() => undefined);
   cloud.syncSoon();
-  return [missing.length === 0 ? "The footage is back, and the transcripts as they were: nothing was heard again." : `The footage is back, but not ${missing.join(", ")}: it came from this Mac's disk, and the archive deleted it.`, 0];
+  return [missing.length === 0 ? "The footage is back, and the transcripts as they were: nothing was heard again." : `The footage is back, but not ${missing.join(", ")}: it came from ${THIS_MACHINE}'s disk, and the archive deleted it.`, 0];
 }

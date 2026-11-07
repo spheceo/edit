@@ -52,6 +52,7 @@ import { stableStringify } from "./stable.ts";
 import { deepFreeze } from "./store.ts";
 import * as tools from "./tools.ts";
 import { putOff } from "./put_off.ts";
+import { ANOTHER_MACHINE, THIS_MACHINE } from "./machine.ts";
 
 const FILE = "reviews.json";
 /** How often Repack is asked for new notes while Edit runs. */
@@ -1283,7 +1284,7 @@ export async function uploadFull(app: App, projectId: string, n: number, progres
   const shared = read(app.store.home).shared[projectId];
   const version = shared?.versions.find((one) => one.n === n);
   if (version === undefined) throw new Error(`v${n} isn't shared from here`);
-  if (!fs.existsSync(version.path)) throw new Error(`v${n}'s export isn't on this Mac any more (${version.path}): export it again`);
+  if (!fs.existsSync(version.path)) throw new Error(`v${n}'s export isn't on ${THIS_MACHINE} any more (${version.path}): export it again`);
   const key = fullKeyOf(`edit/reviews/${projectId}/${version.timeline}`, version.path);
   await cloud.uploadFile(version.path, key, progress);
   const bytes = fs.statSync(version.path).size;
@@ -1771,7 +1772,7 @@ export async function adopt(app: App, projectId: string): Promise<Shared | undef
   update(home, (state) => {
     state.shared[projectId] ??= shared;
   });
-  diag.info("review", `${projectId}: its review (${row.url}, v${versions.map((one) => one.n).join(", v")}) was shared from another Mac: taken in here`);
+  diag.info("review", `${projectId}: its review (${row.url}, v${versions.map((one) => one.n).join(", v")}) was shared from ${ANOTHER_MACHINE}: taken in here`);
   return read(home).shared[projectId];
 }
 

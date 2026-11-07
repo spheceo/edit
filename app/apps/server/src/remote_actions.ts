@@ -50,6 +50,7 @@ import * as writerCloud from "./writer/cloud.ts";
 import * as writerImports from "./writer/imports.ts";
 import * as writerJobs from "./writer/jobs.ts";
 import * as writerStore from "./writer/store.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 /** The kinds this build carries out (Convex sends an older build only updates). */
 export const KINDS = ["update", "diagnostics", "resume"] as const;
@@ -195,7 +196,7 @@ function projectLines(app: App): string[] {
     const id = summary.id;
     const status = (cloud?.status(id) ?? { cloud: false }) as { cloud?: boolean; sync?: string; message?: string | null };
     const job = app.scripts.get(id);
-    const where = status.cloud ? `cloud ${status.sync ?? "?"}${status.message ? ` (${status.message})` : ""}` : "only on this Mac";
+    const where = status.cloud ? `cloud ${status.sync ?? "?"}${status.message ? ` (${status.message})` : ""}` : `only on ${THIS_MACHINE}`;
     const importing = job ? ` · import ${job.state}${job.error ? `: ${job.error}` : ""}` : "";
     return `${id} "${summary.name}" · ${where}${importing}`;
   });
@@ -207,7 +208,7 @@ function scriptLines(app: App): string[] {
   return writerStore.list(data).map((row) => {
     const refused = writerCloud.refused(row.id);
     const rev = writerCloud.revOf(data, row.id);
-    const where = refused !== null ? `NOT IN THE CLOUD (${refused})` : rev === null ? "only on this Mac" : `cloud rev ${rev}`;
+    const where = refused !== null ? `NOT IN THE CLOUD (${refused})` : rev === null ? `only on ${THIS_MACHINE}` : `cloud rev ${rev}`;
     const imported = row.status === "ready" ? "" : ` · import ${row.status}${row.error ? `: ${row.error}` : ""}`;
     const choice = row.decision ? ` · waits on a choice: ${row.decision.summary}` : "";
     const writing = writerJobs.running(row.id) ? " · Claude is writing" : "";
@@ -249,14 +250,14 @@ export function keepLatest(app: App): void {
   let sentAt = 0;
   const look = async () => {
     try {
-      const text = diag.scrub(await report(app, "Kept up to date by Edit itself (the latest from this Mac)."));
+      const text = diag.scrub(await report(app, `Kept up to date by Edit itself (the latest from ${THIS_MACHINE}).`));
       const needs = text.slice(text.indexOf("Needs attention:"), text.indexOf("Machine:"));
       if (needs === sent && Date.now() - sentAt < LATEST_AT_LEAST_MS) return;
       await problemReports.publishLatest(app.store.home, app.machine, text);
       sent = needs;
       sentAt = Date.now();
     } catch (error) {
-      diag.warn("reports", `keeping this Mac's latest report: ${diag.messageOf(error)}`);
+      diag.warn("reports", `keeping ${THIS_MACHINE}'s latest report: ${diag.messageOf(error)}`);
     }
   };
   setTimeout(() => void look(), 60_000).unref?.();
@@ -343,7 +344,7 @@ export async function resume(app: App, projectId: string): Promise<string> {
   if (projectId.startsWith("ask-")) return (await import("./remote_ask.ts")).answer(app, projectId);
   const live = app.store.get(projectId);
   if (live === null && writerStore.idOk(projectId) && writerStore.ids(writerStore.dataDir(app.store.home)).includes(projectId)) return resumeScript(app, projectId);
-  if (live === null) throw new Error(`There's no project or script ${projectId} on this Mac.`);
+  if (live === null) throw new Error(`There's no project or script ${projectId} on ${THIS_MACHINE}.`);
   const done: string[] = [];
   const cloud = cloudProjects.cloudOf(app);
   if (cloud?.on() && (cloud.status(projectId) as { cloud?: boolean }).cloud !== true) {
@@ -406,7 +407,7 @@ export async function unstick(app: App): Promise<string> {
     if (row.status !== "error" || writerImports.importing(row.id)) continue;
     // Stopped on a failure this build meets again (a 413): started again it would only stop there again, after its download (Nov 1).
     if (row.retryHelps === false) {
-      done.push(`script "${row.title}": left stopped, as this build stops there again (${row.error ?? ""}); update this Mac, then resume it`);
+      done.push(`script "${row.title}": left stopped, as this build stops there again (${row.error ?? ""}); update ${THIS_MACHINE}, then resume it`);
       continue;
     }
     void writerImports.resume(app, data, row.id, { kind: "retry" }).catch((error: unknown) => diag.warn("remote", `unstick: script ${row.id}: ${diag.messageOf(error)}`));
@@ -538,7 +539,7 @@ export async function probe(app: App, id: string, send: typeof problemReports.se
     if (found.originalPath && fs.existsSync(found.originalPath) && !files.includes(found.originalPath)) files.push(found.originalPath);
   } else {
     const live = app.store.get(id);
-    if (live === null) throw new Error(`There's no project or script ${id} on this Mac.`);
+    if (live === null) throw new Error(`There's no project or script ${id} on ${THIS_MACHINE}.`);
     lines.push(`Project "${live.project.name}"`, "");
     for (const media of live.project.media) if (fs.existsSync(media.path)) files.push(media.path);
   }
@@ -554,7 +555,7 @@ export async function probe(app: App, id: string, send: typeof problemReports.se
     const errors = decoded.stderr.split("\n").filter((line) => line.trim() !== "");
     lines.push(`sound decoded: exit ${decoded.code}, ${errors.length} error lines${errors.length > 0 ? `; the first: ${errors.slice(0, 12).join(" | ")}` : ""}`, "");
   }
-  if (files.length === 0) lines.push("No footage of its own on this Mac.");
+  if (files.length === 0) lines.push(`No footage of its own on ${THIS_MACHINE}.`);
   const { key } = await send(app.store.home, app.machine, diag.scrub(lines.join("\n")));
   diag.info("remote", `probe ${id}: sent ${key}`);
   return `Sent: ${key}`;

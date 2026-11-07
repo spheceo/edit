@@ -8,6 +8,7 @@ import type { Project } from "../src/model.ts";
 import { defaultExportsDir } from "../src/paths.ts";
 import { defaultExportPath } from "../src/server_seam.ts";
 import type { Store } from "../src/store.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 test("exports stay in the suggested folder until a folder is saved", () => {
   const home = fs.mkdtempSync(`${os.tmpdir()}/edit-export-folder-`);
@@ -47,7 +48,7 @@ test("a file, or a folder whose parent is missing, is refused", () => {
     const file = `${parent}/clip.mp4`;
     fs.writeFileSync(file, "x");
     expect(() => saveExportFolder(home, file)).toThrow("that isn't a folder");
-    expect(() => saveExportFolder(home, `${parent}/missing/Edit`)).toThrow("that folder isn't on this Mac");
+    expect(() => saveExportFolder(home, `${parent}/missing/Edit`)).toThrow(`that folder isn't on ${THIS_MACHINE}`);
     expect(() => saveExportFolder(home, "  ")).toThrow("pick a folder");
     expect(readExportFolder(home).chosen).toBe(false);
   } finally {

@@ -22,6 +22,7 @@ import { title as titleOf } from "./youtube.ts";
 import type { Recording } from "./drive.ts";
 import { keepShared, originalKey, segment } from "./handoff.ts";
 import { readable } from "./media.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** Whether imports stream their footage to the cloud: always, once Edit's cloud is on. */
 export function on(): boolean {
@@ -100,6 +101,6 @@ export async function fromYoutube(app: App, dir: string, url: string, onBytes: (
   }
   await cloud.mutation("edit:putMedia", { source, originalReady: true, size });
   keepShared(dir, null, source, key);
-  diag.info("writer", `YouTube ${id} downloaded and put in Edit's originals (${Math.round(size / 1e6)} MB), nothing kept on this Mac`);
+  diag.info("writer", `YouTube ${id} downloaded and put in Edit's originals (${Math.round(size / 1e6)} MB), nothing kept on ${THIS_MACHINE}`);
   return { source, key, name, size, url: await cloud.presign(key, "GET", READ_SECONDS) };
 }

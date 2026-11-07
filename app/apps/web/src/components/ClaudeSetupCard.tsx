@@ -2,6 +2,7 @@ import { ExternalLink } from "lucide-react";
 import { useEffect } from "react";
 import { setupClaude, useAgent, useClaudeSupport, watchClaudeSupport } from "../lib/agent";
 import { Pulse } from "./ui";
+import { THIS_MACHINE } from "../lib/platform";
 
 /**
  * Claude Code, when someone has to do something about it: one line saying
@@ -18,7 +19,7 @@ export function ClaudeSetupCard() {
   const needs = notInstalled || status?.phase === "needs_login" || status?.phase === "error" || signingIn;
   if (!needs) return null;
   const said = notInstalled
-    ? "Claude Code isn't set up on this Mac."
+    ? `Claude Code isn't set up on ${THIS_MACHINE}.`
     : signingIn
       ? "Finish signing in to Claude on its website."
       : status?.phase === "needs_login"

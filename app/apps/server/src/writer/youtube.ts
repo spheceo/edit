@@ -11,6 +11,7 @@ import { join } from "../paths.ts";
 import * as edit from "../youtube.ts";
 import { cookieArgs } from "../youtube_signin.ts";
 import { run } from "./proc.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** A single YouTube watch or short link. Other hosts are refused so yt-dlp is not pointed at an arbitrary site. */
 export function checkUrl(raw: string): void {
@@ -125,7 +126,7 @@ function probeTrouble(error: string): [string, boolean] {
   const lower = error.toLowerCase();
   if (lower.includes("private video")) return ["It's private.", true];
   if (lower.includes("confirm your age") || lower.includes("age-restricted") || lower.includes("inappropriate")) return [AGE, true];
-  if (lower.includes("not a bot") || lower.includes("sign in")) return ["YouTube asked this Mac to sign in, so it couldn't be checked. It should still import through the proxy.", false];
+  if (lower.includes("not a bot") || lower.includes("sign in")) return [`YouTube asked ${THIS_MACHINE} to sign in, so it couldn't be checked. It should still import through the proxy.`, false];
   if (["unavailable", "removed", "does not exist", "terminated"].some((word) => lower.includes(word))) return ["It's no longer available.", true];
   if (lower.includes("premiere") || lower.includes("live event")) return ["It hasn't premiered yet.", true];
   // Nov 6, Marius's Mac on a slow connection: checks ran past 90 s, and four of six links showed only their URL.

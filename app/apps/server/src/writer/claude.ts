@@ -17,6 +17,7 @@ import { claudeTurn } from "../memory.ts";
 import { join } from "../paths.ts";
 import * as planLimit from "../plan_limit.ts";
 import * as live from "./live.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** The model every build and check that reads the whole script uses: Opus 5.5, pinned (revisions are `REVISION`). */
 export const OPUS = "claude-opus-5-5";
@@ -100,9 +101,9 @@ const clipped = (text: string, max: number) => [...text.trim()].slice(0, max).jo
 export function explain(said: string, status: number | null = null): Trouble {
   const lower = said.toLowerCase();
   const quoted = clipped(said, 240);
-  if (lower.includes("failed to start") || lower.includes("enoent")) return new Trouble("Install Claude Code on this Mac (the claude command), then build again.");
+  if (lower.includes("failed to start") || lower.includes("enoent")) return new Trouble(`Install Claude Code on ${THIS_MACHINE} (the claude command), then build again.`);
   if (lower.includes("not logged in") || lower.includes("/login") || lower.includes("invalid api key") || lower.includes("authentication") || status === 401) {
-    return new Trouble("Claude Code on this Mac is signed out. Run claude in a terminal and sign in, then build again.");
+    return new Trouble(`Claude Code on ${THIS_MACHINE} is signed out. Run claude in a terminal and sign in, then build again.`);
   }
   if (planLimit.isLimit(said)) return new Trouble(`Your Claude plan's usage limit is reached: "${quoted}" Build again once it resets.`, false, true);
   // A reply cut off at its output limit: what a whole plan in one answer can run into.
@@ -144,7 +145,7 @@ export async function ask(question: Question): Promise<Answer> {
 
 async function askNow(question: Question): Promise<Answer> {
   const binary = await findClaude();
-  if (binary === null) throw new Trouble("Install Claude Code on this Mac (the claude command), then build again.");
+  if (binary === null) throw new Trouble(`Install Claude Code on ${THIS_MACHINE} (the claude command), then build again.`);
   const { query } = await sdk();
   const abort = new AbortController();
   const stop = () => abort.abort();

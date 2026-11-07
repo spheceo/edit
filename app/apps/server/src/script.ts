@@ -37,6 +37,7 @@ import * as posts from "./posts.ts";
 import { LINK_PREFIX as FINISHED_LINK, reviewCode, reviewOf } from "./finished.ts";
 import { finishCase, pendingCase } from "./case_insertion.ts";
 import * as durableJobs from "./jobs.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 export type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 
@@ -305,7 +306,7 @@ export async function fetchDoc(id: string): Promise<[html: string, title: string
   } catch {
     throw new Error("Couldn't reach Google Docs to read the script. Check the internet connection and try again.");
   }
-  if (code === 404) throw new Error("That Google Doc doesn't exist, or this Mac's Google account can't see it. Check the link, or copy all its text (⌘A, ⌘C in the Doc) and paste that here instead.");
+  if (code === 404) throw new Error(`That Google Doc doesn't exist, or ${THIS_MACHINE}'s Google account can't see it. Check the link, or copy all its text (⌘A, ⌘C in the Doc) and paste that here instead.`);
   if (code === 429 || code >= 500) throw new Error("Google Docs is busy right now. Try again in a minute.");
   if (code !== 200 || effective.includes("accounts.google.com") || !body.includes("<body")) throw new Error(problem);
   let title = dispositionName(disposition) ?? "";
@@ -1982,7 +1983,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
     await Promise.resolve();
     const began = timing.now();
     const title = app.store.get(id)?.project.name ?? id;
-    diag.info("script", `${title}: getting ${files.length} footage ${files.length === 1 ? "file" : "files"} ready (${cloudEnabled() ? "from the cloud" : "to this Mac"})`);
+    diag.info("script", `${title}: getting ${files.length} footage ${files.length === 1 ? "file" : "files"} ready (${cloudEnabled() ? "from the cloud" : `to ${THIS_MACHINE}`})`);
     const fetched: ([string, Excerpt[]] | undefined)[] = new Array(files.length);
     const errors: (string | undefined)[] = new Array(files.length);
     const fetchOne = async (index: number, file: string) => {

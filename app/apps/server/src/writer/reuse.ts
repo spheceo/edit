@@ -28,6 +28,7 @@ import { keepPeaks, readPeaks } from "./tidy.ts";
 import { transcribeSpan } from "./transcription.ts";
 import { cardId, isDoc, trelloGet, unwrapRedirect, urls } from "./trello.ts";
 import { isYoutube } from "./youtube.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** What the reuse job asks for, and what it says when the producer starts it. */
 export const REQUEST = "Import the reused cases' videos for the opening.";
@@ -314,7 +315,7 @@ async function bringIn(app: App, dir: string, given: string[], job: Job): Promis
   // Joining onto the preview needs the file itself: back from the cloud if it was left there.
   const base = store.proxyPath(dir);
   if (!isFile(base)) await storage.bringBack(app, store.dataDir(app.store.home), script.id, job, true);
-  if (!isFile(base)) throw new Error("The preview isn't on this Mac or in the cloud. Restore the footage first.");
+  if (!isFile(base)) throw new Error(`The preview isn't on ${THIS_MACHINE} or in the cloud. Restore the footage first.`);
   // Kept out of the cloud (a dot folder) until the footage is joined.
   const folder = join(dir, ".reuse");
   fs.mkdirSync(folder, { recursive: true });

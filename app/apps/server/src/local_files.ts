@@ -23,6 +23,7 @@ import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { readBytes, readJson, type RouteContext, type Router } from "./http/router.ts";
 import { extension, fileName, fileStem, homePath, isDir, isFile, join, parent, userHome } from "./paths.ts";
 import * as reviews from "./reviews.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 type Context = RouteContext<App>;
 
@@ -199,7 +200,7 @@ export function deleteStored(app: App, paths: string[]): { files: number; bytes:
   for (const path of paths) {
     const one = known.get(path);
     if (one === undefined) {
-      refused.push(`${homePath(path)}: not one of Edit's exports on this Mac`);
+      refused.push(`${homePath(path)}: not one of Edit's exports on ${THIS_MACHINE}`);
       continue;
     }
     if (one.busy) {
@@ -239,7 +240,7 @@ export async function copyExport(app: App, path: string, folder: string): Promis
   if (isFile(path)) fs.copyFileSync(path, to);
   else {
     const key = cloudKeyFor(app.store.home, path);
-    if (key === null) throw new Error("that export isn't on this Mac or in the cloud any more");
+    if (key === null) throw new Error(`that export isn't on ${THIS_MACHINE} or in the cloud any more`);
     await cloud.download(key, to);
   }
   saved.add(to);
@@ -270,7 +271,7 @@ export function routes(router: Router<App>): void {
       const { path } = await readJson<{ path?: unknown }>(context);
       if (typeof path !== "string" || path === "") throw bad("path is required");
       const known = saved.has(path) || context.app.exports.exported(path) || storedExports(context.app).some((one) => one.path === path);
-      if (!known || !fs.existsSync(path)) throw notFound("not a file Edit made on this Mac");
+      if (!known || !fs.existsSync(path)) throw notFound(`not a file Edit made on ${THIS_MACHINE}`);
       try {
         await reveal(path);
       } catch (error) {

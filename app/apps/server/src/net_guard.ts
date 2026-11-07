@@ -7,6 +7,7 @@
 
 import { lookup as dnsLookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { THIS_MACHINE } from "./machine.ts";
 
 export type Lookup = (host: string) => Promise<string[]>;
 
@@ -64,12 +65,12 @@ export async function publicUrl(given: string | URL, lookup: Lookup = systemLook
   if (url.port !== "" && url.port !== "80" && url.port !== "443") throw new Error("only web pages on the usual ports (80, 443) can be read");
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/gu, "").replace(/\.$/u, "");
   if (host === "" || host === "localhost" || /\.(?:local|localhost|internal|lan|home\.arpa)$/u.test(host)) {
-    throw new Error("that address is on this Mac or its network, not the web");
+    throw new Error(`that address is on ${THIS_MACHINE} or its network, not the web`);
   }
   const addresses = isIP(host) !== 0 ? [host] : await lookup(host).catch(() => {
     throw new Error(`couldn't find ${host}`);
   });
-  if (addresses.length === 0 || addresses.some(isPrivateAddress)) throw new Error("that address is on this Mac or its network, not the web");
+  if (addresses.length === 0 || addresses.some(isPrivateAddress)) throw new Error(`that address is on ${THIS_MACHINE} or its network, not the web`);
   return url;
 }
 

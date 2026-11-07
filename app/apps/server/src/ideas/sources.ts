@@ -18,6 +18,7 @@ import { serialize, type Transcript } from "../transcribe.ts";
 import { MODEL, parseCaptions } from "../youtube_captions.ts";
 import * as youtube from "../youtube.ts";
 import * as research from "../writer/research.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** How much of a transcript goes to Claude (Sphe Research's cap: the hook is rarely in the tail). */
 export const TRANSCRIPT_CHARS = 60_000;
@@ -51,7 +52,7 @@ export async function video(id: string): Promise<Video> {
   };
 }
 
-const NO_PROXY = "The YouTube proxy isn't available, so the captions weren't fetched: Edit never asks YouTube for them from this Mac's own address.";
+const NO_PROXY = `The YouTube proxy isn't available, so the captions weren't fetched: Edit never asks YouTube for them from ${THIS_MACHINE}'s own address.`;
 
 /** Test hook: where the captions come from (yt-dlp through the proxy). */
 export const captions = {

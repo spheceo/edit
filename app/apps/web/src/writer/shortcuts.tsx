@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Dialog, Icon } from "./ui";
+import { MOD_KEY } from "../lib/platform";
 
 export type Shortcut = { keys: string[]; what: string };
 
@@ -19,9 +20,9 @@ export const FOOTAGE_SHORTCUTS: { title: string; items: Shortcut[] }[] = [
   {
     title: "Editing",
     items: [
-      { keys: ["⌘", "Z"], what: "Undo" },
-      { keys: ["⇧", "⌘", "Z"], what: "Redo" },
-      { keys: ["⌘", "K"], what: "Split the clip at the playhead" },
+      { keys: [MOD_KEY, "Z"], what: "Undo" },
+      { keys: ["⇧", MOD_KEY, "Z"], what: "Redo" },
+      { keys: [MOD_KEY, "K"], what: "Split the clip at the playhead" },
       { keys: ["⌫"], what: "Remove the selected timeline items" },
       { keys: ["Esc"], what: "Clear the selection" },
     ],
@@ -33,7 +34,7 @@ export const FOOTAGE_SHORTCUTS: { title: string; items: Shortcut[] }[] = [
       { keys: ["Double-click"], what: "A transcript word plays the footage from there" },
       { keys: ["⇧", "Click"], what: "Select a stretch of transcript to add or remove" },
       { keys: ["Drag"], what: "A clip's edge trims it, snapping to words; the ruler scrubs" },
-      { keys: ["⌘", "Scroll"], what: "Zoom the timeline" },
+      { keys: [MOD_KEY, "Scroll"], what: "Zoom the timeline" },
     ],
   },
 ];

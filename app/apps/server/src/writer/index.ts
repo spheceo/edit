@@ -18,6 +18,7 @@ import { isFile, join, userHome } from "../paths.ts";
 import * as jobs from "./jobs.ts";
 import * as storage from "./storage.ts";
 import * as store from "./store.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** Where Writer kept its scripts on this Mac. */
 export const WRITER_FOLDER = (): string => process.env.EDIT_WRITER_FOLDER ?? join(userHome(), "Library", "Application Support", "com.spheceo.writer");
@@ -105,7 +106,7 @@ function carryOn(app: App, data: string, cut: string[]): void {
 function adoptWriter(data: string): void {
   try {
     const adopted = store.adoptWriterFolder(data, WRITER_FOLDER());
-    if (adopted > 0) diag.info("writer", `brought ${adopted} scripts in from Writer's folder on this Mac`);
+    if (adopted > 0) diag.info("writer", `brought ${adopted} scripts in from Writer's folder on ${THIS_MACHINE}`);
   } catch (error) {
     diag.warn("writer", `Writer's scripts weren't brought in: ${diag.messageOf(error)}`);
   }

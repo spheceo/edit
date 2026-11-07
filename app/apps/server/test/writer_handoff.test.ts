@@ -9,6 +9,7 @@ import * as writerStore from "../src/writer/store.ts";
 import { carryResearch, resolveWriterCases, styleOf, toParsed, type WriterScript } from "../src/writer_handoff.ts";
 import { reusedScriptBlock } from "../src/project.ts";
 import { fixtureHome } from "./helpers/home.ts";
+import { THE_MACHINE, THIS_MACHINE } from "../src/machine.ts";
 
 test("a Writer script's clips become footage ranges of each recording and cut-ins, notes and edit: notes kept", () => {
   const joined: WriterScript = {
@@ -42,7 +43,7 @@ test("a Writer script's clips become footage ranges of each recording and cut-in
 });
 
 test("a script whose footage no other machine can fetch, or with none, says why", () => {
-  expect(() => toParsed({ id: "x", title: "x", sourceKind: "file", sourceUrl: "/tmp/a.mp4", clips: [{ id: "c", startMs: 0, endMs: 1000 }] })).toThrow("only on the Mac that imported it");
+  expect(() => toParsed({ id: "x", title: "x", sourceKind: "file", sourceUrl: "/tmp/a.mp4", clips: [{ id: "c", startMs: 0, endMs: 1000 }] })).toThrow(`only on ${THE_MACHINE} that imported it`);
   expect(() => toParsed({ id: "x", title: "x", sourceKind: "commentary" })).toThrow("commentary script has no finished draft");
   expect(() => toParsed({ id: "x", title: "x", sourceKind: "youtube", sourceUrl: "https://youtu.be/dslLBsHkVzE", clips: [] })).toThrow("no footage ranges");
 });
@@ -130,7 +131,7 @@ test("a script's research and case names go to the edit made from it, so neither
   }
 });
 
-test("a script deleted on this Mac leaves Home's list at once, before its delete reaches the cloud (Nov 1: its row stayed until the next sync)", async () => {
+test(`a script deleted on ${THIS_MACHINE} leaves Home's list at once, before its delete reaches the cloud (Nov 1: its row stayed until the next sync)`, async () => {
   const { MockServer } = await import("./mocks/server.ts");
   const writerCloud = await import("../src/writer/cloud.ts");
   const { list } = await import("../src/writer_handoff.ts");
@@ -150,7 +151,7 @@ test("a script deleted on this Mac leaves Home's list at once, before its delete
   }
 });
 
-test("a category or title changed on this Mac shows on Home's list at once, before its push lands; the cloud's once it's newer", async () => {
+test(`a category or title changed on ${THIS_MACHINE} shows on Home's list at once, before its push lands; the cloud's once it's newer`, async () => {
   const { MockServer } = await import("./mocks/server.ts");
   const { list } = await import("../src/writer_handoff.ts");
   const mock = MockServer.start();

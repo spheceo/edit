@@ -58,6 +58,7 @@ import { byteLength, isWhitespace, serdeParse, takeChars } from "./rust.ts";
 import { stableStringify } from "./stable.ts";
 import * as kinds from "./kinds.ts";
 import { isSubtitled, nowMs, shapeOf, validId, type CloudHook, type Store } from "./store.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 /** A push waits this long after the last change (more changes restart it). */
 const DEBOUNCE = 2_000;
@@ -1325,8 +1326,8 @@ function keepCopy(app: App, cloudProjects: Cloud, id: string, tookOver: string |
   );
   const message =
     tookOver !== null
-      ? `${tookOver} took over “${live.project.name}” before your last changes reached the cloud. They're kept as “${name}” on this Mac.`
-      : `“${live.project.name}” was changed on another machine meanwhile, so the cloud's version is open. Your changes here are kept as “${name}” on this Mac.`;
+      ? `${tookOver} took over “${live.project.name}” before your last changes reached the cloud. They're kept as “${name}” on ${THIS_MACHINE}.`
+      : `“${live.project.name}” was changed on another machine meanwhile, so the cloud's version is open. Your changes here are kept as “${name}” on ${THIS_MACHINE}.`;
   cloudProjects.with(id, (entry) => {
     entry.saved.dirty = false;
     entry.note = { kind: "conflict", message };

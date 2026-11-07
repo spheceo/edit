@@ -44,6 +44,7 @@ import { report, work } from "./remote_actions.ts";
 import { redactSupport } from "./support_cli.ts";
 import * as tools from "./tools.ts";
 import { BUILD } from "./version.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 /** A remote resume of `ask-…` is a question. */
 export const ASK = "ask-";
@@ -430,7 +431,7 @@ function workNow(app: App): string {
 function project(app: App, id: string | undefined): string {
   if (id === undefined) return `Which project? Its id, from:\n${app.store.list().map((one) => `${one.id} "${one.name}"`).join("\n")}`;
   const live = app.store.get(id);
-  if (live === null) return `There's no project ${id} on this Mac.`;
+  if (live === null) return `There's no project ${id} on ${THIS_MACHINE}.`;
   const p = live.project;
   const counts = new Map<string, number>();
   for (const clip of p.clips) counts.set(clip.type, (counts.get(clip.type) ?? 0) + 1);

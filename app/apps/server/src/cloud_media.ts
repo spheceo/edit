@@ -83,6 +83,7 @@ import type { Excerpt, Made, Original, Originals } from "./seams.ts";
 import * as tools from "./tools.ts";
 import { stableStringify } from "./stable.ts";
 import { serialize, type Transcript } from "./transcribe.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 /**
  * A media's cloud proxy: footage's from the addon (the preview's picture and
@@ -1117,7 +1118,7 @@ async function driveInTheCloud(file: string, key: string, progress: (sent: numbe
     id = started.id;
   } catch (error) {
     const message = diag.messageOf(error);
-    if (!/\b404\b|not found|not configured/i.test(message)) diag.warn("cloud", `copying ${file} in the cloud: ${scrub(message)}; streaming it through this Mac`);
+    if (!/\b404\b|not found|not configured/i.test(message)) diag.warn("cloud", `copying ${file} in the cloud: ${scrub(message)}; streaming it through ${THIS_MACHINE}`);
     return null;
   }
   diag.info("cloud", `copying Drive file ${file} to the cloud there (job ${id})`);
@@ -1140,7 +1141,7 @@ async function driveInTheCloud(file: string, key: string, progress: (sent: numbe
       return size;
     }
     if (state === "errored" || state === "terminated" || state === "unknown") {
-      diag.warn("cloud", `the cloud copy of ${file} ${state === "unknown" ? "was lost" : `failed (${String(status.error ?? state)})`}; streaming it through this Mac`);
+      diag.warn("cloud", `the cloud copy of ${file} ${state === "unknown" ? "was lost" : `failed (${String(status.error ?? state)})`}; streaming it through ${THIS_MACHINE}`);
       return null;
     }
     // Only forward: the parts' list empties as they're joined into the file.
@@ -1150,7 +1151,7 @@ async function driveInTheCloud(file: string, key: string, progress: (sent: numbe
       progress(bytes);
     }
     if (Date.now() - moved > jobTiming.stall) {
-      diag.warn("cloud", `the cloud copy of ${file} stood still for ${jobTiming.stall / 60_000} minutes; streaming it through this Mac`);
+      diag.warn("cloud", `the cloud copy of ${file} stood still for ${jobTiming.stall / 60_000} minutes; streaming it through ${THIS_MACHINE}`);
       try {
         await cloud.relayJson("jobs/cancel", { id, key });
       } catch {
@@ -2213,7 +2214,7 @@ export async function playbackSounds(project: Project, start: number, end: numbe
       }
     }),
   );
-  if (heard.length > 0) diag.info("playback", `${project.id}: ${Object.keys(sounds).length} of ${heard.length} sounds from copies on this Mac (${made} made from proxies) in ${Math.round((Date.now() - began) / 1000)} s`);
+  if (heard.length > 0) diag.info("playback", `${project.id}: ${Object.keys(sounds).length} of ${heard.length} sounds from copies on ${THIS_MACHINE} (${made} made from proxies) in ${Math.round((Date.now() - began) / 1000)} s`);
   return sounds;
 }
 

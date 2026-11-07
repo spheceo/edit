@@ -5,6 +5,7 @@ import * as nodePath from "node:path";
 import { forgetFiled, hooks, problemFrom } from "../src/agent_reports.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { fixtureHome } from "./helpers/home.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 test("report_problem files the failure with the diagnostics, once a day per tool and error", async () => {
   const { app, cleanup } = fixtureHome("agent-reports");
@@ -18,7 +19,7 @@ test("report_problem files the failure with the diagnostics, once a day per tool
     // Not signed in here: kept on this Mac, and said so.
     const first = await call(args);
     expect(first.isError).toBe(false);
-    expect(first.content[0]!.text).toStartWith("couldn't send it to the team (Sign in to Edit to send a report.); kept on this Mac at ");
+    expect(first.content[0]!.text).toStartWith(`couldn't send it to the team (Sign in to Edit to send a report.); kept on ${THIS_MACHINE} at `);
     const dir = nodePath.join(app.store.home, "reports-sent");
     const [file] = fs.readdirSync(dir);
     const kept = fs.readFileSync(nodePath.join(dir, file!), "utf8");

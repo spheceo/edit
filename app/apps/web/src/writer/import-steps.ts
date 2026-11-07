@@ -1,8 +1,9 @@
 import type { ImportProgress } from "./types";
+import { THIS_MACHINE } from "../lib/platform";
 
 /** An import's steps, in order, as imports.ts reports them (its stage, and the words of its detail). */
 export const STEPS: { key: string; label: string; hint: string }[] = [
-  { key: "download", label: "Download", hint: "The footage comes down from YouTube, Drive or this Mac." },
+  { key: "download", label: "Download", hint: `The footage comes down from YouTube, Drive or ${THIS_MACHINE}.` },
   { key: "preview", label: "Preview", hint: "Joined into one timeline and cut to a 480p preview the editors play." },
   { key: "research", label: "Research", hint: "The article and any case files are read for names and facts." },
   { key: "transcribe", label: "Transcribe", hint: "Every recording is heard and its words timed." },

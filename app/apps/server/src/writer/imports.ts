@@ -41,6 +41,7 @@ import * as caption_turns from "./caption_turns.ts";
 import * as versions from "./versions.ts";
 import * as watch from "./watch.ts";
 import * as youtube from "./youtube.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** Drive recordings (or compilation videos) downloaded at once. */
 const DOWNLOADS = 3;
@@ -963,7 +964,7 @@ function checkSpace(dir: string, needed: number): void {
   } catch {
     return;
   }
-  if (free < needed) throw new Error(`This needs about ${(needed / 1e9).toFixed(1)} GB free on this Mac, and ${(free / 1e9).toFixed(1)} GB is free. Make room, then retry.`);
+  if (free < needed) throw new Error(`This needs about ${(needed / 1e9).toFixed(1)} GB free on ${THIS_MACHINE}, and ${(free / 1e9).toFixed(1)} GB is free. Make room, then retry.`);
 }
 
 /** Runs `work` on each item, `lanes` at a time. */

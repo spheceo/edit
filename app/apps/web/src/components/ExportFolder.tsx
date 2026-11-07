@@ -10,6 +10,7 @@ import { closeDialog, openDialog } from "../lib/dialogs";
 import { folderDetail } from "../lib/export-face";
 import { FolderPicker } from "./FolderBrowser";
 import { Button } from "./ui";
+import { THIS_MACHINE } from "../lib/platform";
 
 const LATER = "edit.exportFolder.later";
 
@@ -138,7 +139,7 @@ export function ExportFolderPrompt() {
       open={open}
       onClose={dismiss}
       title={ask ? "Where should exports go?" : "Exports folder"}
-      detail={ask ? "Pick a folder on this Mac. Exports go there from now on. You can change this in Settings." : "Exports on this Mac go in the folder you pick. One already exporting keeps the folder it started in."}
+      detail={ask ? `Pick a folder on ${THIS_MACHINE}. Exports go there from now on. You can change this in Settings.` : `Exports on ${THIS_MACHINE} go in the folder you pick. One already exporting keeps the folder it started in.`}
       start={folder?.chosen ? folder.path : folder?.suggested}
       confirm="Use this folder"
       cancel={ask ? "Not now" : "Cancel"}

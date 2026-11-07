@@ -33,6 +33,7 @@ import { MemoryChip } from "./MemoryChip";
 import { UpdateButton } from "./UpdateButton";
 import { Button, ConfirmDialog, cx, Modal, Pulse, spring } from "./ui";
 import { DevBadge, DevControl, promoteItem, useDevTools, useShowDev } from "./DevProjects";
+import { ANOTHER_MACHINE, THEIR_MACHINE, THIS_MACHINE } from "../lib/platform";
 
 // Every project is 1080p at 30 fps.
 const FORMAT = { width: 1920, height: 1080, fps: 30 };
@@ -535,7 +536,7 @@ export function Home() {
             )}
             {cloud?.on && cloud.error && (
               <p className="mb-2 px-3 text-[12px] text-warning" title={cloud.error}>
-                {cloud.offline ? "Can’t reach the cloud: showing what’s on this Mac." : "The cloud’s list didn’t load."}
+                {cloud.offline ? `Can’t reach the cloud: showing what’s on ${THIS_MACHINE}.` : "The cloud’s list didn’t load."}
               </p>
             )}
             {inIdeas && (ideasHome?.boardError ?? ideasError) && (
@@ -974,7 +975,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
         title={`Delete “${project.name}”?`}
         detail={
           inCloud
-            ? "It’s deleted from the cloud too, for everyone on the team. A copy is kept in this Mac’s Edit data folder; footage files stay where they are."
+            ? `It’s deleted from the cloud too, for everyone on the team. A copy is kept in ${THIS_MACHINE}’s Edit data folder; footage files stay where they are.`
             : "The project and its edit are removed (a copy is kept in Edit’s data folder). Your footage files stay where they are."
         }
         confirm={inCloud ? "Delete everywhere" : "Delete project"}
@@ -993,7 +994,7 @@ function useProject(project: ProjectSummary, onChanged: () => void, cloudOn: boo
         ? {
             tone: "warn",
             text: mostlyMissing ? "Footage missing" : `${missing} ${missing === 1 ? "file" : "files"} missing`,
-            title: `${missing} of ${used} footage files the edit plays aren’t on this Mac (deleted, or on a drive that isn’t plugged in)`,
+            title: `${missing} of ${used} footage files the edit plays aren’t on ${THIS_MACHINE} (deleted, or on a drive that isn’t plugged in)`,
           }
         : null;
   return { drive, missing, used, mostlyMissing, mostlyRemote, editor, cloudNews, status, notice, open, items, driveMenu, nameInput, dialogs };
@@ -1818,7 +1819,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           ) : project.holder ? (
             <StateChips editor={project.holder} />
           ) : (
-            <span title="Not on this Mac yet: opening it downloads it" className={cx(CHIP, "text-muted")}>
+            <span title={`Not on ${THIS_MACHINE} yet: opening it downloads it`} className={cx(CHIP, "text-muted")}>
               <CloudDownload size={12} />
               Cloud only
             </span>
@@ -1833,7 +1834,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
         open={deleting}
         onClose={() => setDeleting(false)}
         title={`Delete “${project.name}”?`}
-        detail="It’s deleted from the cloud, for everyone on the team. It isn’t on this Mac, so no copy is kept here."
+        detail={`It’s deleted from the cloud, for everyone on the team. It isn’t on ${THIS_MACHINE}, so no copy is kept here.`}
         confirm="Delete everywhere"
         onConfirm={() => void remove()}
       />
@@ -1843,7 +1844,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
 
 /** A project out of step with the cloud, said in its status: a conflict, or changes not synced yet; nothing when it's in sync (most projects, so no mark). */
 export function Place({ sync }: { sync?: CloudStatus }) {
-  const trouble = sync?.sync === "conflict" ? ([CloudAlert, "Conflict", sync.message ?? "A conflict: this Mac’s changes were kept as a copy."] as const) : sync?.dirty || sync?.sync === "offline" ? ([CloudOff, "Not synced", "Changes saved on this Mac haven’t reached the cloud yet."] as const) : null;
+  const trouble = sync?.sync === "conflict" ? ([CloudAlert, "Conflict", sync.message ?? `A conflict: ${THIS_MACHINE}’s changes were kept as a copy.`] as const) : sync?.dirty || sync?.sync === "offline" ? ([CloudOff, "Not synced", `Changes saved on ${THIS_MACHINE} haven’t reached the cloud yet.`] as const) : null;
   if (trouble === null) return null;
   const [Icon, text, title] = trouble;
   return (
@@ -1884,10 +1885,10 @@ export function MoveToCloud({ project, open, onClose, onMoved }: { project: Proj
     <Modal open={open} onClose={onClose} width={400}>
       <div className="p-6">
         <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Move “{project.name}” to the cloud?</h2>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted">The edit is uploaded so a teammate can open it on their Mac and carry on. One machine edits it at a time.</p>
+        <p className="mt-1 text-[13px] leading-relaxed text-muted">The edit is uploaded so a teammate can open it on {THEIR_MACHINE} and carry on. One machine edits it at a time.</p>
         {localMedia !== null && localMedia > 0 && (
           <p className="mt-2 text-[13px] leading-relaxed text-warning/90">
-            Its footage ({localMedia} {localMedia === 1 ? "file" : "files"}) stays on this Mac: this doesn’t upload it, so on another Mac those clips show as missing.
+            Its footage ({localMedia} {localMedia === 1 ? "file" : "files"}) stays on {THIS_MACHINE}: this doesn’t upload it, so on {ANOTHER_MACHINE} those clips show as missing.
           </p>
         )}
         <div className="mt-[22px] flex justify-end gap-2">

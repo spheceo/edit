@@ -26,6 +26,7 @@ import { MemoryChip } from "../components/MemoryChip";
 import { UpdateButton } from "./update";
 import { CAN, useGrants } from "./can";
 import { Dialog, Icon, Menu, Select, Tabs } from "./ui";
+import { THE_MACHINE } from "../lib/platform";
 
 /** No sources yet, the same list each render: a fresh [] rebuilt the cut and reloaded the player every render. */
 const NO_SOURCES: Source[] = [];
@@ -445,7 +446,7 @@ export function CommentaryEditor({
       const done = window.document.execCommand("copy");
       area.remove();
       if (!done) {
-        setError("This browser would not copy the script. Open Edit on the Mac, or select the text by hand.");
+        setError(`This browser would not copy the script. Open Edit on ${THE_MACHINE}, or select the text by hand.`);
         return;
       }
     }

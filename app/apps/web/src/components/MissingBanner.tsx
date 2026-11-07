@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../lib/api";
 import { useEditor } from "../lib/store";
+import { THIS_MACHINE } from "../lib/platform";
 
 export function MissingBanner() {
   const id = useEditor((state) => state.project?.id ?? "");
@@ -38,7 +39,7 @@ export function MissingBanner() {
         Footage missing: {missing.length} of {found?.used ?? missing.length} files
       </span>
       <span className="truncate text-muted">
-        aren’t on this Mac, so their clips play black and silent ({shown}).
+        aren’t on {THIS_MACHINE}, so their clips play black and silent ({shown}).
       </span>
     </div>
   );

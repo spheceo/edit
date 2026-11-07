@@ -25,6 +25,7 @@ import * as media from "./media.ts";
 import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
 import { recordings } from "./transcription.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 /** A source's place in Edit's keys: `drive/<id>`, `youtube/<id>`, `sha256/<hex>`. */
 const sourcePath = (source: string): string => source.replace(":", "/");
@@ -207,7 +208,7 @@ export async function share(data: string, id: string): Promise<string> {
   if (done.length > 0) diag.info("writer", `${name}: shared with Edit: ${done.join("; ")}`);
   // A folder case's master named in the script itself, so it syncs and every Mac's Start the edit finds it.
   if (stampShared(dir)) diag.info("writer", `${name}: its Drive folder cases name their masters in Edit's originals`);
-  return list.length === 0 ? "no footage on this Mac to share" : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
+  return list.length === 0 ? `no footage on ${THIS_MACHINE} to share` : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
 }
 
 /** A recording's words to Edit's analysis: only where the script has them, and never words only YouTube's captions gave (Edit reads the captions itself). */

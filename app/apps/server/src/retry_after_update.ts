@@ -33,6 +33,7 @@ import { writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 import * as reviews from "./reviews.ts";
 import { BUILD } from "./version.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 export const NOTE = "Trying again after the update";
 const LAST = "last-build.json";
@@ -93,7 +94,7 @@ export function noteBuild(app: App, build = BUILD): Item[] {
   // A queue the build before left goes: this build's is what's tried.
   writePending(home, { build, from, items });
   if (items.length > 0) {
-    diag.info("update", `${build}, after ${from ?? "an older build"}: ${items.length} thing(s) that failed will be tried again once this Mac is idle: ${items.map((one) => `${one.kind === "share" ? "sharing" : "exporting"} ${one.name}`).join("; ")}`);
+    diag.info("update", `${build}, after ${from ?? "an older build"}: ${items.length} thing(s) that failed will be tried again once ${THIS_MACHINE} is idle: ${items.map((one) => `${one.kind === "share" ? "sharing" : "exporting"} ${one.name}`).join("; ")}`);
   }
   return items;
 }
@@ -110,7 +111,7 @@ const real: Actions = {
   // Queued like any export; the next retry waits for it to end (the Mac isn't idle meanwhile).
   export: async (app, failure) => {
     const live = app.store.get(failure.project);
-    if (live === null) throw new Error("the project isn't on this Mac");
+    if (live === null) throw new Error(`the project isn't on ${THIS_MACHINE}`);
     await app.exports.start(app.store, app.library, live.project, failure.options, failure.output, {
       note: NOTE,
       ...(failure.drive === true ? { drive: true } : {}),
@@ -122,14 +123,14 @@ const real: Actions = {
 /** Why `item` isn't tried again now (it's dropped, as tried), or null. */
 async function skipped(app: App, item: Item): Promise<string | null> {
   const home = app.store.home;
-  if (app.store.get(item.project) === null) return "the project isn't on this Mac";
+  if (app.store.get(item.project) === null) return `the project isn't on ${THIS_MACHINE}`;
   if (item.kind === "share") {
     const state = reviews.read(home);
     if (state.unshared?.[item.project] !== true) return "it has been shared since";
     const shared = state.shared[item.project];
     if (shared === undefined) return "it has no review";
     if (shared.approved) return `v${shared.approved.version} of its review was approved`;
-    if (reviews.askedFor(item.project)) return "a reviewer asked again on this Mac, and that request does it";
+    if (reviews.askedFor(item.project)) return `a reviewer asked again on ${THIS_MACHINE}, and that request does it`;
   } else {
     if (failedExports(home)[item.project] === undefined) return "it has exported since";
     if (app.exports.runningFor?.(item.project) != null) return "an export of it is running";

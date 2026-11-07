@@ -26,6 +26,7 @@ import * as tools from "./tools.ts";
 import { compiled } from "./update.ts";
 import { cookieArgs, supported as signInSupported } from "./youtube_signin.ts";
 import { join, parent } from "./paths.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 /** The prefix of a script file that's a YouTube video. */
 export const PREFIX = "youtube:";
@@ -522,7 +523,7 @@ const tryRoute = Effect.fn("youtube.tryRoute")(function* (
 ) {
   const proxy = route.proxy;
   const signIn = route.signIn ? cookieArgs() : [];
-  if (route.signIn && signIn.length === 0) return { path: null, stderr: "ERROR: no YouTube sign-in in Chrome on this Mac" };
+  if (route.signIn && signIn.length === 0) return { path: null, stderr: `ERROR: no YouTube sign-in in Chrome on ${THIS_MACHINE}` };
   const runtime = runtimeArgs();
   const args = [
     "--no-playlist",

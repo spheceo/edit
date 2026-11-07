@@ -24,6 +24,7 @@ import * as claudeUsage from "./claude_usage.ts";
 import * as diag from "./diag.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 const FILE = "claude-plan.json";
 /** How often the meter is read. */
@@ -448,7 +449,7 @@ export async function reportLines(count = 8, now = Date.now(), full = false): Pr
   for (const [label, span] of [["the last 24 h", 86_400_000], ["the last week", 7 * 86_400_000]] as const) {
     const split = attribute(stretches(now - span, now));
     if (split.from === 0) continue;
-    const parts = [`Edit ${pct(split.edit)}`, `other Claude Code on this Mac ${pct(split.outside)}`, `nothing running on this Mac ${pct(split.nothing)}${split.nothingStretches > 0 ? ` in ${split.nothingStretches} stretch(es): claude.ai or the Claude app's chats, or another computer on this account` : ""}`];
+    const parts = [`Edit ${pct(split.edit)}`, `other Claude Code on ${THIS_MACHINE} ${pct(split.outside)}`, `nothing running on ${THIS_MACHINE} ${pct(split.nothing)}${split.nothingStretches > 0 ? ` in ${split.nothingStretches} stretch(es): claude.ai or the Claude app's chats, or another computer on this account` : ""}`];
     lines.push(`${label}: the 5-hour meter rose ${pct(split.rose)} in all; ${parts.join("; ")}${split.window === null ? "" : `. A 5-hour window held about ${money(split.window)} at API prices`}`);
   }
   const outside = outsideByDay(now - (count - 1) * 86_400_000);
@@ -467,7 +468,7 @@ export async function reportLines(count = 8, now = Date.now(), full = false): Pr
       .join("; ");
     lines.push(
       `${day}: Edit ${money(total)} over ${calls} calls${top === "" ? "" : ` (${top})`}` +
-        `; other Claude Code on this Mac ${money(theirs?.total ?? 0)}${others === "" ? "" : ` (${others})`}` +
+        `; other Claude Code on ${THIS_MACHINE} ${money(theirs?.total ?? 0)}${others === "" ? "" : ` (${others})`}` +
         `${(ours?.limits ?? 0) > 0 ? `; plan used up ${ours!.limits}×` : ""}`,
     );
   }
@@ -483,6 +484,6 @@ export function timeline(hours = 24, now = Date.now()): string[] {
     const reading = kept().find((one) => one.at === stretch.to);
     const outside = outsideBetween(stretch.from, stretch.to);
     const sources = [...new Set(outside.map((message) => message.source))].join(", ");
-    return `${at(stretch.from)}–${at(stretch.to)}: 5-hour ${reading?.five ?? "?"}% (+${stretch.rose}), week ${reading?.week ?? "?"}%; Edit ${money(stretch.edit)}, other Claude Code ${money(stretch.outside)}${sources === "" ? "" : ` (${sources})`}${stretch.rose > 0 && stretch.edit + stretch.outside < 0.01 ? "  ← nothing on this Mac" : ""}`;
+    return `${at(stretch.from)}–${at(stretch.to)}: 5-hour ${reading?.five ?? "?"}% (+${stretch.rose}), week ${reading?.week ?? "?"}%; Edit ${money(stretch.edit)}, other Claude Code ${money(stretch.outside)}${sources === "" ? "" : ` (${sources})`}${stretch.rose > 0 && stretch.edit + stretch.outside < 0.01 ? `  ← nothing on ${THIS_MACHINE}` : ""}`;
   });
 }

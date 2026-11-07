@@ -23,6 +23,7 @@ import { Database } from "bun:sqlite";
 import * as diag from "./diag.ts";
 import { join } from "./paths.ts";
 import * as youtube from "./youtube.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 /** Where Chrome keeps its profiles (tests point it elsewhere). */
 export const where = { chrome: process.platform === "darwin" ? join(os.homedir(), "Library", "Application Support", "Google", "Chrome") : join(process.env.XDG_CONFIG_HOME || join(os.homedir(), ".config"), "google-chrome") };
@@ -125,7 +126,7 @@ export function cookieArgs(): string[] {
 export async function check(home: string): Promise<SignIn> {
   const now = status();
   if (!now.chrome) {
-    lastCheck = { allowed: false, problem: "Chrome isn't on this Mac." };
+    lastCheck = { allowed: false, problem: `Chrome isn't on ${THIS_MACHINE}.` };
     return { ...now, ...lastCheck };
   }
   if (now.profile === null) {

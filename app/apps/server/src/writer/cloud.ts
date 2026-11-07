@@ -37,6 +37,7 @@ import { importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
 import { changeShelf, hooks as lessonHooks, merge, readShelf, type Shelf } from "./lessons.ts";
 import * as store from "./store.ts";
+import { ANOTHER_MACHINE, THIS_MACHINE } from "../machine.ts";
 
 const TICK_MS = 3_000;
 const PULL_EVERY_MS = 30_000;
@@ -512,7 +513,7 @@ export async function fetchFile(data: string, id: string, name: string): Promise
   if (path === null) throw new Error(`${name} isn't a script's file.`);
   if (isFile(path)) return path;
   const kept = fileKey(data, id, name);
-  if (kept === null || kept.key === "") throw new Error(`This script's ${name} isn't on this Mac or in the cloud.`);
+  if (kept === null || kept.key === "") throw new Error(`This script's ${name} isn't on ${THIS_MACHINE} or in the cloud.`);
   await download(id, name, kept.key, kept.size, path);
   // Its time as kept here now, so the next push sees it unchanged.
   const ledger = loadLedger(data);
@@ -933,8 +934,8 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
     if (fs.existsSync(dir)) {
       if (decision.keepCopy) {
         keepCopy(data, dir, "restored copy");
-        diag.info("writer", `${jobs.named(id, title)}: deleted on another Mac after it changed here, so this Mac's version is kept as a restored copy`);
-      } else diag.info("writer", `${jobs.named(id, title)}: deleted on another Mac, so here too`);
+        diag.info("writer", `${jobs.named(id, title)}: deleted on ${ANOTHER_MACHINE} after it changed here, so ${THIS_MACHINE}'s version is kept as a restored copy`);
+      } else diag.info("writer", `${jobs.named(id, title)}: deleted on ${ANOTHER_MACHINE}, so here too`);
       fs.rmSync(dir, { recursive: true, force: true });
       store.libraryChanged();
     }
@@ -954,8 +955,8 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
     diag.warn(
       "writer",
       decision.why === "theirs-missing"
-        ? `${jobs.named(id, title)}: rev ${rev}'s body isn't in the cloud, so this Mac's copy is saved as the next revision`
-        : `${jobs.named(id, title)}: rev ${rev} from another Mac isn't built and this Mac's is, so this Mac's is saved as the next revision`,
+        ? `${jobs.named(id, title)}: rev ${rev}'s body isn't in the cloud, so ${THIS_MACHINE}'s copy is saved as the next revision`
+        : `${jobs.named(id, title)}: rev ${rev} from ${ANOTHER_MACHINE} isn't built and ${THIS_MACHINE}'s is, so ${THIS_MACHINE}'s is saved as the next revision`,
     );
     // The cloud rev's files come too. This Mac then saves its own body as the
     // next rev, and a file list made only of what it holds would delete the
@@ -973,7 +974,7 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   // replaces it (Oct 31, M's Mac: four stale imports became conflicted copies that showed as stopped imports). A copy
   // is kept once per rev: a pull that failed after keeping one and was tried again kept another every minute (Oct 31,
   // Predator Tutor: 294 copies from Mathias's Mac, rev 7 naming a file no longer in the cloud).
-  if (decision.why === "ours-unfinished") diag.warn("writer", `${jobs.named(id, title)}: this Mac's copy is an import that never finished, so rev ${rev} replaces it`);
+  if (decision.why === "ours-unfinished") diag.warn("writer", `${jobs.named(id, title)}: ${THIS_MACHINE}'s copy is an import that never finished, so rev ${rev} replaces it`);
   if (decision.keepCopy) {
     keepCopy(data, dir, "conflicted copy");
     ledger.copied = { ...ledger.copied, [id]: rev };
@@ -1004,7 +1005,7 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
       } catch (error) {
         if (!(error instanceof Gone)) throw error;
         // Left out rather than asked for for ever: a copy here goes up again with the next push, healing the cloud's.
-        diag.warn("writer", `${jobs.named(id, title)}: rev ${rev}'s ${name} isn't in the cloud, so it's left out${isFile(path) ? " and this Mac's goes up again" : ""}`);
+        diag.warn("writer", `${jobs.named(id, title)}: rev ${rev}'s ${name} isn't in the cloud, so it's left out${isFile(path) ? ` and ${THIS_MACHINE}'s goes up again` : ""}`);
         continue;
       }
     }
@@ -1013,13 +1014,13 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   leftInCloud(data, id, left);
   // Saved here while the files came down: that version is kept as a copy, not lost.
   if ((isFile(bodyPath) ? hash(fs.readFileSync(bodyPath)) : null) !== atStart) {
-    diag.warn("writer", `${jobs.named(id, title)}: changed here while rev ${rev} came down; this Mac's version is kept as a copy`);
+    diag.warn("writer", `${jobs.named(id, title)}: changed here while rev ${rev} came down; ${THIS_MACHINE}'s version is kept as a copy`);
     keepCopy(data, dir, "conflicted copy");
   }
   // Who started it, as the cloud recorded it from their verified sign-in, wins over the body's.
   const given = withCreator(body, row.createdBy);
   writeAtomic(bodyPath, Buffer.from(given));
-  diag.info("writer", `${jobs.named(id, title)}: rev ${rev} came from ${String(row.updatedBy ?? "another Mac")}`);
+  diag.info("writer", `${jobs.named(id, title)}: rev ${rev} came from ${String(row.updatedBy ?? `${ANOTHER_MACHINE}`)}`);
   // Taken as current whichever version of Edit saved it: a row from a Mac on
   // an older Edit (no runFailed) pushed again here was overtaken there, round
   // and round, while the team's Macs were on mixed versions (Oct 30).
@@ -1148,7 +1149,7 @@ async function push(data: string, id: string, dir: string, script: Script, body:
   }
   await remove([...uploaded, bodyKey]);
   if (answer.code === "conflict") {
-    diag.warn("writer", `${jobs.named(id, script.title)}: another Mac saved it first (rev ${base} is behind); taking theirs and keeping this Mac's as a copy`);
+    diag.warn("writer", `${jobs.named(id, script.title)}: ${ANOTHER_MACHINE} saved it first (rev ${base} is behind); taking theirs and keeping ${THIS_MACHINE}'s as a copy`);
     return "overtaken";
   }
   throw new Problem(`The cloud refused ${script.title}: ${String(answer.data.message ?? answer.code)}`);

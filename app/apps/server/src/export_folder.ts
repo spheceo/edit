@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 
 import { writeAtomic } from "./files.ts";
 import { defaultExportsDir, expandHome, homePath, isDir, join, parent, userHome } from "./paths.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 const FILE = "export-folder.json";
 
@@ -62,7 +63,7 @@ export function saveExportFolder(home: string, given: string): ExportFolder {
     if (path === suggested) fs.mkdirSync(path, { recursive: true });
     else {
       const above = parent(path);
-      if (above === null || !isDir(above)) throw new Error("that folder isn't on this Mac");
+      if (above === null || !isDir(above)) throw new Error(`that folder isn't on ${THIS_MACHINE}`);
       fs.mkdirSync(path);
     }
   }

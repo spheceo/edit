@@ -16,6 +16,7 @@ import { cancelUpload, uploadFiles, useUploadedFiles, useUploads, type Upload } 
 import { ResearchTile } from "./Research";
 import { ScriptDownloads, ScriptPanel } from "./ScriptPanel";
 import { cx, IconButton, ProgressRing, spring, Tabs } from "./ui";
+import { MOD } from "../lib/platform";
 
 export const MEDIA_MIME = "application/x-edit-media";
 export const ELEMENT_MIME = "application/x-edit-element";
@@ -95,7 +96,7 @@ function AddButtons({ onImport }: { onImport: () => void }) {
   const input = useRef<HTMLInputElement>(null);
   if (isLocal) {
     return (
-      <IconButton label="Add files (⌘I)" onClick={onImport}>
+      <IconButton label={`Add files (${MOD}I)`} onClick={onImport}>
         <UploadIcon size={15} />
       </IconButton>
     );
@@ -105,7 +106,7 @@ function AddButtons({ onImport }: { onImport: () => void }) {
       <IconButton label="Upload from this device (or drop files anywhere)" onClick={() => input.current?.click()}>
         <UploadIcon size={15} />
       </IconButton>
-      <IconButton label={`Add files already on ${machine} (⌘I)`} onClick={onImport}>
+      <IconButton label={`Add files already on ${machine} (${MOD}I)`} onClick={onImport}>
         <HardDrive size={15} />
       </IconButton>
       <input
@@ -150,7 +151,7 @@ function MediaOptions({ show, setShow, uses }: { show: Show; setShow: (show: Sho
                 edit((draft) => {
                   removed = removeUnusedMedia(draft);
                 });
-                toast(`Removed ${removed} unused file${removed === 1 ? "" : "s"} from the project (⌘Z to undo). Nothing was deleted from disk.`);
+                toast(`Removed ${removed} unused file${removed === 1 ? "" : "s"} from the project (${MOD}Z to undo). Nothing was deleted from disk.`);
               },
             },
           ],

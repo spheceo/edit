@@ -8,6 +8,7 @@ import * as capacity from "../src/export_capacity.ts";
 import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip } from "./helpers/model.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 test("local exports queue across projects, preserve snapshots and advance after failure or queued cancellation", async () => {
   // One at a time, whatever Mac runs the tests (export_capacity.ts lets a big one run more).
@@ -138,7 +139,7 @@ test("a project's exports stay listed across restarts and only a listed one is d
   }
 });
 
-test("a first export with every frame new records this Mac's speed", async () => {
+test(`a first export with every frame new records ${THIS_MACHINE}'s speed`, async () => {
   const { dir, home, store, app, native, cleanup } = fixtureHome("mac-first-exports");
   const registry = new ExportRegistry(home);
   app.exports = registry;
@@ -398,9 +399,9 @@ test("how many exports a Mac runs at once (one per encode engine), and when ther
   expect(capacity.mostAtOnce(mac("Intel(R) Xeon(R)", 64, 50), {})).toBe(1);
   expect(capacity.mostAtOnce(mac("Apple M1", 8, 50), { EDIT_LOCAL_EXPORTS: "2" })).toBe(2);
   expect(capacity.noRoom(0, mac("Apple M1", 8, 5), {})).toBeNull();
-  expect(capacity.noRoom(1, mac("Apple M4 Pro", 24, 90), {})).toBe("waiting for the encoder (this Mac has one)");
+  expect(capacity.noRoom(1, mac("Apple M4 Pro", 24, 90), {})).toBe(`waiting for the encoder (${THIS_MACHINE} has one)`);
   expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 60), {})).toBeNull();
-  expect(capacity.noRoom(2, mac("Apple M3 Max", 64, 60), {})).toBe("waiting for an encoder (this Mac has 2)");
+  expect(capacity.noRoom(2, mac("Apple M3 Max", 64, 60), {})).toBe(`waiting for an encoder (${THIS_MACHINE} has 2)`);
   expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 30), {})).toContain("waiting for memory");
   expect(capacity.noRoom(1, mac("Apple M3 Max", 64, 60, 10), {})).toContain("less busy");
   expect(capacity.noRoom(1, mac("Apple M3 Max", 64, null), {})).toContain("can't be read");
@@ -490,8 +491,8 @@ test("smooth playback's render waits only for the export rendering, goes before 
     expect(registry.localRunning()).toBe(true);
     // "two" in line behind "one"; playback asks after it and still goes first.
     await registry.start(store, app.library, projects[1]!, options, `${dir}/two.mp4`, { drive: false, keepLocal: true });
-    expect(registry.activity().find(one => one.name === "two")).toMatchObject({ state: "queued", waiting: "waiting for the encoder (this Mac has one)" });
-    expect(events.find(one => one.id === projects[1]!.id && one.state === "queued")).toMatchObject({ waiting: "waiting for the encoder (this Mac has one)" });
+    expect(registry.activity().find(one => one.name === "two")).toMatchObject({ state: "queued", waiting: `waiting for the encoder (${THIS_MACHINE} has one)` });
+    expect(events.find(one => one.id === projects[1]!.id && one.state === "queued")).toMatchObject({ waiting: `waiting for the encoder (${THIS_MACHINE} has one)` });
     expect(events.some(one => one.id === projects[0]!.id && one.phase === "starting the export")).toBe(true);
     let given: (() => void) | null = null;
     const turn = registry.takeTurn((release) => { given = release; });

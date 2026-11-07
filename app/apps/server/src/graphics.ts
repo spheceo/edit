@@ -19,6 +19,7 @@ import type { Clip, Project } from "./model.ts";
 import { addTrack, CAPTION_PREFIX, clipEnd, clipOf, fps as fpsOf, freshId, mediaOf, trackOf } from "./project.ts";
 import { withExtension } from "./paths.ts";
 import { charCount, display, idiv, round, serdeParse, trim } from "./rust.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 type Args = Record<string, unknown>;
 
@@ -236,7 +237,7 @@ export function placeLabel(project: Project, args: Args, lookup?: (mediaId: stri
   // Given none, the map's own: what its render measured (E2, Oct 31: a label from e-code was refused for want of the track map_view had answered with).
   const points: unknown[] = trackGiven.length > 0 ? trackGiven : args.building !== undefined ? [args.building] : (mapPoints(project, map.media, lookup) ?? []);
   const pinned = pin(project, map, start, end, text, points);
-  if (pinned === null) throw new Error("place_label: this map's building track isn't on this Mac; give building_track (or building) from map_view");
+  if (pinned === null) throw new Error(`place_label: this map's building track isn't on ${THIS_MACHINE}; give building_track (or building) from map_view`);
   const k = project.settings.height / 1080;
   const track = addTrack(project, "video");
   const made: string[] = [];

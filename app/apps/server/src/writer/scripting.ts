@@ -29,6 +29,7 @@ import { revise } from "./revise.ts";
 import * as store from "./store.ts";
 import { keepPeaks, readPeaks } from "./tidy.ts";
 import * as versions from "./versions.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 const CHANGED = "The script changed while Claude was editing it, so nothing was applied. Ask again.";
 
@@ -266,7 +267,7 @@ export async function exactOnce(app: App, data: string, id: string, job: Job): P
 async function cutExactly(app: App, data: string, dir: string, script: Script, plan: Plan, clips: Clip[], peaks: ArrayLike<number>, job: Job): Promise<[Clip[], string]> {
   // Footage cleared from this Mac once the cloud held it is read from the cloud's preview, a stretch at a time.
   const source = await footageFor(app, data, dir, script.id, job);
-  if ("away" in source) return [clips, `The footage isn't on this Mac and couldn't be read from the cloud (${source.away}), so its cuts follow YouTube's captions. Build again to try once more.`];
+  if ("away" in source) return [clips, `The footage isn't on ${THIS_MACHINE} and couldn't be read from the cloud (${source.away}), so its cuts follow YouTube's captions. Build again to try once more.`];
   const words = script.words;
   let heard: exact.Report;
   try {

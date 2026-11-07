@@ -35,6 +35,7 @@ import * as jobs from "./jobs.ts";
 import { ensureIds } from "./paragraphs.ts";
 import { audit } from "./plan.ts";
 import * as store from "./store.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 const POLL_MS = 45_000;
 /** How often the fixing computer checks for "Ready for changes"; others check in at POLL_MS. */
@@ -871,7 +872,7 @@ async function checkIn(app: App, data: string): Promise<void> {
     return;
   }
   const now = answer.chosen === true;
-  if (now !== chosen) diag.info("writer", now ? "this Mac is the fixing computer: it takes Ready for changes" : "this Mac isn't the fixing computer");
+  if (now !== chosen) diag.info("writer", now ? `${THIS_MACHINE} is the fixing computer: it takes Ready for changes` : `${THIS_MACHINE} isn't the fixing computer`);
   chosen = now;
   if (!chosen) return;
   const requests = (Array.isArray(answer.requests) ? answer.requests : []) as Record<string, unknown>[];
@@ -898,7 +899,7 @@ async function take(app: App, data: string, reviewId: string, scriptId: string, 
   }
   // A script this Mac hasn't got yet (the sync brings it) or is busy with waits for a later check-in.
   if (!here || jobs.running(scriptId) || importing(scriptId)) {
-    const why = `${name}: Ready for changes waits: the script ${here ? "is busy" : "isn't on this Mac yet"}`;
+    const why = `${name}: Ready for changes waits: the script ${here ? "is busy" : `isn't on ${THIS_MACHINE} yet`}`;
     // Said once, not at every check-in.
     if (waiting.get(reviewId) !== why) diag.info("writer", why);
     waiting.set(reviewId, why);

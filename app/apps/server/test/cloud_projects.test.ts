@@ -33,6 +33,7 @@ import { newProject } from "../src/project.ts";
 import { nowMs, type Event } from "../src/store.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 const SETTINGS_1080 = { width: 1920, height: 1080, fps: 30 };
 
@@ -380,7 +381,7 @@ test("a conflict keeps this machine's changes as a conflicted copy and takes the
     expect(projects.isCloud(copy!.id)).toBe(false);
     expect(projects.status(id)).toMatchObject({ sync: "conflict", rev: 2, dirty: false });
     expect(String(projects.status(id).message)).toBe(
-      "“Case (my edit)” was changed on another machine meanwhile, so the cloud's version is open. Your changes here are kept as “Case (my edit) (conflicted copy)” on this Mac.",
+      `“Case (my edit)” was changed on another machine meanwhile, so the cloud's version is open. Your changes here are kept as “Case (my edit) (conflicted copy)” on ${THIS_MACHINE}.`,
     );
     const said = events.find((event) => event.type === "cloud-conflict");
     expect(said).toMatchObject({ id, copy: { id: copy!.id, name: "Case (my edit) (conflicted copy)" } });
@@ -483,7 +484,7 @@ test("losing the lock with changes not pushed keeps them as a copy and goes read
     expect(store.get(id)!.project.name).toBe("kenobi's");
     expect(store.list().some((summary) => summary.name === "unpushed (conflicted copy)")).toBe(true);
     expect(String(projects.status(id).message)).toBe(
-      "kenobi took over “unpushed” before your last changes reached the cloud. They're kept as “unpushed (conflicted copy)” on this Mac.",
+      `kenobi took over “unpushed” before your last changes reached the cloud. They're kept as “unpushed (conflicted copy)” on ${THIS_MACHINE}.`,
     );
     // Taking it back (force) shows their latest version, and it's ours again.
     await takeOver(app, id);

@@ -10,6 +10,7 @@ import * as os from "node:os";
 import * as claudeUsage from "../src/claude_usage.ts";
 import { join } from "../src/paths.ts";
 import * as planUse from "../src/plan_use.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 let home = "";
 let projects = "";
@@ -88,7 +89,7 @@ test("Edit's call is spread over the time it ran", () => {
   expect(claudeUsage.spentBetween(T - MIN, T)).toBeCloseTo(0.5 + 0.2);
 });
 
-test("each rise of the 5-hour meter goes to what spent meanwhile: Edit, other Claude Code here, or nothing on this Mac", async () => {
+test(`each rise of the 5-hour meter goes to what spent meanwhile: Edit, other Claude Code here, or nothing on ${THIS_MACHINE}`, async () => {
   const resets = new Date(T + 4 * 60 * MIN).toISOString();
   const at = (minutes: number, five: number, nextWindow = false) =>
     planUse.keep({ at: T + minutes * MIN, five, fiveResets: nextWindow ? new Date(T + 9 * 60 * MIN).toISOString() : resets, week: 20, weekResets: null, split: { "Claude Code": 90, Chats: 10 } });
@@ -115,9 +116,9 @@ test("each rise of the 5-hour meter goes to what spent meanwhile: Edit, other Cl
   const lines = await planUse.reportLines(8, T + 61 * MIN);
   expect(lines[0]).toContain("5-hour 4%");
   expect(lines[0]).toContain("Claude Code 90%, Chats 10%");
-  expect(lines.join("\n")).toContain("nothing running on this Mac");
+  expect(lines.join("\n")).toContain(`nothing running on ${THIS_MACHINE}`);
   expect(lines.join("\n")).toContain("Terminal in /Users/someone/code/site $5.00 ×1 (opus-5-5)");
-  expect(planUse.timeline(24, T + 61 * MIN).filter((line) => line.endsWith("← nothing on this Mac"))).toHaveLength(2);
+  expect(planUse.timeline(24, T + 61 * MIN).filter((line) => line.endsWith(`← nothing on ${THIS_MACHINE}`))).toHaveLength(2);
 });
 
 test("a resumed session's cost counts only what it added: Claude Code's total is the session's so far", () => {

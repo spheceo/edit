@@ -1,10 +1,11 @@
 import { expect, test } from "vitest";
+import { THE_MACHINE } from "../../lib/platform";
 import { importError } from "../import-error";
 
 test("saved transcription transport errors show recovery instructions without request URLs", () => {
   const message = importError("The connection to Writer's service broke (https://relay/v1/transcribe?keyterm=Jane+Doe: Network Error: peer closed connection without sending TLS close_notify). Retry: what was heard is kept.");
   expect(message).toContain("saved parts");
-  expect(message).toContain("Logs on the Mac that ran the import");
+  expect(message).toContain(`Logs on ${THE_MACHINE} that ran the import`);
   expect(message).not.toContain("https://");
   expect(message).not.toContain("Jane");
 });

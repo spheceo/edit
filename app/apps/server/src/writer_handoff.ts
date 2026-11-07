@@ -38,6 +38,7 @@ import type { Parsed } from "./seams.ts";
 import { writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 import { stableStringify } from "./stable.ts";
+import { THE_MACHINE } from "./machine.ts";
 
 /** A Writer script as its `script.json` has it (the parts the handoff reads). */
 export interface WriterScript {
@@ -124,7 +125,7 @@ export function recordingFiles(given: WriterScript): { start: number; end: numbe
   if (parts.length === 0) {
     const url = given.sourceUrl ?? "";
     const file = script.footageFile(url);
-    if (file === null) throw new Error(`its footage (${given.sourceKind ?? "a file"}) is only on the Mac that imported it: import it in Writer from Drive or YouTube to hand it over`);
+    if (file === null) throw new Error(`its footage (${given.sourceKind ?? "a file"}) is only on ${THE_MACHINE} that imported it: import it in Writer from Drive or YouTube to hand it over`);
     files.push({ start: 0, end: Number.MAX_SAFE_INTEGER, url, file });
   } else {
     for (const part of parts) {
@@ -133,7 +134,7 @@ export function recordingFiles(given: WriterScript): { start: number; end: numbe
       const file = shared ?? (part.url === undefined ? null : script.footageFile(part.url));
       if (file === null) {
         // A Drive folder's recordings are joined into one master that goes up to Edit's originals after the import; until then only the Mac that imported it has them.
-        if (part.url !== undefined && drive.isDrive(part.url) && drive.parse(part.url).kind === "folder") throw new Error(`"${part.title}" is a Drive folder whose joined recordings aren't in Edit's cloud yet: Start the edit on the Mac that imported the script, which sends them up first`);
+        if (part.url !== undefined && drive.isDrive(part.url) && drive.parse(part.url).kind === "folder") throw new Error(`"${part.title}" is a Drive folder whose joined recordings aren't in Edit's cloud yet: Start the edit on ${THE_MACHINE} that imported the script, which sends them up first`);
         throw new Error(`"${part.title}" has no Drive or YouTube link: import it in Writer from Drive or YouTube to hand it over`);
       }
       files.push({ start: part.startMs, end: part.startMs + part.durationMs, url: part.url ?? "", file, ...(shared ? { originalKey: part.originalKey } : {}) });

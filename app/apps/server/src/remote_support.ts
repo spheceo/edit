@@ -23,6 +23,7 @@ import * as actions from "./remote_actions.ts";
 import { RemoteCommandReceipts } from "./remote_commands.ts";
 import { installUpdate } from "./routes.ts";
 import { BUILD } from "./version.ts";
+import { THE_MACHINE } from "./machine.ts";
 
 const query = (name: string) => makeFunctionReference<"query">(`editSupport:${name}`);
 const mutation = (name: string) => makeFunctionReference<"mutation">(`editSupport:${name}`);
@@ -375,7 +376,7 @@ function requireLocalCli(context: RouteContext<App>) {
   const loopback = ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(context.peerAddress ?? "");
   const proxied = [...context.request.headers.keys()].some(name => name === "forwarded" || name.startsWith("x-forwarded-") || name.startsWith("tailscale-"));
   if (!loopback || proxied || context.request.headers.has("origin") || context.request.headers.has("sec-fetch-site"))
-    throw new ApiError(403, "Use edit remote on the Mac running this Edit.");
+    throw new ApiError(403, `Use edit remote on ${THE_MACHINE} running this Edit.`);
 }
 
 export function routes(router: Router<App>) {

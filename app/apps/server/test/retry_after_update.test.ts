@@ -13,6 +13,7 @@ import * as retry from "../src/retry_after_update.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { clip } from "./helpers/model.ts";
 import { MockServer } from "./mocks/server.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 let mock: MockServer;
 let restore: () => void;
@@ -126,7 +127,7 @@ test("a busy Mac (an export, an agent turn) waits, and the queue is kept for whe
   }
 });
 
-test("never on a project another computer holds, nor a share on an approved review, nor one a reviewer asked of this Mac again", async () => {
+test(`never on a project another computer holds, nor a share on an approved review, nor one a reviewer asked of ${THIS_MACHINE} again`, async () => {
   const { app, home, mom, cops, cleanup } = setUp("retry-skipped", "nightly-47");
   try {
     retry.noteBuild(app, "nightly-48");
@@ -151,7 +152,7 @@ test("never on a project another computer holds, nor a share on an approved revi
       return Response.json({ status: "success", value: path === "reviews:checkIn" ? { chosen: true, requests: [{ reviewId: "r1", sourceId: mom, title: "Mom Secretly", requestedAt: 3 }] } : path === "reviews:changes" ? { notes: [], cursor: 0, more: false } : path === "reviews:open" ? [{ sourceId: mom, reviewId: "r1", approved: null }] : { ok: false, reason: "gone" } });
     });
     await reviews.checkIn(app);
-    expect(await retry.step(app, actions)).toBe("skipped: a reviewer asked again on this Mac, and that request does it");
+    expect(await retry.step(app, actions)).toBe(`skipped: a reviewer asked again on ${THIS_MACHINE}, and that request does it`);
   } finally {
     mock.on("POST", "/v1/cloud/convex", () => Response.json({ status: "success", value: { chosen: false, requests: [] } }));
     cleanup();

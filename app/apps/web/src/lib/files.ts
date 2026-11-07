@@ -6,13 +6,14 @@
 
 import { api } from "./api";
 import { useEditor } from "./store";
+import { FILE_MANAGER } from "./platform";
 
 /** Whether this page runs on the Mac that holds Edit's files (its window, or a browser there). */
 export const onThisMac = (): boolean => ["localhost", "127.0.0.1", "::1", "[::1]"].includes(location.hostname);
 
 /** Shows a file Edit made on this Mac in Finder, saying so when it can't. */
 export function showInFinder(path: string): void {
-  void api.reveal(path).catch((error: unknown) => useEditor.getState().toastError(error, "show it in Finder"));
+  void api.reveal(path).catch((error: unknown) => useEditor.getState().toastError(error, `show it in ${FILE_MANAGER}`));
 }
 
 /** Keeps `blob` as `name`: in this Mac's Downloads (said, with Show in Finder), or as this device's download. */
@@ -30,7 +31,7 @@ export async function saveFile(name: string, blob: Blob): Promise<void> {
     const answer = (await response.json()) as { path?: string; error?: string };
     if (!response.ok || answer.path === undefined) throw new Error(answer.error ?? `${response.status}`);
     const path = answer.path;
-    useEditor.getState().toast(`Saved to Downloads as ${path.split("/").pop()}`, "info", { label: "Show in Finder", run: () => showInFinder(path) });
+    useEditor.getState().toast(`Saved to Downloads as ${path.split("/").pop()}`, "info", { label: `Show in ${FILE_MANAGER}`, run: () => showInFinder(path) });
   } catch (error) {
     useEditor.getState().toastError(error, `save ${name}`);
   }

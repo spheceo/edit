@@ -8,12 +8,13 @@
 // `tail --pid` that ends with Edit.
 
 import * as diag from "./diag.ts";
+import { THE_MACHINE } from "./machine.ts";
 
 /** How often what's running is looked at. */
 const EVERY_MS = 15_000;
 
 let held: Bun.Subprocess | null = null;
-const MACHINE = process.platform === "darwin" ? "the Mac" : "this computer";
+const MACHINE = THE_MACHINE;
 
 /** What holds the machine awake until it's killed or Edit ends, or null where there's nothing to. */
 function holder(why: string): string[] | null {

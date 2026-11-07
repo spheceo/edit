@@ -13,6 +13,7 @@ import * as os from "node:os";
 import * as diag from "./diag.ts";
 import { join } from "./paths.ts";
 import { BUILD } from "./version.ts";
+import { THE_MACHINE } from "./machine.ts";
 
 type Mark = { pid: number; started: number; build: string };
 
@@ -34,7 +35,7 @@ export function begin(home: string, reports = join(os.homedir(), "Library", "Log
     const crash = crashOf(reports, last.pid, last.started);
     diag.error(
       "edit",
-      `the last run (${last.build}, started ${diag.stamp(last.started)}) stopped without quitting: ${crash ?? "macOS kept no crash report for it (stopped from outside, or the Mac restarted)"}`,
+      `the last run (${last.build}, started ${diag.stamp(last.started)}) stopped without quitting: ${crash ?? `macOS kept no crash report for it (stopped from outside, or ${THE_MACHINE} restarted)`}`,
     );
   }
   try {

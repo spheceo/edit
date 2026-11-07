@@ -16,6 +16,7 @@ import { StartedBy } from "./StartedBy";
 import { MemoryChip } from "./MemoryChip";
 import { UpdateButton } from "./UpdateButton";
 import { Button, cx, IconButton } from "./ui";
+import { MOD, SHIFT_MOD, THIS_MACHINE } from "../lib/platform";
 
 export function TopBar({ onShare }: { onShare: () => void }) {
   const name = useEditor((state) => state.project?.name ?? "");
@@ -86,7 +87,7 @@ function SyncState() {
   const label = syncLabel(cloud);
   if (!label) return null;
   const Icon = { ok: CloudCheck, busy: CloudSync, warn: label.text === "Read-only" ? Lock : CloudOff, bad: CloudAlert }[label.tone];
-  const title = cloud?.missing ?? cloud?.message ?? (cloud?.sync === "readonly" ? `${cloud.holder} is editing` : cloud?.sync === "offline" ? "Changes are saved on this Mac and go to the cloud when it’s back" : label.text);
+  const title = cloud?.missing ?? cloud?.message ?? (cloud?.sync === "readonly" ? `${cloud.holder} is editing` : cloud?.sync === "offline" ? `Changes are saved on ${THIS_MACHINE} and go to the cloud when it’s back` : label.text);
   return (
     <span
       role="status"
@@ -193,10 +194,10 @@ function History() {
   const canRedo = useEditor((state) => state.future.length > 0);
   return (
     <div className="flex items-center">
-      <IconButton label="Undo (⌘Z)" disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
+      <IconButton label={`Undo (${MOD}Z)`} disabled={!canUndo} onClick={() => useEditor.getState().undo()}>
         <Undo2 size={15} />
       </IconButton>
-      <IconButton label="Redo (⇧⌘Z)" disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
+      <IconButton label={`Redo (${SHIFT_MOD}Z)`} disabled={!canRedo} onClick={() => useEditor.getState().redo()}>
         <Redo2 size={15} />
       </IconButton>
     </div>

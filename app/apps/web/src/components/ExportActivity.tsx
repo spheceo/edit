@@ -11,6 +11,7 @@ import { useEditor } from "../lib/store";
 import { FolderPicker } from "./FolderBrowser";
 import { ProblemView } from "./ProblemView";
 import { Button, cx, DialogTitle, IconButton, Modal } from "./ui";
+import { FILE_MANAGER, THIS_MACHINE } from "../lib/platform";
 
 export const exportActive = (job: Activity) => job.state === "queued" || job.state === "running";
 
@@ -39,7 +40,7 @@ function Finished({ job }: { job: Activity }) {
   return (
     <div className="mt-1 ml-[22px]">
       <div className="text-[12px] leading-snug break-all text-muted" title={job.path}>
-        {here ? `Saved to ${job.saved}` : "Kept in the cloud, not on this Mac: a copy comes back down when you save one."}
+        {here ? `Saved to ${job.saved}` : `Kept in the cloud, not on ${THIS_MACHINE}: a copy comes back down when you save one.`}
       </div>
       <div className="mt-2 flex items-center gap-2">
         {here && (
@@ -61,7 +62,7 @@ function Finished({ job }: { job: Activity }) {
         onPick={async (folder) => {
           const { path } = await api.copyExport(job.path, folder);
           setCopying(false);
-          useEditor.getState().toast(`Saved a copy to ${path.split("/").slice(-2).join("/")}`, "info", { label: "Show in Finder", run: () => showInFinder(path) });
+          useEditor.getState().toast(`Saved a copy to ${path.split("/").slice(-2).join("/")}`, "info", { label: `Show in ${FILE_MANAGER}`, run: () => showInFinder(path) });
         }}
       />
     </div>

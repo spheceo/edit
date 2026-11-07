@@ -7,6 +7,7 @@ import { type Player, clipStarts, editedPosition, type Playhead } from "./playba
 import type { Clip, Part, Word } from "./types";
 import { resizeTimelineWindow } from "./timeline-zoom";
 import { Icon } from "./ui";
+import { MOD } from "../lib/platform";
 
 /** Left inset, so the playhead at 0:00 is not flush with the edge. */
 const INSET = 14;
@@ -269,7 +270,7 @@ export function Timeline({
             className="icon-tool"
             disabled={disabled || !splittable}
             aria-label="Split at playhead"
-            title="Split at playhead (⌘K)"
+            title={`Split at playhead (${MOD}K)`}
             onClick={() => position && onEdit(splitClip(clips, position.index, position.sourceMs))}
           >
             <Icon name="scissors" size={14} />

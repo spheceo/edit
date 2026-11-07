@@ -25,6 +25,7 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { THE_MACHINE, THIS_MACHINE } from "./machine.ts";
 
 const GB = 1024 ** 3;
 
@@ -96,13 +97,13 @@ export function mostAtOnce(given: Machine = machine, env: Record<string, string 
 export function noRoom(running: number, given: Machine = machine, env: Record<string, string | undefined> = process.env): string | null {
   if (running === 0) return null;
   const most = mostAtOnce(given, env);
-  if (running >= most) return most === 1 ? "waiting for the encoder (this Mac has one)" : `waiting for an encoder (this Mac has ${most})`;
+  if (running >= most) return most === 1 ? `waiting for the encoder (${THIS_MACHINE} has one)` : `waiting for an encoder (${THIS_MACHINE} has ${most})`;
   const percent = given.availablePercent();
-  if (percent === null) return "this Mac's free memory can't be read";
+  if (percent === null) return `${THIS_MACHINE}'s free memory can't be read`;
   const available = (percent / 100) * given.totalBytes;
   if (percent < 35 || available < 6 * GB) return `waiting for memory (${Math.round(percent)}% free, ${(available / GB).toFixed(1)} GB)`;
   const busy = given.load() / Math.max(1, given.cores);
-  if (busy > 0.75) return `waiting for the Mac to be less busy (load ${given.load().toFixed(1)} on ${given.cores} cores)`;
+  if (busy > 0.75) return `waiting for ${THE_MACHINE} to be less busy (load ${given.load().toFixed(1)} on ${given.cores} cores)`;
   return null;
 }
 

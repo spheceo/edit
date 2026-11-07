@@ -14,6 +14,7 @@ import { useEditor } from "../lib/store";
 import { ago, formatBytes } from "../lib/time";
 import { Badge, Button, ConfirmDialog, cx, DialogTitle, IconButton, Modal } from "./ui";
 import { Loader } from "./Logo";
+import { FILE_MANAGER, THE_MACHINE, THIS_MACHINE } from "../lib/platform";
 
 /** The Settings row: how much the exports take, and the way into the list. */
 export function StorageSettings() {
@@ -34,7 +35,7 @@ export function StorageSettings() {
       <h3 className="mb-2 text-[12px] font-medium text-muted">Storage</h3>
       <div className="flex min-h-[52px] items-center gap-3.5 rounded-[10px] border border-line bg-panel px-3 py-2.5">
         <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-[13px]">
-          <span className="font-medium">Exports on this Mac</span>
+          <span className="font-medium">Exports on {THIS_MACHINE}</span>
           <span className="text-[12px] leading-[1.45] text-muted">
             {summary === null ? "Looking…" : summary.files === 0 ? "None." : `${summary.files} ${summary.files === 1 ? "file" : "files"}, ${formatBytes(summary.bytes)}`}
             {summary?.free != null && ` · ${formatBytes(summary.free)} free on the disk`}
@@ -103,7 +104,7 @@ function ExportFiles({ onClose }: { onClose: () => void }) {
     <div className="flex h-[min(620px,calc(100vh-48px))] flex-col">
       <div className="border-b border-line px-6 pt-6 pb-4">
         <DialogTitle
-          title="Exports on this Mac"
+          title={`Exports on ${THIS_MACHINE}`}
           detail={`Every export Edit made here, and any other video in its export folders, largest first.${free !== null ? ` ${formatBytes(free)} free on the disk.` : ""} One kept in the cloud too comes back down when it's shared or saved again.`}
         />
       </div>
@@ -113,7 +114,7 @@ function ExportFiles({ onClose }: { onClose: () => void }) {
             <Loader size={28} />
           </div>
         ) : files.length === 0 ? (
-          <p className="p-8 text-center text-[13px] text-muted">No exports on this Mac.</p>
+          <p className="p-8 text-center text-[13px] text-muted">No exports on {THIS_MACHINE}.</p>
         ) : (
           files.map((one) => {
             const on = picked.has(one.path);
@@ -133,7 +134,7 @@ function ExportFiles({ onClose }: { onClose: () => void }) {
                   <span className="flex min-w-0 items-center gap-1.5 text-[13px]">
                     <span className="truncate">{one.projectName ?? one.name}</span>
                     {one.newest && <Badge title="A re-export copies its unchanged parts from the newest">Newest</Badge>}
-                    {one.inCloud && <Badge title="A copy is in the cloud: deleting this one frees the Mac">In the cloud</Badge>}
+                    {one.inCloud && <Badge title={`A copy is in the cloud: deleting this one frees ${THE_MACHINE}`}>In the cloud</Badge>}
                     {one.busy && <Badge>In use</Badge>}
                     {one.project === null && <Badge title="In Edit's export folder, but not on Edit's list">Not listed</Badge>}
                   </span>
@@ -143,7 +144,7 @@ function ExportFiles({ onClose }: { onClose: () => void }) {
                 </div>
                 <span className="shrink-0 text-[12px] text-secondary tabular">{formatBytes(one.bytes)}</span>
                 <IconButton
-                  label="Show in Finder"
+                  label={`Show in ${FILE_MANAGER}`}
                   className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                   onClick={(event) => {
                     event.stopPropagation();
@@ -176,7 +177,7 @@ function ExportFiles({ onClose }: { onClose: () => void }) {
         open={asking}
         onClose={() => setAsking(false)}
         title={`Delete ${chosen.length} ${chosen.length === 1 ? "export" : "exports"}?`}
-        detail={`${formatBytes(bytes)} goes from this Mac. ${chosen.some((one) => !one.inCloud) ? "Those not kept in the cloud are gone for good; a review link that shared one still plays it." : "Each is kept in the cloud, so nothing is lost."}`}
+        detail={`${formatBytes(bytes)} goes from ${THIS_MACHINE}. ${chosen.some((one) => !one.inCloud) ? "Those not kept in the cloud are gone for good; a review link that shared one still plays it." : "Each is kept in the cloud, so nothing is lost."}`}
         confirm="Delete"
         busy={busy}
         onConfirm={() => void remove()}

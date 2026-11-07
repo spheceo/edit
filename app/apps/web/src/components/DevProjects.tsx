@@ -11,6 +11,7 @@ import { useEditor } from "../lib/store";
 import type { ProjectSummary } from "../lib/types";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { Button, cx, Modal } from "./ui";
+import { THIS_MACHINE } from "../lib/platform";
 
 /**
  * Whether this is a dev build, where test projects and their controls show: the
@@ -114,7 +115,7 @@ export function DevControl({ count, cloudOnly = 0, show, onShow, onChanged }: { 
             Delete {count} test {count === 1 ? "project" : "projects"}?
           </h2>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            Every project marked Test on this Mac goes, from the cloud too where it’s there. Projects without the mark aren’t touched. A copy of each is kept in Edit’s data folder; footage files stay where they are.
+            Every project marked Test on {THIS_MACHINE} goes, from the cloud too where it’s there. Projects without the mark aren’t touched. A copy of each is kept in Edit’s data folder; footage files stay where they are.
           </p>
           <div className="mt-[22px] flex justify-end gap-2">
             <Button variant="subtle" disabled={busy} onClick={() => setConfirming(false)}>

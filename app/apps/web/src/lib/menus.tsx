@@ -61,6 +61,7 @@ import {
 import { playhead, preview } from "./playback";
 import { useEditor } from "./store";
 import { rate } from "./types";
+import { MOD } from "./platform";
 
 const state = () => useEditor.getState();
 
@@ -108,7 +109,7 @@ export function clipMenu(clipId: string): MenuItem[] {
     {
       label: clips.length > 1 ? "Duplicate clips" : "Duplicate",
       icon: <Copy size={14} />,
-      shortcut: "⌘D",
+      shortcut: `${MOD}D`,
       onSelect: () => {
         let created: string[] = [];
         editor.edit((draft) => {

@@ -35,6 +35,7 @@ import * as lessonNote from "./lesson_note.ts";
 import { peaksOf, reviseCommentary, reviseWith } from "./scripting.ts";
 import * as store from "./store.ts";
 import * as versions from "./versions.ts";
+import { ANOTHER_MACHINE } from "../machine.ts";
 
 /** What a note came to: the script changed, it was answered (nothing to change), or it wasn't done (replied with why, left open). */
 type Outcome = { kind: "changed" | "answered" | "unchanged"; said: string };
@@ -91,7 +92,7 @@ async function fixNotes(data: string, id: string, noteIds: string[], ready: stri
   const taken = await reviews.claim(noteIds, ready === null);
   reviews.markTried(data, noteIds);
   const notes = taken.flatMap((one) => reviews.note(data, one) ?? []).sort((a, b) => a.createdAt - b.createdAt);
-  if (notes.length === 0) return ["Those notes were already taken, on another Mac or by an earlier run.", 0];
+  if (notes.length === 0) return [`Those notes were already taken, on ${ANOTHER_MACHINE} or by an earlier run.`, 0];
   let [fixed, cost] = [0, 0];
   const lines: string[] = [];
   const handled = new Set<string>();

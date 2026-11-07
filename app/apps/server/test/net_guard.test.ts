@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 
 import { isPrivateAddress, publicUrl, safeFetch } from "../src/net_guard.ts";
 import { readPage } from "../src/research.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 const publicDns = async () => ["93.184.216.34"];
 
@@ -20,10 +21,10 @@ test("only public http(s) addresses on the usual ports", async () => {
     await expect(publicUrl(bad, publicDns)).rejects.toThrow();
   }
   // A public-looking name that resolves inside (DNS pointing at this Mac).
-  await expect(publicUrl("https://sneaky.example/", async () => ["127.0.0.1"])).rejects.toThrow("on this Mac or its network");
+  await expect(publicUrl("https://sneaky.example/", async () => ["127.0.0.1"])).rejects.toThrow(`on ${THIS_MACHINE} or its network`);
 });
 
-test("a redirect to this Mac is refused; to another public page it's followed", async () => {
+test(`a redirect to ${THIS_MACHINE} is refused; to another public page it's followed`, async () => {
   const hops: string[] = [];
   const fetcher = async (url: string) => {
     hops.push(url);
@@ -39,5 +40,5 @@ test("a redirect to this Mac is refused; to another public page it's followed", 
 
 test("read_page refuses Edit's own API", async () => {
   await expect(readPage("http://127.0.0.1:7700/api/projects", 1000)).rejects.toThrow();
-  await expect(readPage("http://127.0.0.1/api/projects", 1000)).rejects.toThrow("on this Mac or its network");
+  await expect(readPage("http://127.0.0.1/api/projects", 1000)).rejects.toThrow(`on ${THIS_MACHINE} or its network`);
 });

@@ -16,6 +16,7 @@ import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import { join } from "./paths.ts";
 import * as problemReports from "./problem_reports.ts";
 import * as remote from "./remote_actions.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 /** What one report says, and why not when it can't. */
 export function problemFrom(args: Record<string, unknown>): { tool: string; error: string; asked: string; instead: string; note: string } | string {
@@ -55,7 +56,7 @@ registerTool("report_problem", async ({ app, args, projectId }: ToolCall) => {
     const { key: where } = await problemReports.send(app.store.home, app.machine, report);
     filed.set(key, where);
     diag.info("reports", `the agent reported ${given.tool} failing on ${projectId}`);
-    return text(`reported to the team (${where}), with this Mac's diagnostics: it gets fixed in Edit. Carry on with the rest, and say it's FAILED in your summary.`);
+    return text(`reported to the team (${where}), with ${THIS_MACHINE}'s diagnostics: it gets fixed in Edit. Carry on with the rest, and say it's FAILED in your summary.`);
   } catch (error) {
     // Not signed in, or the cloud didn't answer: kept on this Mac for the next report.
     const dir = join(app.store.home, "reports-sent");
@@ -64,7 +65,7 @@ registerTool("report_problem", async ({ app, args, projectId }: ToolCall) => {
     fs.writeFileSync(local, report);
     filed.set(key, local);
     diag.warn("reports", `the agent's report of ${given.tool} kept here only: ${diag.messageOf(error)}`);
-    return text(`couldn't send it to the team (${diag.messageOf(error)}); kept on this Mac at ${local}. Tell the user in your summary, with the error, so they can pass it on.`);
+    return text(`couldn't send it to the team (${diag.messageOf(error)}); kept on ${THIS_MACHINE} at ${local}. Tell the user in your summary, with the error, so they can pass it on.`);
   }
 });
 

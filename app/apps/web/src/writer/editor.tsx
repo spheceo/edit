@@ -25,6 +25,7 @@ import type { BuildStatus, ChatTurn, Clip, Highlight, Research, Script } from ".
 import { FOOTAGE_SHORTCUTS, Shortcuts } from "./shortcuts";
 import { BandTip, bandsOf, ReviewButton, ReviewDialog, useReview, ArchivedBanner } from "./review";
 import { Icon, Menu } from "./ui";
+import { MOD, SHIFT_MOD, THE_MACHINE } from "../lib/platform";
 
 export type View = "video" | "script" | "split";
 const VIEWS: { value: View; label: string }[] = [
@@ -571,7 +572,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
       const done = window.document.execCommand("copy");
       area.remove();
       if (!done) {
-        setError("This browser would not copy the script. Open Edit on the Mac, or select the text by hand.");
+        setError(`This browser would not copy the script. Open Edit on ${THE_MACHINE}, or select the text by hand.`);
         return;
       }
     }
@@ -611,10 +612,10 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
             </span>
           )}
           <ViewTabs view={view} onChange={(next) => (setExpanded(false), setView(next))} />
-          <button type="button" className="icon-tool" aria-label="Undo" title="Undo (⌘Z)" disabled={!past.current.length || busy} onClick={undo}>
+          <button type="button" className="icon-tool" aria-label="Undo" title={`Undo (${MOD}Z)`} disabled={!past.current.length || busy} onClick={undo}>
             <Icon name="undo" />
           </button>
-          <button type="button" className="icon-tool" aria-label="Redo" title="Redo (⇧⌘Z)" disabled={!future.current.length || busy} onClick={redo}>
+          <button type="button" className="icon-tool" aria-label="Redo" title={`Redo (${SHIFT_MOD}Z)`} disabled={!future.current.length || busy} onClick={redo}>
             <Icon name="redo" />
           </button>
           <button

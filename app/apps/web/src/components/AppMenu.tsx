@@ -14,6 +14,7 @@ import { StartedBy } from "./StartedBy";
 import { ExportFolderPrompt, ExportsSettings } from "./ExportFolder";
 import { StorageSettings } from "./StorageSettings";
 import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
+import { FILE_MANAGER, MOD } from "../lib/platform";
 
 /** `row`: as Home's sidebar has it (the study portal's): the photo, the name and a chevron across the sidebar's top. */
 export function AppMenu({ row = false }: { row?: boolean } = {}) {
@@ -31,7 +32,7 @@ export function AppMenu({ row = false }: { row?: boolean } = {}) {
           { separator: true },
         ] as MenuItem[])
       : []),
-    { label: "Settings", icon: <Settings size={14} />, shortcut: "⌘,", onSelect: () => openDialog("settings") },
+    { label: "Settings", icon: <Settings size={14} />, shortcut: `${MOD},`, onSelect: () => openDialog("settings") },
     { label: "Logs", icon: <ScrollText size={14} />, onSelect: () => openDialog("logs") },
     { label: "Report a problem…", icon: <Bug size={14} />, onSelect: () => openReport() },
     { separator: true },
@@ -194,7 +195,7 @@ function LogsView() {
         </span>
         <div className="flex gap-2">
           <button className="h-8 rounded-lg px-3 text-[13px] text-muted hover:text-fg" onClick={() => void fetch("/api/logs/reveal", { method: "POST" })}>
-            Show in Finder
+            Show in {FILE_MANAGER}
           </button>
           <button className="h-8 rounded-lg bg-white px-3 text-[13px] font-medium text-black" onClick={() => void copy()}>
             {copied ? "Copied" : "Copy"}

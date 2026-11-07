@@ -42,6 +42,7 @@ import { MockServer } from "./mocks/server.ts";
 import { scratch } from "./helpers/home.ts";
 import { media, project as newProject, stubNative } from "./helpers/model.ts";
 import type { Word } from "../src/transcribe.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 const DOC = `<html><head><title>Kent crash</title><style>.c1{color:red}</style></head><body>
 <p><span>Kent crash</span></p><p><span>Total Duration: 27m</span></p>
@@ -418,7 +419,7 @@ test("a Doc only the team can see is read with the team's sign-in; Google's own 
     expect(await fetchDoc("TEAMDOC12345")).toEqual([DOC, "Team case"]);
     // The sign-in can't see it: the public link, and what went wrong said for what it is.
     mock.on("GET", "/docs.google.com/document/d/GONEDOC12345/export", () => new Response("", { status: 404 }));
-    await expect(fetchDoc("GONEDOC12345")).rejects.toThrow("That Google Doc doesn't exist, or this Mac's Google account can't see it.");
+    await expect(fetchDoc("GONEDOC12345")).rejects.toThrow(`That Google Doc doesn't exist, or ${THIS_MACHINE}'s Google account can't see it.`);
     mock.on("GET", "/docs.google.com/document/d/BUSYDOC12345/export", () => new Response("", { status: 503 }));
     await expect(fetchDoc("BUSYDOC12345")).rejects.toThrow("Google Docs is busy right now. Try again in a minute.");
   } finally {

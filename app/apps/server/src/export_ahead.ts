@@ -29,6 +29,7 @@ import { native } from "./native/index.ts";
 import { duration } from "./project.ts";
 import { read as reviewState } from "./reviews.ts";
 import * as seams from "./seams.ts";
+import { THE_MACHINE } from "./machine.ts";
 
 /** How long a project's edits rest before its export is made ahead (tests make it quick). */
 export const hooks = { restMs: 2 * 60_000, onBattery: (): boolean => onBattery() };
@@ -105,7 +106,7 @@ export function tryNow(app: App, id: string): string | null {
     throw error;
   }
   if (other !== null) return other === id ? "already making it" : "making another's";
-  return registry.startAhead(app.store, app.library, project, options, aheadFile(app.store.cacheDir(), id), watermark) ? null : "the Mac is busy";
+  return registry.startAhead(app.store, app.library, project, options, aheadFile(app.store.cacheDir(), id), watermark) ? null : `${THE_MACHINE} is busy`;
 }
 
 /** Projects whose edits are resting, each with its timer. */
@@ -131,7 +132,7 @@ function changed(app: App, id: string): void {
       }
       if (why === null) diag.info("export", `${app.store.get(id)?.project.name ?? id}: making its export ahead, for the next export or share`);
       // Busy, smoothing or making another's: looked at again after another rest.
-      else if (why === "the Mac is busy" || why === "slowed shots still smoothing" || why === "making another's" || why === "an agent is working") wait();
+      else if (why === `${THE_MACHINE} is busy` || why === "slowed shots still smoothing" || why === "making another's" || why === "an agent is working") wait();
     }, hooks.restMs);
     later.unref?.();
     resting.set(id, later);

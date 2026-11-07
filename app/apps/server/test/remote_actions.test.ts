@@ -10,6 +10,7 @@ import * as presence from "../src/presence.ts";
 import { busyWith, disk, IDLE_MS, idleNow, lastUsed, problems, probe, RESTART, resume, UNSTICK, updateWhenIdle } from "../src/remote_actions.ts";
 import * as problemReports from "../src/problem_reports.ts";
 import * as store from "../src/writer/store.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 
 /** An Edit home with one script in Script mode's folder, and no projects. */
 function home(fields: Partial<Script>): [App, string] {
@@ -26,7 +27,7 @@ function home(fields: Partial<Script>): [App, string] {
 }
 
 describe("remote resume of a script", () => {
-  test("a finished script only on this Mac goes to the cloud and isn't imported again", async () => {
+  test(`a finished script only on ${THIS_MACHINE} goes to the cloud and isn't imported again`, async () => {
     const [app, id] = home({});
     expect(await resume(app, id)).toBe('"Case": sent to the cloud; its import had finished');
   });
@@ -38,7 +39,7 @@ describe("remote resume of a script", () => {
 
   test("an id that's neither a project nor a script says so", async () => {
     const [app] = home({});
-    await expect(resume(app, "nope")).rejects.toThrow("There's no project or script nope on this Mac.");
+    await expect(resume(app, "nope")).rejects.toThrow(`There's no project or script nope on ${THIS_MACHINE}.`);
   });
 });
 

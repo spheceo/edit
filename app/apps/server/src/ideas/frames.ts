@@ -20,8 +20,9 @@ import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
 import * as tools from "../tools.ts";
 import * as youtube from "../youtube.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
-const NO_PROXY = "The YouTube proxy isn't available, so the video can't be looked at: Edit never asks YouTube for it from this Mac's own address.";
+const NO_PROXY = `The YouTube proxy isn't available, so the video can't be looked at: Edit never asks YouTube for it from ${THIS_MACHINE}'s own address.`;
 
 /** A storyboard sheet: its picture, the second its first tile shows, and its tiles (left to right, then down). */
 export type Sheet = { url: string; start: number; tiles: number };

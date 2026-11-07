@@ -4,6 +4,7 @@ import { addReviewNote, checkReviewNote, deleteReviewNote, message, type NoteDet
 import mark from "./assets/writer-mark.svg";
 import type { ReviewNote } from "./types";
 import { Icon, Menu, type MenuItem, Select } from "./ui";
+import { MOD } from "../lib/platform";
 
 /*
  * The review's comments as feedback.spheceo.com shows them (the standard):
@@ -595,7 +596,7 @@ function Composer({ scriptId, draft, onDraft, onSent, onError }: { scriptId: str
         }}
       />
       <div className="cm-actions">
-        <span className="faint cm-hint">⌘↵ sends</span>
+        <span className="faint cm-hint">{MOD}↵ sends</span>
         <button type="submit" className="primary sm" disabled={!ready || sending}>
           {sending ? "Sending…" : suggesting ? "Suggest" : "Comment"}
         </button>

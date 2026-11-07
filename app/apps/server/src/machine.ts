@@ -54,3 +54,11 @@ function hardwareId(): string {
   }
   return hostname() || "unknown";
 }
+
+// How Edit's words name this machine to the people using it: a Mac as one, Linux as "this computer".
+const MAC = process.platform === "darwin";
+export const THIS_MACHINE = MAC ? "this Mac" : "this computer";
+export const THE_MACHINE = MAC ? "the Mac" : "the computer";
+export const ANOTHER_MACHINE = MAC ? "another Mac" : "another computer";
+export const THEIR_MACHINE = MAC ? "their Mac" : "their computer";
+export const FILE_MANAGER = MAC ? "Finder" : "Files";

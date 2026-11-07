@@ -10,6 +10,7 @@ import { Router } from "../src/http/router.ts";
 import { listen, respond } from "../src/http/server.ts";
 import { RemoteCommandReceipts } from "../src/remote_commands.ts";
 import { BUILD } from "../src/version.ts";
+import { THIS_MACHINE } from "../src/machine.ts";
 const NEXT = "nightly-99999";
 const item = (id = "cmd1") => ({ commandId: id, deviceId: "device1", kind: "update" as const, expiresAt: Date.now() + 60_000 });
 
@@ -49,7 +50,7 @@ function fixture(running = false) {
   };
 }
 
-test("every signed-in start registers this Mac, on; signed out writes nothing (Nov 1: always on)", async () => {
+test(`every signed-in start registers ${THIS_MACHINE}, on; signed out writes nothing (Nov 1: always on)`, async () => {
   const f = fixture();
   const path = join(f.home, "remote-support.json");
   try {
@@ -282,7 +283,7 @@ test("a resume is carried out once, reports what happened and never installs an 
     const finished = f.calls.filter(call => call.state !== undefined);
     expect(finished).toHaveLength(1);
     expect(finished[0]).toMatchObject({ commandId: "cmd-resume", state: "failed" });
-    expect(String(finished[0]!.detail)).toContain("no project or script p1 on this Mac");
+    expect(String(finished[0]!.detail)).toContain(`no project or script p1 on ${THIS_MACHINE}`);
     expect(new RemoteCommandReceipts(f.home, "device1").read("cmd-resume")?.state).toBe("failed");
   } finally { await f.clean(); }
 });

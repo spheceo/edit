@@ -25,6 +25,7 @@ import { canonical, checkStacked, commentOf, describe, describeComments, designO
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import { sizeOf } from "./size.ts";
+import { THIS_MACHINE } from "../machine.ts";
 
 export const AT_ONCE = 2;
 const SENT_TURNS = 14;
@@ -250,7 +251,7 @@ export const TOOLS = [
   {
     name: "cut_out",
     description:
-      "Lift a picture's subject out exactly, its own pixels (Photos' \"Copy Subject\", on this Mac, no credits): the rest of the picture transparent, at the picture's own size, added to the thumbnail's images. point: [x, y] from 0 to 1 across and down the picture, on the subject you want (his face), else every subject in it. For \"bring him over from V2\", \"he's perfect there\": never ask OpenArt to redraw a subject the person likes — cut him out and lay him over the other base as an image layer. The same box as the layer of the picture he came from puts him where he was; move or size him to sit right. Grade him to the scene's light on his own layer, then compare close: his edges, and none of the old subject showing behind (size him a touch bigger to cover, or make the base clean of the old subject first with make_picture). Read the file it names.",
+      `Lift a picture's subject out exactly, its own pixels (Photos' "Copy Subject", on ${THIS_MACHINE}, no credits): the rest of the picture transparent, at the picture's own size, added to the thumbnail's images. point: [x, y] from 0 to 1 across and down the picture, on the subject you want (his face), else every subject in it. For "bring him over from V2", "he's perfect there": never ask OpenArt to redraw a subject the person likes — cut him out and lay him over the other base as an image layer. The same box as the layer of the picture he came from puts him where he was; move or size him to sit right. Grade him to the scene's light on his own layer, then compare close: his edges, and none of the old subject showing behind (size him a touch bigger to cover, or make the base clean of the old subject first with make_picture). Read the file it names.`,
     inputSchema: {
       type: "object",
       additionalProperties: false,

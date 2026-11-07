@@ -6,6 +6,7 @@ import * as claude from "./claude.ts";
 import * as diag from "./diag.ts";
 import { writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
+import { THIS_MACHINE } from "./machine.ts";
 
 export type SupportPhase = "idle" | "updating" | "checking" | "signing_in" | "ready" | "needs_login" | "error";
 export interface SupportCheck { name: string; ok: boolean; detail: string }
@@ -227,7 +228,7 @@ export class ClaudeSupport {
     }
     if (binary === null) { this.set("error", "Claude Code is not installed. Choose Set up Claude to install it."); return; }
     this.state.path = binary;
-    this.set("checking", "Testing Claude Code on this Mac…");
+    this.set("checking", `Testing Claude Code on ${THIS_MACHINE}…`);
     const version = await this.run(binary, ["--version"], signal);
     this.state.version = safeDetail(version.out.trim());
     this.check("Executable", version.code === 0, `${binary}: ${version.out}`);

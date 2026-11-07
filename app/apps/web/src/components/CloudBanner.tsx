@@ -7,6 +7,7 @@ import { useState } from "react";
 import { cloudApi, readOnly } from "../lib/cloud";
 import { useEditor } from "../lib/store";
 import { Button, Modal } from "./ui";
+import { THEIR_MACHINE } from "../lib/platform";
 
 export function CloudBanner() {
   const cloud = useEditor((state) => state.cloud);
@@ -45,7 +46,7 @@ export function CloudBanner() {
         <div className="p-6">
           <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Take over from {holder}?</h2>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            You’ll edit it here and {holder}'s editor turns read-only. Anything they changed that hasn’t reached the cloud yet is kept on their Mac as a copy, not lost.
+            You’ll edit it here and {holder}'s editor turns read-only. Anything they changed that hasn’t reached the cloud yet is kept on {THEIR_MACHINE} as a copy, not lost.
           </p>
           <div className="mt-[22px] flex justify-end gap-2">
             <Button variant="subtle" onClick={() => setAsking(false)}>

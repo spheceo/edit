@@ -61,6 +61,7 @@ import { ProblemView } from "./ProblemView";
 import { Button, cx, Modal } from "./ui";
 import { ClaudeSetupCard } from "./ClaudeSetupCard";
 import { ClaudeMark } from "./ClaudeMark";
+import { MOD, THIS_MACHINE } from "../lib/platform";
 
 export { ClaudeMark };
 
@@ -247,7 +248,7 @@ function MainAgentPanel() {
       {!entries.length && status && !status.ready ? (
         <SetupClaude />
       ) : !entries.length ? (
-        <Empty title="Ask for an edit" detail="Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ⌘Z." />
+        <Empty title="Ask for an edit" detail={`Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ${MOD}Z.`} />
       ) : (
         <ChatTurns turns={turns} known={known} />
       )}
@@ -597,7 +598,7 @@ function SetupClaude() {
       </div>
     );
   }
-  return <Empty title="Getting Claude ready" detail="Edit is checking Claude Code on this Mac. This takes a moment." />;
+  return <Empty title="Getting Claude ready" detail={`Edit is checking Claude Code on ${THIS_MACHINE}. This takes a moment.`} />;
 }
 
 export function Empty({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) {

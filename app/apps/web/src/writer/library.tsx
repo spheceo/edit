@@ -31,6 +31,7 @@ import type { Brief, BriefLink, BriefRole, Choice, ClaudeStatus, ImportProgress,
 import { Dialog, Icon, Menu, Select, Tabs, type ToastMessage, Toasts } from "./ui";
 import { MemoryChip } from "../components/MemoryChip";
 import { UpdateButton } from "./update";
+import { THIS_MACHINE } from "../lib/platform";
 
 /** The New script dialog's tabs: one case's video (YouTube, Drive or a file on this Mac), a compilation, a commentary. */
 type Source = "video" | "brief" | "compilation" | "commentary";
@@ -745,11 +746,11 @@ const isDrive = (url: string) => /drive\.google\.com/.test(url);
 /** What the Video tab will do with what's in it, said in a few words. */
 const videoHint = (value: string, file: string) =>
   file
-    ? "The video stays where it is on this Mac. Edit makes a preview and transcribes it."
+    ? `The video stays where it is on ${THIS_MACHINE}. Edit makes a preview and transcribes it.`
     : isDrive(value)
       ? "A Drive video, or a folder of recordings joined in name order."
       : value.trim()
-        ? "Downloaded on this Mac through Edit's proxy, then transcribed."
+        ? `Downloaded on ${THIS_MACHINE} through Edit's proxy, then transcribed.`
         : SOURCES.video.hint;
 
 /** A Google Doc link: the script of a case the channel already made, always a reused case. */
@@ -1296,7 +1297,7 @@ function ImportDialog({
                 {!file && (
                   <>
                     {" "}
-                    <button type="button" className="link-button" onClick={() => void choose()}>Choose a file on this Mac…</button>
+                    <button type="button" className="link-button" onClick={() => void choose()}>Choose a file on {THIS_MACHINE}…</button>
                   </>
                 )}
               </p>
@@ -1420,7 +1421,7 @@ function DeleteDialog({
       title="Delete script?"
       description={
         <>
-          <b>{shown.current?.title}</b> and its transcript, preview and narration are removed from this Mac. A video
+          <b>{shown.current?.title}</b> and its transcript, preview and narration are removed from {THIS_MACHINE}. A video
           opened from disk stays where it is.
         </>
       }

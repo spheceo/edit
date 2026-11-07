@@ -44,11 +44,15 @@ about: in Reference 4 the producer kept a 25-second clip because "it's the
 most important clip where we actually see her in fear … and also mentions
 the squatting story." Never show the ruling itself.
 
-Every intro clip is a moment that also plays in the body, in its place in the
-story. The one exception is a moment the producer brings in from another
-video for the intro alone: in Reference 1 the producer framed the case "as
-the cop getting caught lying" and asked for that moment, from a second
-upload, in the intro.
+Every intro clip from the hearing is a moment that also plays in the body, in
+its place in the story. Two kinds come from elsewhere, for the intro alone. A
+moment the producer brings in from another video: in Reference 1 the producer
+framed the case "as the cop getting caught lying" and asked for that moment,
+from a second upload, in the intro. And a news clip: a reporter's or an
+anchor's line that promises the story (the charge, the fall, the moment the
+title is about) is often the strongest intro clip, so when the sources have
+news coverage, weigh its best lines against the hearing's. The team: "news
+clips are sometimes the best intro clips."
 
 ## The intro
 

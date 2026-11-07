@@ -1995,6 +1995,7 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
         // The links at once; what each is (YouTube takes a few seconds a video) as it comes.
         if (alive) setSources(lines.flatMap((line) => line.match(LINK) ?? []).map((url) => ({ url, title: "", durationMs: null, reuse: /^REUSE\b/i.test(lines.find((one) => one.includes(url)) ?? ""), problem: null })));
         const checked = await writer.checkVideos(lines);
+        if (alive) setError(null);
         if (alive) setSources(checked.map((one) => ({ url: one.url, title: one.title, durationMs: one.durationMs, reuse: one.reuse, ...(one.earlier ? { earlier: one.earlier } : {}), problem: one.problem })));
       } catch (cause) {
         if (alive) setError((cause as Error).message);

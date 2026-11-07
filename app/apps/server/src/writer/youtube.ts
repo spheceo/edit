@@ -25,6 +25,9 @@ export function checkUrl(raw: string): void {
   if (!ok) throw new Error("That is not a YouTube video link.");
 }
 
+/** Plain-http YouTube links made https, as YouTube itself serves them (Nov 7: "http://youtube.com/watch?v=…" pasted into New project was refused). */
+export const secure = (text: string): string => text.replace(/\bhttp:\/\/((?:www\.|m\.)?youtube\.com|youtu\.be)(?=[/?#\s]|$)/gi, "https://$1");
+
 export const isYoutube = (url: string): boolean => {
   try {
     checkUrl(url);

@@ -201,8 +201,9 @@ export async function fromFile(app: App, data: string, source: string, link: str
 
 /** A title given is kept in place of the video's own, which is looked up otherwise. */
 export async function fromYoutube(app: App, data: string, url: string, link: string | null, title: string | null, kind: Kind | null, then: Script["firstBuild"] | null = null, answer: Answer = "finished"): Promise<Script> {
+  url = youtube.secure(url.trim());
   youtube.checkUrl(url);
-  return start(app, data, newScript(givenTitle(title) ?? "YouTube video", "youtube", url.trim(), ""), await article(link), kind, then, answer);
+  return start(app, data, newScript(givenTitle(title) ?? "YouTube video", "youtube", url, ""), await article(link), kind, then, answer);
 }
 
 /** A Drive file, or a folder of recordings joined in name order, as Repack takes them; a title given is kept in place of the folder's name. */
@@ -229,7 +230,7 @@ export function linesFor(given: string[], oneCase: boolean): [string[], Reuse[]]
 function linesIn(given: string[]): [string[], Reuse[]] {
   const urls: string[] = [];
   const reuses: Reuse[] = [];
-  const text = given.join("\n");
+  const text = youtube.secure(given.join("\n"));
   // Never silently drop a malformed source among otherwise valid cases.
   for (const url of trello.urls(text).map(trello.unwrapRedirect)) {
     if (!trello.isDoc(url) && !drive.isDrive(url) && !youtube.isYoutube(url) && trello.cardId(url) === null) throw new Error(`Unsupported compilation source: ${url}`);

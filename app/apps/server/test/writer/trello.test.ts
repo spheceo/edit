@@ -121,3 +121,9 @@ test("New project checks a single video as it checks a compilation's (no two-cas
   }
   expect(() => compilationLines(["https://www.youtube.com/watch?v=OVITtAlFG6M"])).toThrow("at least two cases");
 });
+
+test("a plain-http YouTube link is taken as https, not refused", () => {
+  const [urls] = compilationLines(["http://youtube.com/watch?v=AR3tXqqmlus", "http://youtu.be/0v6XGfUgN1U"]);
+  expect(urls).toEqual(["https://youtube.com/watch?v=AR3tXqqmlus", "https://youtu.be/0v6XGfUgN1U"]);
+  expect(() => compilationLines(["http://youtube.com.evil.example/watch?v=AR3tXqqmlus", "https://youtu.be/0v6XGfUgN1U"])).toThrow("Unsupported");
+});

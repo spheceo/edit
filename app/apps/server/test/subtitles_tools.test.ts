@@ -92,7 +92,7 @@ test("repack_subtitles subtitles the footage in its speakers' colours, mutes and
         { voice: "m/speaker_0", name: "Officer", role: "officer", color: "#00e5c7", lines: 1, shown: true },
         { voice: "m/speaker_1", name: "Jane (Mother)", role: "witness", color: "#e57e00", lines: 1, shown: true },
       ],
-      mutes: [{ term: "fucking", time: 1.35, starred: true, clip: "a" }],
+      mutes: [{ term: "fucking", time: 1.35, clip: "a" }],
     });
     // Keys sorted.
     expect(text.indexOf('"mutes"')).toBeLessThan(text.indexOf('"rev"'));
@@ -170,7 +170,7 @@ test("mute_house_words mutes the sound and stars the subtitles already there, mo
     const { text, isError } = await call(app, "mute_house_words", { project_id: id, end: 10 });
     expect(isError).toBe(false);
     expect(text).toBe(
-      'muted 0.00–10.00s: {"mutes":[{"clip":"a","starred":true,"term":"fucking","time":1.35}],"rev":4,"subtitles_starred":1,"texts_starred":0}',
+      'muted 0.00–10.00s: {"mutes":[{"clip":"a","term":"fucking","time":1.35}],"rev":4,"subtitles_starred":1,"texts_starred":0}',
     );
     const project = store.get(id)!.project;
     const subtitle = project.clips.find((clip) => clip.id === "s") as TextClip;

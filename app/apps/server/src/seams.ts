@@ -510,10 +510,9 @@ export interface Line {
   doubtful?: boolean;
 }
 
-/** A house word to mute (and maybe star). */
+/** A house word to mute and star. */
 export interface Suggestion {
   term: string;
-  starred: boolean;
   display: string | null;
   word: number;
   at_ms: number;

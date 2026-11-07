@@ -7,7 +7,8 @@
 // (the engine's chunks.rs), a watch from its cached windows, smoothing per
 // shot, a Drive upload sends the finished file again, an import's cloud
 // upload sends its files again, a moving map shot carries on from its
-// frames. A job that was resumed
+// frames, a review's full-quality file carries on from its parts already up.
+// A job that was resumed
 // twice and still didn't end (it may be what brings the server down) isn't
 // started a third time, unless it got further each time (`progressed`).
 
@@ -19,7 +20,7 @@ import { inArea, runPromise } from "./effect/runtime.ts";
 import { nowMs, readState, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 
-export type Kind = "export" | "archive" | "drive" | "smooth" | "watch" | "upload" | "map" | "case";
+export type Kind = "export" | "archive" | "drive" | "smooth" | "watch" | "upload" | "map" | "case" | "full";
 
 export interface Job {
   /** One job per key: kind, project and what in it (a clip). */

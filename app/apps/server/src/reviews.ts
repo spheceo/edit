@@ -27,6 +27,7 @@ import * as cloudProjects from "./cloud_projects.ts";
 import * as accounts from "./accounts.ts";
 import * as diag from "./diag.ts";
 import * as editNotes from "./edit_notes.ts";
+import * as jobs from "./jobs.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
 import * as machine from "./machine.ts";
 import * as reviewGuard from "./review_guard.ts";
@@ -312,12 +313,21 @@ export const fullUpload = { waitMs: (attempt: number): number => Math.min(attemp
  * copy, an hour or more, and failed whenever a part's connection closed).
  * Held as an export being read until it's there (the archive waits), tried
  * again a minute or more apart; until then the Download button has nothing.
+ * Noted in jobs.json while it goes, so a restart carries on with it (Nov 7,
+ * Predator Teacher: Edit restarted on JJ's Mac with 0.7 of v3's 4.9 GB up, and
+ * nothing sent the rest, so the Download button found no file).
  */
-function fullBehind(name: string, path: string, key: string): void {
-  void withExport(path, async () => {
+export function fullBehind(home: string, projectId: string, name: string, path: string, key: string): Promise<void> {
+  const job = jobs.begin(home, "full", projectId, { name, path, key }, key);
+  let moved = false;
+  return withExport(path, async () => {
     for (let attempt = 1; ; attempt++) {
       try {
-        await cloud.uploadFile(path, key, () => {});
+        await cloud.uploadFile(path, key, () => {
+          // Parts going up this run: the restarts before don't count against it.
+          if (!moved) jobs.progressed(home, job);
+          moved = true;
+        });
         diag.info("review", `${name}: the full-quality file is up for the review's Download button`);
         return;
       } catch (error) {
@@ -329,7 +339,7 @@ function fullBehind(name: string, path: string, key: string): void {
         await new Promise((resolve) => setTimeout(resolve, fullUpload.waitMs(attempt)));
       }
     }
-  });
+  }).finally(() => jobs.end(home, job));
 }
 
 export async function share(app: App, projectId: string, path: string | null, replace = false, compress = false): Promise<{ url: string; version: number }> {
@@ -427,7 +437,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         });
         fs.rmSync(copy, { force: true });
         diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
-        fullBehind(live.project.name, chosen.path, fullKey);
+        void fullBehind(home, projectId, live.project.name, chosen.path, fullKey);
         return { url: shared.url, version: latest.n };
       }
       haltShare(projectId);
@@ -445,7 +455,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         });
         fs.rmSync(copy, { force: true });
         diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
-        fullBehind(live.project.name, chosen.path, fullKey);
+        void fullBehind(home, projectId, live.project.name, chosen.path, fullKey);
         return { url: answer.url, version: 1 };
       }
       haltShare(projectId);
@@ -469,7 +479,7 @@ export async function share(app: App, projectId: string, path: string | null, re
       });
       fs.rmSync(copy, { force: true });
       diag.info("review", `${live.project.name}: shared v${answer.version} at ${answer.url}`);
-      fullBehind(live.project.name, chosen.path, fullKey);
+      void fullBehind(home, projectId, live.project.name, chosen.path, fullKey);
       return { url: answer.url, version: answer.version };
     });
   } finally {

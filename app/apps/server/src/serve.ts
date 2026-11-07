@@ -410,6 +410,12 @@ function resumeJobs(app: App): void {
     upload: (job) => {
       seams.cloudMedia.resumeUpload(app.store.home, job.args);
     },
+    full: (job) => {
+      // A review version's full-quality file for its Download button: the rest of its parts.
+      const { name, path, key } = job.args as { name: string; path: string; key: string };
+      if (!fs.existsSync(path)) throw new Error(`${path} is gone`);
+      void reviews.fullBehind(app.store.home, job.project, name, path, key);
+    },
     map: (job) => {
       const { first } = job.args as { first: string };
       if (!seams.broll.resumeMap?.(app, job.project, first)) throw new Error("its stand-in or job file is gone");

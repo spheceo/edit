@@ -92,7 +92,8 @@ test("the model menu's pick: Opus at medium until picked, kept in the home, anyt
     expect((await ask("GET", "/api/models")).text).toBe('{"effort":"medium","revision":"claude-opus-5-5"}');
     expect((await ask("PUT", "/api/models", { revision: "claude-sonnet-5-5" })).json()).toEqual({ effort: "medium", revision: "claude-sonnet-5-5" });
     expect((await ask("PUT", "/api/models", { effort: "max" })).json()).toEqual({ effort: "max", revision: "claude-sonnet-5-5" });
-    expect(JSON.parse(fs.readFileSync(`${home}/models.json`, "utf8"))).toEqual({ revision: "claude-sonnet-5-5", effort: "max" });
+    expect((await ask("PUT", "/api/models", { effort: "xhigh" })).json()).toEqual({ effort: "xhigh", revision: "claude-sonnet-5-5" });
+    expect(JSON.parse(fs.readFileSync(`${home}/models.json`, "utf8"))).toEqual({ revision: "claude-sonnet-5-5", effort: "xhigh" });
     expect((await ask("PUT", "/api/models", { revision: "gpt-6", effort: "ultra" })).json()).toEqual({ effort: "medium", revision: "claude-opus-5-5" });
     expect((await ask("PUT", "/api/models", ["x"])).status).toBe(400);
   } finally {

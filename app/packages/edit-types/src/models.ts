@@ -22,7 +22,7 @@ export const BUILD_MODEL = OPUS;
 export const REVISION_MODELS: readonly ClaudeModel[] = [OPUS, SONNET];
 
 /** The thinking levels the menu offers, in order. */
-export const EFFORTS = ["low", "medium", "high", "max"] as const;
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 /** Edit's own level: its work is mostly the house style applied again and again, which medium does as well as high in far less time. */
 export const DEFAULT_EFFORT: Effort = "medium";
@@ -50,8 +50,8 @@ export const revisionModel = (choice: ModelChoice): ClaudeModel => REVISION_MODE
 /** A model id's name as the chat shows it ("Sonnet 5.5"); Claude Code's own `opus` is Opus's. */
 export const nameOf = (id: string): string => REVISION_MODELS.find((model) => model.id === id)?.name ?? (/sonnet/u.test(id) ? SONNET.name : OPUS.name);
 
-/** A thinking level as the menu shows it ("Medium"). */
-export const effortName = (effort: Effort): string => effort[0]!.toUpperCase() + effort.slice(1);
+/** A thinking level as the menu shows it ("Medium", "Extra high"). */
+export const effortName = (effort: Effort): string => (effort === "xhigh" ? "Extra high" : effort[0]!.toUpperCase() + effort.slice(1));
 
 /** Opus to build it, the person's pick once it's built. */
 export const modelFor = (built: boolean, choice: ModelChoice): ClaudeModel => (built ? revisionModel(choice) : BUILD_MODEL);

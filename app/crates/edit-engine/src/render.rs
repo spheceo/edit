@@ -137,9 +137,9 @@ pub(crate) struct VideoReader {
 }
 
 impl VideoReader {
-    /// Small frames for Vision, using FFmpeg's ranged input for cloud media
-    /// and AVFoundation for local files, just as timeline rendering does.
-    #[cfg(target_os = "macos")]
+    /// Small frames for face and text finders (Vision on a Mac, YuNet
+    /// elsewhere), using FFmpeg's ranged input for cloud media and
+    /// AVFoundation for local files on a Mac, just as timeline rendering does.
     pub(crate) fn analysis(path: &Path, width: u32, height: u32) -> Self {
         Self::open(Source {
             key: DecodeKey {

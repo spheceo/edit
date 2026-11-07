@@ -15,6 +15,8 @@ pub mod chunks;
 pub mod desktop;
 pub mod excerpts;
 pub mod export;
+#[cfg(not(target_os = "macos"))]
+pub mod face_model;
 pub mod faces;
 pub mod log;
 pub mod loudness;

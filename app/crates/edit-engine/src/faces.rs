@@ -1,7 +1,9 @@
 //! Faces in footage: Apple's Vision face detector on small frames of the
 //! light preview, two a second of source, kept per file in its cache dir
 //! (`faces-v1.json`) so a second run, another project using the same
-//! footage, or a re-run reads them back. Off macOS nothing is found.
+//! footage, or a re-run reads them back. Off macOS YuNet finds them
+//! (`face_model`), kept in its own file (`faces-yunet-v1.json`), with a Mac's
+//! Vision faces read first where the cloud brought them (`cloud_media.ts`).
 //! Placing subtitles and captions around them is the server's.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -14,22 +16,25 @@ use serde::{Deserialize, Serialize};
 /// The faces found at each sample index ([x0, y0, x1, y1] shares of the frame).
 pub type Faces = BTreeMap<i64, Vec<[f32; 4]>>;
 /// One stretch's faces, index by index.
-#[cfg(target_os = "macos")]
 type Seen = Vec<(i64, Vec<[f32; 4]>)>;
 
 /// Frames looked at per second of source.
 pub const RATE: f64 = 2.0;
 /// The analysis's file in the media's cache dir; a new method is a new file.
-const FILE: &str = "faces-v1.json";
-/// How wide the frames looked at are.
 #[cfg(target_os = "macos")]
+const FILE: &str = "faces-v1.json";
+/// YuNet's (off macOS): its own file, never taken for Vision's.
+#[cfg(not(target_os = "macos"))]
+const FILE: &str = "faces-yunet-v1.json";
+/// Vision's file, read first off macOS when a Mac's analysis came down from the cloud.
+#[cfg(not(target_os = "macos"))]
+const VISION_FILE: &str = "faces-v1.json";
+/// How wide the frames looked at are.
 const WIDE: u32 = 640;
 /// Faces the detector is less sure of are ignored.
-#[cfg(target_os = "macos")]
 const SURE: f32 = 0.5;
 /// Faces smaller than this share of the picture's height are ignored (far
 /// in the background, or not faces at all).
-#[cfg(target_os = "macos")]
 const SMALLEST: f32 = 0.03;
 /// Faces at each sample (index = source seconds × RATE): x0, y0, x1, y1 as
 /// shares of the picture from its top left.
@@ -66,6 +71,8 @@ pub fn detect(
         .and_then(|file| std::fs::read(file).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
+    #[cfg(not(target_os = "macos"))]
+    found.samples.extend(vision(source));
     let missing: Vec<i64> = indexes
         .iter()
         .copied()
@@ -90,9 +97,8 @@ pub fn detect(
 }
 
 /// Finds the faces at `indexes` (sorted): the light preview decoded small
-/// by AVFoundation, in up to three stretches side by side, each frame given
-/// to Vision.
-#[cfg(target_os = "macos")]
+/// (by AVFoundation on a Mac, FFmpeg elsewhere), in up to three stretches
+/// side by side, each frame given to Vision on a Mac, YuNet elsewhere.
 fn look(
     source: &Path,
     (width, height): (u32, u32),
@@ -113,7 +119,11 @@ fn look(
         for &index in part {
             let time = index as f64 / RATE;
             let bgra = reader.frame_at(time)?;
-            let faces = crate::mac_media::faces(bgra, wide, high)?
+            #[cfg(target_os = "macos")]
+            let seen = crate::mac_media::faces(bgra, wide, high)?;
+            #[cfg(not(target_os = "macos"))]
+            let seen = crate::face_model::faces(bgra, wide, high)?;
+            let faces = seen
                 .into_iter()
                 .filter(|[_, y0, _, y1, sure]| *sure >= SURE && y1 - y0 >= SMALLEST)
                 .map(|[x0, y0, x1, y1, _]| {
@@ -144,19 +154,32 @@ fn look(
     Ok(out)
 }
 
-/// No face detector off macOS: subtitles stay bottom middle.
+/// A Mac's Vision faces for `source` where the cloud brought its file (off macOS).
 #[cfg(not(target_os = "macos"))]
-fn look(
-    _source: &Path,
-    _size: (u32, u32),
-    _indexes: &[i64],
-) -> Result<BTreeMap<i64, Vec<[f32; 4]>>, String> {
-    Ok(BTreeMap::new())
+fn vision(source: &Path) -> BTreeMap<i64, Vec<[f32; 4]>> {
+    crate::util::media_cache(source)
+        .and_then(|dir| std::fs::read(dir.join(VISION_FILE)).ok())
+        .and_then(|bytes| serde_json::from_slice::<Found>(&bytes).ok())
+        .map(|found| found.samples)
+        .unwrap_or_default()
 }
 
 /// The faces found in `source` so far, without looking at anything new (the audit).
 pub fn cached(source: &Path) -> Option<BTreeMap<i64, Vec<[f32; 4]>>> {
     let file = crate::util::media_cache(source)?.join(FILE);
+    #[cfg(target_os = "macos")]
     let found: Found = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    #[cfg(not(target_os = "macos"))]
+    let found = {
+        let mut found: Found = std::fs::read(file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        found.samples.extend(vision(source));
+        if found.samples.is_empty() {
+            return None;
+        }
+        found
+    };
     Some(found.samples)
 }

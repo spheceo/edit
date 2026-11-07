@@ -2436,7 +2436,8 @@ export function stranded(project: Project): string[] {
  * again: its transcript, the faces and seats found in it, the watcher's
  * answers (`watch/<hash>.json`). Under `edit/analysis/<source path>/<file>`.
  */
-const ANALYSIS = ["transcript.json", "faces-v1.json", "seats-v2.json"];
+// faces-yunet-v1.json: Linux's faces (crates/edit-engine/src/face_model.rs), shared between Linux machines; a Mac reads its own Vision file.
+const ANALYSIS = ["transcript.json", "faces-v1.json", "faces-yunet-v1.json", "seats-v2.json"];
 /** What went up from (or came down to) a cache dir: file → size and mtime, so each version goes once. */
 const SHARED = "cloud-shared.json";
 /**

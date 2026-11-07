@@ -389,6 +389,8 @@ impl VideoReader {
                 return Ok(changed);
             }
         }
+        #[cfg(not(target_os = "macos"))]
+        let _ = if_changed; // only the Mac's reader can tell a picture didn't change
         self.read_ffmpeg(time)?;
         out.copy_from_slice(self.frame.get(..out.len()).ok_or("decoded size changed")?);
         Ok(true)

@@ -23,6 +23,7 @@ pub mod mac_media;
 pub mod media;
 pub mod mix;
 pub mod motion;
+#[cfg(target_os = "macos")]
 pub mod player;
 pub mod render;
 pub mod screen_text;

@@ -32,10 +32,10 @@ native profile="release":
     out="$(mktemp -d)"
     trap 'rm -rf "$out"' EXIT
     if [ "{{profile}}" = release ]; then
-        node_modules/.bin/napi build --release -o "$out" --dts index.d.ts
+        bun node_modules/.bin/napi build --release -o "$out" --dts index.d.ts
         codesign -s - -f "$out/edit-native.node"
     else
-        node_modules/.bin/napi build -o "$out" --dts index.d.ts
+        bun node_modules/.bin/napi build -o "$out" --dts index.d.ts
     fi
     if [ -f "$out/index.d.ts" ]; then cp "$out/index.d.ts" index.d.ts; fi
     cp "$out/edit-native.node" edit-native.node.next

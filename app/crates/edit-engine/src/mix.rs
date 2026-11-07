@@ -384,6 +384,8 @@ impl Source for OneSide {
 /// Opens the decoder for a part: native at speed 1 where AVFoundation reads
 /// the file, FFmpeg otherwise, with only one side heard when the clip says so.
 struct Sources {
+    // Read by the Mac's AVFoundation path only.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     native: bool,
     /// Each file's sound, opened once (None: AVFoundation can't read it).
     #[cfg(target_os = "macos")]

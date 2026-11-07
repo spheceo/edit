@@ -16,8 +16,10 @@ pub const RATE: f64 = 1.0;
 /// The analysis's file in the media's cache dir; a new method is a new file.
 const FILE: &str = "text-v1.json";
 /// How wide the frames looked at are: a channel's subscribe button reads at this size.
+#[cfg(target_os = "macos")]
 const WIDE: u32 = 960;
 /// Text the recogniser is less sure of is ignored.
+#[cfg(target_os = "macos")]
 const SURE: f32 = 0.3;
 
 /// One piece of text seen: its box (x0, y0, x1, y1 as shares of the picture

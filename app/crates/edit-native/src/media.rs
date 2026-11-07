@@ -296,7 +296,12 @@ pub async fn smooth_slow_motion(
             Path::new(&out),
         );
         #[cfg(not(target_os = "macos"))]
-        Err("smoothing on VideoToolbox needs a Mac".to_owned())
+        {
+            let _ = (
+                source, start, length, speed, fps, max_width, max_height, bitrate, out,
+            );
+            Err("smoothing on VideoToolbox needs a Mac".to_owned())
+        }
     })
     .await
 }

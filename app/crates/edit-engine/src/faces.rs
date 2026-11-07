@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 /// The faces found at each sample index ([x0, y0, x1, y1] shares of the frame).
 pub type Faces = BTreeMap<i64, Vec<[f32; 4]>>;
 /// One stretch's faces, index by index.
+#[cfg(target_os = "macos")]
 type Seen = Vec<(i64, Vec<[f32; 4]>)>;
 
 /// Frames looked at per second of source.
@@ -21,11 +22,14 @@ pub const RATE: f64 = 2.0;
 /// The analysis's file in the media's cache dir; a new method is a new file.
 const FILE: &str = "faces-v1.json";
 /// How wide the frames looked at are.
+#[cfg(target_os = "macos")]
 const WIDE: u32 = 640;
 /// Faces the detector is less sure of are ignored.
+#[cfg(target_os = "macos")]
 const SURE: f32 = 0.5;
 /// Faces smaller than this share of the picture's height are ignored (far
 /// in the background, or not faces at all).
+#[cfg(target_os = "macos")]
 const SMALLEST: f32 = 0.03;
 /// Faces at each sample (index = source seconds × RATE): x0, y0, x1, y1 as
 /// shares of the picture from its top left.

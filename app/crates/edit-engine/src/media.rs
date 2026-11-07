@@ -522,15 +522,7 @@ pub fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<()
             "2",
         ])
         .args(preview_encoder("26", None, "1500k", "3000k"))
-        .args([
-            "-g",
-            &gop,
-            "-bf",
-            "0",
-            "-an",
-            "-movflags",
-            "+faststart",
-        ])
+        .args(["-g", &gop, "-bf", "0", "-an", "-movflags", "+faststart"])
         .arg(&partial)
         .stdin(Stdio::null())
         .output()
@@ -554,7 +546,16 @@ fn preview_encoder(crf: &str, rate: Option<&str>, ceiling: &str, buffer: &str) -
     let mut args: Vec<String> = Vec::new();
     let mut push = |items: &[&str]| args.extend(items.iter().map(|item| (*item).to_owned()));
     if crate::export::encoders().nvenc {
-        push(&["-c:v", "h264_nvenc", "-preset", "p4", "-profile:v", "high", "-rc", "vbr"]);
+        push(&[
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p4",
+            "-profile:v",
+            "high",
+            "-rc",
+            "vbr",
+        ]);
         match rate {
             Some(rate) => push(&["-b:v", rate]),
             None => {
@@ -646,7 +647,11 @@ pub fn make_proxy(
             "-protocol_whitelist",
             "file,pipe",
         ])
-        .args(if video && !native { hardware_decode() } else { Vec::new() })
+        .args(if video && !native {
+            hardware_decode()
+        } else {
+            Vec::new()
+        })
         .arg("-i")
         .arg(source);
     if video && !native {

@@ -465,7 +465,12 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
             let hevc = format == Format::Hevc;
             if nvenc {
                 let rate = target.unwrap_or_else(|| quality_rate(if hevc { 0.6 } else { 1.0 }));
-                push(&nvenc_args(hevc, rate).iter().map(String::as_str).collect::<Vec<_>>());
+                push(
+                    &nvenc_args(hevc, rate)
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                );
             } else if hardware {
                 let rate = target.unwrap_or_else(|| quality_rate(if hevc { 0.6 } else { 1.0 }));
                 push(&[
@@ -655,7 +660,17 @@ pub fn nvenc_args(hevc: bool, rate: u64) -> Vec<String> {
         (rate * 2).to_string(),
     ]);
     args.extend(
-        ["-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32", "-bf", "3"].map(str::to_owned),
+        [
+            "-spatial-aq",
+            "1",
+            "-temporal-aq",
+            "1",
+            "-rc-lookahead",
+            "32",
+            "-bf",
+            "3",
+        ]
+        .map(str::to_owned),
     );
     if !hevc {
         args.extend(["-profile:v", "high"].map(str::to_owned));

@@ -869,13 +869,16 @@ impl FrameRenderer {
 /// video layer's clip and its frame, decoded at the size it's shown in a
 /// `shown` picture from `sources` (a media's preview file, else its own path),
 /// through `pool` so playing on decodes forward and a jump seeks.
+#[cfg(target_os = "macos")]
 pub(crate) struct PreviewPictures {
     pool: ReaderPool,
 }
 
 /// A clip's decoded picture: its clip, width, height and BGRA pixels.
+#[cfg(target_os = "macos")]
 pub(crate) type Picture = (String, u32, u32, Vec<u8>);
 
+#[cfg(target_os = "macos")]
 impl PreviewPictures {
     pub(crate) fn new() -> Self {
         // A few readers per file: two layers of one source, and the way back after a jump.
@@ -3160,7 +3163,7 @@ mod tests {
     /// JJ's Mom Secretly v2: the join had 105 frames too many, twice) tries
     /// again rendering those chunks, not copying them again, and stays a
     /// chunked export instead of going whole.
-        #[test]
+    #[test]
     fn a_second_try_renders_what_the_first_copied_from_the_last_export() {
         let dir = temp_dir("chunks-retry");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3211,7 +3214,7 @@ mod tests {
     /// Smooth playback's render (a background export) keeps its sound a
     /// minute at a time: the file's sound is the edit's length, and after a
     /// change to the edit's last seconds only the last minute is made again.
-        #[test]
+    #[test]
     fn smooth_playback_keeps_its_sound_a_minute_at_a_time() {
         let dir = temp_dir("kept-sound");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3284,7 +3287,7 @@ mod tests {
     /// A focused export (smooth playback: the playhead's chunks first, then
     /// on, then those before) makes the same file as one in order: every
     /// frame where it belongs, made of chunks, not exported whole.
-        #[test]
+    #[test]
     fn a_focused_export_renders_from_the_playhead_and_joins_in_order() {
         let dir = temp_dir("focused");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3334,7 +3337,7 @@ mod tests {
     /// and gives the same file a whole export would: every frame, the sound
     /// the length of the picture; a trim near the start leaves later chunks
     /// as they were when the trim ends on a chunk boundary.
-        #[test]
+    #[test]
     fn a_re_export_redoes_only_the_chunks_that_changed() {
         let dir = temp_dir("chunks");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3483,7 +3486,7 @@ mod tests {
 
     /// An NTSC project (24 × 1000/1001) exports at exactly 24000/1001, its
     /// frames and sound the timeline's length at that rate.
-        #[test]
+    #[test]
     fn an_ntsc_project_exports_at_its_exact_rate() {
         let dir = temp_dir("ntsc");
         let red = source(&dir, "red.mp4", "red", 0.5);

@@ -102,14 +102,24 @@ impl Writer {
                 "-color_range",
                 "tv",
             ])
-            .args(if options.hevc { &["-tag:v", "hvc1"][..] } else { &[] })
-            .args(if options.faststart { &["-movflags", "+faststart"][..] } else { &[] })
+            .args(if options.hevc {
+                &["-tag:v", "hvc1"][..]
+            } else {
+                &[]
+            })
+            .args(if options.faststart {
+                &["-movflags", "+faststart"][..]
+            } else {
+                &[]
+            })
             .args(["-threads", "2", "-f", "mp4"])
             .arg(path)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|error| format!("ffmpeg: {error}"))?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("ffmpeg: {error}"))?;
         let stdin = child.stdin.take().ok_or("ffmpeg stdin")?;
         let stderr = child.stderr.take().map(|mut stderr| {
             std::thread::spawn(move || {
@@ -147,7 +157,9 @@ impl Writer {
         let mut sent = Ok(());
         for line in pixels.chunks(stride).take(self.height as usize) {
             sent = match line.get(..row) {
-                Some(line) => stdin.write_all(line).map_err(|_| "the encoder stopped early"),
+                Some(line) => stdin
+                    .write_all(line)
+                    .map_err(|_| "the encoder stopped early"),
                 None => Err("GPU readback came back short"),
             };
             if sent.is_err() {
@@ -187,7 +199,12 @@ impl Writer {
             .stderr
             .take()
             .and_then(|thread| thread.join().ok())
-            .and_then(|text| text.lines().rev().find(|line| !line.trim().is_empty()).map(str::to_owned));
+            .and_then(|text| {
+                text.lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .map(str::to_owned)
+            });
         match said {
             Some(line) => format!("{what}: {line}"),
             None => what.to_owned(),

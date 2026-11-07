@@ -147,11 +147,16 @@ pub fn protocols(path: &Path) -> &'static str {
 
 /// FFmpeg's input options for reading `path` over HTTPS: the system's
 /// certificates (the shipped static FFmpeg's OpenSSL doesn't know where macOS
-/// keeps them, so without them every HTTPS read fails verification), and
-/// picking a long read from R2 back up when the connection drops.
+/// keeps them, so without them every HTTPS read fails verification; Linux's
+/// are where Debian and Fedora keep them), and picking a long read from R2
+/// back up when the connection drops.
 pub fn url_args(path: &Path) -> &'static [&'static str] {
-    const SYSTEM: &str = "/etc/ssl/cert.pem";
-    static FOUND: OnceLock<bool> = OnceLock::new();
+    /// macOS's, then Debian's and Ubuntu's, then Fedora's.
+    const SYSTEMS: [&str; 3] = [
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+    ];
     // A read that gets nothing for 30 s fails (and reconnects) rather than
     // waiting forever on a connection that went quiet.
     const RECONNECT: [&str; 8] = [
@@ -164,25 +169,21 @@ pub fn url_args(path: &Path) -> &'static [&'static str] {
         "-rw_timeout",
         "30000000",
     ];
+    static SECURE: OnceLock<Vec<&'static str>> = OnceLock::new();
     if !is_url(path) {
         &[]
     } else if path
         .to_str()
         .is_some_and(|text| text.starts_with("https://"))
-        && *FOUND.get_or_init(|| Path::new(SYSTEM).is_file())
     {
-        &[
-            "-ca_file",
-            SYSTEM,
-            RECONNECT[0],
-            RECONNECT[1],
-            RECONNECT[2],
-            RECONNECT[3],
-            RECONNECT[4],
-            RECONNECT[5],
-            RECONNECT[6],
-            RECONNECT[7],
-        ]
+        SECURE.get_or_init(|| {
+            let mut args = Vec::new();
+            if let Some(file) = SYSTEMS.iter().find(|file| Path::new(file).is_file()) {
+                args.extend(["-ca_file", *file]);
+            }
+            args.extend(RECONNECT);
+            args
+        })
     } else {
         &RECONNECT
     }

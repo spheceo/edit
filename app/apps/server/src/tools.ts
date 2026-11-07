@@ -163,7 +163,8 @@ export function protocols(path: string): string {
   return isUrl(path) ? "file,pipe,http,https,tcp,tls,crypto" : "file,pipe";
 }
 
-const SYSTEM_CERTIFICATES = "/etc/ssl/cert.pem";
+/** macOS's certificates, then Debian's and Ubuntu's, then Fedora's. */
+const SYSTEM_CERTIFICATES = ["/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"];
 // A read that gets nothing for 30 s fails (and reconnects) rather than waiting forever.
 const RECONNECT = [
   "-reconnect",
@@ -175,19 +176,20 @@ const RECONNECT = [
   "-rw_timeout",
   "30000000",
 ];
-let certificates: boolean | null = null;
+let certificates: string | null | undefined;
 
 /**
  * FFmpeg's input options for reading `path` over HTTPS: the system's
  * certificates (the shipped static FFmpeg's OpenSSL doesn't know where macOS
- * keeps them, so without them every HTTPS read fails verification), and
+ * keeps them, so without them every HTTPS read fails verification; Linux's
+ * are where Debian and Fedora keep them), and
  * picking a long read from R2 back up when the connection drops.
  */
 export function urlArgs(path: string): string[] {
   if (!isUrl(path)) return [];
-  certificates ??= isFile(SYSTEM_CERTIFICATES);
+  if (certificates === undefined) certificates = SYSTEM_CERTIFICATES.find((file) => isFile(file)) ?? null;
   // Plain HTTP (a local stand-in) has no TLS to give certificates to.
-  return certificates && path.startsWith("https:") ? ["-ca_file", SYSTEM_CERTIFICATES, ...RECONNECT] : [...RECONNECT];
+  return certificates !== null && path.startsWith("https:") ? ["-ca_file", certificates, ...RECONNECT] : [...RECONNECT];
 }
 
 /** The last non-empty line of FFmpeg's stderr: what it says went wrong. */

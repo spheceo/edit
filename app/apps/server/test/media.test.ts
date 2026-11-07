@@ -78,6 +78,7 @@ function settled(store: { subscribe: (fn: (event: Record<string, unknown>) => vo
   });
 }
 
+// Real thumbnails, waveform and previews: seconds on a 2-core runner with no GPU and a debug addon, more than the 5 s default.
 test.skipIf(ffmpeg === null)("footage gets thumbnails, a waveform, previews and (asked) a transcript", async () => {
   const { dir, app, store, cleanup } = fixtureHome("media-processor");
   try {
@@ -136,7 +137,7 @@ test.skipIf(ffmpeg === null)("footage gets thumbnails, a waveform, previews and 
   } finally {
     cleanup();
   }
-});
+}, 60_000);
 
 test("a failed step says why and the rest go on", async () => {
   const { dir, app, store, cleanup } = fixtureHome("media-failure");
@@ -152,7 +153,7 @@ test("a failed step says why and the rest go on", async () => {
   } finally {
     cleanup();
   }
-});
+}, 60_000);
 
 test.skipIf(ffmpeg === null)("a pieced proxy's thumbnails, waveform, censor check and loudness read its original, kept as the proxy's", async () => {
   // Reading the pieced proxy itself would make every piece of it (off Modal, step 6).

@@ -301,6 +301,36 @@ export async function restoreArchived(
   }
 }
 
+/** Hooks for tests: the wait between tries of a full-quality upload. */
+export const fullUpload = { waitMs: (attempt: number): number => Math.min(attempt, 5) * 60_000, tries: 20 };
+
+/**
+ * The export itself, for the review page's Download button, sent once the
+ * version is up rather than before it (Nov 7, Sphe's Mac: R2 took ~2 MB/s,
+ * and each share waited on a 5–7 GB full-quality file after its 0.7 GB review
+ * copy, an hour or more, and failed whenever a part's connection closed).
+ * Held as an export being read until it's there (the archive waits), tried
+ * again a minute or more apart; until then the Download button has nothing.
+ */
+function fullBehind(name: string, path: string, key: string): void {
+  void withExport(path, async () => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await cloud.uploadFile(path, key, () => {});
+        diag.info("review", `${name}: the full-quality file is up for the review's Download button`);
+        return;
+      } catch (error) {
+        if (attempt >= fullUpload.tries) {
+          diag.warn("review", `${name}: the full-quality file didn't go up after ${attempt} tries: ${diag.messageOf(error)}`);
+          return;
+        }
+        diag.warn("review", `${name}: the full-quality file (try ${attempt}): ${diag.messageOf(error)}; trying again`);
+        await new Promise((resolve) => setTimeout(resolve, fullUpload.waitMs(attempt)));
+      }
+    }
+  });
+}
+
 export async function share(app: App, projectId: string, path: string | null, replace = false, compress = false): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (the relay token)");
   const live = app.store.get(projectId);
@@ -386,10 +416,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         await cloud.uploadFile(copy, `${prefix}/video.mp4`, tick("uploading"), signal);
         haltShare(projectId);
         await cloud.uploadFile(poster, `${prefix}/poster.jpg`, () => haltShare(projectId), signal);
-        // The export itself, untouched, for the page's Download button (`fullKey`).
-        sharing.set(projectId, "uploading the full-quality file");
-        haltShare(projectId);
-        await cloud.uploadFile(pick.path, fullKey, tick("uploading the full-quality file"), signal);
+        // The export itself, for the page's Download button (`fullKey`), goes up after the version (fullBehind).
       }
       if (latest !== null && latest !== undefined) {
         const shared = read(home).shared[projectId]!;
@@ -399,6 +426,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         });
         fs.rmSync(copy, { force: true });
         diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
+        fullBehind(live.project.name, chosen.path, fullKey);
         return { url: shared.url, version: latest.n };
       }
       haltShare(projectId);
@@ -416,6 +444,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         });
         fs.rmSync(copy, { force: true });
         diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
+        fullBehind(live.project.name, chosen.path, fullKey);
         return { url: answer.url, version: 1 };
       }
       haltShare(projectId);
@@ -439,6 +468,7 @@ export async function share(app: App, projectId: string, path: string | null, re
       });
       fs.rmSync(copy, { force: true });
       diag.info("review", `${live.project.name}: shared v${answer.version} at ${answer.url}`);
+      fullBehind(live.project.name, chosen.path, fullKey);
       return { url: answer.url, version: answer.version };
     });
   } finally {

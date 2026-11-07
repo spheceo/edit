@@ -1518,7 +1518,7 @@ const FIXABLE = [
   "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range", "commentary_text_heavy",
   "commentary_flash", "commentary_short_card", "commentary_source_overuse", "commentary_graphics_monotony",
   "commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture", "commentary_leak_overuse",
-  "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "glimpse", "popups_together", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
+  "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "broll_recut", "glimpse", "popups_together", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "subtitle_late", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "script_order", "voiceover_in_footage", "footage_ahead", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",

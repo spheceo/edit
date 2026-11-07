@@ -5,7 +5,8 @@
 // Old comp's Ava and Lola tapes showed theirs under ours, two subtitles at
 // once) and
 // B-roll shots that run across a cut in their footage (`broll_crosses_cut`:
-// seats.ts's cuts). Files not read yet start reading and are listed as
+// seats.ts's cuts) and, in a courtroom video, one camera picture cut up into
+// short shots (`broll_recut`). Files not read yet start reading and are listed as
 // pending, as the censor check's are.
 
 import * as diag from "./diag.ts";
@@ -13,7 +14,7 @@ import { Semaphore } from "./media.ts";
 import type { Clip, Media, Project } from "./model.ts";
 import { native, isReal } from "./native/index.ts";
 import { clipEnd, fps as fpsOf, mediaOf, reusedMedia, trackOf } from "./project.ts";
-import { round } from "./rust.ts";
+import { compareStrings, round } from "./rust.ts";
 import * as seats from "./seats.ts";
 
 /** A channel's call to action: "SUBSCRIBE", "SUBSCRIBED", the bell, "like and subscribe". */
@@ -34,6 +35,16 @@ const SUBTITLE_CHANGING = 0.3;
 
 /** Seconds of a shot at either end where a cut doesn't count (a frame or two of the next picture is the cut itself). */
 const EDGE = 0.3;
+
+/**
+ * Seconds a courtroom B-roll shot runs before a cut to the same camera
+ * picture stops reading as re-cutting it (`broll_recut`). A hearing's cameras
+ * are fixed, so a bridge cut every second or two between punch-ins of one
+ * picture is the same footage zoomed in and out (JJ, Nov 7: "it all feel
+ * cheap… it's significantly better to just stay on the same piece of B-roll
+ * footage and then zoom in on it").
+ */
+const RECUT = 5;
 
 type VideoClip = Extract<Clip, { type: "video" }>;
 
@@ -251,5 +262,41 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
     }
   }
   out.push(...subtitled.values());
+  if (project.style === "courtroom") out.push(...recuts(project, clips));
   return { issues: out, pending: [...pending].sort() };
+}
+
+/**
+ * A courtroom's B-roll shots back to back in one camera picture of the same
+ * file (none of its cuts between them), one of them under RECUT seconds: the
+ * cut only changes the framing. A file whose cuts aren't read yet is pending
+ * (issues lists it) and skipped here.
+ */
+function recuts(project: Project, clips: [VideoClip, Media][]): unknown[] {
+  const fps = fpsOf(project);
+  const shots = clips.filter(([clip]) => /B-roll/u.test(clip.name ?? "")).sort(([a], [b]) => a.start - b.start || compareStrings(a.id, b.id));
+  const out: unknown[] = [];
+  for (let index = 1; index < shots.length; index++) {
+    const [before, media] = shots[index - 1]!;
+    const [after] = shots[index]!;
+    // Back to back: the next starts where this one ends (or inside its dissolve).
+    if (after.media !== before.media || after.start <= before.start || after.start > clipEnd(before) + 1) continue;
+    const shortest = Math.min(after.start - before.start, after.duration) / fps;
+    if (shortest >= RECUT) continue;
+    const cuts = seats.cachedCuts(media.path);
+    if (cuts === null) continue;
+    const [a0, a1] = played(project, before);
+    const [b0, b1] = played(project, after);
+    const [from, to] = [Math.min(a0, b0), Math.max(a1, b1)];
+    if (seats.lone(cuts).some((cut) => cut > from + EDGE && cut < to - EDGE)) continue;
+    out.push({
+      kind: "broll_recut",
+      clip: after.id,
+      start: after.start,
+      after: before.id,
+      seconds: round(shortest * 10) / 10,
+      fix: "one camera picture cut up: hold one shot across both (cover_cut_in with one shot there, its push doing the zoom), cutting only to a picture that's new (another camera, a tease, the Windows screen)",
+    });
+  }
+  return out;
 }

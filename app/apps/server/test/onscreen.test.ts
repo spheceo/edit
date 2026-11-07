@@ -76,6 +76,27 @@ test("a B-roll shot across a cut in its footage is flagged; one between cuts, or
   expect(issues(project([video("c3", 0, 210, 132, 0.5)])).issues).toEqual([]);
 });
 
+test("a courtroom's B-roll cut up inside one camera picture is flagged; a held shot, a new picture or another style isn't", () => {
+  addon({}, [200]);
+  const recut = (clips: Clip[], style = "courtroom") => {
+    const p = project(clips);
+    p.style = style as Project["style"];
+    return issues(p).issues.filter((one) => (one as { kind: string }).kind === "broll_recut");
+  };
+  // Two seconds on the judge, then the attorney a few seconds on, both before the feed's cut at 200 s.
+  const judge = video("c1", 0, 60, 120, 1, "Cut-in 2 · B-roll: the judge");
+  const attorney = video("c2", 60, 90, 125, 1, "Cut-in 2 · B-roll: the attorney");
+  expect(recut([judge, attorney])).toEqual([
+    { kind: "broll_recut", clip: "c2", start: 60, after: "c1", seconds: 2, fix: expect.any(String) },
+  ]);
+  // Held 6 s and 5 s: a change of person, not a re-cut.
+  expect(recut([video("c1", 0, 180, 120, 1, "Cut-in 2 · B-roll: a"), video("c2", 180, 150, 130, 1, "Cut-in 2 · B-roll: b")])).toEqual([]);
+  // The feed cuts between them (another camera): a new picture.
+  expect(recut([judge, video("c2", 60, 90, 210, 1, "Cut-in 2 · B-roll: the attorney")])).toEqual([]);
+  // A bodycam's B-roll moves: not a courtroom's rule.
+  expect(recut([judge, attorney], "bodycam")).toEqual([]);
+});
+
 test("footage not read yet is pending", () => {
   addon({}, null);
   expect(issues(project([video("c1", 0, 60, 10, 1, "Cut-in 1 · B-roll: shot 1")])).pending).toEqual(["hearing.mp4"]);

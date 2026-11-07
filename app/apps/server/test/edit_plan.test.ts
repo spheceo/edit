@@ -294,6 +294,10 @@ test("long_broll_shots_and_music_that_outstays_its_song_are_flagged", () => {
     { op: "add", clip: { type: "audio", track: "new", media: "song", source_in: 0, start: 2000, duration: 900 } },
   ]);
   expect(kinds(p, "long_broll_shot").map((issue) => issue.seconds)).toEqual([5]);
+  // A courtroom holds its hearing's shots (JJ, Nov 7).
+  p.style = "courtroom";
+  expect(kinds(p, "long_broll_shot")).toEqual([]);
+  p.style = "bodycam";
   expect(kinds(p, "music_bed_long").map((issue) => issue.seconds)).toEqual([30]);
   expect(kinds(p, "music_repeated")[0]!.starts).toEqual([0, 1000, 2000]);
   expect(kinds(p, "music_stops_mid_narration").map((issue) => issue.narration_left)).toEqual([10]);

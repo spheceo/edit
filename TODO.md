@@ -2,16 +2,17 @@
 
 Ideas and next steps that aren't started yet. Newest at the top.
 
-## Local transcription (future)
+## Speaking to the agents: local speech-to-text (future)
 
-Transcribe on the machine's own GPU instead of ElevenLabs Scribe through the relay (`apps/server/src/transcribe.ts`): no per-minute cost, no upload, works offline. What it has to match before it can replace Scribe: word timings (subtitles, cuts), who's speaking (subtitle colours, `people.ts`), and the case's names spelled right (`names.ts` sends them as keyterms). Researched Nov 7, 2026:
+Talk to the in-app agents instead of typing a prompt: a mic button in the chat composers (the edit agent, Writer, Ideas, Thumbnails), the words transcribed on the machine itself, so nothing is uploaded, nothing is paid per minute, and the text lands in the box to send or fix first. Not footage: footage and subtitles stay on ElevenLabs Scribe (`transcribe.ts`). What it needs: text back within a moment of stopping (words as you speak, ideally), on every machine the team uses (Apple Silicon Macs first, Linux with or without an NVIDIA card), and the case's names spelled right where it can (the project's cast, `people.ts`). Researched Nov 7, 2026:
 
-- **Words and timings:** NVIDIA Parakeet TDT 0.6B v3 is the fast pick: word-level timestamps built in, 25 European languages, thousands of times real time on a GPU. For top English accuracy, Canary-Qwen-2.5B, IBM Granite Speech 4.1 or Cohere Transcribe (Apache 2.0) led the Hugging Face Open ASR Leaderboard during 2026; check the leaderboard again before choosing. Whisper large-v3 only for languages the others lack (it needs a separate alignment step for word timings).
-- **Names:** NeMo's GPU phrase boosting (GPU-PB / TurboBias) takes a per-request list of phrases for Parakeet and Canary, the local equivalent of Scribe's keyterms. Names must be passed capitalised as they should appear.
-- **Speakers:** pyannote's Community-1 (MIT code, CC-BY-4.0 weights, needs a Hugging Face token to download) has no speaker limit; NVIDIA's Sortformer is end-to-end but best at four speakers or fewer, which bodycam and interrogations often exceed.
-- **Before switching:** run both on the team's real footage (bodycam wind and sirens, overlapping interrogations) and compare names, speakers and timing against Scribe; keep Scribe as the fallback for a machine without an NVIDIA card (every Mac).
+- **NVIDIA Parakeet TDT 0.6B v3** (Apache 2.0) is the accurate one: on a Mac through FluidAudio (Core ML on the Neural Engine; a short phrase back in ~0.2 s on an M4) or parakeet-mlx (~0.5 s), on Linux through ONNX on the NVIDIA card. About 1.2 GB, so downloaded the first time someone dictates. Its 120M streaming sibling, Parakeet EOU, gives words as you speak and knows when you've stopped.
+- **Moonshine** (MIT for English, small) was built for streaming: words appear as you talk and are seldom revised. Small enough to run on any CPU, so the one model that could serve every machine the same way (through tract, as faces and on-screen text do on Linux).
+- **Whisper large-v3-turbo** (MIT, through whisper.cpp or WhisperKit) only if the team dictates in languages Parakeet lacks; it's slower for the same English.
+- **Names:** every engine stumbles on names and jargon (bodycam terms, the cast). NeMo's phrase boosting does it for Parakeet on NVIDIA; elsewhere, the agent can be told the cast and fix a misheard name, as it would a typo.
+- **Try first:** Moonshine everywhere for its simplicity, against Parakeet on a Mac, with the team's own dictated prompts; keep whichever gets names and speed right.
 
-Sources: [Open ASR models compared](https://www.marktechpost.com/2026/07/23/best-open-speech-recognition-asr-models-in-2026-wer-languages-latency-and-license-compared/), [Gladia's 2026 list](https://www.gladia.io/blog/best-open-source-speech-to-text-models), [NeMo word boosting](https://docs.nvidia.com/nemo/speech/nightly/asr/asr_customization/word_boosting.html), [pyannote](https://github.com/pyannote/pyannote-audio), [diarization in 2026](https://www.pyannote.ai/blog/top-7-speaker-diarization-apis-and-models-in-2026).
+Sources: [local STT models compared](https://www.onresonant.com/resources/local-stt-models-2026), [Mac engines on 13,000 recordings](https://dicta.to/blog/speech-to-text-engine-comparison-mac-2026/), [Parakeet on the Neural Engine](https://macparakeet-website.pages.dev/blog/whisper-to-parakeet-neural-engine), [speech-swift (Parakeet EOU streaming)](https://github.com/soniqo/speech-swift), [Whisper large-v3 vs turbo](https://vexascribe.com/whisper-large-v3-vs-turbo), [NeMo word boosting](https://docs.nvidia.com/nemo/speech/nightly/asr/asr_customization/word_boosting.html).
 
 ## Linux: the thumbnail subject cut-out
 

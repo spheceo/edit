@@ -499,9 +499,10 @@ pub fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<()
             "-threads",
             "2",
             "-filter_threads",
-            "1",
-            "-i",
+            filter_threads(),
         ])
+        .args(hardware_decode())
+        .arg("-i")
         .arg(input)
         .args([
             "-map",
@@ -519,16 +520,9 @@ pub fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<()
             "tv",
             "-threads",
             "2",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "26",
-            "-maxrate",
-            "1500k",
-            "-bufsize",
-            "3000k",
+        ])
+        .args(preview_encoder("26", None, "1500k", "3000k"))
+        .args([
             "-g",
             &gop,
             "-bf",
@@ -549,6 +543,54 @@ pub fn make_light(source: &Path, paths: &CachePaths, probe: &Probe) -> Result<()
         ));
     }
     std::fs::rename(&partial, &paths.light).map_err(|error| error.to_string())
+}
+
+/// A preview's or proxy's encoder off the Mac's native paths: NVENC where an
+/// NVIDIA card answers (imports several times faster than libx264 on the CPU,
+/// Nov 7), else libx264 at `veryfast`; at `crf` (NVENC's constant quality a
+/// step higher, for the same look), or at `rate` when one is given, never past
+/// `ceiling`. The caller sets the GOP and no B-frames.
+fn preview_encoder(crf: &str, rate: Option<&str>, ceiling: &str, buffer: &str) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    let mut push = |items: &[&str]| args.extend(items.iter().map(|item| (*item).to_owned()));
+    if crate::export::encoders().nvenc {
+        push(&["-c:v", "h264_nvenc", "-preset", "p4", "-profile:v", "high", "-rc", "vbr"]);
+        match rate {
+            Some(rate) => push(&["-b:v", rate]),
+            None => {
+                let cq = (crf.parse::<u32>().unwrap_or(23) + 1).to_string();
+                push(&["-cq", &cq, "-b:v", "0"]);
+            }
+        }
+    } else {
+        push(&["-c:v", "libx264", "-preset", "veryfast"]);
+        match rate {
+            Some(rate) => push(&["-b:v", rate]),
+            None => push(&["-crf", crf]),
+        }
+    }
+    push(&["-maxrate", ceiling, "-bufsize", buffer]);
+    args
+}
+
+/// FFmpeg's filter threads for a preview's resize: four beside NVENC, where the
+/// resize is what's left on the CPU (a 4K proxy: 8.2 s on one, 3.3 s on four,
+/// Nov 7), one beside libx264, which four only slowed (17.6 s against 11.3).
+fn filter_threads() -> &'static str {
+    if !cfg!(target_os = "macos") && crate::export::encoders().nvenc {
+        "4"
+    } else {
+        "1"
+    }
+}
+
+/// Decoding on an NVIDIA card (frames handed back for FFmpeg's scale), where its encoder answers; none on a Mac (its own paths decode there) or without one.
+fn hardware_decode() -> Vec<String> {
+    if !cfg!(target_os = "macos") && crate::export::encoders().nvenc {
+        vec!["-hwaccel".to_owned(), "cuda".to_owned()]
+    } else {
+        Vec::new()
+    }
 }
 
 pub fn make_proxy(
@@ -597,14 +639,15 @@ pub fn make_proxy(
             "-threads",
             "2",
             "-filter_threads",
-            "1",
+            filter_threads(),
             "-y",
             "-progress",
             "pipe:1",
             "-protocol_whitelist",
             "file,pipe",
-            "-i",
         ])
+        .args(if video && !native { hardware_decode() } else { Vec::new() })
+        .arg("-i")
         .arg(source);
     if video && !native {
         // Half-second GOPs: seeking decodes at most ~15 frames, and playback
@@ -629,18 +672,11 @@ pub fn make_proxy(
                 "tv",
                 "-threads",
                 "2",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "20",
-                // Never past the other paths' 8 Mbit/s: grainy bodycam at
-                // CRF 20 alone came out at ~29 (a 6.6 GB preview).
-                "-maxrate",
-                "8M",
-                "-bufsize",
-                "16M",
+            ])
+            // Never past the other paths' 8 Mbit/s: grainy bodycam at
+            // CRF 20 alone came out at ~29 (a 6.6 GB preview).
+            .args(preview_encoder("20", None, "8M", "16M"))
+            .args([
                 "-g",
                 &gop,
                 // No reordering: each frame comes out of the decoder as soon as it goes in.
@@ -808,7 +844,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
         "-threads",
         "2",
         "-filter_threads",
-        "1",
+        filter_threads(),
     ]);
     let protocols = crate::util::protocols(source);
     if native {
@@ -829,6 +865,7 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
         command
             .args(["-protocol_whitelist", protocols])
             .args(crate::util::url_args(source))
+            .args(hardware_decode())
             .arg("-i")
             .arg(source)
             .args([
@@ -848,21 +885,9 @@ pub fn make_cloud_proxy(source: &Path, probe: &Probe, out: &Path) -> Result<(), 
                 "bt709",
                 "-color_range",
                 "tv",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-b:v",
-                &rate,
-                "-maxrate",
-                &ceiling,
-                "-bufsize",
-                &buffer,
-                "-g",
-                &gop,
-                "-bf",
-                "0",
-            ]);
+            ])
+            .args(preview_encoder("", Some(&rate), &ceiling, &buffer))
+            .args(["-g", &gop, "-bf", "0"]);
     }
     command
         .args([

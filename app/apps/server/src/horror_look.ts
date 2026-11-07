@@ -20,7 +20,7 @@ import { clipFrom } from "./clips.ts";
 import { iconFile } from "./horror_graphics.ts";
 import { rgbaPng } from "./evidence_highlight.ts";
 import { houseMedia } from "./import.ts";
-import type { Media, Project, VideoClip } from "./model.ts";
+import type { AudioClip, Media, Project, VideoClip } from "./model.ts";
 import { join } from "./paths.ts";
 import { freshId } from "./project.ts";
 import type * as seams from "./seams.ts";
@@ -276,5 +276,23 @@ export function textOnTop(project: Project): void {
     };
     lift(text);
     for (const blur of project.clips.filter((c) => c.type === "adjustment" && c.parent === text.id)) lift(blur);
+  }
+}
+
+/**
+ * A post's own sound eases in and out where it's cut (6 frames out, 4 in), unless the same footage's sound carries
+ * straight on in the next clip: the team, on v2 at 5:03–5:10, "the audio cut isn't completely clean here at the end"
+ * (Nov 6): the reel's sound stopped dead at about -15 dB, then the narration. Only edges left at no fade.
+ */
+export function soundEdges(project: Project): void {
+  if (project.style !== "horror") return;
+  const fps = project.settings.fps;
+  const sounds = project.clips.filter((c): c is AudioClip => c.type === "audio" && project.media.find((m) => m.id === c.media)?.kind === "video");
+  const sourceAt = (c: AudioClip, frame: number) => c.source_in + (frame / fps) * c.speed;
+  const joined = (a: AudioClip, b: AudioClip) =>
+    a.media === b.media && Math.abs(b.start - (a.start + a.duration)) <= 1 && Math.abs(b.source_in - sourceAt(a, a.duration)) < 0.1;
+  for (const c of sounds) {
+    if ((c.fade_out ?? 0) === 0 && !sounds.some((next) => next !== c && joined(c, next))) c.fade_out = Math.min(6, Math.floor(c.duration / 4));
+    if ((c.fade_in ?? 0) === 0 && !sounds.some((before) => before !== c && joined(before, c))) c.fade_in = Math.min(4, Math.floor(c.duration / 4));
   }
 }

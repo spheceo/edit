@@ -657,6 +657,7 @@ async function coverCutIn(call: ToolCall): Promise<Content[]> {
     horrorLook.fillReels(project);
     horrorLook.mosaicCensors(project);
     horrorLook.textOnTop(project);
+    horrorLook.soundEdges(project);
     return covered;
   });
   report.smoothing_started = hooks.smoothInBackground(app, projectId, smooth);

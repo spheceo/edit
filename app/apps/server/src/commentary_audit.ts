@@ -1,5 +1,6 @@
 import type { Clip, Project } from "./model.ts";
 import { clipEnd, mediaOf, trackOf } from "./project.ts";
+import { captured } from "./watermarks.ts";
 
 /** Most of the narration a blurred text backdrop may cover: emphasis is selective. */
 export const TEXT_BACKDROP_SHARE = 0.25;
@@ -274,6 +275,21 @@ function pacing(p: Project, live: Clip[]): Record<string, unknown>[] {
         out.push({ kind: "horror_cards_stacked", clip: b.id, under: a.id, start: b.start, end: Math.min(clipEnd(a), clipEnd(b)),
           fix: "two cards are up at once, one over the other: delete or trim the one this replaces (with its backdrop, ground and marker), so one picture, page or profile is on screen at a time" });
       }
+    }
+    // "It gets worse at around 6:00 where it mostly used b-roll… 6:45 - Here we shouldn't use b-roll but show his
+    // profile instead on insta" (Nov 6): case 3 ran 75 s on a short film and case 2's race footage, nothing of its own.
+    // The story's own: the script's posts (imported as "instagram <id>", "x <id>"…), captured pages, Edit's cards and desktops.
+    const own = (c: Clip) => c.type === "video" && (/^(Cut-in \d+ · )?(Horror|Desktop|Janitor) · /u.test(c.name ?? "") || /^(instagram|x|tiktok|reddit|facebook|threads) /u.test(mediaOf(p, c.media)?.name ?? "") || (mediaOf(p, c.media) !== undefined && captured(p, mediaOf(p, c.media)!)));
+    const pictures = live.filter((c) => c.type === "video" && !/backdrop|card ground|Mark blur/u.test(c.name ?? ""));
+    const topPicture = (frame: number) => pictures.filter((c) => c.start <= frame && clipEnd(c) > frame).sort((x, y) => (stack.get(y.track) ?? 0) - (stack.get(x.track) ?? 0))[0];
+    const end = Math.max(0, ...live.map(clipEnd));
+    let run: number | null = null;
+    for (let f = 0; f <= end; f += 15) {
+      const top = f < end ? topPicture(f) : undefined;
+      if (top !== undefined && !own(top)) { run ??= f; continue; }
+      if (run !== null && f - run >= 25 * fps) out.push({ kind: "horror_broll_run", start: run, end: f, seconds: Math.round((f - run) / fps),
+        fix: "this stretch shows none of the story's own posts, pages or cards: if it's the case's own video (its interview, its news report), leave it; otherwise show the story where its words are (the account's profile and posts, the people, the news; capture_evidence them, and search for the account when the script gives no link), with stock only between" });
+      run = null;
     }
     // "By now it's getting boring for viewers because they see the text for 20s+."
     for (const c of live) {

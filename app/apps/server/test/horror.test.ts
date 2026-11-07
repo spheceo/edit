@@ -348,3 +348,28 @@ test("the audit catches two cards up at once: a profile laid over the old card i
   const found = issues(p).filter((i) => i.kind === "horror_cards_stacked").map((i) => `${String(i.clip)}<${String(i.under)}`);
   expect(found).toEqual(["profile<old"]);
 });
+
+test("a post's own sound eases out where it's cut, not where the same footage carries on (\"the audio cut isn't completely clean\", Nov 6)", async () => {
+  const { soundEdges } = await import("../src/horror_look.ts");
+  const p = horror();
+  p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
+  // One reel's sound in two pieces back to back, then another reel's, and one the agent faded itself.
+  p.clips.push(clip({ id: "s1", type: "audio", media: "reel", track: "a1", start: 0, duration: 60, source_in: 0 } as never));
+  p.clips.push(clip({ id: "s2", type: "audio", media: "reel", track: "a1", start: 60, duration: 60, source_in: 2 } as never));
+  p.clips.push(clip({ id: "s3", type: "audio", media: "wide", track: "a1", start: 200, duration: 90, source_in: 5, fade_out: 15 } as never));
+  soundEdges(p);
+  const fades = Object.fromEntries(p.clips.filter((c) => c.type === "audio").map((c) => [c.id, [c.fade_in, c.fade_out]]));
+  expect(fades).toEqual({ s1: [4, 0], s2: [0, 6], s3: [4, 15] });
+});
+
+test("the audit flags a long stretch of B-roll with nothing of the story's own (Nov 6, case 3 on a short film)", () => {
+  const p = horror();
+  p.media.push(media({ id: "yt", name: "2AM： The Smiling Man ｜ short film [_u6Tt3PqIfQ].mp4", kind: "video", path: "/yt.mp4", duration: 300, width: 1920, height: 1080 }));
+  p.clips.push(clip({ id: "b1", type: "video", media: "yt", track: "v1", start: 0, duration: 600 }));
+  p.clips.push(clip({ id: "b2", type: "video", media: "yt", track: "v1", start: 600, duration: 600 }));
+  p.media.push(media({ id: "ig", name: "instagram DU6q9WeEjRX.mp4", kind: "video", path: "/ig.mp4", duration: 30, width: 720, height: 1280 }));
+  p.clips.push(clip({ id: "post", type: "video", media: "ig", track: "v1", start: 1200, duration: 300, name: "Cut-in 2 · B-roll: jumping barefoot on rocks" }));
+  p.clips.push(clip({ id: "b3", type: "video", media: "yt", track: "v1", start: 1500, duration: 300 }));
+  const runs = issues(p).filter((i) => i.kind === "horror_broll_run").map((i) => [i.start, i.end]);
+  expect(runs).toEqual([[0, 1200]]);
+});

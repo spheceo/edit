@@ -14,7 +14,7 @@ What it's for: the next edit shouldn't get the same notes. The agent never sees 
 - If Claude Code hits its usage limit, wait for the reset (round.py does); don't switch models.
 - Cheap services are fair game: Codex (computer use, delegate_task) may sign in as the user to check existing credit or free tiers and put keys in Infisical (project `cdf4a0c5-eca4-4415-af3a-40871af285f3`, env `dev`). **Never buy anything.**
 - Run to the end on your own: every wait bounded, every background job watched (Monitor), nothing that can hang.
-- A trial that hits a bug in Edit or the harness: fix the root cause, verify it, log it in `LOG.md`, and run that trial again on the fix; never score around a broken tool (root `AGENTS.md`: the whole flow, no shortcuts).
+- A trial that hits a bug in Edit or the harness: fix the root cause, verify it, log it in `LOG.md`, and run that trial again on the fix; never score around a broken tool (the `in-app-agent` skill: the whole flow, no shortcuts).
 
 ## Before round 1
 0. **The lessons inbox** (Nov 1): what the agents noted from the team between loops (`note_lesson`, kept in mamagi prod). `edit lessons` lists the open ones by part, each with the team's words, who and where (`--all` adds the closed ones: a note that's back after it was taught means that teaching didn't hold); it asks the installed Edit (prod, :7700), never `just dev`'s (dev's Convex has its own, empty inbox). Each open lesson is a row for the key, or a one-off to drop.

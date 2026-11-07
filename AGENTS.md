@@ -32,15 +32,10 @@ We need to be on the same page with terminology. When communicating, use this la
 - **niche** means the type of content often used as a category, for example, bodycam.
 
 # In-app agent improvement
-When Sphe hands you a project, take it through Edit end to end as a real user would, in order, through the app's own screens, tools, and in-app agent. Never skip a step, edit the project by hand, do a tool's job for it, or drop a feature to finish faster. If something breaks, stop there: find the root cause, fix it in the product (code, skill, audit, or tool), verify it with a test and by running the failed step again, commit, and carry on from that step on the fixed build. A fix only Sphe can unblock means stop and ask. Log each fix in `docs/feedback/<date>-<project>.md`, and in the teaching loop's `LOG.md` when that is the trial.
-
-A round of feedback is a chance to make the next edit better, not just this one. For each pattern, decide how to teach it, what should be right by default, and what audit or tool stops it coming back, and quote the team's words in the rule if needed. Then apply it through the in-app agent on the new build. Lessons noted between rounds are an inbox, not memory the agent reads back; the skills, code, and audits are what teach it. To make a lesson stick across videos, run the teaching loop.
-
-We occasionally run teaching loops off the agents and sometimes we run trial experiments. These are not run all the time but when we see that we have enough feedback to then go in and train the in-app agent, we then do so.
-
-`agent/` is what the agent is taught, read into the binary at build time, so under `just dev` the server has to restart before a change shows up. Keep the team's wording. A new rule goes in the skill for that part of the edit; only what every part needs goes in `instructions.md`. The core and the skills ask for one context read, one plan, and one look per stage: say what to check, never "check with render_frame". Before working on the code, read `app/AGENTS.md`
+When I hand you a project to take through Edit, pass on the team's feedback on the agent's work, ask for a trial or teaching loop, or you change anything in `agent/`, use the `in-app-agent` skill in `.agents/skills`. Its core rule is to go through Edit as a real user would and fix what breaks in the product, never by hand.
 
 # General Rules
+- Before working on the code, read `app/AGENTS.md`.
 - Try not to kill a running dev server unless absolutely necessary.
 - Try and have as few environment variables as possible. If something can just be hard-coded as a normal variable within the code, just do that.
 - Try not to create audit reports or endless documentation content. This must be done thoughtfully. Once you no longer need something docs-related, like a plan, you can then just remove it after you're done using it.
@@ -50,3 +45,17 @@ We occasionally run teaching loops off the agents and sometimes we run trial exp
 - We should mainly make nightly releases but only once you get permission. Once you make the release you must watch it and let me know when it's out.
 - When asked to create skills or when there is a very specific need for creating a skill for future coding agents that work on this project, place it inside of `.agents/skills` (and not in `.claude` or any other specific directory) as this will just be symlinked to there.
 - Do not edit this AGENTS.md file unless explicitly given permission to do so.
+
+# Development environment
+You are most likely on our Linux machine, `mandalorian` (Ubuntu, NVIDIA RTX 4060), running inside T3 Code. That can change, but assume it unless you see otherwise.
+
+The team mainly uses macOS, so a Mac is linked to this machine for anything Mac-specific: the native window and player, the Keychain, VideoToolbox, signing. Reach it through T3 Code's linked environments. Its tools are loaded on demand, so search for them by what they do (linked environments, delegating a task) rather than by a name that may change:
+- List the linked environments to get the Mac's environment id and check that it answers.
+- Delegate a task with that environment id and Edit's project on the Mac. The agent there has its own shell and works in the Mac's checkout of this repo, on whatever branch is checked out there. It starts with none of your context, so brief it fully: the goal, what is already done, the checks to run, and what not to do (no release, no killing a dev server).
+- The same tools read the Mac's threads and projects, so you can see what is running there before you start.
+
+The usual case is a feature built here that then needs doing or checking on macOS: commit and push here, have the Mac's agent rebase onto `origin` and push (never force-push), then pull here, so both machines stay on the same commits.
+
+T3 Code can also render an HTML page inline in the chat, which is the way to show a UI prototype before building it. Its preview check, which screenshots the page first, needs the browser sandbox allowed on this machine once (`sudo env "PATH=$PATH" t3 browser setup --base-dir ~/.t3`); until then it fails on Ubuntu's AppArmor, and only the inline render works.
+
+You may be running in a worktree. Don't create worktrees yourself; I make them. If you're not in one, work on the branch you find yourself on and commit as the rules above say. If you are, you're probably on a separate branch: commit when you're done, and once we're happy with the work we'll open a pull request.

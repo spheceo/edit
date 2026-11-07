@@ -208,6 +208,16 @@ test("the host check turns away rebinding and cross-site requests", async () => 
     expect([crossOrigin.status, await crossOrigin.text()]).toEqual([403, "cross-origin requests are not allowed"]);
     const crossSite = await asked({ headers: { "sec-fetch-site": "cross-site" } });
     expect([crossSite.status, await crossSite.text()]).toEqual([403, "cross-site requests are not allowed"]);
+    // A link clicked in another app opens the page, never the API (nor in a frame, nor with a POST).
+    const link = { "sec-fetch-site": "cross-site", "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" };
+    const page = (init: RequestInit & { host?: string }, path = "/") => checkHost(request(path, init), ["localhost", "127.0.0.1"]);
+    expect(page({ headers: link })).toBeNull();
+    expect(page({ headers: link }, "/projects/p1")).toBeNull();
+    expect((await asked({ headers: link })).status).toBe(403);
+    expect(page({ headers: link }, "/mcp")?.status).toBe(403);
+    expect(page({ headers: { ...link, "sec-fetch-dest": "iframe" } })?.status).toBe(403);
+    expect(page({ method: "POST", headers: link })?.status).toBe(403);
+    expect(page({ headers: link, host: "evil.example:7700" })?.status).toBe(403);
     const ok = await asked({ headers: { origin: "http://localhost:7700" } });
     expect([ok.status, ok.headers.get("x-frame-options")]).toEqual([200, "DENY"]);
   } finally {

@@ -51,6 +51,11 @@ export function checkHost(request: Request, allowed: string[]): Response | null 
     const page = refererOrigin(request.headers.get("referer"));
     if (page !== null && loopbackSibling(page, host)) return null;
   }
+  // Opening Edit from a link in another app (a chat, Slack) is a top-level GET
+  // the browser marks cross-site; the page that loads only shows Edit, which
+  // the other site can't read or frame (x-frame-options). The API stays
+  // closed to it. Nov 7: a link to the editor in T3 Code was refused.
+  if (request.method === "GET" && origin === null && request.headers.get("sec-fetch-mode") === "navigate" && request.headers.get("sec-fetch-dest") === "document" && !pathname.startsWith("/api/") && pathname !== "/mcp") return null;
   if (origin !== null && !sameOrigin(origin, host)) return text("cross-origin requests are not allowed", 403);
   if (request.headers.get("sec-fetch-site") === "cross-site") return text("cross-site requests are not allowed", 403);
   return null;

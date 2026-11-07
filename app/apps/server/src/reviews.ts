@@ -395,7 +395,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         const shared = read(home).shared[projectId]!;
         update(home, (state) => {
           const one = state.shared[projectId]?.versions.find((version) => version.n === latest.n);
-          if (one !== undefined) Object.assign(one, { path: chosen.path, clips });
+          if (one !== undefined) Object.assign(one, { path: chosen.path, clips, fps, durationMs: Math.round((chosen.frames / fps) * 1000) });
         });
         fs.rmSync(copy, { force: true });
         diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);

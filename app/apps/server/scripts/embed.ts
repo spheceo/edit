@@ -5,7 +5,7 @@
 // assets a module imports itself `with { type: "file" }` come along anyway.
 //
 //     bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node \
-//         [--window target/release/edit-window] [--web apps/web/dist]
+//         [--window target/release/edit-window] [--rife rife] [--web apps/web/dist]
 //     bun build apps/server/src/embedded.gen.ts --compile --outfile package/edit …
 
 import * as fs from "node:fs";
@@ -21,6 +21,8 @@ const absolute = (path: string) => nodePath.resolve(process.cwd(), path);
 const web = absolute(flag("--web") ?? nodePath.join(root, "apps/web/dist"));
 const addon = flag("--native");
 const window = flag("--window");
+// Linux's smoothing (scripts/rife.sh's folder): the program and its model.
+const rife = flag("--rife");
 const out = absolute(flag("--out") ?? nodePath.join(root, "apps/server/src/embedded.gen.ts"));
 const dir = nodePath.dirname(out);
 
@@ -30,6 +32,11 @@ if (addon === undefined || !fs.existsSync(absolute(addon))) {
 }
 if (window !== undefined && !fs.existsSync(absolute(window))) {
   console.error(`embed: no window helper at ${window}`);
+  process.exit(2);
+}
+const rifeFiles = rife === undefined ? null : ["rife-ncnn-vulkan", "rife-v4.6/flownet.param", "rife-v4.6/flownet.bin"].map((file) => absolute(nodePath.join(rife, file)));
+if (rifeFiles !== null && !rifeFiles.every((file) => fs.existsSync(file))) {
+  console.error(`embed: ${rife} isn't RIFE's folder (run scripts/rife.sh)`);
   process.exit(2);
 }
 if (!fs.existsSync(nodePath.join(web, "index.html"))) {
@@ -63,6 +70,7 @@ const lines = [
   ...files.map((file, index) => `import web${index} from ${specifier(nodePath.join(web, file))} with { type: "file" };`),
 ];
 if (window !== undefined) lines.push(`import editWindow from ${specifier(absolute(window))} with { type: "file" };`);
+if (rifeFiles !== null) rifeFiles.forEach((file, index) => lines.push(`import rife${index} from ${specifier(file)} with { type: "file" };`));
 lines.push(
   "",
   "// A static require: bun embeds the addon and loads it from inside the binary.",
@@ -72,10 +80,11 @@ lines.push(
   ...files.map((file, index) => `    [${JSON.stringify(file)}, web${index}],`),
   "  ]),",
   `  window: ${window !== undefined ? "editWindow" : "null"},`,
+  `  rife: ${rifeFiles !== null ? "{ program: rife0, param: rife1, bin: rife2 }" : "null"},`,
   "});",
   "",
   'await import("./main.ts");',
   "",
 );
 fs.writeFileSync(out, lines.join("\n"));
-console.log(`embed: ${files.length} UI files, the addon${window !== undefined ? ", the window helper" : ""} → ${nodePath.relative(process.cwd(), out)}`);
+console.log(`embed: ${files.length} UI files, the addon${window !== undefined ? ", the window helper" : ""}${rifeFiles !== null ? ", RIFE" : ""} → ${nodePath.relative(process.cwd(), out)}`);

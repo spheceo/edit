@@ -152,6 +152,13 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
+      # Linux's slow-motion smoothing (apps/server/src/rife.ts), embedded in
+      # `edit`: kept between runs, its release zip is 431 MB.
+      - if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: app/rife
+          key: rife-${{ matrix.target }}-${{ hashFiles('app/scripts/rife.sh') }}
       # The addon and the window helper, then everything embedded in one `edit`
       # (apps/server/scripts/embed.ts); `bun build --compile` leaves the
       # signature invalid, so every binary is signed again (ad hoc).
@@ -178,7 +185,7 @@ jobs:
             scripts/build-native.sh ${{ matrix.target }}
           fi
           window=()
-          if [ "$mac" = true ]; then window=(--window "target/${{ matrix.target }}/release/edit-window"); fi
+          if [ "$mac" = true ]; then window=(--window "target/${{ matrix.target }}/release/edit-window"); else scripts/rife.sh ${{ matrix.target }} rife; window=(--rife rife); fi
           bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node "${window[@]}"
           mkdir package
           bun build apps/server/src/embedded.gen.ts --compile --target="$bun_target" \

@@ -27,6 +27,8 @@ node_modules/
 # FFmpeg and qjs fetched for a release (scripts/ffmpeg.sh, scripts/fetch-quickjs.sh)
 /app/ffmpeg/
 /app/quickjs/
+# RIFE for Linux's smoothing (scripts/rife.sh)
+/app/rife/
 
 # Mood-board stills from other channels: kept locally, not published
 /docs/moodboard/shots/

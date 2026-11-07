@@ -12,6 +12,8 @@ export interface Embedded {
   web: Map<string, string>;
   /** The window helper (crates/edit-window), when this build has one. */
   window: string | null;
+  /** RIFE for Linux's smoothing (rife.ts): the program and its model's two files. */
+  rife: { program: string; param: string; bin: string } | null;
 }
 
 let current: Embedded | null = null;

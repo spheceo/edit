@@ -10,7 +10,7 @@ import * as accounts from "./accounts.ts";
 import { keepAwakeWhile } from "./awake.ts";
 import { importing } from "./drive_import.ts";
 import { createApp, hostname, type App } from "./app.ts";
-import { pauseForExports, setListening } from "./broll.ts";
+import { pauseForExports, setListening, smoothsFast } from "./broll.ts";
 import { startCleaning } from "./cache_cleanup.ts";
 import * as cloud from "./cloud.ts";
 import { setSmoothByDefault } from "./cutin.ts";
@@ -224,6 +224,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   pauseForExports(() => app.exports.localRunning?.() ?? app.exports.running());
   // Slowed cut-in shots are smoothed unless asked not to, where it takes seconds.
   setSmoothByDefault(app.native.smoothSupported());
+  // On Linux, RIFE on the GPU (rife.ts), looked for just after start (it runs a two-frame check).
+  if (process.platform === "linux") setTimeout(() => setSmoothByDefault(smoothsFast(app)), 2_000).unref();
   // The cache kept to what's used.
   startCleaning(app);
   seams.broll.stopLeftoverMaps?.();

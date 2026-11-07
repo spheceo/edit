@@ -28,6 +28,7 @@ import { compareStrings, display, fixed, round, serdeParse, toI64, trim } from "
 import * as seams from "./seams.ts";
 import * as seats from "./seats.ts";
 import { stableStringify } from "./stable.ts";
+import { rife, smooth as smoothWithRife } from "./rife.ts";
 import * as tools from "./tools.ts";
 import type { Transcript } from "./transcribe.ts";
 import mapPageText from "./map_page.html" with { type: "text" };
@@ -379,6 +380,21 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
             diag.warn("broll", `smoothing ${source.name} on VideoToolbox: ${diag.messageOf(error)}; FFmpeg's optical flow instead`);
           }
         }
+        // RIFE on Linux's GPU where there's one (rife.ts), FFmpeg's when it fails.
+        const gpu = rife(app.store.home);
+        if (gpu !== null) {
+          try {
+            await diag.timeOnAsync("broll", "smooth: RIFE", source.name, () =>
+              smoothWithRife(gpu, input, inputIn, length, speed, fps, width, height, partial, join(dir, `${stem}-${key}.frames`), timing.smoothLimitMs),
+            );
+            fs.renameSync(partial, out);
+            return await swapInSmooth(app, projectId, clip, out, fps);
+          } catch (error) {
+            if (isBug(error)) throw error;
+            fs.rmSync(partial, { force: true });
+            diag.warn("broll", `smoothing ${source.name} with RIFE: ${diag.messageOf(error)}; FFmpeg's optical flow instead`);
+          }
+        }
         const filter = `scale=w='min(${width},iw)':h='min(${height},ih)':force_original_aspect_ratio=decrease:force_divisible_by=2,setpts=PTS/${fixed(speed, 6)},minterpolate=fps=${display(fps)}:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1,format=yuv420p`;
         const made = await ffmpeg(
           [
@@ -438,7 +454,13 @@ export async function smoothSlowMotion(app: App, projectId: string, clipId: stri
 
 /** The smoother renders are made with now: a new one makes every older render stale. */
 function currentSmoother(app: App): string {
-  return app.native.smoothSupported() ? "vt-frame-rate-conversion-v2" : "bounded-optical-flow-v2";
+  if (app.native.smoothSupported()) return "vt-frame-rate-conversion-v2";
+  return rife(app.store.home) !== null ? "rife-v4.6-v1" : "bounded-optical-flow-v2";
+}
+
+/** Whether slowed shots smooth in seconds here (VideoToolbox on a Mac, RIFE on Linux's GPU), so they're smoothed unless asked not to. */
+export function smoothsFast(app: App): boolean {
+  return app.native.smoothSupported() || rife(app.store.home) !== null;
 }
 
 /** Where a smoothed render came from and what made it, by its file name. */

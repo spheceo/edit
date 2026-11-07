@@ -8,7 +8,9 @@
 // The first time, a Mac dialog asks: '"security" wants to use your
 // confidential information stored in "Chrome Safe Storage"'; typing the Mac's
 // password and choosing Always Allow is the whole set-up. `check` brings that
-// dialog up while the editor is looking at Settings, not mid-import.
+// dialog up while the editor is looking at Settings, not mid-import. On Linux
+// Chrome keeps its profiles in ~/.config/google-chrome and its cookie key in
+// the desktop's keyring, which yt-dlp opens without asking.
 //
 // Only cookie names are read here, never their values; the cookie file a
 // check writes is deleted at once. The sign-in never goes through the paid
@@ -23,7 +25,10 @@ import { join } from "./paths.ts";
 import * as youtube from "./youtube.ts";
 
 /** Where Chrome keeps its profiles (tests point it elsewhere). */
-export const where = { chrome: join(os.homedir(), "Library", "Application Support", "Google", "Chrome") };
+export const where = { chrome: process.platform === "darwin" ? join(os.homedir(), "Library", "Application Support", "Google", "Chrome") : join(process.env.XDG_CONFIG_HOME || join(os.homedir(), ".config"), "google-chrome") };
+
+/** Where reading Chrome's YouTube sign-in works: macOS and Linux. */
+export const supported = process.platform === "darwin" || process.platform === "linux";
 
 /** The cookies that say a YouTube account is signed in. */
 const SIGNED_IN = ["LOGIN_INFO", "SAPISID", "__Secure-3PAPISID"];
@@ -102,7 +107,7 @@ export function status(): SignIn {
 
 /** yt-dlp's arguments for the sign-in, or none when Chrome has no YouTube sign-in. */
 export function cookieArgs(): string[] {
-  if (process.platform !== "darwin" || process.env.EDIT_YOUTUBE_SIGNIN === "0") return [];
+  if (!supported || process.env.EDIT_YOUTUBE_SIGNIN === "0") return [];
   try {
     const profile = status().profile;
     return profile === null ? [] : ["--cookies-from-browser", `chrome:${join(where.chrome, profile.dir)}`];

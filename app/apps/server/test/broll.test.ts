@@ -428,21 +428,6 @@ test.skipIf(ffmpeg === null || ffprobe === null)("a streamed cloud clip is cut t
   }
 });
 
-test.skipIf(ffmpeg === null)("a still becomes 30 s of footage, made once", async () => {
-  const { cleanup, dir } = fixtureHome("still");
-  try {
-    const image = `${dir}/photo.png`;
-    makeFile(["-f", "lavfi", "-i", "color=c=green:s=64x48", "-frames:v", "1"], image);
-    const out = await broll.stillVideo(image, `${dir}/stills`);
-    expect(out).toMatch(/\/stills\/photo-[0-9a-f]{12}\.mp4$/);
-    const again = await broll.stillVideo(image, `${dir}/stills`);
-    expect(again).toBe(out);
-    await expect(broll.stillVideo(`${dir}/none.png`, `${dir}/stills`)).rejects.toThrow(`${dir}/none.png: No such file or directory (os error 2)`);
-  } finally {
-    cleanup();
-  }
-});
-
 test("a cut found at two frames a second is found again to the frame", async () => {
   const dir = fs.mkdtempSync(join(os.tmpdir(), "exact-cut-"));
   const file = join(dir, "cut.mp4");

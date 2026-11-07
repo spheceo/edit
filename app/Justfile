@@ -33,7 +33,7 @@ native profile="release":
     trap 'rm -rf "$out"' EXIT
     if [ "{{profile}}" = release ]; then
         bun node_modules/.bin/napi build --release -o "$out" --dts index.d.ts
-        codesign -s - -f "$out/edit-native.node"
+        { [ "$(uname)" != Darwin ] || codesign -s - -f "$out/edit-native.node"; }  # ad hoc: a Mac runs nothing unsigned
     else
         bun node_modules/.bin/napi build -o "$out" --dts index.d.ts
     fi
@@ -54,7 +54,7 @@ native-compiled: (native "debug")
     dir="$(mktemp -d)"
     trap 'mv -f crates/edit-native/edit-native.node.away crates/edit-native/edit-native.node 2>/dev/null || true; rm -rf "$dir"' EXIT
     bun build --compile crates/edit-native/test/compiled/main.ts --outfile "$dir/edit-compiled"
-    codesign -s - -f "$dir/edit-compiled"
+    { [ "$(uname)" != Darwin ] || codesign -s - -f "$dir/edit-compiled"; }  # ad hoc: a Mac runs nothing unsigned
     mv crates/edit-native/edit-native.node crates/edit-native/edit-native.node.away
     mkdir "$dir/home"
     (cd "$dir" && ./edit-compiled "$dir/home")
@@ -123,7 +123,7 @@ release: web (native "release") (window "release")
     mkdir -p package
     bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node --window "$target/release/edit-window"
     bun build apps/server/src/embedded.gen.ts --compile --outfile package/edit
-    codesign -s - -f package/edit
+    { [ "$(uname)" != Darwin ] || codesign -s - -f package/edit; }  # ad hoc: a Mac runs nothing unsigned
     echo "built package/edit"
 
 # The dev server's binary: the Bun server compiled with the UI and the addon
@@ -152,12 +152,12 @@ serve-build-bin:
         (unset CARGO_TARGET_DIR CARGO_BUILD_BUILD_DIR; just web)
     fi
     (cd crates/edit-native && { [ -d node_modules ] || bun install --frozen-lockfile; } \
-        && bunx napi build --profile serve --dts index.d.ts && codesign -s - -f edit-native.node)
+        && bunx napi build --profile serve --dts index.d.ts && { [ "$(uname)" != Darwin ] || codesign -s - -f edit-native.node; })
     bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node
     dest="${EDIT_SERVE_BIN:-/tmp/run/edit}"
     mkdir -p "$(dirname "$dest")"
     bun build apps/server/src/embedded.gen.ts --compile --outfile "$dest.new"
-    codesign -s - -f "$dest.new"
+    { [ "$(uname)" != Darwin ] || codesign -s - -f "$dest.new"; }  # ad hoc: a Mac runs nothing unsigned
     mv -f "$dest.new" "$dest"
     echo "built $dest in $((SECONDS - start)) s; restart the server to run it"
 

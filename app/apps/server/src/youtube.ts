@@ -24,7 +24,7 @@ import { inArea, runPromise } from "./effect/runtime.ts";
 import * as relay from "./relay.ts";
 import * as tools from "./tools.ts";
 import { compiled } from "./update.ts";
-import { cookieArgs } from "./youtube_signin.ts";
+import { cookieArgs, supported as signInSupported } from "./youtube_signin.ts";
 import { join, parent } from "./paths.ts";
 
 /** The prefix of a script file that's a YouTube video. */
@@ -493,7 +493,7 @@ function routesFor(proxy: string, straight: number): Route[] {
   if (proxy !== "") routes.push({ proxy, signIn: false });
   // Chrome's folder is looked in only when it comes to this: macOS warns the
   // person whenever Edit reads another app's data (Oct 30: "Data Access Blocked").
-  if (process.platform === "darwin" && process.env.EDIT_YOUTUBE_SIGNIN !== "0") routes.push({ proxy: null, signIn: true });
+  if (signInSupported && process.env.EDIT_YOUTUBE_SIGNIN !== "0") routes.push({ proxy: null, signIn: true });
   return routes;
 }
 

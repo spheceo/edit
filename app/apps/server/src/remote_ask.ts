@@ -248,14 +248,25 @@ async function run(command: string[], ms = 10_000): Promise<string> {
 
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 
+/** A file's text, trimmed, or "" (Linux's /proc and /sys). */
+const readText = (path: string) => fs.promises.readFile(path, "utf8").then((text) => text.trim(), () => "");
+
+/** Linux's answers to what `sw_vers`, `sysctl` and `pmset` say on a Mac: the distribution, the machine, its CPU, the battery, the GPU. */
+async function linuxSystem(): Promise<[string, string, string, string, string]> {
+  const release = await readText("/etc/os-release");
+  const product = `${/^PRETTY_NAME="?([^"\n]*)"?/mu.exec(release)?.[1] ?? "Linux"} · kernel ${os.release()}`;
+  const model = [await readText("/sys/devices/virtual/dmi/id/sys_vendor"), await readText("/sys/devices/virtual/dmi/id/product_name")].filter((part) => part !== "").join(" ") || "unknown machine";
+  const supplies = await fs.promises.readdir("/sys/class/power_supply").catch(() => [] as string[]);
+  const batteries = await Promise.all(supplies.filter((name) => name.startsWith("BAT")).map(async (name) => `${name}: ${await readText(`/sys/class/power_supply/${name}/capacity`)}% ${await readText(`/sys/class/power_supply/${name}/status`)}`));
+  const gpu = await run(["nvidia-smi", "--query-gpu=name,driver_version,memory.used,memory.total,utilization.gpu,utilization.encoder,temperature.gpu", "--format=csv,noheader"]);
+  return [product, model, os.cpus()[0]?.model ?? "", batteries.join("\n") || "no battery (on mains)", gpu.startsWith("(") ? "GPU: no NVIDIA driver answering" : `GPU: ${gpu}`];
+}
+
 async function system(app: App): Promise<string> {
-  const [product, model, chip, disks, battery, thermal, ffmpeg, claude] = await Promise.all([
-    run(["sw_vers"]),
-    run(["sysctl", "-n", "hw.model"]),
-    run(["sysctl", "-n", "machdep.cpu.brand_string"]),
+  const mac = process.platform === "darwin";
+  const [[product, model, chip, battery, thermal], disks, ffmpeg, claude] = await Promise.all([
+    mac ? Promise.all([run(["sw_vers"]), run(["sysctl", "-n", "hw.model"]), run(["sysctl", "-n", "machdep.cpu.brand_string"]), run(["pmset", "-g", "batt"]), run(["pmset", "-g", "therm"])]) : linuxSystem(),
     run(["df", "-H", "-l"]),
-    run(["pmset", "-g", "batt"]),
-    run(["pmset", "-g", "therm"]),
     run([tools.ffmpeg(), "-hide_banner", "-version"]).then((text) => text.split("\n")[0] ?? ""),
     run(["claude", "--version"]),
   ]);
@@ -317,6 +328,7 @@ async function cpu(): Promise<string> {
     late = Math.max(late, now - last - 50);
     last = now;
   }, 50);
+  const linuxBefore = process.platform === "linux" ? await threadTimes() : null;
   const before = process.cpuUsage();
   const began = performance.now();
   await new Promise((resolve) => setTimeout(resolve, WINDOW_MS));
@@ -324,10 +336,13 @@ async function cpu(): Promise<string> {
   const used = process.cpuUsage(before);
   const percent = ((used.user + used.system) / 1000 / (performance.now() - began)) * 100;
   // Each thread: %CPU now, and its system and user time since the server started.
-  const threads = (await run(["ps", "-M", "-p", String(process.pid)])).split("\n").slice(1).flatMap((line, at) => {
-    const match = /\s(\d+(?:\.\d+)?)\s+\S+\s+\S+\s+(\d+:\d+\.\d+)\s+(\d+:\d+\.\d+)/.exec(line);
-    return match === null ? [] : [{ at, now: Number(match[1]), total: `${match[2]} sys + ${match[3]} user` }];
-  });
+  const threads =
+    linuxBefore !== null
+      ? linuxThreads(linuxBefore, await threadTimes(), performance.now() - began)
+      : (await run(["ps", "-M", "-p", String(process.pid)])).split("\n").slice(1).flatMap((line, at) => {
+          const match = /\s(\d+(?:\.\d+)?)\s+\S+\s+\S+\s+(\d+:\d+\.\d+)\s+(\d+:\d+\.\d+)/.exec(line);
+          return match === null ? [] : [{ at, now: Number(match[1]), total: `${match[2]} sys + ${match[3]} user` }];
+        });
   const memory = process.memoryUsage();
   const mb = (bytes: number) => `${Math.round(bytes / 1e6)} MB`;
   let kinds = "";
@@ -346,6 +361,37 @@ async function cpu(): Promise<string> {
     `${threads.length} threads, the busiest (#0 is JavaScript's):`,
     ...threads.sort((a, b) => b.now - a.now).slice(0, 10).map((thread) => `  #${thread.at} ${thread.now.toFixed(1)}% now · ${thread.total}`),
   ].join("\n");
+}
+
+/** Linux's clock ticks a second (USER_HZ): 100 on every architecture it runs on. */
+const TICKS = 100;
+
+/** Each of this server's threads' user and system time (ticks), by thread id, from /proc (Linux has no `ps -M`). */
+async function threadTimes(): Promise<Map<number, { user: number; system: number }>> {
+  const times = new Map<number, { user: number; system: number }>();
+  const ids = await fs.promises.readdir("/proc/self/task").catch(() => [] as string[]);
+  for (const id of ids) {
+    // The name is in parentheses and may hold spaces: fields count from after it.
+    const stat = await readText(`/proc/self/task/${id}/stat`);
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (fields.length > 12) times.set(Number(id), { user: Number(fields[11]), system: Number(fields[12]) });
+  }
+  return times;
+}
+
+/** `ps -M`'s rows from two readings `ms` apart: the first thread (the lowest id, JavaScript's) is #0. */
+function linuxThreads(before: Map<number, { user: number; system: number }>, after: Map<number, { user: number; system: number }>, ms: number): { at: number; now: number; total: string }[] {
+  const clock = (ticks: number) => {
+    const seconds = ticks / TICKS;
+    return `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(2).padStart(5, "0")}`;
+  };
+  return [...after]
+    .sort((a, b) => a[0] - b[0])
+    .map(([id, time], at) => {
+      const was = before.get(id) ?? { user: 0, system: 0 };
+      const spent = (time.user + time.system - was.user - was.system) / TICKS;
+      return { at, now: (spent / (ms / 1000)) * 100, total: `${clock(time.system)} sys + ${clock(time.user)} user` };
+    });
 }
 
 async function timed(what: string, work: () => Promise<unknown>): Promise<string> {

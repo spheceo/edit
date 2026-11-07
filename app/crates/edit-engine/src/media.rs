@@ -193,6 +193,30 @@ pub fn probe(path: &Path) -> Result<Probe, String> {
         })
         .unwrap_or(0.0);
     if let Some(video) = video {
+        // Off a Mac FFmpeg reads a picture's size (ImageIO does on one), so
+        // photos stay images everywhere: as 30 s videos the map's first-frame
+        // stand-in was no longer seen as one (Nov 7, Linux).
+        #[cfg(not(target_os = "macos"))]
+        if is_image_path(path) {
+            let (mut width, mut height) = (
+                video["width"].as_u64().unwrap_or(0) as u32,
+                video["height"].as_u64().unwrap_or(0) as u32,
+            );
+            if rotation_of(video).rem_euclid(180) == 90 {
+                std::mem::swap(&mut width, &mut height);
+            }
+            if width == 0 || height == 0 {
+                return Err(format!("{} has no picture size", path.display()));
+            }
+            return Ok(Probe {
+                kind: MediaKind::Image,
+                duration: 30.0,
+                width,
+                height,
+                fps: 0.0,
+                has_audio: false,
+            });
+        }
         let codec = video["codec_name"].as_str().unwrap_or_default();
         if duration <= 0.0
             || ["png", "mjpeg", "bmp", "gif", "webp", "tiff"].contains(&codec) && duration < 0.1

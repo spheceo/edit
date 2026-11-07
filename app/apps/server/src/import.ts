@@ -49,26 +49,8 @@ export async function importPaths(
     const file = isFile(path);
     if (file && media.isMediaPath(path)) {
       // Footage or sound: as it is.
-    } else if (file && media.isImagePath(path) && process.platform === "darwin") {
-      // Photos stay images on macOS.
     } else if (file && media.isImagePath(path)) {
-      // A still becomes 30 s of footage (it then plays, scales and exports like any clip).
-      const name = fileName(path);
-      let dir: string;
-      try {
-        dir = join(app.store.uploadsDir(id), "stills");
-      } catch (error) {
-        errors.push(diag.messageOf(error));
-        continue;
-      }
-      try {
-        const video = await seams.broll.stillVideo(path, dir);
-        if (name !== null) names.set(video, name);
-        path = video;
-      } catch (error) {
-        errors.push(diag.messageOf(error));
-        continue;
-      }
+      // Photos stay images.
     } else if (file) {
       // Any other file (Oct 31): a picture, video or sound converted beside the project's media;
       // anything else kept as one of its files (the agent reads them with read_upload).

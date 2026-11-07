@@ -15,7 +15,7 @@ import * as diag from "./diag.ts";
 import * as jobs from "./jobs.ts";
 import { copyFile, ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
-import { debugModified, fingerprint } from "./hash.ts";
+import { fingerprint } from "./hash.ts";
 import { importPaths } from "./import.ts";
 import { probe as probeFile, Semaphore } from "./media.ts";
 import type { Clip, Media, Probe, Project, VideoClip } from "./model.ts";
@@ -57,9 +57,6 @@ const MAP_LOOK_1_MS = 1_792_572_512_000;
 
 /** The longest moving map shot. */
 export const MAP_MOST_SECONDS = 12.0;
-
-/** Seconds of footage a still becomes: room to hold it, push in and trim. */
-const STILL_SECONDS = 30;
 
 /** How long things take (tests shorten the waits). */
 export const timing = {
@@ -142,69 +139,6 @@ async function ffmpeg(
 let exportsRunning: () => boolean = () => false;
 export function pauseForExports(running: () => boolean): void {
   exportsRunning = running;
-}
-
-/**
- * A still as 30 s of steady 30 fps footage (even-sized, high quality), so it
- * plays, scales, grades and exports like any clip. Made once per image.
- */
-export async function stillVideo(image: string, dir: string): Promise<string> {
-  let meta: fs.BigIntStats;
-  try {
-    meta = fs.statSync(image, { bigint: true });
-  } catch (error) {
-    throw new Error(`${image}: ${ioMessage(error)}`);
-  }
-  const stem = fileStem(image) ?? "still";
-  const key = fingerprint([image, meta.size.toString(), debugModified(meta.mtimeNs)]);
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch (error) {
-    throw new Error(`${dir}: ${ioMessage(error)}`);
-  }
-  const out = join(dir, `${stem}-${key}.mp4`);
-  if (isFile(out)) return out;
-  const partial = join(dir, `${stem}-${key}.partial.mp4`);
-  const made = await ffmpeg([
-    "-hide_banner",
-    "-loglevel",
-    "error",
-    "-y",
-    "-loop",
-    "1",
-    "-framerate",
-    "30",
-    "-i",
-    image,
-    "-t",
-    String(STILL_SECONDS),
-    "-vf",
-    "scale='min(3840,trunc(iw/2)*2)':-2:flags=lanczos,format=yuv420p",
-    "-c:v",
-    "libx264",
-    "-preset",
-    "medium",
-    "-crf",
-    "12",
-    "-tune",
-    "stillimage",
-    "-r",
-    "30",
-    "-an",
-    "-movflags",
-    "+faststart",
-    partial,
-  ]);
-  if (!made.ok) {
-    fs.rmSync(partial, { force: true });
-    throw new Error(`couldn't turn ${image} into footage: ${trim(made.stderr)}`);
-  }
-  try {
-    fs.renameSync(partial, out);
-  } catch (error) {
-    throw new Error(ioMessage(error));
-  }
-  return out;
 }
 
 /** A media file's words, transcribing it first if needed. */

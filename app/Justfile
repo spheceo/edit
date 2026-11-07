@@ -261,10 +261,14 @@ lint:
     node_modules/.bin/oxlint --type-aware --tsconfig apps/web/tsconfig.json apps/web
     node_modules/.bin/oxlint apps/relay/src packages
 
+# The Rust that's built here: everything, but the window helper only on a Mac
+# (Linux's window is Chrome's, apps/server/src/linux_desktop.ts).
+rust_crates := if os() == "macos" { "--workspace" } else { "--workspace --exclude edit-window" }
+
 check: types
     cargo fmt --all --check
-    cargo clippy --workspace --all-targets -- -D warnings
-    cargo test --workspace
+    cargo clippy {{rust_crates}} --all-targets -- -D warnings
+    cargo test {{rust_crates}}
     # The generated TS types are committed: they must match the Rust.
     git diff --exit-code -- packages/edit-types
     test -z "$(git status --porcelain -- packages/edit-types)"

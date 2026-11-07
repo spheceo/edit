@@ -805,8 +805,14 @@ export async function readTurns(script: Script, dir: string, onStep: ((detail: s
   }
 }
 
-/** Where a preview is written until it's whole, so nothing reads half of it. */
-const making = (proxy: string): string => join(proxy.slice(0, proxy.lastIndexOf("/")), ".proxy-making.mp4");
+/**
+ * Where a preview is written until it's whole, so nothing reads half of it:
+ * a name of its own for each build, so a build that stops (and removes its
+ * file) never removes another's. With one name, a stopped import's build
+ * deleted its retry's file as the retry wrote it ("Error writing trailer: No
+ * such file or directory", Linux, Nov 7).
+ */
+const making = (proxy: string): string => join(proxy.slice(0, proxy.lastIndexOf("/")), `.proxy-making-${crypto.randomUUID().slice(0, 8)}.mp4`);
 
 async function previewFits(proxy: string, durationMs: number): Promise<boolean> {
   if (!isFile(proxy)) return false;

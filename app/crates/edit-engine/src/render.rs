@@ -29,8 +29,39 @@ use crate::mac_media::{Writer as ChunkWriter, WriterOptions};
 #[cfg(not(target_os = "macos"))]
 use crate::pipe_writer::{Writer as ChunkWriter, WriterOptions};
 
-pub fn new_renderer(width: u32, height: u32) -> Result<Renderer, String> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+/// The GPU device renderers draw with. On a Mac each renderer has its own;
+/// on Linux they share one, made once: NVIDIA's driver (615) deadlocked when
+/// one renderer's device was destroyed while another's submitted work (Nov 7,
+/// the renderer's tests side by side; exports, previews and frames for the
+/// agent do the same in the server).
+fn gpu() -> Result<(wgpu::Device, wgpu::Queue), String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        static SHARED: parking_lot::Mutex<Option<(wgpu::Device, wgpu::Queue)>> =
+            parking_lot::Mutex::new(None);
+        let mut shared = SHARED.lock();
+        if let Some((device, queue)) = shared.as_ref() {
+            return Ok((device.clone(), queue.clone()));
+        }
+        let made = new_gpu()?;
+        *shared = Some(made.clone());
+        Ok(made)
+    }
+    #[cfg(target_os = "macos")]
+    new_gpu()
+}
+
+fn new_gpu() -> Result<(wgpu::Device, wgpu::Queue), String> {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    // Vulkan or Metal only: OpenGL (EGL) opened beside Vulkan deadlocked
+    // NVIDIA's driver when renderers came and went side by side (Linux, Nov 7).
+    descriptor.backends = wgpu::Backends::PRIMARY;
+    // No debug labels on GPU objects (a debug build's default): with renderers
+    // made side by side, Vulkan's loader crashed naming one
+    // (vkSetDebugUtilsObjectNameEXT, NVIDIA 615 on Linux, Nov 7: `just dev`'s
+    // debug addon and `just check`'s tests, never a release build).
+    descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
+    let instance = wgpu::Instance::new(descriptor);
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         ..Default::default()
@@ -41,11 +72,15 @@ pub fn new_renderer(width: u32, height: u32) -> Result<Renderer, String> {
     {
         return Err("the cloud worker has no hardware graphics adapter".to_owned());
     }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("edit native"),
         ..Default::default()
     }))
-    .map_err(|error| format!("GPU device: {error}"))?;
+    .map_err(|error| format!("GPU device: {error}"))
+}
+
+pub fn new_renderer(width: u32, height: u32) -> Result<Renderer, String> {
+    let (device, queue) = gpu()?;
     let mut renderer = Renderer::new(device, queue, width, height);
     for (family, weight, file) in BUNDLED_FONTS {
         if let Some(bytes) = edit_render::text::bundled_font_bytes(file) {

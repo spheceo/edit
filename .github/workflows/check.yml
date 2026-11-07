@@ -20,14 +20,23 @@ defaults:
 
 jobs:
   check:
-    # The native engine is macOS-only (AVFoundation), so checks run where
-    # releases are built.
-    runs-on: macos-latest
+    # On each platform releases are built for: a Mac, and Linux since Nov 7
+    # (its engine runs FFmpeg where a Mac runs AVFoundation, so each checks
+    # its own).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
-          targets: aarch64-apple-darwin, wasm32-unknown-unknown
+          targets: ${{ matrix.target }}, wasm32-unknown-unknown
           components: rustfmt, clippy
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
@@ -46,7 +55,23 @@ jobs:
         with:
           bun-version: 1.4.0
       - name: Tools (just, FFmpeg)
+        if: runner.os == 'macOS'
         run: brew install just ffmpeg
+      # Linux: the FFmpeg its release ships (scripts/ffmpeg.sh), and Vulkan's
+      # software device for the renderer's tests (Edit renders on Vulkan only;
+      # hosted runners have no GPU).
+      - if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: app/ffmpeg
+          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('app/scripts/ffmpeg.sh') }}
+      - name: Tools (just, FFmpeg, Vulkan)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq just mesa-vulkan-drivers libvulkan1
+          scripts/ffmpeg.sh ${{ matrix.target }} ffmpeg
+          echo "$PWD/ffmpeg" >> "$GITHUB_PATH"
       - name: Dependencies
         run: bun install --frozen-lockfile
       - name: Check

@@ -104,15 +104,33 @@ fn rounded_photo_corners_leave_the_background_visible() {
     assert_eq!(&pixels[(32 * 64 + 32) * 4..][..4], &[255, 255, 255, 255]);
 }
 
+/// One GPU device for every test, as the engine shares one on Linux (its
+/// render.rs `gpu`): NVIDIA's driver deadlocked with tests' devices made and
+/// destroyed side by side; and Vulkan or Metal only, no debug labels.
+fn shared_gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
+    static SHARED: std::sync::OnceLock<Option<(wgpu::Device, wgpu::Queue)>> =
+        std::sync::OnceLock::new();
+    SHARED
+        .get_or_init(|| {
+            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            descriptor.backends = wgpu::Backends::PRIMARY;
+            descriptor.flags.remove(wgpu::InstanceFlags::DEBUG);
+            let instance = wgpu::Instance::new(descriptor);
+            let adapter =
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    ..Default::default()
+                }))
+                .ok()?;
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+        })
+        .clone()
+}
+
 // A test helper: failing here should fail the test.
 #[allow(clippy::unwrap_used)]
 fn renderer(width: u32, height: u32) -> Option<Renderer> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+    let (device, queue) = shared_gpu()?;
     let mut renderer = Renderer::new(device, queue, width, height);
     for (family, weight, file) in BUNDLED_FONTS {
         let bytes = edit_render::text::bundled_font_bytes(file).unwrap();

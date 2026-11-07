@@ -23,6 +23,8 @@ pub mod mac_media;
 pub mod media;
 pub mod mix;
 pub mod motion;
+#[cfg(not(target_os = "macos"))]
+pub mod pipe_writer;
 #[cfg(target_os = "macos")]
 pub mod player;
 pub mod render;

@@ -272,7 +272,7 @@ export function createStub(): Stub {
     fps: null,
     quality: "high",
     target_mb: null,
-    hardware: process.platform === "darwin",
+    hardware: true,
     wait_for_smoothing: false,
     audio: true,
     loudness: null,
@@ -491,7 +491,7 @@ export function createStub(): Stub {
       return `${path}.${wanted}`;
     },
     async encoders() {
-      return { videotoolbox: false, hevc: false, prores: false, mp3: false };
+      return { videotoolbox: false, nvenc: false, hevc: false, prores: false, mp3: false };
     },
     ExportJob: {
       start(_job: ExportStart): ExportJob {

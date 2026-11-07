@@ -67,7 +67,7 @@ export function videoHardware(): VideoHardware | null {
   if (hardware !== undefined) return hardware;
   if (process.platform === "darwin") return (hardware = "videotoolbox");
   try {
-    const tried = Bun.spawnSync([ffmpeg(), "-hide_banner", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=black:s=256x144:r=30:d=0.1", "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"], { stdout: "ignore", stderr: "ignore", timeout: 20_000 });
+    const tried = Bun.spawnSync([ffmpeg(), "-hide_banner", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=black:s=256x144:r=30:d=0.1", "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "/dev/null"], { stdout: "ignore", stderr: "ignore", timeout: 20_000 });
     hardware = tried.exitCode === 0 ? "nvenc" : null;
   } catch {
     hardware = null;

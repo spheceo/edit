@@ -25,7 +25,8 @@ fps: number | null, quality: Quality,
  */
 target_mb: number | null, 
 /**
- * Encode on the Mac's media engine (VideoToolbox): much faster, a little bigger.
+ * Encode on the video hardware: the Mac's media engine (VideoToolbox), or
+ * an NVIDIA card's NVENC elsewhere. Much faster, a little bigger.
  */
 hardware: boolean, 
 /**

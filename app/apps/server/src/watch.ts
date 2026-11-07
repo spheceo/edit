@@ -523,7 +523,7 @@ async function cutAt(source: string, preview: [string, string] | null, window: W
       command.push("-skip_frame", "nokey", "-ss", start, "-t", length, "-i", light, "-ss", start, "-t", length, "-i", sound, "-map", "0:v:0", "-map", "1:a:0");
       audio = ["-c:a", "copy"];
     } else {
-      if (process.platform === "darwin") command.push("-hwaccel", "videotoolbox");
+      command.push(...tools.hardwareDecode());
       // Keyframes close together (Premiere exports put one every ~1.25 s):
       // decode only those, about as often as Gemini samples.
       if (await keyframesClose(source)) command.push("-skip_frame", "nokey");

@@ -471,13 +471,12 @@ const RENDER_NAME = /^(?<stem>.+)-(?<speed>\d+\.\d{2})x-[0-9a-f]+\.mp4$/u;
 
 /**
  * Each frame's small grey picture (32×18), for finding where a render began
- * in its source: decoded on the Mac's video hardware where it can be (a
+ * in its source: decoded on the video hardware where it can be (a
  * 14-minute cloud source ran past two minutes in software, JJ's Mac, Nov 5–6).
  */
 async function signatures(path: string, timeoutMs: number): Promise<Uint8Array[]> {
   const remote = tools.isUrl(path) ? ["-protocol_whitelist", tools.protocols(path), ...tools.urlArgs(path)] : [];
-  const hardware = process.platform === "darwin" ? ["-hwaccel", "videotoolbox"] : [];
-  const raw = await tools.run([tools.ffmpeg(), "-v", "error", ...remote, ...hardware, "-i", path, "-an", "-vf", "scale=32:18,format=gray", "-f", "rawvideo", "-"], { timeoutMs });
+  const raw = await tools.run([tools.ffmpeg(), "-v", "error", ...remote, ...tools.hardwareDecode(), "-i", path, "-an", "-vf", "scale=32:18,format=gray", "-f", "rawvideo", "-"], { timeoutMs });
   const frames: Uint8Array[] = [];
   for (let at = 0; at + 576 <= raw.length; at += 576) frames.push(raw.subarray(at, at + 576));
   return frames;
@@ -1118,7 +1117,9 @@ async function renderMap(
         // to the browser's own frame.
         `--window-size=${width + 64},${height + 200}`,
         `--user-data-dir=${profile}`,
-        ...(process.platform === "darwin" ? ["--use-angle=metal"] : []),
+        // The GPU for the map's WebGL: Metal on a Mac, Vulkan on Linux (headless
+        // Chrome there draws on SwiftShader, the CPU, unless told: Nov 7).
+        ...(process.platform === "darwin" ? ["--use-angle=metal"] : process.platform === "linux" ? ["--use-angle=vulkan"] : []),
         `http://${pageHost(app)}/api/maps/${token}`,
       ],
       { stdin: "ignore", stdout: "ignore", stderr: "ignore" },

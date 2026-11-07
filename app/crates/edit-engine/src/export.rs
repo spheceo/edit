@@ -136,7 +136,8 @@ pub struct ExportOptions {
     pub quality: Quality,
     /// Aim for a file about this big (MB) instead of a quality (MP4 only).
     pub target_mb: Option<f64>,
-    /// Encode on the Mac's media engine (VideoToolbox): much faster, a little bigger.
+    /// Encode on the video hardware: the Mac's media engine (VideoToolbox), or
+    /// an NVIDIA card's NVENC elsewhere. Much faster, a little bigger.
     pub hardware: bool,
     /// Explicitly wait for optional optical flow; normally export the current snapshot immediately.
     pub wait_for_smoothing: bool,
@@ -194,7 +195,7 @@ impl Default for ExportOptions {
             fps: None,
             quality: Quality::default(),
             target_mb: None,
-            hardware: cfg!(target_os = "macos"),
+            hardware: true,
             wait_for_smoothing: false,
             audio: true,
             loudness: None,
@@ -367,8 +368,7 @@ pub fn audio_bitrate(format: Format, quality: Quality) -> u32 {
     }
 }
 
-/// Shared target for the native writer and FFmpeg's hardware encoder.
-#[cfg(target_os = "macos")]
+/// Shared target for the native writer (a chunk writer off macOS) and FFmpeg's hardware encoder.
 pub fn video_bitrate(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<u64, String> {
     if let Some(mb) = options.target_mb {
         let rate = mb * 8_000_000.0 * 0.94 / plan.seconds(fps)
@@ -457,11 +457,16 @@ pub fn video_args(options: &ExportOptions, plan: &Plan, fps: f64) -> Result<Vec<
             * scale)
             .round() as u64
     };
-    let hardware = options.hardware && encoders().videotoolbox;
+    let found = encoders();
+    let hardware = options.hardware && found.videotoolbox;
+    let nvenc = options.hardware && !hardware && found.nvenc;
     match format {
         Format::H264 | Format::Hevc => {
             let hevc = format == Format::Hevc;
-            if hardware {
+            if nvenc {
+                let rate = target.unwrap_or_else(|| quality_rate(if hevc { 0.6 } else { 1.0 }));
+                push(&nvenc_args(hevc, rate).iter().map(String::as_str).collect::<Vec<_>>());
+            } else if hardware {
                 let rate = target.unwrap_or_else(|| quality_rate(if hevc { 0.6 } else { 1.0 }));
                 push(&[
                     "-c:v",
@@ -591,6 +596,8 @@ pub fn chapters_file(options: &ExportOptions, plan: &Plan, fps: f64) -> Option<S
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct Encoders {
     pub videotoolbox: bool,
+    /// An NVIDIA card's encoder, there and answering (FFmpeg lists it with no card or driver).
+    pub nvenc: bool,
     pub hevc: bool,
     pub prores: bool,
     pub mp3: bool,
@@ -611,10 +618,77 @@ pub fn encoders() -> Encoders {
         };
         Encoders {
             videotoolbox: has("h264_videotoolbox") && has("hevc_videotoolbox"),
+            nvenc: !cfg!(target_os = "macos")
+                && has("h264_nvenc")
+                && has("hevc_nvenc")
+                && nvenc_answers(),
             hevc: has("libx265"),
             prores: has("prores_ks"),
             mp3: has("libmp3lame"),
         }
+    })
+}
+
+/// NVENC at `rate` bits a second: the rate VideoToolbox gets, at NVENC's
+/// high-quality preset, with adaptive quantisation in space and time, a
+/// lookahead and B-frames (an RTX 4060 runs p5 at several times real time for
+/// 1080p, Nov 7). Exports and a chunked export's chunks (`pipe_writer`) alike.
+pub fn nvenc_args(hevc: bool, rate: u64) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "-c:v",
+        if hevc { "hevc_nvenc" } else { "h264_nvenc" },
+        "-preset",
+        "p5",
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    args.extend([
+        "-b:v".to_owned(),
+        rate.to_string(),
+        "-maxrate".to_owned(),
+        (rate * 3 / 2).to_string(),
+        "-bufsize".to_owned(),
+        (rate * 2).to_string(),
+    ]);
+    args.extend(
+        ["-spatial-aq", "1", "-temporal-aq", "1", "-rc-lookahead", "32", "-bf", "3"].map(str::to_owned),
+    );
+    if !hevc {
+        args.extend(["-profile:v", "high"].map(str::to_owned));
+    }
+    args
+}
+
+/// Whether NVENC encodes a frame: the driver loads and the card takes a session.
+fn nvenc_answers() -> bool {
+    ["h264_nvenc", "hevc_nvenc"].iter().all(|codec| {
+        std::process::Command::new(crate::util::ffmpeg())
+            .args([
+                "-hide_banner",
+                "-v",
+                "error",
+                "-nostdin",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=black:s=256x144:r=30:d=0.1",
+                "-frames:v",
+                "1",
+                "-c:v",
+                codec,
+                "-f",
+                "null",
+                "/dev/null",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
     })
 }
 

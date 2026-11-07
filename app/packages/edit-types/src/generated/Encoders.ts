@@ -3,4 +3,8 @@
 /**
  * The encoders this FFmpeg has that the dialog's choices depend on.
  */
-export type Encoders = { videotoolbox: boolean, hevc: boolean, prores: boolean, mp3: boolean, };
+export type Encoders = { videotoolbox: boolean, 
+/**
+ * An NVIDIA card's encoder, there and answering (FFmpeg lists it with no card or driver).
+ */
+nvenc: boolean, hevc: boolean, prores: boolean, mp3: boolean, };

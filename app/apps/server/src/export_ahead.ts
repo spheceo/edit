@@ -57,8 +57,17 @@ export function upToDate(home: string, cache: string, project: Project, options:
   return listExports(home, project.id).some((one) => one.whole && one.timeline === timeline);
 }
 
-/** Whether this Mac runs on its battery now (pmset); false when it can't tell. */
+/** Whether this machine runs on its battery now (pmset; Linux's power supplies); false when it can't tell. */
 function onBattery(): boolean {
+  if (process.platform === "linux") {
+    try {
+      const supplies = fs.readdirSync("/sys/class/power_supply");
+      const read = (name: string, what: string) => fs.readFileSync(`/sys/class/power_supply/${name}/${what}`, "utf8").trim();
+      return supplies.some((name) => name.startsWith("BAT") && read(name, "status") === "Discharging");
+    } catch {
+      return false;
+    }
+  }
   if (process.platform !== "darwin") return false;
   const result = spawnSync("pmset", ["-g", "batt"], { encoding: "utf8", timeout: 2000 });
   return result.status === 0 && result.stdout.includes("'Battery Power'");

@@ -1165,7 +1165,7 @@ async function exportEncoders({ app }: Context): Promise<Response> {
   try {
     return json(await app.native.encoders());
   } catch {
-    return json({ videotoolbox: false, hevc: false, prores: false, mp3: false });
+    return json({ videotoolbox: false, nvenc: false, hevc: false, prores: false, mp3: false });
   }
 }
 

@@ -24,6 +24,10 @@ use edit_render::{text::BUNDLED_FONTS, wgpu, Renderer};
 use serde_json::{json, Value};
 
 use crate::export::{ExportOptions, Format, Plan};
+#[cfg(target_os = "macos")]
+use crate::mac_media::{Writer as ChunkWriter, WriterOptions};
+#[cfg(not(target_os = "macos"))]
+use crate::pipe_writer::{Writer as ChunkWriter, WriterOptions};
 
 pub fn new_renderer(width: u32, height: u32) -> Result<Renderer, String> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -1425,14 +1429,8 @@ pub fn export_file(
         .map_err(|error| error.to_string())?;
     let temporary = ExportFile(path);
     let mut progress = progress;
-    #[cfg(target_os = "macos")]
     let settings = native_options(project, options, plan, false)?;
-    #[cfg(not(target_os = "macos"))]
-    let settings: Option<()> = None;
-    #[cfg(target_os = "macos")]
     let mut made = None;
-    #[cfg(not(target_os = "macos"))]
-    let made: Option<(Vec<crate::chunks::Chunk>, Option<String>)> = None;
     if let Some(settings) = settings {
         // Tried twice before exporting it whole: the chunks made are kept, so
         // a second try only makes the rest. A sound encoder that stalled once
@@ -1442,7 +1440,6 @@ pub fn export_file(
         // wrong, and copying it again fails the same way (Nov 2, JJ's Mom
         // Secretly v2: both joins had 53141 frames, not 53036, and the whole
         // export after stalled on a Mac out of memory).
-        #[cfg(target_os = "macos")]
         for attempt in 1..=2 {
             match export_chunked(
                 project,
@@ -1473,8 +1470,6 @@ pub fn export_file(
                 ),
             }
         }
-        #[cfg(not(target_os = "macos"))]
-        let _ = settings;
     }
     if made.is_none() {
         // The native encoder first; when it fails (stalled on a Mac out of
@@ -1531,13 +1526,12 @@ pub fn export_file(
 /// in the last export (or left by a run that stopped) are copied, the rest
 /// rendered, and the sound mixed again only when something heard changed.
 /// Says which chunks the file is made of and the sound's key.
-#[cfg(target_os = "macos")]
 #[allow(clippy::too_many_arguments)]
 fn export_chunked(
     project: &Project,
     options: &ExportOptions,
     plan: &Plan,
-    settings: crate::mac_media::WriterOptions,
+    settings: WriterOptions,
     output: &Path,
     cache: &Path,
     sounds: &HashMap<String, PathBuf>,
@@ -1679,7 +1673,7 @@ fn export_chunked(
             open: None,
             size: (plan.width, plan.height),
             fps,
-            settings: crate::mac_media::WriterOptions {
+            settings: WriterOptions {
                 faststart: false,
                 ..settings
             },
@@ -1771,7 +1765,6 @@ fn export_chunked(
 
 /// Joins the chunks in the concat list `list`, the sound (its first sound
 /// stream: a mix or the last export) and chapters into `output`.
-#[cfg(target_os = "macos")]
 fn join_chunks(
     options: &ExportOptions,
     list: &Path,
@@ -2242,13 +2235,12 @@ fn render_picture(
 /// The standard Mac video path encodes with AVFoundation; the compositor
 /// remains shared with the browser. Nonstandard shapes/rates and
 /// software-quality exports keep the compatibility encoder (None).
-#[cfg(target_os = "macos")]
 fn native_options(
     project: &Project,
     options: &ExportOptions,
     plan: &Plan,
     alone: bool,
-) -> Result<Option<crate::mac_media::WriterOptions>, String> {
+) -> Result<Option<WriterOptions>, String> {
     if !options.hardware
         || std::env::var_os("EDIT_FFMPEG_VIDEO").is_some()
         || !matches!(options.format, Format::H264 | Format::Hevc)
@@ -2260,7 +2252,15 @@ fn native_options(
     {
         return Ok(None);
     }
-    Ok(Some(crate::mac_media::WriterOptions {
+    // Off a Mac the chunks are FFmpeg's (`pipe_writer`): HEVC needs NVENC or libx265.
+    let encoders = crate::export::encoders();
+    if !cfg!(target_os = "macos")
+        && options.format == Format::Hevc
+        && !(encoders.nvenc || encoders.hevc)
+    {
+        return Ok(None);
+    }
+    Ok(Some(WriterOptions {
         hevc: options.format == Format::Hevc,
         bitrate: crate::export::video_bitrate(options, plan, project.fps())?,
         key_interval: options.key_interval(f64::from(project.settings.fps)),
@@ -2303,18 +2303,16 @@ fn native_writer(
 
 /// Writes each chunk of a chunked export to its own file: `<key>.partial.mp4`
 /// while it's being written, renamed to `<key>.mp4` once whole.
-#[cfg(target_os = "macos")]
 struct ChunkSink {
     /// Frames `[start, end)` and the file, in the order they're rendered.
     todo: VecDeque<(i64, i64, PathBuf)>,
     /// The chunk being written: its frames, file, writer and frames written.
-    open: Option<(i64, i64, PathBuf, crate::mac_media::Writer, i64)>,
+    open: Option<(i64, i64, PathBuf, ChunkWriter, i64)>,
     size: (u32, u32),
     fps: f64,
-    settings: crate::mac_media::WriterOptions,
+    settings: WriterOptions,
 }
 
-#[cfg(target_os = "macos")]
 impl ChunkSink {
     fn partial(path: &Path) -> PathBuf {
         path.with_extension("partial.mp4")
@@ -2340,7 +2338,7 @@ impl ChunkSink {
             if frame != start {
                 return Err("a chunk's frames came out of order".to_owned());
             }
-            let writer = crate::mac_media::Writer::open(
+            let writer = ChunkWriter::open(
                 &Self::partial(&path),
                 self.size.0,
                 self.size.1,
@@ -2391,7 +2389,6 @@ enum Sink {
         first: i64,
     },
     /// Each chunk into its own file (`chunks.rs`).
-    #[cfg(target_os = "macos")]
     Chunks(ChunkSink),
     Pipe {
         stdin: BufWriter<ChildStdin>,
@@ -2408,7 +2405,6 @@ impl Sink {
             Sink::Native { writer, first } => {
                 writer.frame(_frame - *first, pixels, stride, Order::Rgba)
             }
-            #[cfg(target_os = "macos")]
             Sink::Chunks(chunks) => chunks.write(_frame, pixels, stride),
             Sink::Pipe {
                 stdin,
@@ -2430,7 +2426,6 @@ impl Sink {
         match self {
             #[cfg(target_os = "macos")]
             Sink::Native { mut writer, .. } => writer.finish(_frames),
-            #[cfg(target_os = "macos")]
             Sink::Chunks(chunks) => chunks.finish(),
             Sink::Pipe { mut stdin, .. } => stdin
                 .flush()
@@ -3165,8 +3160,7 @@ mod tests {
     /// JJ's Mom Secretly v2: the join had 105 frames too many, twice) tries
     /// again rendering those chunks, not copying them again, and stays a
     /// chunked export instead of going whole.
-    #[cfg(target_os = "macos")]
-    #[test]
+        #[test]
     fn a_second_try_renders_what_the_first_copied_from_the_last_export() {
         let dir = temp_dir("chunks-retry");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3217,8 +3211,7 @@ mod tests {
     /// Smooth playback's render (a background export) keeps its sound a
     /// minute at a time: the file's sound is the edit's length, and after a
     /// change to the edit's last seconds only the last minute is made again.
-    #[cfg(target_os = "macos")]
-    #[test]
+        #[test]
     fn smooth_playback_keeps_its_sound_a_minute_at_a_time() {
         let dir = temp_dir("kept-sound");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3291,8 +3284,7 @@ mod tests {
     /// A focused export (smooth playback: the playhead's chunks first, then
     /// on, then those before) makes the same file as one in order: every
     /// frame where it belongs, made of chunks, not exported whole.
-    #[cfg(target_os = "macos")]
-    #[test]
+        #[test]
     fn a_focused_export_renders_from_the_playhead_and_joins_in_order() {
         let dir = temp_dir("focused");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3342,8 +3334,7 @@ mod tests {
     /// and gives the same file a whole export would: every frame, the sound
     /// the length of the picture; a trim near the start leaves later chunks
     /// as they were when the trim ends on a chunk boundary.
-    #[cfg(target_os = "macos")]
-    #[test]
+        #[test]
     fn a_re_export_redoes_only_the_chunks_that_changed() {
         let dir = temp_dir("chunks");
         let red = source(&dir, "red.mp4", "red", 0.5);
@@ -3492,8 +3483,7 @@ mod tests {
 
     /// An NTSC project (24 × 1000/1001) exports at exactly 24000/1001, its
     /// frames and sound the timeline's length at that rate.
-    #[cfg(target_os = "macos")]
-    #[test]
+        #[test]
     fn an_ntsc_project_exports_at_its_exact_rate() {
         let dir = temp_dir("ntsc");
         let red = source(&dir, "red.mp4", "red", 0.5);

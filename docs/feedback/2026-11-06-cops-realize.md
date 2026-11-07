@@ -30,3 +30,12 @@ The four projects' footage was imported on Mathias's Mac, so every frame the age
 On nightly-61 the server answered health in 13–52 s: /api/projects/status built and sorted every project's whole chat twice (54 chats, 6.5 MB) every few seconds, and so did each followed fix. The agents' tools didn't connect (Cops Realize, six times), whole previews took 3–4 min, and Son & Dad's share upload had R2 close its sockets. Whether a turn runs is now read without building the chat (agent.ts `turn`); health 0.03–2.75 s after.
 
 Also on the way: Cops Realize's chat was flagged by the model's safeguards (Sonnet and Opus) every turn, so it was reset (the old chat kept in ~/Documents/edit-chat-backups); three flaky tests fixed so just check passes on a loaded Mac (f8592da8, c2c034dc's media timeout, 37c4d0b4's lint).
+
+### Fixes 7–10 (nightly-63 to nightly-66) and the shares
+
+- Reviews' state (bde10a81) and Writer's script list and ledger were parsed on every look (790 KB; 89 scripts, 217 MB; 2.6 MB), and the server sat in JSON.parse: now parsed again only when the file changes.
+- A map shot's tiles count as progress (the page says so while they come): every try had been killed at 150 s; Female Police Captain's map rendered in 11 min 58 s, the first on this Mac since Oct 30. A share waits 20 min for maps (118f8864).
+- both_ears reads a source no further than the last stretch it hears (73f51ccd).
+- A share's version goes up once its review copy is up; the full-quality file follows behind. Uploads go in 16 MiB parts, eight at a time: every 64 MiB part was cut at ~60 s.
+
+Shared: Son & Dad v2 01:31, Predator Teacher v2 05:03, Cops Realize v3 and Female Police Captain v2 05:21. Still to do: the server still stalls for seconds at a time under load (health up to ~5–26 s); it needs a JS-level profile to find what's left.

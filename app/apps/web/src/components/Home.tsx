@@ -1915,7 +1915,7 @@ const LINK = /https?:\/\/\S+/gi;
 const WRITER_KIND: Partial<Record<Style, "foia" | "interrogation" | "courtroom">> = { bodycam: "foia", interrogation: "interrogation", courtroom: "courtroom" };
 
 /** One source of a script to write, as Script mode checked it: a video or a reused case. */
-type Source = { url: string; title: string; durationMs: number | null; reuse: boolean; earlier?: string; problem: string | null };
+type Source = { url: string; title: string; durationMs: number | null; reuse: boolean; earlier?: string; problem: string | null; warning?: string | null; again?: boolean };
 
 /**
  * New project: a title, then what it's made from, then the kind and a first
@@ -1995,8 +1995,18 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
         // The links at once; what each is (YouTube takes a few seconds a video) as it comes.
         if (alive) setSources(lines.flatMap((line) => line.match(LINK) ?? []).map((url) => ({ url, title: "", durationMs: null, reuse: /^REUSE\b/i.test(lines.find((one) => one.includes(url)) ?? ""), problem: null })));
         const checked = await writer.checkVideos(lines);
-        if (alive) setError(null);
-        if (alive) setSources(checked.map((one) => ({ url: one.url, title: one.title, durationMs: one.durationMs, reuse: one.reuse, ...(one.earlier ? { earlier: one.earlier } : {}), problem: one.problem })));
+        // A link YouTube didn't answer for (slow, or a sign-in asked) is checked once more on its own, behind the rest: Create
+        // doesn't wait on it, and only if it fails again does its row say so (Nov 6, Marius: four of six links showed only their URL).
+        const again = new Set(checked.filter((one) => one.title === "" && one.problem === null && one.warning !== null && /youtu/.test(one.url)).map((one) => one.url));
+        if (!alive) return;
+        setError(null);
+        setSources(checked.map((one) => ({ url: one.url, title: one.title, durationMs: one.durationMs, reuse: one.reuse, ...(one.earlier ? { earlier: one.earlier } : {}), problem: one.problem, warning: one.warning, again: again.has(one.url) })));
+        setReading(false);
+        for (const url of again) {
+          const [found] = await writer.checkVideos([url]).catch(() => []);
+          if (!alive) return;
+          setSources((all) => (all ?? []).map((one) => (one.url !== url ? one : found ? { ...one, title: found.title, durationMs: found.durationMs, problem: found.problem, warning: found.warning, again: false } : { ...one, again: false })));
+        }
       } catch (cause) {
         if (alive) setError((cause as Error).message);
       } finally {
@@ -2172,8 +2182,9 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
                       <span className="block truncate text-fg" title={one.url}>
                         {one.title || one.url}
                       </span>
-                      {reading && one.title === "" && one.problem === null && <span className="shimmer block text-faint">Checking…</span>}
+                      {(reading || one.again) && one.title === "" && one.problem === null && <span className="shimmer block text-faint">Checking…</span>}
                       {one.problem !== null && <span className="block truncate text-danger">{one.problem}</span>}
+                      {one.problem === null && !one.again && one.warning && <span className="block truncate text-faint" title={one.warning}>{one.warning}</span>}
                     </span>
                     {one.durationMs !== null && <span className="shrink-0 text-faint tabular">{shortDuration(one.durationMs / 1000)}</span>}
                     <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-muted" title="A case the channel already covered: put in as it was, not written again">

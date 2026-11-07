@@ -128,6 +128,8 @@ function probeTrouble(error: string): [string, boolean] {
   if (lower.includes("not a bot") || lower.includes("sign in")) return ["YouTube asked this Mac to sign in, so it couldn't be checked. It should still import through the proxy.", false];
   if (["unavailable", "removed", "does not exist", "terminated"].some((word) => lower.includes(word))) return ["It's no longer available.", true];
   if (lower.includes("premiere") || lower.includes("live event")) return ["It hasn't premiered yet.", true];
+  // Nov 6, Marius's Mac on a slow connection: checks ran past 90 s, and four of six links showed only their URL.
+  if (lower.includes("took too long")) return ["YouTube was too slow to check it. It should still import.", false];
   return ["YouTube couldn't be asked about it, so it wasn't checked. Check the link opens.", false];
 }
 

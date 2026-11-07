@@ -4,7 +4,8 @@
 //! channel's burned-in calls to action ("SUBSCRIBE", the bell) and logos in a
 //! re-upload, which the team wants blurred wherever they show (Corrupt Cop's
 //! "Subscribe should be blurred here. This could appear throughout the
-//! video"). Off macOS nothing is found.
+//! video"). Off macOS PaddleOCR reads them (`text_model`), kept in its own
+//! file (`text-paddle-v1.json`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -14,12 +15,14 @@ use serde::{Deserialize, Serialize};
 /// Frames looked at per second of source.
 pub const RATE: f64 = 1.0;
 /// The analysis's file in the media's cache dir; a new method is a new file.
-const FILE: &str = "text-v1.json";
-/// How wide the frames looked at are: a channel's subscribe button reads at this size.
 #[cfg(target_os = "macos")]
+const FILE: &str = "text-v1.json";
+/// PaddleOCR's (off macOS): its own file, never taken for Vision's.
+#[cfg(not(target_os = "macos"))]
+const FILE: &str = "text-paddle-v1.json";
+/// How wide the frames looked at are: a channel's subscribe button reads at this size.
 const WIDE: u32 = 960;
 /// Text the recogniser is less sure of is ignored.
-#[cfg(target_os = "macos")]
 const SURE: f32 = 0.3;
 
 /// One piece of text seen: its box (x0, y0, x1, y1 as shares of the picture
@@ -34,7 +37,6 @@ pub struct Seen {
 pub type Texts = BTreeMap<i64, Vec<Seen>>;
 
 /// One stretch's reads, index by index.
-#[cfg(target_os = "macos")]
 type Read = Vec<(i64, Vec<Seen>)>;
 
 #[derive(Default, Deserialize, Serialize)]
@@ -78,9 +80,9 @@ pub fn detect(source: &Path, size: (u32, u32), indexes: &BTreeSet<i64>) -> Resul
         .collect())
 }
 
-/// Reads the text at `indexes` (sorted): the light preview decoded by
-/// AVFoundation, in up to three stretches side by side, each frame given to Vision.
-#[cfg(target_os = "macos")]
+/// Reads the text at `indexes` (sorted): the light preview decoded (by
+/// AVFoundation on a Mac, FFmpeg elsewhere), in up to three stretches side by
+/// side, each frame given to Vision on a Mac, PaddleOCR elsewhere.
 fn look(source: &Path, (width, height): (u32, u32), indexes: &[i64]) -> Result<Texts, String> {
     let wide = WIDE.min(width.max(2)) & !1;
     let decode = crate::track::decode_source(source, wide as usize);
@@ -97,7 +99,11 @@ fn look(source: &Path, (width, height): (u32, u32), indexes: &[i64]) -> Result<T
         for &index in part {
             let time = index as f64 / RATE;
             let bgra = reader.frame_at(time)?;
-            let seen = crate::mac_media::text(bgra, wide, high)?
+            #[cfg(target_os = "macos")]
+            let lines = crate::mac_media::text(bgra, wide, high)?;
+            #[cfg(not(target_os = "macos"))]
+            let lines = crate::text_model::text(bgra, wide, high)?;
+            let seen = lines
                 .into_iter()
                 .filter(|(_, sure, _)| *sure >= SURE)
                 .map(|(b, _, t)| Seen {
@@ -127,12 +133,6 @@ fn look(source: &Path, (width, height): (u32, u32), indexes: &[i64]) -> Result<T
         out.extend(result?);
     }
     Ok(out)
-}
-
-/// No text recogniser off macOS.
-#[cfg(not(target_os = "macos"))]
-fn look(_source: &Path, _size: (u32, u32), _indexes: &[i64]) -> Result<Texts, String> {
-    Ok(BTreeMap::new())
 }
 
 /// The text read in `source` so far, without looking at anything new (the audit).

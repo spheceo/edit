@@ -53,6 +53,53 @@ export function qjs(): string | null {
   return null;
 }
 
+/** The video hardware FFmpeg encodes H.264 on here. */
+export type VideoHardware = "videotoolbox" | "nvenc";
+let hardware: VideoHardware | null | undefined;
+
+/**
+ * This machine's video hardware: VideoToolbox on a Mac; NVENC where an NVIDIA
+ * card's driver answers, tried once with a one-frame encode (FFmpeg lists
+ * h264_nvenc with no card or driver at all: Nov 7, Ubuntu on nouveau); else
+ * null, and libx264 encodes.
+ */
+export function videoHardware(): VideoHardware | null {
+  if (hardware !== undefined) return hardware;
+  if (process.platform === "darwin") return (hardware = "videotoolbox");
+  try {
+    const tried = Bun.spawnSync([ffmpeg(), "-hide_banner", "-v", "error", "-nostdin", "-f", "lavfi", "-i", "color=black:s=256x144:r=30:d=0.1", "-frames:v", "1", "-c:v", "h264_nvenc", "-f", "null", "-"], { stdout: "ignore", stderr: "ignore", timeout: 20_000 });
+    hardware = tried.exitCode === 0 ? "nvenc" : null;
+  } catch {
+    hardware = null;
+  }
+  return hardware;
+}
+
+/**
+ * `-c:v` for H.264 on the video hardware, with its speed setting (the rate
+ * options are the caller's: `-b:v`, `-maxrate`, `-g` and `-bf` mean the same to
+ * each); null where there's none.
+ */
+export function hardwareH264(): string[] | null {
+  const found = videoHardware();
+  if (found === "videotoolbox") return ["-c:v", "h264_videotoolbox"];
+  if (found === "nvenc") return ["-c:v", "h264_nvenc", "-preset", "p4"];
+  return null;
+}
+
+/** As `hardwareH264`, else libx264 at `veryfast`. */
+export function h264(): string[] {
+  return hardwareH264() ?? ["-c:v", "libx264", "-preset", "veryfast"];
+}
+
+/** Decoding on the video hardware, frames handed back in memory (the filters are FFmpeg's): `-hwaccel …`, or none. */
+export function hardwareDecode(): string[] {
+  const found = videoHardware();
+  if (found === "videotoolbox") return ["-hwaccel", "videotoolbox"];
+  if (found === "nvenc") return ["-hwaccel", "cuda"];
+  return [];
+}
+
 /** Whether the FFmpeg in use is the one shipped with Edit. */
 export function bundled(): boolean {
   return isAbsolute(ffmpeg());
@@ -61,6 +108,7 @@ export function bundled(): boolean {
 /** Forgets what was found (tests that change the environment). */
 export function forget(): void {
   found.clear();
+  hardware = undefined;
 }
 
 function cached(tool: string, variable: string): string {

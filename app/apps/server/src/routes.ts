@@ -83,8 +83,8 @@ export function buildRouter(): Router<App> {
       const since = Number(query.get("since") ?? 0) || 0;
       return json({ lines: diag.lines(2000).filter((line) => line.at > since) });
     })
-    .post("/api/logs/reveal", ({ app }) => {
-      Bun.spawn(["open", "-R", join(app.store.home, "logs", "edit.log")], { stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+    .post("/api/logs/reveal", async ({ app }) => {
+      await localFiles.reveal(join(app.store.home, "logs", "edit.log"));
       return json({ ok: true });
     })
     .get("/api/setup", setup);

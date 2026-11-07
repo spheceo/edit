@@ -293,11 +293,14 @@ function share(context: Context, local: string, key: string): void {
  * ordinary MP4): decoded and scaled in VideoToolbox as the whole proxy is
  * (media.rs `hardware_video`), or with `hardware` false, scaled by FFmpeg
  * (footage whose tags VideoToolbox's scaler refuses: Robyn in custody's
- * "gbr" matrix), always encoded by VideoToolbox.
+ * "gbr" matrix), encoded by VideoToolbox. Off a Mac FFmpeg decodes and
+ * scales, and NVENC encodes where there's one, else libx264 (tools.ts).
  */
 export function videoCommand(layout: Layout, n: number, url: string, out: string, bitrate = layout.bitrate, hardware = true): string[] {
   const [first, end] = framesOf(layout, n);
   const gop = String(Math.max(1, Math.round(layout.fps / 2)));
+  const mac = tools.videoHardware() === "videotoolbox";
+  hardware &&= mac;
   return [
     tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-threads", hardware ? "2" : "4",
     ...(hardware ? ["-hwaccel", "videotoolbox", "-hwaccel_output_format", "videotoolbox_vld"] : []),
@@ -308,7 +311,7 @@ export function videoCommand(layout: Layout, n: number, url: string, out: string
       ? ["-vf", `scale_vt=w=${layout.width}:h=${layout.height}:color_matrix=bt709:color_primaries=bt709:color_transfer=bt709`]
       : ["-vf", `scale=w=${layout.width}:h=${layout.height}:out_color_matrix=bt709:out_range=tv,format=yuv420p`, "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]),
     "-fps_mode", "cfr", "-r", String(layout.fps), "-frames:v", String(end - first),
-    "-c:v", "h264_videotoolbox", "-prio_speed", "1",
+    ...(mac ? ["-c:v", "h264_videotoolbox", "-prio_speed", "1"] : tools.h264()),
     "-b:v", `${Math.round(bitrate / 1000)}k`, "-maxrate", `${Math.round((bitrate * 1.25) / 1000)}k`, "-bufsize", `${Math.round((bitrate * 2) / 1000)}k`,
     "-g", gop, "-bf", "0", "-movflags", "+faststart", out,
   ];
@@ -327,7 +330,7 @@ export async function makeVideo(context: Context, base: string, layout: Layout, 
     const partial = `${out}.partial`;
     try {
       const began = performance.now();
-      const hardware = !softwareScaled.has(base);
+      const hardware = tools.videoHardware() === "videotoolbox" && !softwareScaled.has(base);
       const options = { timeoutMs: 30 * 60_000, ...(signal ? { signal } : {}) };
       // Stopped (the fill's piece giving way): why, not FFmpeg's end.
       const stopped = (error: unknown) => (signal?.aborted ? (signal.reason as Error) : new Error(`piece ${n}'s picture: ${diag.scrub(diag.messageOf(error))}`));

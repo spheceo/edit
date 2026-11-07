@@ -4,7 +4,7 @@
 
 import { expect, test } from "bun:test";
 
-import { biggestApp, biggestApps, calm, claudeGate, claudesRunning, claudeTurn, editUse, judge, useLine, type MemoryState, type Pressure } from "../src/memory.ts";
+import { biggestApp, biggestApps, calm, claudeGate, claudesRunning, claudeTurn, editUse, judge, linuxPressure, useLine, type MemoryState, type Pressure } from "../src/memory.ts";
 
 function run(readings: [number, Pressure][]): MemoryState {
   return readings.reduce((state, [at, pressure]) => judge(state, pressure, at), calm);
@@ -81,4 +81,17 @@ test("Claude Code questions start at once with memory to spare, three at a time 
   expect(claudesRunning()).toBe(4);
   [first[1]!, first[2]!, fourth!, fifth].forEach((release) => release());
   expect(claudesRunning()).toBe(0);
+});
+
+test("on Linux the level comes from MemAvailable (never MemFree) and how long work stalled on memory", () => {
+  const meminfo = (available: number) => `MemTotal:       1000000 kB\nMemFree:          10000 kB\nMemAvailable:   ${available} kB\n`;
+  const psi = (some: number, full: number) => `some avg10=${some.toFixed(2)} avg60=0.00 avg300=0.00 total=1\nfull avg10=${full.toFixed(2)} avg60=0.00 avg300=0.00 total=1\n`;
+  // 1% free but half available (the page cache): normal.
+  expect(linuxPressure(meminfo(500_000), psi(0, 0))).toBe(1);
+  expect(linuxPressure(meminfo(100_000), psi(0, 0))).toBe(2);
+  expect(linuxPressure(meminfo(40_000), psi(0, 0))).toBe(4);
+  expect(linuxPressure(meminfo(500_000), psi(25, 0))).toBe(2);
+  expect(linuxPressure(meminfo(500_000), psi(50, 12))).toBe(4);
+  // No PSI (an old kernel): memory alone.
+  expect(linuxPressure(meminfo(500_000), "")).toBe(1);
 });

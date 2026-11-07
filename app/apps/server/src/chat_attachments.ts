@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
 import { isFile, join } from "./paths.ts";
+import { ffmpeg } from "./tools.ts";
 
 export type AttachedKind = "image" | "video" | "audio" | "file";
 
@@ -93,7 +94,7 @@ const LONGEST = 1568;
 
 /**
  * The attached pictures as JPEGs the model reads (`sips` scales and converts,
- * HEIC and PNG alike), written to `dir`. One that can't be read is left to the
+ * HEIC and PNG alike; FFmpeg off a Mac), written to `dir`. One that can't be read is left to the
  * words: the agent can still look at its media.
  */
 export async function pictures(list: Attached[], media: { id: string; path: string; kind: string }[], dir: string): Promise<Picture[]> {
@@ -105,11 +106,16 @@ export async function pictures(list: Attached[], media: { id: string; path: stri
     try {
       fs.mkdirSync(dir, { recursive: true });
       const path = join(dir, `${one.media}-${Date.now()}.jpg`);
-      const made = Bun.spawn(["/usr/bin/sips", "-Z", String(LONGEST), "-s", "format", "jpeg", "-s", "formatOptions", "85", found.path, "--out", path], { stdout: "ignore", stderr: "pipe" });
+      const made = Bun.spawn(
+        process.platform === "darwin"
+          ? ["/usr/bin/sips", "-Z", String(LONGEST), "-s", "format", "jpeg", "-s", "formatOptions", "85", found.path, "--out", path]
+          : [ffmpeg(), "-v", "error", "-nostdin", "-y", "-i", found.path, "-frames:v", "1", "-vf", `scale=w='min(${LONGEST},iw)':h='min(${LONGEST},ih)':force_original_aspect_ratio=decrease`, "-q:v", "3", "-update", "1", path],
+        { stdout: "ignore", stderr: "pipe" },
+      );
       const timer = setTimeout(() => made.kill(), 20_000);
       const code = await made.exited;
       clearTimeout(timer);
-      if (code !== 0 || !isFile(path)) throw new Error(`sips exited ${code}`);
+      if (code !== 0 || !isFile(path)) throw new Error(`${process.platform === "darwin" ? "sips" : "ffmpeg"} exited ${code}`);
       out.push({ media: one.media, path, data: fs.readFileSync(path).toString("base64"), mime: "image/jpeg" });
     } catch (error) {
       diag.warn("agent", `an attached picture (${one.name}) couldn't be given to the model: ${diag.messageOf(error)}`);

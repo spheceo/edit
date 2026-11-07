@@ -827,11 +827,7 @@ async function reviewCopyFromChunks(cache: string, project: string, source: stri
         const partial = `${piece}.partial.mp4`;
         // No chapters: the export's run to its end and would count in the piece's length (review_runtime.py).
         const common = ["-v", "error", "-nostdin", "-y", "-ss", (chunk.at / last.fps).toFixed(6), "-i", source, "-frames:v", String(chunk.frames), "-an", "-map_chapters", "-1", "-vf", "scale=-2:720"];
-        try {
-          await tools.run([tools.ffmpeg(), ...common, "-c:v", "h264_videotoolbox", "-b:v", "3M", partial]);
-        } catch {
-          await tools.run([tools.ffmpeg(), ...common, "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", partial]);
-        }
+        await encodeReview(common, partial);
         fs.renameSync(partial, piece);
         made += 1;
       }),
@@ -853,12 +849,22 @@ async function reviewCopyFromChunks(cache: string, project: string, source: stri
 export async function reviewCopy(source: string, dest: string): Promise<void> {
   const partial = `${dest}.partial.mp4`;
   const common = ["-v", "error", "-nostdin", "-y", "-i", source, "-map_chapters", "-1", "-vf", "scale=-2:720", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"];
-  try {
-    await tools.run([tools.ffmpeg(), ...common, "-c:v", "h264_videotoolbox", "-b:v", "3M", partial]);
-  } catch {
-    await tools.run([tools.ffmpeg(), ...common, "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", partial]);
-  }
+  await encodeReview(common, partial);
   fs.renameSync(partial, dest);
+}
+
+/** A review copy's picture at 3 Mbit/s on the video hardware, else libx264 at CRF 26. */
+async function encodeReview(common: string[], partial: string): Promise<void> {
+  const hardware = tools.hardwareH264();
+  if (hardware !== null) {
+    try {
+      await tools.run([tools.ffmpeg(), ...common, ...hardware, "-b:v", "3M", partial]);
+      return;
+    } catch {
+      // libx264 below
+    }
+  }
+  await tools.run([tools.ffmpeg(), ...common, "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", partial]);
 }
 
 // ---------------------------------------------------------------------------

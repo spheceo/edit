@@ -18,7 +18,7 @@ import { registerTool, text } from "./mcp/registry.ts";
 import { extension, fileName, fileStem, join } from "./paths.ts";
 import { ffmpeg, ffprobe } from "./tools.ts";
 
-/** Pictures macOS's `sips` reads that Edit doesn't: made PNGs. */
+/** Pictures macOS's `sips` reads that Edit doesn't: made PNGs (by FFmpeg off a Mac, which reads HEIC, AVIF and the rest but raw camera files). */
 export const PICTURES = ["heic", "heif", "avif", "psd", "ico", "icns", "jp2", "tga", "exr", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "srw", "pef"];
 /** Text a file's words are read from as they are. */
 const PLAIN = ["txt", "md", "markdown", "csv", "tsv", "json", "srt", "vtt", "xml", "yaml", "yml", "log"];
@@ -98,10 +98,11 @@ export async function plan(path: string, dir: string): Promise<Plan> {
     for (let n = 2; fs.existsSync(made); n++) made = join(dir, wanted.replace(/(\.[^.]+)$/, ` ${n}$1`));
     return made;
   };
-  if (PICTURES.includes(ext) && process.platform === "darwin") {
+  if (PICTURES.includes(ext)) {
     const out = free(`${stem}.png`);
-    const made = await run(["/usr/bin/sips", "-s", "format", "png", path, "--out", out]);
+    const made = await run(process.platform === "darwin" ? ["/usr/bin/sips", "-s", "format", "png", path, "--out", out] : [ffmpeg(), "-v", "error", "-y", "-i", path, "-frames:v", "1", "-update", "1", out]);
     if (made.code === 0 && fs.existsSync(out)) return { media: out, from: ext };
+    fs.rmSync(out, { force: true });
     diag.warn("upload", `${fileName(path)}: not made a picture (${made.out}); kept as a file`);
     return { file: true };
   }
@@ -133,10 +134,11 @@ export async function plan(path: string, dir: string): Promise<Plan> {
   return { file: true };
 }
 
-/** A kept file's words, for the agent: plain text as it is, documents through textutil. */
+/** A kept file's words, for the agent: plain text as it is, documents through textutil (on Linux, `elsewhere`). */
 export async function words(path: string): Promise<string> {
   const ext = (extension(path) ?? "").toLowerCase();
   if (PLAIN.includes(ext)) return fs.readFileSync(path, "utf8");
+  if (process.platform !== "darwin" && (DOCUMENTS.includes(ext) || ext === "pdf")) return elsewhere(path, ext);
   if (DOCUMENTS.includes(ext) && process.platform === "darwin") {
     const made = await run(["/usr/bin/textutil", "-convert", "txt", "-stdout", path]);
     if (made.code === 0) return made.out;
@@ -149,6 +151,100 @@ export async function words(path: string): Promise<string> {
     throw new Error(`${fileName(path)}'s text isn't readable here (a scanned PDF, or not indexed yet): ask the user what's in it`);
   }
   throw new Error(`${fileName(path)} is a ${ext || "binary"} file: its words can't be read`);
+}
+
+/** XML or HTML's text: a line for each paragraph, break and cell, the tags gone, the entities read. */
+function textOf(markup: string): string {
+  const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+  return markup
+    .replace(/<(script|style)\b[\s\S]*?<\/\1>/giu, "")
+    .replace(/<\/(w:p|text:p|text:h|p|div|li|tr|h[1-6])>|<(w:br|w:tab|text:line-break|br)\b[^>]*>/giu, "\n")
+    .replace(/<[^>]+>/gu, "")
+    .replace(/&(#x?[0-9a-f]+|[a-z]+);/giu, (whole, name: string) => {
+      if (name.startsWith("#")) {
+        const code = name[1]?.toLowerCase() === "x" ? Number.parseInt(name.slice(2), 16) : Number(name.slice(1));
+        return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+      }
+      return entities[name.toLowerCase()] ?? whole;
+    })
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
+}
+
+/** Groups whose words aren't the document's: tables of fonts and colours, styles, pictures, its metadata. */
+const RTF_SKIPPED = new Set(["fonttbl", "colortbl", "stylesheet", "info", "pict", "header", "footer", "listtable", "listoverridetable", "generator", "themedata", "colorschememapping", "latentstyles", "datastore", "xmlnstbl", "rsidtbl", "object"]);
+
+/** An RTF file's words: group by group, the control words read for breaks, tabs and characters, the skipped groups dropped. */
+function rtfText(rtf: string): string {
+  let out = "";
+  const groups: boolean[] = [];
+  let skipping = false;
+  for (let at = 0; at < rtf.length; ) {
+    const char = rtf[at]!;
+    if (char === "{" || char === "}") {
+      if (char === "{") groups.push(skipping);
+      else skipping = groups.pop() ?? false;
+      at += 1;
+    } else if (char === "\\") {
+      const next = rtf[at + 1] ?? "";
+      if (next === "'") {
+        if (!skipping) out += String.fromCharCode(Number.parseInt(rtf.slice(at + 2, at + 4), 16));
+        at += 4;
+      } else if (next === "*") {
+        skipping = true;
+        at += 2;
+      } else if (next === "\\" || next === "{" || next === "}") {
+        if (!skipping) out += next;
+        at += 2;
+      } else {
+        const word = /^\\([a-z]+)(-?\d+)? ?/iu.exec(rtf.slice(at, at + 48));
+        if (word === null) {
+          at += 2;
+          continue;
+        }
+        at += word[0].length;
+        const [, name, number] = word;
+        if (RTF_SKIPPED.has(name!)) skipping = true;
+        else if (skipping) continue;
+        else if (name === "par" || name === "line") out += "\n";
+        else if (name === "tab") out += "\t";
+        else if (name === "u" && number !== undefined) {
+          out += String.fromCodePoint(Number(number) < 0 ? Number(number) + 65536 : Number(number));
+          // The character shown by readers that don't know \u.
+          if (rtf[at] !== "\\" && rtf[at] !== "{") at += 1;
+        }
+      }
+    } else {
+      if (!skipping && char !== "\r" && char !== "\n") out += char;
+      at += 1;
+    }
+  }
+  return out.replace(/[ \t]+\n/gu, "\n").replace(/\n{3,}/gu, "\n\n").trim();
+}
+
+/**
+ * A document's words off a Mac (no textutil, no Spotlight): a PDF through
+ * poppler's `pdftotext`, Word and OpenDocument files from the XML inside
+ * them, HTML and RTF with their markup taken out.
+ */
+async function elsewhere(path: string, ext: string): Promise<string> {
+  const unreadable = (why: string) => new Error(`${fileName(path)} couldn't be read: ${why}`);
+  if (ext === "pdf") {
+    const made = await run(["pdftotext", "-layout", "-enc", "UTF-8", path, "-"]).catch(() => ({ code: -1, out: "pdftotext isn't installed (sudo apt install poppler-utils)" }));
+    if (made.code === 0 && made.out.trim() !== "") return made.out;
+    if (made.code === 0) throw new Error(`${fileName(path)}'s text isn't readable here (a scanned PDF): ask the user what's in it`);
+    throw unreadable(made.out);
+  }
+  const inside = ext === "docx" ? "word/document.xml" : ext === "odt" ? "content.xml" : null;
+  if (inside !== null) {
+    const made = await run(["unzip", "-p", path, inside]).catch(() => ({ code: -1, out: "unzip isn't installed" }));
+    if (made.code !== 0) throw unreadable(made.out);
+    return textOf(made.out);
+  }
+  if (ext === "html" || ext === "htm") return textOf(fs.readFileSync(path, "utf8"));
+  if (ext === "rtf") return rtfText(fs.readFileSync(path, "latin1"));
+  throw unreadable(`a .${ext} file needs a Mac to read: ask the user to send it as .docx or .pdf`);
 }
 
 /** How long ago, in words. */

@@ -99,7 +99,7 @@ export function makePiece(app: App, media: Media, index: number): Promise<string
         "-ss", String(index * PIECE), "-protocol_whitelist", tools.protocols(source.input), ...tools.urlArgs(source.input), "-i", source.input,
         "-t", seconds.toFixed(3), "-map", "0:v:0", "-an", "-sn", "-dn",
         "-vf", `scale=w=${WIDTH}:h=${HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2`,
-        "-c:v", "h264_videotoolbox", "-b:v", String(BITRATE), "-g", "1", "-profile:v", "high", "-pix_fmt", "yuv420p",
+        ...tools.h264(), "-b:v", String(BITRATE), "-g", "1", "-profile:v", "high", "-pix_fmt", "yuv420p",
         "-movflags", "+faststart", scratch,
       ], { timeoutMs: 20 * 60_000 });
       fs.mkdirSync(local.slice(0, local.lastIndexOf("/")), { recursive: true });

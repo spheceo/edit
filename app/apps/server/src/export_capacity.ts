@@ -23,6 +23,7 @@
 // place as an export does (exports.ts `takeTurn`), ahead of the ones in line.
 
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as os from "node:os";
 
 const GB = 1024 ** 3;
@@ -43,6 +44,17 @@ export const machine: Machine = {
   totalBytes: os.totalmem(),
   cores: os.cpus().length,
   availablePercent: () => {
+    // Linux's MemAvailable (what can be had without swapping), never os.freemem's MemFree: the page cache keeps that near zero.
+    if (process.platform === "linux") {
+      try {
+        const meminfo = fs.readFileSync("/proc/meminfo", "utf8");
+        const kb = (name: string) => Number(new RegExp(`^${name}:\\s+(\\d+)`, "mu").exec(meminfo)?.[1] ?? Number.NaN);
+        const percent = (kb("MemAvailable") / kb("MemTotal")) * 100;
+        return Number.isFinite(percent) ? Math.round(percent) : null;
+      } catch {
+        return null;
+      }
+    }
     if (process.platform !== "darwin") return (os.freemem() / os.totalmem()) * 100;
     const read = spawnSync("sysctl", ["-n", "kern.memorystatus_level"], { encoding: "utf8", timeout: 2000 });
     const level = Number.parseInt(read.stdout ?? "", 10);

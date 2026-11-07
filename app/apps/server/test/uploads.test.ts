@@ -42,6 +42,31 @@ test.skipIf(ffmpeg === null || !mac)("pictures, video and sound Edit doesn't rea
   }
 });
 
+test.skipIf(ffmpeg === null || mac)("off a Mac, FFmpeg makes other pictures PNGs, and a document's words come from the XML or markup inside it", async () => {
+  const dir = fs.mkdtempSync(join(os.tmpdir(), "uploads-"));
+  try {
+    const avif = join(dir, "phone photo.avif");
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "testsrc=s=64x48", "-frames:v", "1", "-c:v", "libaom-av1", "-still-picture", "1", avif]).exitCode).toBe(0);
+    expect(await uploads.plan(avif, join(dir, "converted"))).toEqual({ media: join(dir, "converted", "phone photo.png"), from: "avif" });
+    fs.writeFileSync(join(dir, "raw.cr2"), "not a picture");
+    expect(await uploads.plan(join(dir, "raw.cr2"), join(dir, "converted"))).toEqual({ file: true });
+    expect(fs.existsSync(join(dir, "converted", "raw.png"))).toBe(false);
+    fs.writeFileSync(join(dir, "page.html"), "<html><style>p{}</style><body><h1>Case 12</h1><p>Officer &amp; driver</p><p>Line&nbsp;two&#33;</p></body></html>");
+    expect(await uploads.words(join(dir, "page.html"))).toBe("Case 12\nOfficer & driver\nLine two!");
+    fs.writeFileSync(join(dir, "note.rtf"), "{\\rtf1\\ansi{\\fonttbl\\f0 Helvetica;}\\f0 First line\\par Caf\\'e9}");
+    expect(await uploads.words(join(dir, "note.rtf"))).toBe("First line\nCafé");
+    if (Bun.which("zip") !== null) {
+      fs.mkdirSync(join(dir, "doc", "word"), { recursive: true });
+      fs.writeFileSync(join(dir, "doc", "word", "document.xml"), '<w:document><w:body><w:p><w:r><w:t>Suspect fled</w:t></w:r></w:p><w:p><w:r><w:t xml:space="preserve">at 9 &lt;pm&gt;</w:t></w:r></w:p></w:body></w:document>');
+      expect(Bun.spawnSync(["zip", "-q", "-r", join(dir, "case.docx"), "word"], { cwd: join(dir, "doc") }).exitCode).toBe(0);
+      expect(await uploads.words(join(dir, "case.docx"))).toBe("Suspect fled\nat 9 <pm>");
+    }
+    await expect(uploads.words(join(dir, "raw.cr2"))).rejects.toThrow("its words can't be read");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the agent's context lists what the user uploaded, newest first, and whether it's placed; read_upload reads a file", async () => {
   const { app, store, cleanup } = fixtureHome("uploads-context");
   try {

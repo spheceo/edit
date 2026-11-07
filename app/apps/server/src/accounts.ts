@@ -673,11 +673,13 @@ export async function signOut(app: App): Promise<void> {
   await runPromise(announce(app));
 }
 
-/** Opens a URL in the Mac's browser (the sign-in page), never with a secret in it. */
+/** Opens a URL in this machine's browser (the sign-in page), never with a secret in it; on a Linux with no desktop, nothing (the code is the way in). */
 function openBrowser(url: string): void {
   // EDIT_NO_BROWSER: a test drives the sign-in itself.
-  if (process.platform !== "darwin" || process.env.EDIT_NO_BROWSER === "1") return;
-  const child = spawn("/usr/bin/open", [url], { stdio: "ignore", detached: true });
+  if (process.env.EDIT_NO_BROWSER === "1") return;
+  const desktop = process.platform === "darwin" || (process.platform === "linux" && (process.env.WAYLAND_DISPLAY ?? process.env.DISPLAY ?? "") !== "");
+  if (!desktop) return;
+  const child = spawn(process.platform === "darwin" ? "/usr/bin/open" : "xdg-open", [url], { stdio: "ignore", detached: true });
   child.on("error", (error) => diag.warn("accounts", `opening the browser: ${diag.messageOf(error)}`));
   child.unref();
 }

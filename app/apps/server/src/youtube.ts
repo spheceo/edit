@@ -76,7 +76,8 @@ export function startOf(t: string): number | null {
 // yt-dlp.
 
 const RELEASE = "https://github.com/yt-dlp/yt-dlp/releases/latest/download";
-const ASSET = "yt-dlp_macos";
+/** yt-dlp's build for this machine (Nov 7: Linux was handed the macOS one, and every YouTube import failed). */
+const ASSET = process.platform === "darwin" ? "yt-dlp_macos" : process.arch === "arm64" ? "yt-dlp_linux_aarch64" : "yt-dlp_linux";
 /** How often Edit's yt-dlp is checked against the newest release. */
 const FRESH_MS = 24 * 3600_000;
 let fetching: Promise<string> | null = null;
@@ -148,7 +149,7 @@ async function fetchYtdlp(to: string): Promise<string> {
       .split("\n")
       .find((row) => row.trim().endsWith(` ${ASSET}`));
     const expected = line?.trim().split(/\s+/)[0];
-    if (expected === undefined) throw new Error("yt-dlp's release has no checksum for its macOS build");
+    if (expected === undefined) throw new Error(`yt-dlp's release has no checksum for ${ASSET}`);
     // Current already: only noted as checked.
     if (fs.existsSync(to) && new Bun.CryptoHasher("sha256").update(fs.readFileSync(to)).digest("hex") === expected) {
       const now = new Date();

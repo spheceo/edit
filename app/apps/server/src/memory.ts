@@ -7,7 +7,8 @@
 //
 // Low once the pressure has been yellow for 30 s, or at once when it's red;
 // over after a minute back at normal, so a passing spike doesn't flicker it.
-// Read every 5 s, only once a window has asked (and only on macOS). Also
+// Read every 5 s, only once a window has asked. On Linux the kernel's own
+// measures stand in for macOS's level (`linuxPressure`). Also
 // here: what a report says of memory (Edit's part, the biggest apps), and the
 // Claude Code questions held to three at once while memory is short.
 //
@@ -155,8 +156,51 @@ async function output(command: string[]): Promise<string> {
 }
 
 async function readPressure(): Promise<Pressure> {
+  if (process.platform === "linux") {
+    const read = (path: string) => fs.promises.readFile(path, "utf8").catch(() => "");
+    const [meminfo, psi] = await Promise.all([read("/proc/meminfo"), read("/proc/pressure/memory")]);
+    return linuxPressure(meminfo, psi);
+  }
   const level = Number.parseInt(await output(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"]), 10);
   return level === 4 ? 4 : level === 2 ? 2 : 1;
+}
+
+/**
+ * macOS's three levels from Linux's measures: the share of memory the kernel
+ * calls available (MemAvailable, never MemFree, which the page cache keeps
+ * near zero), and the share of the last 10 s that work stalled waiting for
+ * memory (PSI: `some`, a task waited; `full`, all of them did). Red under 5%
+ * available or a tenth of the time fully stalled; yellow under 12% or a fifth
+ * of the time partly stalled.
+ */
+export function linuxPressure(meminfo: string, psi: string): Pressure {
+  const kb = (name: string) => Number(new RegExp(`^${name}:\\s+(\\d+)`, "mu").exec(meminfo)?.[1] ?? Number.NaN);
+  const share = (kb("MemAvailable") / kb("MemTotal")) * 100;
+  const stalled = (kind: string) => Number(new RegExp(`^${kind} avg10=([\\d.]+)`, "mu").exec(psi)?.[1] ?? 0);
+  if (share < 5 || stalled("full") >= 10) return 4;
+  if (share < 12 || stalled("some") >= 20) return 2;
+  return 1;
+}
+
+/** Linux's biggest app other than Edit (its process and everything it started): the command using the most resident memory, its processes added up. */
+async function readBiggestLinuxApp(): Promise<BigApp | null> {
+  const rows = (await output(["ps", "-eo", "pid=,ppid=,rss=,comm="])).split("\n").flatMap((line) => {
+    const parts = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
+    return parts === null ? [] : [{ pid: Number(parts[1]), ppid: Number(parts[2]), bytes: Number(parts[3]) * 1024, name: parts[4]!.trim() }];
+  });
+  const edits = new Set([process.pid]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const row of rows) {
+      if (edits.has(row.pid) || !edits.has(row.ppid)) continue;
+      edits.add(row.pid);
+      grew = true;
+    }
+  }
+  const byName = new Map<string, number>();
+  for (const row of rows) if (!edits.has(row.pid)) byName.set(row.name, (byName.get(row.name) ?? 0) + row.bytes);
+  const [name, bytes] = [...byName].sort((a, b) => b[1] - a[1])[0] ?? [];
+  return name === undefined || bytes === undefined ? null : { name: name === "chrome" ? "Google Chrome" : name, bytes };
 }
 
 function editBundle(): string | null {
@@ -168,6 +212,7 @@ function editBundle(): string | null {
 }
 
 async function readBiggestApp(): Promise<BigApp | null> {
+  if (process.platform === "linux") return readBiggestLinuxApp();
   const [top, paths] = await Promise.all([output(["top", "-l", "1", "-stats", "pid,mem"]), output(["ps", "-axo", "pid=,comm="])]);
   return biggestApp(top, paths, editBundle());
 }
@@ -198,7 +243,7 @@ async function read(): Promise<void> {
 
 export function routes(router: Router<App>): void {
   router.get("/api/memory", async () => {
-    if (process.platform !== "darwin") return json({ low: false });
+    if (process.platform !== "darwin" && process.platform !== "linux") return json({ low: false });
     if (timer === null) {
       await read();
       timer = setInterval(() => void read(), READ_EVERY_MS);
@@ -242,7 +287,7 @@ export async function claudeTurn(label: string, signal?: AbortSignal): Promise<(
     if (signal?.aborted) throw new Error("stopped");
     if (!said) {
       said = true;
-      diag.info("memory", `${label}: waiting to start, as ${claudes} Claude Code questions are running and macOS says memory is short`);
+      diag.info("memory", `${label}: waiting to start, as ${claudes} Claude Code questions are running and the system says memory is short`);
     }
     await new Promise<void>((resolve) => {
       const done = () => {

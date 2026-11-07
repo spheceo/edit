@@ -53,16 +53,28 @@ export function saveToDownloads(name: string, bytes: Uint8Array): string {
   return path;
 }
 
-/** Shows `path` in Finder (or the file manager) on this machine. */
+/**
+ * Shows `path` in Finder (or the file manager) on this machine. On Linux the
+ * desktop's file manager is asked over D-Bus to show it selected (GNOME's
+ * Files, Dolphin and the rest answer `org.freedesktop.FileManager1`), else its
+ * folder is opened.
+ */
 export async function reveal(path: string): Promise<void> {
-  const command = process.platform === "darwin" ? ["open", "-R", path] : ["xdg-open", parent(path) || path];
-  let opened = false;
-  try {
-    opened = (await Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).exited) === 0;
-  } catch {
-    opened = false;
+  const ran = async (command: string[]) => {
+    try {
+      return (await Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "ignore" }).exited) === 0;
+    } catch {
+      return false;
+    }
+  };
+  if (process.platform === "darwin") {
+    if (await ran(["open", "-R", path])) return;
+  } else {
+    const uri = `file://${path.split("/").map(encodeURIComponent).join("/")}`;
+    const selected = await ran(["gdbus", "call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method", "org.freedesktop.FileManager1.ShowItems", `['${uri.replaceAll("'", "%27")}']`, ""]);
+    if (selected || (await ran(["xdg-open", parent(path) || path]))) return;
   }
-  if (!opened) throw new Error("couldn't open a file browser on this machine");
+  throw new Error("couldn't open a file browser on this machine");
 }
 
 // ---------------------------------------------------------------- the exports on this Mac

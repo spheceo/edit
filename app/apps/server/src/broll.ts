@@ -943,9 +943,14 @@ const CHROMES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
   "/Applications/Chromium.app/Contents/MacOS/Chromium",
   "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+  // Google's .deb, then Debian's Chromium and Edge. Never Ubuntu's chromium-browser: a
+  // snap, with its own /tmp, so the DevToolsActivePort a thumbnail render or an
+  // evidence capture waits for in the profile Edit made is never seen.
+  "/opt/google/chrome/chrome",
+  "/usr/bin/google-chrome-stable",
   "/usr/bin/google-chrome",
   "/usr/bin/chromium",
-  "/usr/bin/chromium-browser",
+  "/usr/bin/microsoft-edge",
 ];
 
 /** Chrome on this machine, if any. */

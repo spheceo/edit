@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 
 import * as diag from "../diag.ts";
 import { isFile } from "../paths.ts";
-import { ffmpeg, ffprobe, isUrl, protocols, urlArgs } from "../tools.ts";
+import { ffmpeg, ffprobe, hardwareDecode, isUrl, protocols, urlArgs, videoHardware } from "../tools.ts";
 import { ProgramTimedOut, run } from "./proc.ts";
 
 /** A joined case may run as long as Repack lets one run. */
@@ -93,8 +93,11 @@ export interface JoinPart {
   streams: Streams;
 }
 
-/** The encoder that makes previews on the Mac's video hardware. */
-const HARDWARE = "h264_videotoolbox";
+/** The encoder that makes previews on this machine's video hardware (tools.ts), or null. */
+function hardwareEncoder(): string | null {
+  const found = videoHardware();
+  return found === "videotoolbox" ? "h264_videotoolbox" : found === "nvenc" ? "h264_nvenc" : null;
+}
 /**
  * Decode on the video hardware, the frames handed on in memory. Kept on the
  * hardware (videotoolbox_vld and scale_vt), a recording whose frames changed
@@ -103,9 +106,12 @@ const HARDWARE = "h264_videotoolbox";
  * fell to libx264, two to three times real time on a Mac loaded to 40, where
  * the hardware encoder is many times that.
  */
-const HARDWARE_DECODE = ["-hwaccel", "videotoolbox"];
+const HARDWARE_DECODE = (): string[] => hardwareDecode();
 /** The hardware encoder at a quality close to libx264's CRF 27, a key frame a second, High profile, TV range (`RANGE`). */
-const HARDWARE_ENCODE = ["-c:v", HARDWARE, "-profile:v", "high", "-q:v", "65", "-g", "30", "-pix_fmt", "yuv420p", "-color_range", "tv"];
+function hardwareEncode(): string[] {
+  const quality = videoHardware() === "nvenc" ? ["-preset", "p4", "-rc", "vbr", "-cq", "28", "-b:v", "0"] : ["-q:v", "65"];
+  return ["-c:v", hardwareEncoder() ?? "none", "-profile:v", "high", ...quality, "-g", "30", "-pix_fmt", "yuv420p", "-color_range", "tv"];
+}
 /**
  * Every piece in TV range, whatever its recording was. Axon bodycam files are
  * full range (yuvj420p), and `format=yuv420p` alone kept their range flag, so
@@ -202,13 +208,13 @@ export function inputsOf(part: JoinPart, first: number, decode: string[] = []): 
 async function joinHardware(part: JoinPart, dest: string, onPercent: (percent: number) => void, signal?: AbortSignal): Promise<void> {
   const total = part.streams.durationMs;
   if (total === 0 || total > MAX_CASE_MS) throw new Error("Use footage between a second and twenty hours in all.");
-  const read = inputsOf(part, 0, HARDWARE_DECODE);
+  const read = inputsOf(part, 0, HARDWARE_DECODE());
   const picture = `[${read.video}]${hardwarePicture(854, 480)},trim=duration=${seconds(total)},setpts=PTS-STARTPTS[v]`;
   const sound = part.streams.audio
     ? `[${read.audio}]aresample=48000,aformat=channel_layouts=stereo,apad,atrim=duration=${seconds(total)},asetpts=PTS-STARTPTS[a]`
     : `anullsrc=r=48000:cl=stereo,atrim=duration=${seconds(total)}[a]`;
   await encode(
-    ["-hide_banner", "-y", ...read.args, "-filter_complex", `${picture};${sound}`, "-map", "[v]", "-map", "[a]", ...HARDWARE_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
+    ["-hide_banner", "-y", ...read.args, "-filter_complex", `${picture};${sound}`, "-map", "[v]", "-map", "[a]", ...hardwareEncode(), "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
     dest,
     total,
     onPercent,
@@ -221,7 +227,7 @@ export type Encoder = "the video hardware" | "libx264";
 
 /** One video's 480p piece, on the video hardware where it can, else libx264: which did. */
 async function joinOne(part: JoinPart, dest: string, onPercent: (percent: number) => void, hardware: boolean, signal?: AbortSignal): Promise<Encoder> {
-  if (hardware) {
+  if (hardware && hardwareEncoder() !== null) {
     try {
       await joinHardware(part, dest, onPercent, signal);
       return "the video hardware";
@@ -248,7 +254,7 @@ export async function join(parts: JoinPart[], dest: string, onPercent: (percent:
 
 /** As `join`, encoded as `like` was (the hardware or libx264), so it copies onto `like` end to end. */
 export async function joinLike(parts: JoinPart[], dest: string, like: string, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal): Promise<Encoder> {
-  if (parts.length === 1 && parts[0]!.streams.video) return joinOne(parts[0]!, dest, onPercent, ((await encoderOf(like)) ?? "").includes(HARDWARE), signal);
+  if (parts.length === 1 && parts[0]!.streams.video) return joinOne(parts[0]!, dest, onPercent, ((await encoderOf(like)) ?? "").includes(hardwareEncoder() ?? "\0"), signal);
   await joinSized(parts, dest, onPercent, 854, 480, "27", signal);
   return "libx264";
 }
@@ -393,9 +399,9 @@ export async function append(base: string, more: string[], dest: string, onPerce
 /** A 480p preview with sound: on the Mac's video hardware, else by libx264. */
 export async function encodeProxy(source: string, dest: string, durationMs: number, onPercent: (percent: number) => void = () => {}, signal?: AbortSignal): Promise<void> {
   fs.mkdirSync(dest.slice(0, dest.lastIndexOf("/")), { recursive: true });
-  try {
+  if (hardwareEncoder() !== null) try {
     return await encode(
-      ["-hide_banner", "-y", ...HARDWARE_DECODE, "-i", source, "-vf", hardwarePicture(null, 480), ...HARDWARE_ENCODE, "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
+      ["-hide_banner", "-y", ...HARDWARE_DECODE(), "-i", source, "-vf", hardwarePicture(null, 480), ...hardwareEncode(), "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "-progress", "pipe:1", "-nostats", dest],
       dest,
       durationMs,
       onPercent,

@@ -280,19 +280,70 @@ export function textOnTop(project: Project): void {
 }
 
 /**
- * A post's own sound eases in and out where it's cut (6 frames out, 4 in), unless the same footage's sound carries
- * straight on in the next clip: the team, on v2 at 5:03–5:10, "the audio cut isn't completely clean here at the end"
- * (Nov 6): the reel's sound stopped dead at about -15 dB, then the narration. Only edges left at no fade.
+ * A post's own sound eases in and out where it's cut (6 frames out, 4 in), and the narration by 2 at each end,
+ * unless the same recording carries straight on in the next clip: the team, on v2 at 5:03–5:10, "the audio cut isn't
+ * completely clean here at the end" (Nov 6): the narration's "…his biggest fan." was cut 60 ms after the word, its
+ * tail still at -23 dB, and the reel's sound came in on it at full level. Only edges left at no fade.
  */
 export function soundEdges(project: Project): void {
   if (project.style !== "horror") return;
   const fps = project.settings.fps;
-  const sounds = project.clips.filter((c): c is AudioClip => c.type === "audio" && project.media.find((m) => m.id === c.media)?.kind === "video");
+  const voiced = new Set((project.script?.blocks ?? []).flatMap((b) => {
+    const ids = b as { clip?: string; voiceover?: string };
+    return b.kind === "narration" ? [ids.clip, ids.voiceover].filter((id): id is string => typeof id === "string") : [];
+  }));
+  const kindOf = (c: AudioClip) => project.media.find((m) => m.id === c.media)?.kind;
+  const sounds = project.clips.filter((c): c is AudioClip => c.type === "audio" && (kindOf(c) === "video" || voiced.has(c.id) || (c.name ?? "").startsWith("Voice-over")));
   const sourceAt = (c: AudioClip, frame: number) => c.source_in + (frame / fps) * c.speed;
   const joined = (a: AudioClip, b: AudioClip) =>
     a.media === b.media && Math.abs(b.start - (a.start + a.duration)) <= 1 && Math.abs(b.source_in - sourceAt(a, a.duration)) < 0.1;
   for (const c of sounds) {
-    if ((c.fade_out ?? 0) === 0 && !sounds.some((next) => next !== c && joined(c, next))) c.fade_out = Math.min(6, Math.floor(c.duration / 4));
-    if ((c.fade_in ?? 0) === 0 && !sounds.some((before) => before !== c && joined(before, c))) c.fade_in = Math.min(4, Math.floor(c.duration / 4));
+    const post = kindOf(c) === "video";
+    if ((c.fade_out ?? 0) === 0 && !sounds.some((next) => next !== c && joined(c, next))) c.fade_out = Math.min(post ? 6 : 2, Math.floor(c.duration / 4));
+    if ((c.fade_in ?? 0) === 0 && !sounds.some((before) => before !== c && joined(before, c))) c.fade_in = Math.min(post ? 4 : 2, Math.floor(c.duration / 4));
   }
+}
+
+/**
+ * A card and its ground (its blurred copy, the darkened footage under it) last as long as each other: a ground left
+ * up after its picture was trimmed showed a bare blur for 2 s at 8:01–8:03 of v2 (Nov 6). A still card that ends
+ * early with nothing else there runs on to its ground's end; otherwise the ground is trimmed to the cards it stands
+ * under, or goes when there's none.
+ */
+export function groundsWithCards(project: Project): void {
+  if (project.style !== "horror") return;
+  const card = /^(Cut-in \d+ · )?Horror · (picture|screenshot)$/u;
+  const ground = /^(Cut-in \d+ · )?Horror · (card ground|card ground blur|card backdrop)$/u;
+  const cards = project.clips.filter((c) => c.type === "video" && card.test(c.name ?? ""));
+  const gone = new Set<string>();
+  for (const g of project.clips) {
+    if (!ground.test(g.name ?? "") || g.parent !== undefined) continue;
+    const end = g.start + g.duration;
+    const over = cards.filter((c) => c.start < end && c.start + c.duration > g.start);
+    if (over.length === 0) {
+      gone.add(g.id);
+      continue;
+    }
+    const from = Math.max(g.start, Math.min(...over.map((c) => c.start)));
+    let to = Math.min(end, Math.max(...over.map((c) => c.start + c.duration)));
+    // The card ended early with nothing else there (its picture trimmed, its ground not): a still card runs on to its ground's end.
+    const last = over.reduce((a, b) => (b.start + b.duration > a.start + a.duration ? b : a));
+    const still = last.type === "video" && project.media.find((m) => m.id === last.media)?.kind === "image";
+    const taken = project.clips.some((c) => c.type === "video" && c.id !== last.id && !ground.test(c.name ?? "") && !/backdrop|Mark blur|analog look/u.test(c.name ?? "") && c.start < end && c.start + c.duration > to);
+    if (to < end && still && !taken) {
+      last.duration = end - last.start;
+      to = end;
+    }
+    if (from === g.start && to === end) continue;
+    const cut = from - g.start;
+    g.start = from;
+    g.duration = to - from;
+    if (g.type === "video") g.source_in += (cut / project.settings.fps) * g.speed;
+    if (g.keyframes !== undefined && cut > 0) {
+      for (const keys of Object.values(g.keyframes)) for (const key of keys ?? []) key.frame -= cut;
+    }
+    g.fade_out = Math.min(g.fade_out ?? 0, Math.floor(g.duration / 3));
+    g.fade_in = Math.min(g.fade_in ?? 0, Math.floor(g.duration / 3));
+  }
+  if (gone.size > 0) project.clips = project.clips.filter((c) => !gone.has(c.id));
 }

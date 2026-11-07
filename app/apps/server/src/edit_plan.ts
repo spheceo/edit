@@ -210,6 +210,7 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   horrorLook.mosaicCensors(project);
   horrorLook.textOnTop(project);
   horrorLook.soundEdges(project);
+  horrorLook.groundsWithCards(project);
   // Text placed or relabelled (a quote, a caption's speaker): one colour per
   // person across the video, as add_subtitles leaves it.
   if (

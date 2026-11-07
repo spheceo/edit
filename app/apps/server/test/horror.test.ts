@@ -360,6 +360,12 @@ test("a post's own sound eases out where it's cut, not where the same footage ca
   soundEdges(p);
   const fades = Object.fromEntries(p.clips.filter((c) => c.type === "audio").map((c) => [c.id, [c.fade_in, c.fade_out]]));
   expect(fades).toEqual({ s1: [4, 0], s2: [0, 6], s3: [4, 15] });
+  // The narration eases by 2 frames at its ends: "…his biggest fan." was cut 60 ms after the word.
+  p.media.push(media({ id: "vo", name: "instagram_vid.wav", kind: "audio", path: "/vo.wav", duration: 600 }));
+  p.clips.push(clip({ id: "n1", type: "audio", media: "vo", track: "a1", start: 300, duration: 222, source_in: 178.366, name: "Voice-over" } as never));
+  soundEdges(p);
+  const n1 = p.clips.find((c) => c.id === "n1")!;
+  expect([n1.fade_in, n1.fade_out]).toEqual([2, 2]);
 });
 
 test("the audit flags a long stretch of B-roll with nothing of the story's own (Nov 6, case 3 on a short film)", () => {
@@ -372,4 +378,25 @@ test("the audit flags a long stretch of B-roll with nothing of the story's own (
   p.clips.push(clip({ id: "b3", type: "video", media: "yt", track: "v1", start: 1500, duration: 300 }));
   const runs = issues(p).filter((i) => i.kind === "horror_broll_run").map((i) => [i.start, i.end]);
   expect(runs).toEqual([[0, 1200]]);
+});
+
+test("a card and its ground last as long as each other: a still card trimmed short runs on, a ground under nothing goes (Nov 6, a bare blur at 8:01)", async () => {
+  const { groundsWithCards } = await import("../src/horror_look.ts");
+  const p = horror();
+  p.tracks.push({ id: "t2", kind: "video", hidden: false, muted: false, locked: false });
+  // A profile's picture trimmed to 112 frames over its 172-frame ground, nothing after it until 172.
+  p.clips.push(clip({ id: "g", type: "video", media: "shot", track: "v1", start: 0, duration: 172, name: "Horror · card ground" }));
+  p.clips.push(clip({ id: "pic", type: "video", media: "shot", track: "t2", start: 0, duration: 112, name: "Horror · picture" }));
+  // A ground with its card gone.
+  p.clips.push(clip({ id: "lone", type: "video", media: "shot", track: "v1", start: 400, duration: 90, name: "Horror · card ground" }));
+  // A ground running past its card into the next footage: trimmed to the card.
+  p.clips.push(clip({ id: "g2", type: "video", media: "shot", track: "v1", start: 600, duration: 150, name: "Horror · card ground" }));
+  p.clips.push(clip({ id: "pic2", type: "video", media: "shot", track: "t2", start: 600, duration: 100, name: "Horror · picture" }));
+  p.clips.push(clip({ id: "next", type: "video", media: "reel", track: "t2", start: 700, duration: 100 }));
+  groundsWithCards(p);
+  const span = (id: string) => { const c = p.clips.find((x) => x.id === id); return c ? [c.start, c.duration] : null; };
+  expect(span("pic")).toEqual([0, 172]);
+  expect(span("g")).toEqual([0, 172]);
+  expect(span("lone")).toBeNull();
+  expect(span("g2")).toEqual([600, 100]);
 });

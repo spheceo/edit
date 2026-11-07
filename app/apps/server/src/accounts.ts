@@ -216,7 +216,7 @@ function post(path: string, body: Record<string, string>, via = ""): Promise<Pos
 
 /** `Edit/<build> (macOS)`, or `(macOS; edit serve)` for a device sign-in: what admins and the approval page show. */
 function userAgent(via: string): string {
-  const system = process.platform === "darwin" ? "macOS" : process.platform;
+  const system = process.platform === "darwin" ? "macOS" : process.platform === "linux" ? "Linux" : process.platform;
   return `Edit/${BUILD.replace(/^v/u, "")} (${via === "" ? system : `${system}; ${via}`})`;
 }
 

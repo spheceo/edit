@@ -54,7 +54,7 @@ beforeAll(() => {
       const url = new URL(request.url);
       const body = (await request.json().catch(() => ({}))) as Record<string, string>;
       seen.push({ path: url.pathname, body });
-      if (url.pathname.startsWith("/app/") && !/^Edit\/\S+ \((macOS|linux)(; [a-z ]+)?\)$/u.test(request.headers.get("user-agent") ?? "")) return Response.json({ error: "no user agent" }, { status: 400 });
+      if (url.pathname.startsWith("/app/") && !/^Edit\/\S+ \((macOS|Linux)(; [a-z ]+)?\)$/u.test(request.headers.get("user-agent") ?? "")) return Response.json({ error: "no user agent" }, { status: 400 });
       if (url.pathname === "/app/revoke") return revokeBusy-- > 0 ? Response.json({ error: "slow_down" }, { status: 429, headers: { "retry-after": "0" } }) : Response.json({});
       if (url.pathname === "/app/device") {
         devices.push(request.headers.get("user-agent") ?? "");
@@ -131,6 +131,26 @@ test("signs in with PKCE through the loopback, keeps the refresh token in the ke
   expect(Object.values(kept())).toEqual(["refresh-1-aaaaaaaa"]);
   expect(relay.token()).toBe(accounts.accessToken());
   expect(relay.authHeaders().authorization).toMatch(/^Bearer eyJ/);
+});
+
+test.skipIf(process.platform === "darwin")("off macOS the sign-in is kept in the Edit home's sign-in.json, mode 600, one entry per home", async () => {
+  const given = process.env.EDIT_KEYCHAIN_FILE;
+  delete process.env.EDIT_KEYCHAIN_FILE;
+  const home = join(dir, "linux-home");
+  try {
+    expect(await keychain.get(home)).toBeNull();
+    await keychain.set(home, "refresh-token-1");
+    await keychain.set(join(dir, "other-home"), "refresh-token-2");
+    await keychain.set(home, "refresh-token-3");
+    const path = join(home, "sign-in.json");
+    expect(fs.statSync(path).mode & 0o777).toBe(0o600);
+    expect(await keychain.get(home)).toBe("refresh-token-3");
+    expect(fs.readdirSync(home)).toEqual(["sign-in.json"]);
+    await keychain.remove(home);
+    expect(await keychain.get(home)).toBeNull();
+  } finally {
+    process.env.EDIT_KEYCHAIN_FILE = given;
+  }
 });
 
 test("renews with the kept refresh token and keeps the rotated one; a refused one signs out", async () => {
@@ -210,7 +230,7 @@ test("a device sign-in (headless, over Tailscale): a code to type, polled throug
   deviceScript = ["authorization_pending", "slow_down", "authorization_pending", "ok"];
   const device = await accounts.beginDevice(app, "edit serve");
   expect([device.userCode, device.uri, device.complete]).toEqual(["BCDF-GHJK", "https://accounts.test/device", "https://accounts.test/device?code=BCDF-GHJK"]);
-  expect(devices.at(-1)).toMatch(/^Edit\/\S+ \((macOS|linux); edit serve\)$/u);
+  expect(devices.at(-1)).toMatch(/^Edit\/\S+ \((macOS|Linux); edit serve\)$/u);
   expect(accounts.status()).toMatchObject({ signing_in: true, device: { user_code: "BCDF-GHJK" } });
   // A second ask while it waits is the same code.
   expect((await accounts.beginDevice(app, "edit serve")).userCode).toBe("BCDF-GHJK");

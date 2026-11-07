@@ -14,11 +14,14 @@
 // keeps using the tool: its signature changes with every build, so an item
 // trusting it would be lost on the next.
 //
-// Off macOS, or with `EDIT_KEYCHAIN_FILE` (tests), a file of mode 600.
+// Off macOS, `sign-in.json` (mode 600) in the Edit home: a Linux desktop's
+// keyring is open to every process of the user too, and a server has none.
+// `EDIT_KEYCHAIN_FILE` names the file instead (tests).
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { dirname, join } from "node:path";
 
 import * as diag from "./diag.ts";
 import { native } from "./native/index.ts";
@@ -33,9 +36,10 @@ function account(home: string): string {
   return `home-${createHash("sha256").update(home).digest("hex").slice(0, 16)}`;
 }
 
-function file(): string | null {
+function file(home: string): string | null {
   const given = process.env.EDIT_KEYCHAIN_FILE;
-  return given !== undefined && given !== "" ? given : null;
+  if (given !== undefined && given !== "") return given;
+  return process.platform === "darwin" ? null : join(home, "sign-in.json");
 }
 
 function run(args: string[], input: string | null): Promise<{ code: number; out: string }> {
@@ -76,9 +80,13 @@ function readFileStore(path: string): Record<string, string> {
   }
 }
 
+/** Written beside and renamed over: a token rotated and then half written would sign the person out. */
 function writeFileStore(path: string, values: Record<string, string>): void {
-  fs.writeFileSync(path, JSON.stringify(values), { mode: 0o600 });
-  fs.chmodSync(path, 0o600);
+  fs.mkdirSync(dirname(path), { recursive: true });
+  const next = `${path}.${process.pid}.next`;
+  fs.writeFileSync(next, JSON.stringify(values), { mode: 0o600 });
+  fs.chmodSync(next, 0o600);
+  fs.renameSync(next, path);
 }
 
 /** An item this program isn't trusted for (made by the `security` tool): errSecInteractionNotAllowed, errSecAuthFailed. */
@@ -87,7 +95,7 @@ const notOurs = (status: number) => status === -25308 || status === -25293;
 let own: boolean | null = null;
 /** Whether this Edit keeps its item itself: signed by Edit's team, on macOS. */
 export function ownItems(): boolean {
-  own ??= process.platform === "darwin" && file() === null && teamOf(process.execPath) === EDIT_TEAM;
+  own ??= process.platform === "darwin" && file("") === null && teamOf(process.execPath) === EDIT_TEAM;
   return own;
 }
 
@@ -122,9 +130,8 @@ async function ownSet(home: string, value: string): Promise<void> {
 
 /** This home's stored secret, or null. */
 export async function get(home: string): Promise<string | null> {
-  const store = file();
+  const store = file(home);
   if (store !== null) return readFileStore(store)[account(home)] ?? null;
-  if (process.platform !== "darwin") return null;
   if (ownItems()) {
     const answer = native().keychainGet(SERVICE, account(home));
     if (answer.status === 0) return answer.value ?? null;
@@ -144,26 +151,24 @@ export async function get(home: string): Promise<string | null> {
 /** Keeps this home's secret (replacing what was there). */
 export async function set(home: string, value: string): Promise<void> {
   if (!SAFE.test(value)) throw new Error("the sign-in token has characters the Keychain can't be given safely");
-  const store = file();
+  const store = file(home);
   if (store !== null) {
     writeFileStore(store, { ...readFileStore(store), [account(home)]: value });
     return;
   }
-  if (process.platform !== "darwin") throw new Error("keeping the sign-in needs the macOS Keychain");
   if (ownItems()) await ownSet(home, value);
   else await toolSet(home, value);
 }
 
 /** Forgets this home's secret. */
 export async function remove(home: string): Promise<void> {
-  const store = file();
+  const store = file(home);
   if (store !== null) {
     const values = readFileStore(store);
     delete values[account(home)];
     writeFileStore(store, values);
     return;
   }
-  if (process.platform !== "darwin") return;
   // Edit's own item, else one the tool made.
   if (!ownItems() || notOurs(native().keychainDelete(SERVICE, account(home)))) await toolRemove(home);
 }

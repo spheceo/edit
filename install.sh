@@ -19,18 +19,21 @@ set -eu
 REPO="spheceo/edit"
 PREFIX="${EDIT_INSTALL_DIR:-$HOME/.local/bin}"
 
-# Releases have Apple Silicon Mac builds only (no Intel since Oct 29).
+# Releases have Apple Silicon Mac builds (no Intel since Oct 29) and x86-64 Linux builds.
 case "$(uname -s)/$(uname -m)" in
   Darwin/arm64) TARGET="aarch64-apple-darwin" ;;
   Darwin/x86_64)
     echo "Edit only has Apple Silicon Mac builds (this Mac is Intel)." >&2
     exit 1
     ;;
+  Linux/x86_64) TARGET="x86_64-unknown-linux-gnu" ;;
   *)
-    echo "Edit only has Mac builds so far (this is $(uname -s)/$(uname -m))." >&2
+    echo "Edit has Apple Silicon Mac and x86-64 Linux builds (this is $(uname -s)/$(uname -m))." >&2
     exit 1
     ;;
 esac
+LINUX=""
+[ "$(uname -s)" = Linux ] && LINUX=1
 
 ARCHIVE="edit-$TARGET.tar.gz"
 VERSION="${EDIT_VERSION:-}"
@@ -55,7 +58,7 @@ if ! curl -fSL --retry 3 --progress-bar -o "$TMP/$ARCHIVE" "$BASE/$ARCHIVE"; the
 fi
 curl -fsSL --retry 3 -o "$TMP/$ARCHIVE.sha256" "$BASE/$ARCHIVE.sha256"
 EXPECTED="$(cut -d' ' -f1 <"$TMP/$ARCHIVE.sha256")"
-ACTUAL="$(shasum -a 256 "$TMP/$ARCHIVE" | cut -d' ' -f1)"
+if command -v shasum >/dev/null 2>&1; then ACTUAL="$(shasum -a 256 "$TMP/$ARCHIVE" | cut -d' ' -f1)"; else ACTUAL="$(sha256sum "$TMP/$ARCHIVE" | cut -d' ' -f1)"; fi
 if [ "$ACTUAL" != "$EXPECTED" ]; then
   echo "Checksum mismatch: expected $EXPECTED, got $ACTUAL." >&2
   exit 1
@@ -84,16 +87,32 @@ case ":$PATH:" in
   *":$PREFIX:"*) ;;
   *) echo "Add it to your PATH (e.g. in ~/.zshrc):  export PATH=\"\$PATH:$PREFIX\"" ;;
 esac
-[ -x "$PREFIX/edit-ffmpeg" ] || command -v ffmpeg >/dev/null 2>&1 || echo "Edit needs FFmpeg for importing and export: brew install ffmpeg"
+if [ ! -x "$PREFIX/edit-ffmpeg" ] && ! command -v ffmpeg >/dev/null 2>&1; then
+  if [ -n "$LINUX" ]; then echo "Edit needs FFmpeg for importing and export: sudo apt install ffmpeg"; else echo "Edit needs FFmpeg for importing and export: brew install ffmpeg"; fi
+fi
 # The agent panel runs on Claude Code (the default) or Codex: one of them is enough.
 if ! command -v claude >/dev/null 2>&1 && ! command -v codex >/dev/null 2>&1; then
   echo "The agent panel needs Claude Code (or Codex; pick in Settings → Agent):"
   echo "  curl -fsSL https://claude.ai/install.sh | bash, then claude auth login"
 fi
-# Map shots and research open pages in Chrome (apps/server/src/broll.ts).
-if [ ! -d "/Applications/Google Chrome.app" ] && [ ! -d "/Applications/Chromium.app" ] && [ ! -d "/Applications/Microsoft Edge.app" ]; then
-  echo "Map shots and research need Google Chrome: https://www.google.com/chrome/"
+# Map shots and research open pages in Chrome (apps/server/src/broll.ts); on Linux it's Edit's window too.
+if [ -n "$LINUX" ]; then
+  if [ ! -x /opt/google/chrome/chrome ] && ! command -v google-chrome >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1; then
+    echo "Edit's window, map shots and research need Google Chrome (its .deb, not the snap): https://www.google.com/chrome/"
+  fi
+  # NVENC for exports and imports: NVIDIA's driver 610 or newer (scripts/ffmpeg.sh).
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    driver="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1)"
+    if [ -n "$driver" ] && [ "${driver%%.*}" -lt 610 ] 2>/dev/null; then
+      echo "Exports and imports use the NVIDIA card with its driver 610 or newer (this one is $driver): pick a newer one in Software & Updates → Additional Drivers"
+    fi
+  fi
+  "$PREFIX/edit" launcher || true
 fi
 echo
-echo "Start it with:  edit serve"
+if [ -n "$LINUX" ]; then
+  echo "Open Edit from your apps, or start it with:  edit app"
+else
+  echo "Start it with:  edit serve"
+fi
 echo "Updates show up in the editor; one click installs and restarts."

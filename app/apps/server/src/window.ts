@@ -101,13 +101,14 @@ export function windowHelper(home: string): string | null {
 }
 
 /**
- * Opens the editor at `url` in the window helper and runs until it closes:
+ * Opens the editor in its window (`command`: the helper onto a URL on a Mac,
+ * Chrome's app window on Linux, linux_desktop.ts) and runs until it closes:
  * then cloud projects open here are pushed and their locks let go, and Edit
- * exits (with the helper's code when it couldn't open).
+ * exits (with the window's code when it couldn't open).
  */
-export function runWindow(helper: string, url: string): void {
+export function runWindow(command: string[]): void {
   let restarting = false;
-  const child = Bun.spawn([helper, "--url", url], { stdin: "pipe", stdout: "inherit", stderr: "inherit" });
+  const child = Bun.spawn(command, { stdin: "pipe", stdout: "inherit", stderr: "inherit" });
   // An update execs a new `edit app`, which opens a fresh window: this one goes first.
   onRestart(() => {
     restarting = true;

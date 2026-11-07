@@ -24,6 +24,10 @@ node_modules/
 # The release binary's entry (apps/server/scripts/embed.ts writes it)
 /app/apps/server/src/embedded.gen.ts
 
+# FFmpeg and qjs fetched for a release (scripts/ffmpeg.sh, scripts/fetch-quickjs.sh)
+/app/ffmpeg/
+/app/quickjs/
+
 # Mood-board stills from other channels: kept locally, not published
 /docs/moodboard/shots/
 /.claude/worktrees/

@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# The engine's Mac binaries: the Node addon (crates/edit-native/edit-native.node)
-# and the window helper (target/<target>/release/edit-window), both signed ad
-# hoc, with copies of both in engine/. Run from app/ by the release and by
+# The engine's binaries: the Node addon (crates/edit-native/edit-native.node)
+# and, on a Mac, the window helper (target/<target>/release/edit-window), both
+# signed ad hoc, with copies in engine/. Run from app/ by the release and by
 # engine-cache.yml, which keeps engine/ by a hash of the Rust sources so a
 # release without Rust changes reuses it (not target/: rust-cache prunes the
 # workspace's own outputs there before a later step could save them).
 set -euo pipefail
 target="$1"
+# Linux: the addon alone (the window there is Chrome's, apps/server/src/window.ts),
+# unsigned, through Bun (napi's CLI wants Node otherwise).
+if [[ "$target" == *-linux-* ]]; then
+  (cd crates/edit-native && bun install --frozen-lockfile \
+    && bun node_modules/.bin/napi build --release --target "$target" --dts index.d.ts)
+  mkdir -p engine
+  cp crates/edit-native/edit-native.node engine/
+  exit 0
+fi
 stamp="$(mktemp)"
 (cd crates/edit-native && bun install --frozen-lockfile \
   && bunx napi build --release --target "$target" --dts index.d.ts \

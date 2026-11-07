@@ -13,6 +13,7 @@ import { fail, start } from "./serve.ts";
 import { runCli as updateCli } from "./update.ts";
 import { BUILD } from "./version.ts";
 import { runSupport } from "./support_cli.ts";
+import { keepLauncher, windowCommand } from "./linux_desktop.ts";
 import { adoptShellEnv, portTaken, runWindow, windowHelper } from "./window.ts";
 
 export const DEFAULT_PORT = 7700;
@@ -37,6 +38,9 @@ USAGE
       now, through the running Edit (it also happens by itself after saves).
   edit update
       Install the newest release (the editor also offers it, one click).
+  edit launcher
+      Linux: put Edit in the desktop's apps with its icon (install.sh does; Edit
+      keeps it current as it starts).
   edit support <command> --url https://<device>.<tailnet>.ts.net
       Inspect or help an owner's already-shared Edit; \`edit support help\` says more.
   edit remote enable|devices|update|update-when-idle|diagnostics|unstick|restart|history [device-id]
@@ -104,6 +108,7 @@ export async function main(args: string[]): Promise<void> {
       if (process.env.EDIT_ADOPT_SHELL_ENV === "1") adoptShellEnv();
       // Headless (not Edit.app's window starting it): signing in is a code printed here.
       else accounts.signInOnTerminal(true);
+      keepLauncher();
       start(home(), flag("--host") ?? null, port());
       return;
     case "app":
@@ -114,6 +119,10 @@ export async function main(args: string[]): Promise<void> {
       return;
     case "mcp":
       console.log(mcpText(flag("--port") ?? String(DEFAULT_PORT)));
+      return;
+    case "launcher":
+      if (process.platform !== "linux") fail("edit launcher is for Linux; a Mac opens Edit.app");
+      keepLauncher();
       return;
     case "remote": {
       const given = args[1];
@@ -205,16 +214,18 @@ export async function main(args: string[]): Promise<void> {
   }
 }
 
-/** The desktop app: the same server, in this process, with a window onto it. */
+/** The desktop app: the same server, in this process, with a window onto it (on Linux, Chrome's). */
 function app(home: string, port: number): void {
-  const helper = windowHelper(home);
   const url = `http://127.0.0.1:${port}/`;
-  if (helper === null) fail(`this build has no window; open ${url} in a browser`);
+  const helper = process.platform === "linux" ? null : windowHelper(home);
+  const window = helper !== null ? [helper, "--url", url] : process.platform === "linux" ? windowCommand(home, port) : null;
+  if (window === null) fail(process.platform === "linux" ? `Edit's window is Google Chrome's: install it (https://www.google.com/chrome/), or open ${url} in a browser` : `this build has no window; open ${url} in a browser`);
   adoptShellEnv();
+  keepLauncher();
   // Something already on the port is most likely another Edit (`edit serve`,
   // `just dev`, the app opened twice): open onto it rather than run a second
   // server over the same projects.
   if (!portTaken(port)) start(home, null, port);
-  runWindow(helper, url);
+  runWindow(window);
 }
 

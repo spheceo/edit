@@ -26,8 +26,8 @@ export function ffprobe(): string {
 /**
  * The qjs (QuickJS-ng) Edit ships beside `edit` as yt-dlp's JavaScript
  * runtime (`youtube.ts`): `EDIT_QJS`, else `qjs-<target>` beside the binary
- * or in Edit.app's Resources, fetched by `scripts/fetch-quickjs.sh`; null on
- * a Mac with no bundled copy (a dev run), where an installed runtime serves.
+ * or in Edit.app's Resources, fetched by `scripts/fetch-quickjs.sh`; null
+ * with no bundled copy (a dev run), where an installed runtime serves.
  */
 export function qjs(): string | null {
   const given = process.env.EDIT_QJS;
@@ -37,7 +37,9 @@ export function qjs(): string | null {
       ? "aarch64-apple-darwin"
       : process.platform === "darwin" && process.arch === "x64"
         ? "x86_64-apple-darwin"
-        : null;
+        : process.platform === "linux" && process.arch === "x64"
+          ? "x86_64-unknown-linux-gnu"
+          : null;
   if (triple === null) return null;
   let beside: string | null = null;
   try {

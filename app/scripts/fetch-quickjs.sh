@@ -7,10 +7,12 @@
 # Mac doesn't ship with.
 #
 #   scripts/fetch-quickjs.sh aarch64-apple-darwin <out-dir>
+#   scripts/fetch-quickjs.sh x86_64-unknown-linux-gnu <out-dir>
 #
 # The fetch lands as <out-dir>/qjs-<target>, the sidecar name beside edit.
-# Bumping the version: take the new release's qjs-darwin-<arch> assets and
-# their SHA-256.
+# Bumping the version: take the new release's qjs-darwin-<arch> and
+# qjs-linux-<arch> assets and their SHA-256 (the release lists each one's).
+# The Linux builds are static-pie: no library to check.
 
 set -eu
 
@@ -20,8 +22,12 @@ VERSION="0.17.0"
 
 case "$TARGET" in
   aarch64-apple-darwin)
-    ARCH="arm64"
+    ASSET="qjs-darwin-arm64"
     SUM="8be3ddfe3397d2e692e4e1e8972ee9d032a0a580505d2f8b4ea528cf1b651c11"
+    ;;
+  x86_64-unknown-linux-gnu)
+    ASSET="qjs-linux-x86_64"
+    SUM="0bfc02511a9f549c28b53880d988fc7cd5d361e90c5e8afdfcd7dc6774ceace5"
     ;;
   *)
     echo "no qjs build for $TARGET" >&2
@@ -37,22 +43,22 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-URL="https://github.com/quickjs-ng/quickjs/releases/download/v$VERSION/qjs-darwin-$ARCH"
+URL="https://github.com/quickjs-ng/quickjs/releases/download/v$VERSION/$ASSET"
 echo "Fetching qjs from $URL"
 curl -fsSL --retry 3 --retry-delay 10 --retry-all-errors --progress-bar -o "$TMP/qjs" "$URL"
-ACTUAL="$(shasum -a 256 "$TMP/qjs" | cut -d' ' -f1)"
+if command -v shasum >/dev/null 2>&1; then ACTUAL="$(shasum -a 256 "$TMP/qjs" | cut -d' ' -f1)"; else ACTUAL="$(sha256sum "$TMP/qjs" | cut -d' ' -f1)"; fi
 if [ "$ACTUAL" != "$SUM" ]; then
   echo "$URL: checksum mismatch: expected $SUM, got $ACTUAL" >&2
   exit 1
 fi
-if otool -L "$TMP/qjs" | tail -n +2 | grep -vE '^[[:space:]]*(/usr/lib/|/System/Library/)'; then
+if [ "$(uname -s)" = Darwin ] && otool -L "$TMP/qjs" | tail -n +2 | grep -vE '^[[:space:]]*(/usr/lib/|/System/Library/)'; then
   echo "qjs needs libraries outside macOS, so it can't be bundled." >&2
   exit 1
 fi
 install -m 755 "$TMP/qjs" "$OUT/qjs-$TARGET"
 echo "$TARGET $VERSION" >"$OUT/.qjs-version"
-# Only a binary for this Mac can be run to check it.
-if [ "$(lipo -archs "$OUT/qjs-$TARGET" 2>/dev/null)" = "$(uname -m)" ]; then
-  "$OUT/qjs-$TARGET" --version
-fi
+# Only a binary for this machine can be run to check it.
+case "$(uname -s)/$(uname -m)/$TARGET" in
+  Darwin/arm64/aarch64-apple-darwin | Linux/x86_64/x86_64-unknown-linux-gnu) "$OUT/qjs-$TARGET" --version ;;
+esac
 echo "qjs $VERSION for $TARGET in $OUT"

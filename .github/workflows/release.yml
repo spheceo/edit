@@ -115,8 +115,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin]
-    runs-on: macos-latest
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          # Linux on 22.04: glibc 2.35, so the addon loads on 22.04 and newer.
+          # Its window is Chrome's (apps/server/src/linux_desktop.ts): no helper.
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The addon and window helper engine-cache.yml built on main for these
@@ -158,26 +164,28 @@ jobs:
           # A nightly carries its number (apps/server/src/version.ts): nightly-12 → 12; 0 for a release.
           nightly=0
           if [ "$NIGHTLY" = true ]; then nightly="${TAG#nightly-}"; fi
+          mac=false
           case "${{ matrix.target }}" in
-            aarch64-apple-darwin) bun_target=bun-darwin-arm64 ;;
+            aarch64-apple-darwin) bun_target=bun-darwin-arm64 mac=true ;;
+            x86_64-unknown-linux-gnu) bun_target=bun-linux-x64 ;;
           esac
           bun install --frozen-lockfile
           if [ "${{ steps.engine.outputs.cache-hit }}" = true ]; then
             mkdir -p "target/${{ matrix.target }}/release"
             cp engine/edit-native.node crates/edit-native/
-            cp engine/edit-window "target/${{ matrix.target }}/release/"
+            if [ "$mac" = true ]; then cp engine/edit-window "target/${{ matrix.target }}/release/"; fi
           else
             scripts/build-native.sh ${{ matrix.target }}
           fi
-          bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node \
-            --window "target/${{ matrix.target }}/release/edit-window"
+          window=()
+          if [ "$mac" = true ]; then window=(--window "target/${{ matrix.target }}/release/edit-window"); fi
+          bun apps/server/scripts/embed.ts --native crates/edit-native/edit-native.node "${window[@]}"
           mkdir package
           bun build apps/server/src/embedded.gen.ts --compile --target="$bun_target" \
             --define EDIT_VERSION="\"$version\"" --define EDIT_RELEASE=true --define EDIT_NIGHTLY="$nightly" --outfile package/edit
-          codesign -s - -f package/edit
-      # The runner is Apple Silicon: the arm64 build runs here (no GPU renders: no Metal on hosted runners).
+          if [ "$mac" = true ]; then codesign -s - -f package/edit; fi
+      # Each runner runs its own build (no GPU renders: hosted runners have none).
       - name: Smoke test
-        if: matrix.target == 'aarch64-apple-darwin'
         run: |
           set -euo pipefail
           package/edit --version
@@ -211,11 +219,12 @@ jobs:
           cp "quickjs/qjs-${{ matrix.target }}" package/
           "package/qjs-${{ matrix.target }}" --version
           tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe "qjs-${{ matrix.target }}"
-          (cd dist && shasum -a 256 "$name" > "$name.sha256")
+          (cd dist && sha256sum "$name" > "$name.sha256" 2>/dev/null || shasum -a 256 "$name" > "$name.sha256")
           echo "NAME=$name" >> "$GITHUB_ENV"
       # Edit.app, the zip installed apps update from, and the disk image (scripts/package-app.sh):
       # signed with the Developer ID and notarised when these secrets are set, ad hoc until then.
       - name: Edit.app and its disk image
+        if: runner.os == 'macOS'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}

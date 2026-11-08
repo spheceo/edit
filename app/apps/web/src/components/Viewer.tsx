@@ -116,15 +116,17 @@ export function Viewer() {
   // (the agent changes the edit many times a turn: each render would be stale before it landed).
   const hasClips = (project?.clips.length ?? 0) > 0;
   const agentBusy = useAgent((state) => state.project === projectId && state.running);
+  // Edit.app's window draws the edit live: no render to wait for, also while full screen hands the
+  // picture to the page for a while (a render took a place in the export line and the encoder, Nov 8 audit).
+  const drawnByWindow = native || preview.nativeHere;
   useEffect(() => {
-    // Edit.app's window draws the edit live: no render to wait for.
-    if (projectId === null || dirty || !hasClips || agentBusy || native) return;
+    if (projectId === null || dirty || !hasClips || agentBusy || drawnByWindow) return;
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;
     const timer = setTimeout(() => {
       api.renderPlayback(projectId, Math.floor(playhead.frame)).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     }, SMOOTH_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [projectId, rev, dirty, hasClips, agentBusy, playback, native]);
+  }, [projectId, rev, dirty, hasClips, agentBusy, playback, drawnByWindow]);
 
   useEffect(() => {
     if (project) preview.setProject(project, versions);

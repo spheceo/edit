@@ -7,7 +7,8 @@ const engine = vi.hoisted(() => ({
   sources: vi.fn((_frame: number) => "[]"),
 }));
 vi.mock("../engine/pkg/edit_wasm", () => ({ default: vi.fn(), createEngine: vi.fn(async () => engine) }));
-vi.mock("./api", () => ({ fetchRetrying: vi.fn(async () => new Response(new Uint8Array())), mediaUrl: (p: string, m: string) => `/${p}/${m}`, mediaHost: (path: string) => path, request: vi.fn(() => new Promise(() => {})) }));
+const nativeApi = vi.hoisted(() => ({ nativeSources: vi.fn(async () => ({ cache: "/cache", sources: { m1: "/video.mp4" } })) }));
+vi.mock("./api", () => ({ api: nativeApi, fetchRetrying: vi.fn(async () => new Response(new Uint8Array())), mediaUrl: (p: string, m: string) => `/${p}/${m}`, mediaHost: (path: string) => path, request: vi.fn(() => new Promise(() => {})) }));
 
 const decoding = vi.hoisted(() => ({
   frames: new Map<string, object>(), sound: new Map<number, object>(), near: undefined as object | undefined,
@@ -428,6 +429,103 @@ describe("preview seeks and lifetime", () => {
     // And playing live from there never brings the render's sound back under it.
     preview.play(); draw();
     expect(internals.streamSound.paused).toBe(true);
+  });
+
+  // Edit.app's window (lib/nativePreview.ts): its calls answered as crates/edit-window/src/preview.rs does.
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  const inWindow = async (refuse: (command: string) => string | null = () => null) => {
+    const calls: [string, Record<string, unknown>][] = [];
+    const invoke = vi.fn(async (command: string, args: Record<string, unknown> = {}) => {
+      calls.push([command, args]);
+      const refused = refuse(command);
+      if (refused !== null) throw refused;
+      if (command === "preview_open") return true;
+      if (command === "preview_project" || command === "preview_patch") return args.revision;
+      if (command === "preview_frame") return { revision: 0, drawn: true, skipped: false, ms: 4, decode: 3, composite: 0.5, present: 0.3, opens: 0, seeks: 0, ffmpeg: 0 };
+      return null;
+    });
+    (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke };
+    vi.stubGlobal("navigator", { gpu: {}, platform: "MacIntel" });
+    preview.detach();
+    await preview.attach({ width: 320, height: 180 } as HTMLCanvasElement);
+    expect(preview.native).toBe(true);
+    return (command: string) => calls.filter(([name]) => name === command).map(([, args]) => args);
+  };
+
+  it("sends the window the edit whole once, then only what changed, and hears the revision it draws", async () => {
+    const { produce } = await import("immer");
+    let refusePatch = false;
+    const sent = await inWindow((command) => (refusePatch && command === "preview_patch" ? "the window has revision 0, not 2" : null));
+    let p = fixture();
+    preview.setProject(p, {}); await settle(); draw(); await settle();
+    expect(sent("preview_project")).toHaveLength(1);
+    expect(sent("preview_project")[0]!.revision).toBe(1);
+    // A drag's move: the clip that moved, not the edit.
+    p = produce(p, (draft) => { draft.clips[0].start = 5; });
+    preview.setProject(p, {}); draw(); await settle();
+    expect(sent("preview_patch")).toHaveLength(1);
+    expect(sent("preview_patch")[0]).toMatchObject({ base: 1, revision: 2 });
+    const patch = JSON.parse(String(sent("preview_patch")[0]!.patch));
+    expect(patch.lists.clips.put).toEqual([JSON.parse(JSON.stringify(p.clips[0]))]);
+    expect(preview.diagnostics.nativeFrames.accepted).toBe(2);
+    // Out of step: the whole edit next.
+    refusePatch = true;
+    p = produce(p, (draft) => { draft.clips[0].start = 6; });
+    preview.setProject(p, {}); draw(); await settle(); draw(); await settle();
+    expect(sent("preview_project")).toHaveLength(2);
+    expect(JSON.parse(String(sent("preview_project")[1]!.json)).clips[0].start).toBe(6);
+    expect(preview.diagnostics.nativeFrames.accepted).toBe(4);
+    expect(preview.native).toBe(true);
+  });
+
+  it("draws in the page when the window refuses the edit, and says why", async () => {
+    await inWindow((command) => (command === "preview_project" ? "unknown media m9" : null));
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle();
+    expect(preview.native).toBe(false);
+    expect(preview.diagnostics.nativeFrames.off).toContain("refused edit");
+    expect(preview.diagnostics.nativeFrames.off).toContain("unknown media m9");
+  });
+
+  it("keeps each window frame's time for the reports", async () => {
+    await inWindow();
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle();
+    preview.seek(10); draw(); await settle();
+    const report = preview.diagnostics.nativeFrames;
+    expect(report.drawn).toBe(2);
+    expect(report.drawMs.p50).toBe(4);
+    expect(report.decodeMs.p50).toBe(3);
+  });
+
+  it("asks for the sound while the window draws and plays, so a native play isn't silent", async () => {
+    await inWindow();
+    preview.setProject(withSound(), {}); await settle(); draw(); await settle();
+    decoding.requestAudio.mockClear();
+    preview.play(); draw(); await settle();
+    expect(decoding.requestAudio).toHaveBeenCalled();
+    clock.currentTime = 0.3; draw(); await settle();
+    expect(playhead.frame).toBeGreaterThan(0);
+    expect(clock.nodes.length).toBeGreaterThan(0);
+    expect(preview.diagnostics.audioUnderruns).toBe(0);
+  });
+
+  it("asks where the window reads from again when the server's cleaner took a copy, or a frame failed", async () => {
+    await inWindow();
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle();
+    const asked = nativeApi.nativeSources.mock.calls.length;
+    window.dispatchEvent(new Event("edit:native-sources")); await settle();
+    expect(nativeApi.nativeSources.mock.calls.length).toBe(asked + 1);
+  });
+
+  it("in full screen the page draws, still as Edit.app's window's picture (no smooth-playback render asked for), and says why", async () => {
+    await inWindow();
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle();
+    preview.setNativeAllowed(false);
+    expect(preview.native).toBe(false);
+    // Viewer asks for a render only when neither holds (it took a place in the export line and the encoder).
+    expect(preview.nativeHere).toBe(true);
+    expect(preview.diagnostics.nativeFrames.off).toBe("full screen");
+    preview.setNativeAllowed(true); await settle();
+    expect(preview.native).toBe(true);
   });
 
   it("keeps scrubbing responsive after playback reaches the end", () => {

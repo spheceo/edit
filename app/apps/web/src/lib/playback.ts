@@ -8,7 +8,8 @@ import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
 import { clipEnd, paramAt, projectDuration, validateProject } from "./edit";
 import { peopleProblem } from "./people";
 import { mutePoints } from "./mutes";
-import { nativeAvailable, nativePreview } from "./nativePreview";
+import { nativeAvailable, nativePreview, type NativeDrawn, type NativeExcerpt } from "./nativePreview";
+import * as patches from "./patch";
 import { SmoothStream } from "./smoothStream";
 import { savedFrame, saveFrame } from "./storage";
 import type { Clip, Media, Project, Sections, Track } from "./types";
@@ -70,6 +71,13 @@ const SETTLE_MS = 300;
 const DRAG_GAP_MS = 150;
 /** Source seconds a decoded picture may be from the wanted one and still stand in mid-drag. */
 const STAND_IN_REACH = 3;
+/** A patch to the window's edit bigger than this goes whole instead. */
+const PATCH_MOST = 512 * 1024;
+/** A window frame slower than this is reported with what made it slow (two frames at 60 fps). */
+const NATIVE_SLOW_MS = 33;
+
+/** What each media is decoded from in Edit.app's window, the local excerpts of streamed ones, and the media cache. */
+type NativeSources = { cache: string; sources: Record<string, string>; excerpts: Record<string, NativeExcerpt[]> };
 
 class Preview {
   engine: Engine | null = null;
@@ -89,12 +97,28 @@ class Preview {
   /** The edit or what its pictures are decoded from changed since the window had them. */
   private nativeStale = true;
   /** What each media is decoded from in the window, for this project and these versions (`nativeKey`). */
-  private nativeSources: { cache: string; sources: Record<string, string> } | null = null;
+  private nativeSources: NativeSources | null = null;
+  /** The media's preview versions the page last had (what the window's sources are asked for with). */
+  private versions: Record<string, string> = {};
   private nativeKey = "";
   private nativeBusy = false;
   private nativeWanted: number | null = null;
   private nativeDrawn: number | null = null;
   private nativeFailures = 0;
+  /**
+   * The window's edit: the last revision sent, the one it said it draws, and
+   * the project and sources it has (what the next change is a patch of; null:
+   * send it whole). A drag sent the whole 2.4 MB project ten times a second
+   * (Cops Realize, Nov 8: 26 MB/s through the window's IPC); a patch is the
+   * clip that moved.
+   */
+  private nativeRevision = 0;
+  private nativeAccepted = 0;
+  private nativeHas: { project: Project; sources: NativeSources; revision: number } | null = null;
+  private nativeSending = false;
+  /** How the window's frames went (`diagnostics.nativeFrames`, and the once-a-minute `ui:` timings). */
+  private nativeStats = { draws: [] as number[], decodes: [] as number[], drawn: 0, skipped: 0, passed: 0, failed: 0, opens: 0, seeks: 0, streamed: 0, behind: 0, patches: 0, wholes: 0, refused: 0, off: null as string | null };
+  private nativeAsked: number | null = null;
   sections: Sections | null = null;
   error: string | null = null;
   /** The error is the engine refusing the project (cleared when it takes one). */
@@ -195,7 +219,7 @@ class Preview {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   get diagnostics() {
-    return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.renderedFrame,
+    return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.renderedFrame, nativeFrames: this.nativeReport(),
       videoCacheBytes: this.decoder.pictures.bytes, videoCacheFrames: this.decoder.pictures.size,
       audioCacheBytes: this.decoder.sound.bytes, scheduledAudio: this.scheduled.size, mediaReads: this.decoder.network,
       // Whether sound can come out at all: a context that never started (or was suspended) plays nothing.
@@ -375,19 +399,44 @@ class Preview {
       if (generation !== this.generation) return;
       if (!opened) {
         this.nativeRefused = true;
+        this.nativeOff("refused open", "the window can't draw it on this Mac");
         return;
       }
       this.native = true;
       this.nativeStale = true;
+      this.nativeHas = null;
       this.nativeDrawn = null;
       this.nativeFailures = 0;
+      this.nativeStats.off = null;
       this.framed = false;
       this.setSmooth(null);
       recordTiming("preview: native", 0);
     } catch (error) {
       this.nativeRefused = true;
-      note("warn", "preview", `the window's own preview didn't open: ${error}`);
+      this.nativeOff("refused open", `the window's own preview didn't open: ${error}`);
     }
+  }
+
+  /** Why the window stopped drawing (or never did), for the reports: a `ui:` timing per reason, and a warning with the detail. */
+  private nativeOff(reason: "full screen" | "failed" | "refused open" | "refused edit", detail: string | null) {
+    this.nativeStats.off = detail === null ? reason : `${reason}: ${detail}`;
+    recordTiming(`preview: native off (${reason})`, 0);
+    if (detail !== null) note("warn", "preview", detail);
+  }
+
+  /** Whether Edit.app's window draws the picture here whenever it may (not refused this session): full screen hands it to the page for a while. */
+  get nativeHere(): boolean {
+    return nativeAvailable() && !this.nativeRefused;
+  }
+
+  private nativeReport() {
+    const s = this.nativeStats;
+    const at = (list: number[], q: number) => { const sorted = [...list].sort((a, b) => a - b); return sorted.length === 0 ? null : Math.round(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] * 10) / 10; };
+    return { on: this.native, here: this.nativeHere, off: s.off, revision: this.nativeRevision, accepted: this.nativeAccepted, behind: s.behind,
+      drawn: s.drawn, skipped: s.skipped, passedOver: s.passed, failed: s.failed, patches: s.patches, wholes: s.wholes, refused: s.refused,
+      drawMs: { p50: at(s.draws, 0.5), p90: at(s.draws, 0.9), max: at(s.draws, 1) }, decodeMs: { p50: at(s.decodes, 0.5), p90: at(s.decodes, 0.9) },
+      opens: s.opens, seeks: s.seeks, streamedReads: s.streamed,
+      streamedSources: this.nativeSources === null ? null : Object.values(this.nativeSources.sources).filter((source) => source.startsWith("http")).length };
   }
 
   /** The page draws again: the window failed (`refuse`), or can't show it now (full screen). */
@@ -396,7 +445,7 @@ class Preview {
     this.native = false;
     if (refuse !== null) {
       this.nativeRefused = true;
-      note("warn", "preview", `the window's own preview stopped (${refuse}): the page draws it`);
+      this.nativeOff(refuse.startsWith("the window refused the edit") ? "refused edit" : "failed", `the window's own preview stopped (${refuse}): the page draws it`);
     }
     void nativePreview.close().catch(() => {});
     this.nativeBusy = false;
@@ -410,8 +459,10 @@ class Preview {
   setNativeAllowed(allowed: boolean) {
     if (allowed === this.nativeAllowed) return;
     this.nativeAllowed = allowed;
-    if (!allowed) this.leaveNative(null);
-    else if (this.engine) void this.openNative(this.generation).then(() => { this.notify(); this.invalidate(); });
+    if (!allowed) {
+      if (this.native) this.nativeOff("full screen", null);
+      this.leaveNative(null);
+    } else if (this.engine) void this.openNative(this.generation).then(() => { this.notify(); this.invalidate(); });
   }
 
   /** The window's sources for this project, asked again when its media or their versions change. */
@@ -419,11 +470,12 @@ class Preview {
     const key = `${project.id}|${project.media.map((media) => `${media.id}:${media.path}:${versions[media.id] ?? ""}`).join(",")}`;
     if (key === this.nativeKey) return;
     this.nativeKey = key;
-    api.nativeSources(project.id).then((found) => {
+    api.nativeSources(project.id).then((given) => {
       if (this.nativeKey !== key) return;
-      const before = JSON.stringify(this.nativeSources?.sources ?? null);
+      const found = { ...given, excerpts: given.excerpts ?? {} };
+      const before = JSON.stringify(this.nativeSources ?? null);
       this.nativeSources = found;
-      if (JSON.stringify(found.sources) !== before) {
+      if (JSON.stringify(found) !== before) {
         this.nativeStale = true;
         this.invalidate();
       }
@@ -441,36 +493,90 @@ class Preview {
     });
   }
 
-  /** The edit into the window, once it and its sources are known; at most once a frame. */
+  /**
+   * What the window decodes from, asked again now: the server's cleaner took
+   * a copy the window was reading (its `native-sources` event), or a frame
+   * failed, which a file gone from under it does.
+   */
+  refreshNativeSources() {
+    if (!this.project || !nativeAvailable()) return;
+    this.nativeKey = "";
+    this.nativeSourcesFor(this.project, this.versions);
+  }
+
+  /**
+   * The edit into the window, once it and its sources are known; at most once
+   * a frame and one at a time: only what changed since the revision it has
+   * (lib/patch.ts), whole when it has none, the sources changed, or a patch
+   * didn't fit. A refused edit leaves the window's picture behind the page's
+   * engine, so the page draws instead.
+   */
   private syncNative() {
-    if (!this.nativeStale || !this.project || this.nativeSources === null) return;
+    if (!this.nativeStale || this.nativeSending || !this.project || this.nativeSources === null) return;
     if (!this.nativeKey.startsWith(`${this.project.id}|`)) return;
     this.nativeStale = false;
     this.nativeDrawn = null;
-    const { cache, sources } = this.nativeSources;
-    void nativePreview.project(projectJson(this.project), sources, cache).catch((error: unknown) => this.nativeFailed(error));
+    const project = this.project;
+    const sources = this.nativeSources;
+    const has = this.nativeHas;
+    let patch: string | null = null;
+    if (has !== null && has.sources === sources && has.project.id === project.id && has.revision === this.nativeAccepted) {
+      const change = patches.diff(has.project, project);
+      if (patches.empty(change)) return;
+      patch = JSON.stringify(change);
+      // A change touching most of the edit goes whole: parsing it is the same work, and it can't not fit.
+      if (patch.length > PATCH_MOST) patch = null;
+    }
+    const revision = ++this.nativeRevision;
+    this.nativeSending = true;
+    const sent = patch !== null && has !== null
+      ? nativePreview.patch(has.revision, revision, patch)
+      : nativePreview.project(projectJson(project), revision, sources.sources, sources.excerpts, sources.cache);
+    if (patch !== null) this.nativeStats.patches++; else this.nativeStats.wholes++;
+    sent.then((accepted) => {
+      this.nativeSending = false;
+      this.nativeAccepted = accepted;
+      this.nativeHas = { project, sources, revision: accepted };
+      if (this.nativeStale) this.invalidate();
+    }, (error: unknown) => {
+      this.nativeSending = false;
+      if (!this.native) return;
+      if (patch !== null) {
+        // Out of step (or a patch that didn't fit): the whole edit next.
+        this.nativeHas = null;
+        this.nativeStale = true;
+        this.invalidate();
+        return;
+      }
+      this.nativeStats.refused++;
+      this.leaveNative(`the window refused the edit: ${error}`);
+    });
   }
 
   /** The playhead's frame drawn by the window; one at a time, the newest asked for next. */
   private drawNative() {
     if (!this.project || this.error) return;
     this.syncNative();
-    if (this.nativeStale) return;
+    if (this.nativeStale && this.nativeHas === null) return;
     const wanted = Math.floor(playhead.frame);
     this.nativeWanted = wanted;
     if (this.nativeBusy || wanted === this.nativeDrawn) return;
+    // Frames the playhead went past while the window was busy with one before: never shown.
+    if (playhead.playing && this.nativeAsked !== null && wanted > this.nativeAsked + 1) this.nativeStats.passed += wanted - this.nativeAsked - 1;
+    this.nativeAsked = wanted;
     this.nativeBusy = true;
     // The badge only for a frame that's slow, not each one asked for.
     const slow = setTimeout(() => this.setBuffering(true), 150);
-    nativePreview.frame(wanted).then(() => {
+    nativePreview.frame(wanted).then((answer) => {
       clearTimeout(slow);
       this.nativeBusy = false;
       if (!this.native) return;
       this.nativeDrawn = wanted;
       this.nativeFailures = 0;
+      this.nativeFrame(answer);
       this.setBuffering(false);
       if (!this.framed) { this.framed = true; this.notify(); }
-      if (this.nativeWanted !== wanted) this.drawNative();
+      if (this.nativeWanted !== wanted || this.nativeStale) this.drawNative();
     }, (error: unknown) => {
       clearTimeout(slow);
       this.nativeBusy = false;
@@ -478,11 +584,32 @@ class Preview {
     });
   }
 
+  /** A frame's answer, into the diagnostics: its time and where it went, and whether it shows an older edit than the page's. */
+  private nativeFrame(answer: NativeDrawn | undefined) {
+    if (answer === undefined || answer === null) return;
+    const s = this.nativeStats;
+    if (answer.revision !== undefined && answer.revision < this.nativeRevision && !this.nativeSending) s.behind++;
+    if (answer.skipped) { s.skipped++; return; }
+    if (!answer.drawn) return;
+    s.drawn++;
+    s.draws.push(answer.ms);
+    s.decodes.push(answer.decode);
+    if (s.draws.length > 600) { s.draws.shift(); s.decodes.shift(); }
+    s.opens += answer.opens;
+    s.seeks += answer.seeks;
+    s.streamed += answer.ffmpeg;
+    recordTiming("preview: native draw", answer.ms);
+    if (answer.ms > NATIVE_SLOW_MS) recordTiming(answer.ffmpeg > 0 ? "preview: native slow draw (streamed)" : answer.opens > 0 ? "preview: native slow draw (opened)" : "preview: native slow draw (seek)", answer.ms);
+  }
+
   private nativeFailed(error: unknown) {
     if (!this.native) return;
     this.nativeFailures++;
+    this.nativeStats.failed++;
     if (this.nativeFailures === 1) note("warn", "preview", `the window's preview: ${error}`);
     if (this.nativeFailures >= 5) { this.leaveNative(String(error)); return; }
+    // A file gone from under it (the cleaner took a copy) fails a frame: what it reads is asked for again.
+    this.refreshNativeSources();
     this.nativeStale = true;
     setTimeout(() => this.invalidate(), 250);
   }
@@ -569,6 +696,7 @@ class Preview {
     this.leaveNative(null);
     this.nativeKey = "";
     this.nativeSources = null;
+    this.nativeHas = null;
     this.setBuffering(false);
     this.remember();
     this.canvas = null;
@@ -677,6 +805,7 @@ class Preview {
     }
     this.engineStale = true;
     this.nativeStale = true;
+    this.versions = proxyVersions;
     if (nativeAvailable()) this.nativeSourcesFor(project, proxyVersions);
     this.notify();
     this.invalidate();
@@ -895,7 +1024,9 @@ class Preview {
     // The window decodes its own pictures: here only the sound's readiness counts.
     const scene = { frame: Math.floor(frame), sources: this.native ? [] : this.sceneSources(Math.floor(frame)) };
     const { sources } = scene;
+    // The window decodes the pictures; the sound is still the page's to ask for (Nov 8: a native play asked for none and was silent).
     if (!this.native) this.warm(scene.frame, sources);
+    else this.warmSound(scene.frame);
     if (!this.runningClock && ((!this.native && !this.picturesReady(sources)) || !this.audioReady(frame, 0.5))) {
       this.setBuffering(true);
       return;
@@ -1080,6 +1211,24 @@ class Preview {
     this.decoder.retain(lanes);
   }
 
+  /**
+   * `warm`'s sound alone, for when the window draws: the sound playing and
+   * starting within a second while playing, and at rest (once settled) what
+   * Play starts with.
+   */
+  private warmSound(frame: number) {
+    if (!this.project) return;
+    const lanes = new Set<string>();
+    if (!playhead.playing) {
+      if (this.settled) for (const clip of this.activeClips(frame)) this.requestSound(clip, frame, lanes);
+      this.decoder.retain(lanes);
+      return;
+    }
+    const fps = rate(this.project.settings);
+    for (const clip of this.clipsAround(frame, frame + fps * LOOK_AHEAD)) this.requestSound(clip, frame, lanes);
+    this.decoder.retain(lanes);
+  }
+
   private requestSound(clip: Clip, frame: number, lanes: Set<string>) {
     if (!this.audible(clip)) return;
     const media = this.media.get(clip.media)!;
@@ -1190,7 +1339,12 @@ class Preview {
 
   /** `scene`: the sources a playback tick already looked up (and warmed) for its frame. */
   private draw(scene?: { frame: number; sources: PictureSource[] }) {
-    if (this.native) { this.syncEngine(); this.drawNative(); return; }
+    if (this.native) {
+      this.syncEngine();
+      if (!playhead.playing) this.warmSound(Math.floor(playhead.frame));
+      this.drawNative();
+      return;
+    }
     if (!this.engine || !this.project || this.error) return;
     // The rendered video shows this frame: nothing to decode or draw live.
     if (this.smoothShown) { this.syncEngine(); return; }
@@ -1307,6 +1461,8 @@ export function projectJson(project: Project) {
 }
 
 export const preview = new Preview();
+// The server's cleaner took a copy the window reads (lib/store.ts hears it): asked again before the next jump fails on it.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") window.addEventListener("edit:native-sources", () => preview.refreshNativeSources());
 addContext("Preview", () => ({
   error: preview.error,
   waiting: preview.buffering,

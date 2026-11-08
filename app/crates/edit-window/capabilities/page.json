@@ -16,6 +16,7 @@
     "allow-preview-open",
     "allow-preview-place",
     "allow-preview-project",
+    "allow-preview-patch",
     "allow-preview-frame",
     "allow-preview-close",
     "allow-notices-status",

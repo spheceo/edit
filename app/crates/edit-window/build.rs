@@ -4,6 +4,7 @@ fn main() {
         "preview_open",
         "preview_place",
         "preview_project",
+        "preview_patch",
         "preview_frame",
         "preview_close",
         "notices_status",

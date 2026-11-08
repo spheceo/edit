@@ -11,6 +11,13 @@
 //!
 //! The page still owns the playhead, the sound and everything drawn over the
 //! picture; it asks for a frame and hears when it's drawn.
+//!
+//! The page sends the edit whole once (`set_project`) and then only what
+//! changed (`apply_patch`, the page's lib/patch.ts): a drag on Cops Realize
+//! sent its 2.4 MB ten times a second, 26 MB/s through the window's IPC, each
+//! parsed again here (Nov 8). Every update carries the page's revision, and
+//! the player answers with the one it now draws, or why it refused: a refused
+//! update leaves the last one on screen, and the page has to know.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -18,8 +25,22 @@ use std::path::PathBuf;
 
 use edit_core::{evaluate_seen, Project};
 use edit_render::{text::BUNDLED_FONTS, wgpu, Renderer};
+use serde::Deserialize;
+use serde_json::Value;
 
-use crate::render::{feed_peaks, PreviewPictures};
+use crate::render::{decode_stats, feed_peaks, PreviewPictures};
+
+/// Where one drawn frame's time went, in milliseconds (the decoders' share by kind in `decoders`).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct DrawTimes {
+    pub evaluate: f64,
+    pub decode: f64,
+    pub upload: f64,
+    pub composite: f64,
+    pub present: f64,
+    pub layers: usize,
+    pub decoders: decode_stats::Taken,
+}
 
 pub struct Player {
     renderer: Renderer,
@@ -27,12 +48,17 @@ pub struct Player {
     config: wgpu::SurfaceConfiguration,
     pictures: PreviewPictures,
     project: Option<Project>,
+    /// The project as the page sent it (patches apply to this), and the page's revision of it.
+    value: Option<Value>,
+    revision: u64,
     /// What each media is decoded from: its preview file on this Mac, else a URL the server answers.
     sources: HashMap<String, PathBuf>,
     /// The media cache: waveforms' sound levels.
     cache: PathBuf,
     /// The frame on screen, and whether the project or size changed since.
     drawn: Option<i64>,
+    /// The last frame drawn's timings (None when the last ask needed no drawing).
+    pub last: Option<DrawTimes>,
 }
 
 impl Player {
@@ -96,41 +122,104 @@ impl Player {
             config,
             pictures: PreviewPictures::new(),
             project: None,
+            value: None,
+            revision: 0,
             sources: HashMap::new(),
             cache: PathBuf::new(),
             drawn: None,
+            last: None,
         })
     }
 
-    /// The edit to draw (the page's JSON, as its engine takes it), what each
-    /// media is decoded from, and the media cache.
+    /// The edit to draw (the page's JSON, as its engine takes it) at the
+    /// page's `revision`, what each media is decoded from, the local
+    /// excerpts of streamed ones (`crate::excerpts`: a pieced proxy's pieces
+    /// on this Mac), and the media cache. Refused, the last edit stays.
     pub fn set_project(
         &mut self,
         json: &str,
+        revision: u64,
         sources: HashMap<String, String>,
+        excerpts: HashMap<String, Vec<crate::excerpts::Excerpt>>,
         cache: PathBuf,
-    ) -> Result<(), String> {
-        let project: Project = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    ) -> Result<u64, String> {
+        let value: Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        let project = Project::deserialize(&value).map_err(|error| error.to_string())?;
         project.validate()?;
-        if self.project.as_ref().map(|old| &old.id) != Some(&project.id) {
-            self.renderer.clear_peaks();
-            self.pictures.clear();
-        }
         let sources: HashMap<String, PathBuf> = sources
             .into_iter()
             .map(|(media, path)| (media, PathBuf::from(path)))
             .collect();
+        for (media, list) in excerpts {
+            if let Some(object) = sources
+                .get(&media)
+                .and_then(|path| crate::excerpts::object_of(path))
+            {
+                crate::excerpts::add(&object, list);
+            }
+        }
         // A media decoded from another file now: its readers of the old one go.
         if sources != self.sources {
+            self.pictures.clear();
+        }
+        self.sources = sources;
+        self.cache = cache;
+        self.take(project, value, revision);
+        Ok(revision)
+    }
+
+    /// What changed since `base` (the page's lib/patch.ts), making `revision`.
+    /// Refused when the player isn't at `base` or the patch doesn't fit: the
+    /// page sends the whole edit then.
+    pub fn apply_patch(&mut self, base: u64, revision: u64, patch: &str) -> Result<u64, String> {
+        if self.revision != base || self.value.is_none() {
+            return Err(format!(
+                "the window has revision {}, not {base}",
+                self.revision
+            ));
+        }
+        let patch: Value = serde_json::from_str(patch).map_err(|error| error.to_string())?;
+        // Applied in place; refused, the window has no edit to patch until the next whole one.
+        let mut value = self.value.take().unwrap_or(Value::Null);
+        apply(&mut value, &patch)?;
+        if let Some(project) = self.project.as_mut().filter(|_| only_clips(&patch)) {
+            // A drag, a trim, a title typed: the clips that changed, not the whole edit parsed again
+            // (2.4 MB of Cops Realize took 22 ms a patch that way, Nov 8).
+            let clips = project.clips.clone();
+            if let Err(error) = patch_clips(project, &patch).and_then(|()| project.validate()) {
+                project.clips = clips;
+                return Err(error);
+            }
+            if let Some(next) = patch.pointer("/set/next_id").and_then(Value::as_u64) {
+                project.next_id = next;
+            }
+            self.value = Some(value);
+            self.revision = revision;
+            self.drawn = None;
+            return Ok(revision);
+        }
+        let project = Project::deserialize(&value).map_err(|error| error.to_string())?;
+        project.validate()?;
+        self.take(project, value, revision);
+        Ok(revision)
+    }
+
+    /// The revision on screen (0: none yet).
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn take(&mut self, project: Project, value: Value, revision: u64) {
+        if self.project.as_ref().map(|old| &old.id) != Some(&project.id) {
+            self.renderer.clear_peaks();
             self.pictures.clear();
         }
         self.renderer
             .resize(project.settings.width, project.settings.height);
         self.project = Some(project);
-        self.sources = sources;
-        self.cache = cache;
+        self.value = Some(value);
+        self.revision = revision;
         self.drawn = None;
-        Ok(())
     }
 
     /// The layer's size in pixels changed.
@@ -147,13 +236,19 @@ impl Player {
 
     /// Draws `frame`, unless it's on screen already (nothing changed since).
     pub fn draw(&mut self, frame: i64) -> Result<(), String> {
+        self.last = None;
         if self.drawn == Some(frame) {
             return Ok(());
         }
         let Some(project) = &self.project else {
             return Err("no edit to draw yet".to_owned());
         };
+        let ms = |since: std::time::Instant| since.elapsed().as_secs_f64() * 1000.0;
+        let mut times = DrawTimes::default();
+        let started = std::time::Instant::now();
+        decode_stats::take();
         let scene = evaluate_seen(project, frame);
+        times.evaluate = ms(started);
         // Decoded no bigger than it's shown: the edit's size fitted into the layer.
         let (width, height) = (
             project.settings.width.max(1),
@@ -166,17 +261,27 @@ impl Player {
             ((width as f32 * fit).round() as u32).max(2),
             ((height as f32 * fit).round() as u32).max(2),
         );
-        let pictures = self
-            .pictures
-            .decode(project, &scene, shown, &self.sources)?;
+        let started = std::time::Instant::now();
+        let pictures = self.pictures.decode(project, &scene, shown, &self.sources);
+        times.decoders = decode_stats::take();
+        let pictures = pictures?;
+        times.decode = ms(started);
+        times.layers = pictures.len();
+        let started = std::time::Instant::now();
         for (clip, width, height, pixels) in &pictures {
             self.renderer
                 .upload_video(clip, *width, *height, pixels, true);
         }
         feed_peaks(&mut self.renderer, project, &scene, &self.cache);
+        times.upload = ms(started);
+        let started = std::time::Instant::now();
         self.renderer.render(&scene);
+        times.composite = ms(started);
+        let started = std::time::Instant::now();
         self.present()?;
+        times.present = ms(started);
         self.drawn = Some(frame);
+        self.last = Some(times);
         Ok(())
     }
 
@@ -209,5 +314,230 @@ impl Player {
     pub fn rest(&mut self) {
         self.pictures.clear();
         self.drawn = None;
+    }
+}
+
+/// Whether `patch` changes nothing but clips (and the next id handed out).
+fn only_clips(patch: &Value) -> bool {
+    let set_ok = patch
+        .get("set")
+        .and_then(Value::as_object)
+        .is_none_or(|set| set.keys().all(|key| key == "next_id"));
+    let unset_ok = patch
+        .get("unset")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    let lists_ok = patch
+        .get("lists")
+        .and_then(Value::as_object)
+        .is_none_or(|lists| lists.keys().all(|key| key == "clips"));
+    set_ok && unset_ok && lists_ok
+}
+
+/// A clips-only patch into the parsed project's clips, as `apply` does to the JSON.
+fn patch_clips(project: &mut Project, patch: &Value) -> Result<(), String> {
+    let Some(change) = patch.pointer("/lists/clips") else {
+        return Ok(());
+    };
+    let strings = |field: &str| -> Vec<String> {
+        change
+            .get(field)
+            .and_then(Value::as_array)
+            .map(|all| {
+                all.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let gone: std::collections::HashSet<String> = strings("remove").into_iter().collect();
+    project.clips.retain(|clip| !gone.contains(&clip.id));
+    let mut at: HashMap<String, usize> = project
+        .clips
+        .iter()
+        .enumerate()
+        .map(|(index, clip)| (clip.id.clone(), index))
+        .collect();
+    for item in change
+        .get("put")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let clip = edit_core::Clip::deserialize(item).map_err(|error| error.to_string())?;
+        match at.get(&clip.id) {
+            Some(&index) => {
+                if let Some(slot) = project.clips.get_mut(index) {
+                    *slot = clip;
+                }
+            }
+            None => {
+                at.insert(clip.id.clone(), project.clips.len());
+                project.clips.push(clip);
+            }
+        }
+    }
+    if change.get("order").is_some() {
+        let order = strings("order");
+        if order.len() != project.clips.len() || order.iter().any(|one| !at.contains_key(one)) {
+            return Err("clips' new order doesn't match its items".to_owned());
+        }
+        let mut clips: HashMap<String, edit_core::Clip> = project
+            .clips
+            .drain(..)
+            .map(|clip| (clip.id.clone(), clip))
+            .collect();
+        project.clips = order.iter().filter_map(|one| clips.remove(one)).collect();
+    }
+    Ok(())
+}
+
+/// `base` with `patch` applied, as the page's lib/patch.ts `apply`: fields
+/// set and removed, and for a list of things with ids the ones put (changed
+/// in place, new ones at the end), removed, and the new order when it moved.
+pub fn apply(base: &mut Value, patch: &Value) -> Result<(), String> {
+    let object = base.as_object_mut().ok_or("the project isn't an object")?;
+    if let Some(set) = patch.get("set").and_then(Value::as_object) {
+        for (key, value) in set {
+            object.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some(unset) = patch.get("unset").and_then(Value::as_array) {
+        for key in unset.iter().filter_map(Value::as_str) {
+            object.remove(key);
+        }
+    }
+    let Some(lists) = patch.get("lists").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let id = |item: &Value| item.get("id").and_then(Value::as_str).map(str::to_owned);
+    for (key, change) in lists {
+        let list = object
+            .entry(key.clone())
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .ok_or_else(|| format!("{key} isn't a list of things with ids"))?;
+        let strings = |field: &str| -> Vec<String> {
+            change
+                .get(field)
+                .and_then(Value::as_array)
+                .map(|all| {
+                    all.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let gone: std::collections::HashSet<String> = strings("remove").into_iter().collect();
+        list.retain(|item| id(item).is_none_or(|one| !gone.contains(&one)));
+        let mut at: HashMap<String, usize> = HashMap::new();
+        for (index, item) in list.iter().enumerate() {
+            let one = id(item).ok_or_else(|| format!("a {key} item has no id"))?;
+            at.insert(one, index);
+        }
+        for item in change
+            .get("put")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let one = id(item).ok_or_else(|| format!("a changed {key} item has no id"))?;
+            match at.get(&one) {
+                Some(&index) => {
+                    if let Some(slot) = list.get_mut(index) {
+                        *slot = item.clone();
+                    }
+                }
+                None => {
+                    at.insert(one, list.len());
+                    list.push(item.clone());
+                }
+            }
+        }
+        if change.get("order").is_some() {
+            let order = strings("order");
+            if order.len() != list.len() || order.iter().any(|one| !at.contains_key(one)) {
+                return Err(format!("{key}'s new order doesn't match its items"));
+            }
+            let mut items: HashMap<String, Value> = list
+                .drain(..)
+                .filter_map(|item| id(&item).map(|one| (one, item)))
+                .collect();
+            *list = order.iter().filter_map(|one| items.remove(one)).collect();
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_patch_applies_as_the_pages_does() {
+        let mut project = json!({
+            "name": "a", "next_id": 3, "gone": true,
+            "clips": [{"id": "c1", "start": 0}, {"id": "c2", "start": 5}, {"id": "c3", "start": 9}],
+        });
+        apply(
+            &mut project,
+            &json!({
+                "set": {"name": "b"}, "unset": ["gone"],
+                "lists": {"clips": {"put": [{"id": "c2", "start": 6}, {"id": "c4", "start": 1}], "remove": ["c3"]}},
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            project,
+            json!({"name": "b", "next_id": 3,
+                "clips": [{"id": "c1", "start": 0}, {"id": "c2", "start": 6}, {"id": "c4", "start": 1}]})
+        );
+        apply(
+            &mut project,
+            &json!({"set": {}, "unset": [], "lists": {"clips": {"put": [], "remove": [], "order": ["c4", "c1", "c2"]}}}),
+        )
+        .unwrap();
+        let ids: Vec<&str> = project["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|clip| clip["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, ["c4", "c1", "c2"]);
+        // A clips-only patch into the parsed project lands where the JSON's does.
+        let base = json!({
+            "version": 1, "id": "p", "name": "t", "settings": {"width": 320, "height": 180, "fps": 30},
+            "tracks": [{"id": "v", "kind": "video"}],
+            "clips": [
+                {"id": "a", "track": "v", "type": "solid", "start": 0, "duration": 10, "fill": [1, 0, 0, 1]},
+                {"id": "b", "track": "v", "type": "solid", "start": 10, "duration": 10, "fill": [0, 1, 0, 1]},
+            ],
+        });
+        let change = json!({"set": {"next_id": 9}, "unset": [], "lists": {"clips": {
+            "put": [{"id": "b", "track": "v", "type": "solid", "start": 12, "duration": 8, "fill": [0, 1, 0, 1]},
+                    {"id": "c", "track": "v", "type": "solid", "start": 30, "duration": 5, "fill": [0, 0, 1, 1]}],
+            "remove": ["a"], "order": ["c", "b"]}}});
+        assert!(only_clips(&change));
+        let mut parsed = Project::deserialize(&base).unwrap();
+        patch_clips(&mut parsed, &change).unwrap();
+        let mut value = base.clone();
+        apply(&mut value, &change).unwrap();
+        let whole = Project::deserialize(&value).unwrap();
+        assert_eq!(
+            serde_json::to_value(&parsed.clips).unwrap(),
+            serde_json::to_value(&whole.clips).unwrap()
+        );
+        assert!(!only_clips(
+            &json!({"set": {"name": "x"}, "unset": [], "lists": {}})
+        ));
+        // An order naming what isn't there doesn't fit.
+        assert!(apply(
+            &mut project,
+            &json!({"set": {}, "unset": [], "lists": {"clips": {"put": [], "remove": [], "order": ["c1"]}}}),
+        )
+        .is_err());
     }
 }

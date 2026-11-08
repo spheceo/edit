@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 
 /// Seconds `from..to` of an original, in a local file whose time 0 is `from`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
 pub struct Excerpt {
     pub from: f64,
     pub to: f64,

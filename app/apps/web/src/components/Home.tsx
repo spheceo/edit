@@ -171,6 +171,7 @@ export function Home() {
   const busy = Object.values(statuses).some((one) => one.importing !== null || one.working || one.sharing !== null);
   useEffect(() => {
     if (!busy) return;
+    // A poll that fails is noted by api.ts (Report a problem shows it) and the next one asks again.
     const timer = setInterval(() => void api.projectStatus().then(setStatuses).catch(() => {}), 3_000);
     return () => clearInterval(timer);
   }, [busy]);
@@ -186,12 +187,14 @@ export function Home() {
       void api
         .writerScripts()
         .then(({ scripts }) => setScripts(scripts))
+        // Noted by api.ts; the last list stays until the next refresh.
         .catch(() => {});
     }
     // Feedback waiting, and finished edits not exported as they are now.
     void api
       .projectStatus()
       .then(setStatuses)
+      // As above: noted by api.ts, the last statuses stay.
       .catch(() => {});
     return api
       .projects()

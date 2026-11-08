@@ -471,6 +471,7 @@ export async function fetchKey(key: string, local: string): Promise<void> {
   for (;;) {
     const running = fetching.get(local);
     if (running === undefined) break;
+    // Only to wait it out: that fetch's own caller hears how it ended, and this one looks again.
     await running.catch(() => {});
   }
   if (isFile(local)) return;
@@ -759,7 +760,11 @@ async function runUpload(upload: Upload, progressed: () => void): Promise<void> 
   if (upload.uploadOriginal) {
     // Up already, whole (the same footage imported again while its first upload went on: the 10-hour trial,
     // Nov 4, sent 58 GB twice): the key is its content's, so it isn't sent again.
-    if ((await cloud.head(upload.originalKey).catch(() => null))?.size === upload.size) {
+    const there = await cloud.head(upload.originalKey).catch((error: unknown) => {
+      diag.warn("cloud", `${upload.originalKey}: couldn't ask R2 whether it's up already, so it's sent: ${diag.messageOf(error)}`);
+      return null;
+    });
+    if (there?.size === upload.size) {
       cloud.forgetUpload(upload.originalKey);
     } else {
       // The first report is what's up already; any later one is new.
@@ -1238,6 +1243,7 @@ async function driveSource(url: string, stall: cloud.Stall): Promise<cloud.Sourc
     }
     const location = response.headers.get("location");
     if (response.status >= 300 && response.status < 400 && location !== null) {
+      // The redirect's own body is never read: letting it go may fail on a closed socket, which changes nothing.
       await response.body?.cancel().catch(() => {});
       target = new URL(location, target).toString();
       continue;
@@ -1247,6 +1253,7 @@ async function driveSource(url: string, stall: cloud.Stall): Promise<cloud.Sourc
   stall.connected();
   if (response === null || (response.status >= 300 && response.status < 400)) throw stopped("Maximum (50) redirects followed");
   if (response.status >= 400) {
+    // As above: the error is the status, thrown next.
     await response.body?.cancel().catch(() => {});
     throw stopped(`The requested URL returned error: ${response.status}`);
   }
@@ -1723,7 +1730,10 @@ export async function prefetchProject(app: App, id: string, from = 0): Promise<n
     if (media === undefined || key === null || !(media.duration > 0)) continue;
     let size = sizes.get(key);
     if (size === undefined) {
-      size = cloudBlocks.sizeOf(root, key) ?? (await cloud.head(key).catch(() => null))?.size ?? null;
+      size = cloudBlocks.sizeOf(root, key) ?? (await cloud.head(key).catch((error: unknown) => {
+        diag.warn("cloud", `${id}: ${key} isn't read ahead: R2 didn't say its size (${diag.messageOf(error)})`);
+        return null;
+      }))?.size ?? null;
       sizes.set(key, size);
     }
     if (size === null || size <= 0) continue;
@@ -1795,7 +1805,7 @@ async function ensureLocalNow(app: App, id: string): Promise<void> {
   // Shared analysis is keyed by the streamed input, without requiring a video file.
   await fetchAnalysis(app, id);
   // Music and sound effects say so on the media, not just by their path (never transcribed).
-  await seams.library.tagSounds(app, id).catch(() => {});
+  await seams.library.tagSounds(app, id).catch((error: unknown) => diag.warn("library", `${id}: its music and sound effects weren't tagged: ${diag.messageOf(error)}`));
   const live = app.store.get(id);
   const left = live === null ? [] : stranded(live.project);
   const one = left.length === 1;
@@ -2250,7 +2260,11 @@ export async function playbackSounds(project: Project, start: number, end: numbe
           sounds[mediaId] = original;
           return;
         }
-        if ((await cloud.head(soundKey(where.original)).catch(() => null)) !== null) {
+        const up = await cloud.head(soundKey(where.original)).catch((error: unknown) => {
+          diag.warn("export", `${mediaId}: R2 didn't say whether its original's sound is there, so its proxy's is used: ${diag.messageOf(error)}`);
+          return null;
+        });
+        if (up !== null) {
           await fetchKey(soundKey(where.original), original);
           sounds[mediaId] = original;
           return;

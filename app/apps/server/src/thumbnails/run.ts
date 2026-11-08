@@ -347,7 +347,7 @@ async function drawn(session: Session, design: Design, grid: boolean): Promise<s
  * so one pinned while it works isn't left behind.
  */
 async function stillOpen(id: string): Promise<string> {
-  const found = await cloud.get(id).catch(() => null);
+  const found = await cloud.get(id).catch(diag.warned("thumbnails", `${id}: its open comments, for the turn's end`, null));
   if (found === null) return "";
   const left = openComments(found.thumb).filter((one) => !(one.replies ?? []).some((reply) => reply.by === "claude"));
   if (left.length === 0) return "";
@@ -762,14 +762,14 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
   const library = await assets.all().catch(() => assets.BUILT_IN);
   const images: string[] = [];
   for (const image of thumb.images.slice(-24)) {
-    const path = await fileOf(session, image).catch(() => null);
+    const path = await fileOf(session, image).catch(diag.warned("thumbnails", `${thumb.id}: image ${image.id}'s file for the prompt`, null));
     images.push(`- ${image.id} “${image.name}” (${image.from}${image.model ? `, ${image.model}` : ""}, ${image.width}×${image.height})${image.references !== undefined && image.references.length > 0 ? `, made from ${image.references.join(", ")}` : ""}${image.prompt !== undefined ? `, its OpenArt prompt is stored (picture_prompt ${image.id})` : ""}${given.includes(image.id) ? " — given with this message" : ""}${path !== null ? `: ${path}` : ""}`);
   }
   const current = thumb.render !== null ? await assets.localPath(session.context.cacheDir, thumb.render.key).then((path) => {
     const copy = join(session.folder, "current.png");
     fs.copyFileSync(path, copy);
     return copy;
-  }).catch(() => null) : null;
+  }).catch(diag.warned("thumbnails", `${thumb.id}: its current drawing for the prompt`, null)) : null;
   const recent = thumb.chat.slice(-SENT_TURNS - 1, -1).map((turn) => `${turn.role === "you" ? (turn.by ?? "Producer") : "You (Claude)"}: ${turn.text}`);
   return [
     `# The thumbnail: “${thumb.title || "New thumbnail"}”${thumb.brief ? `\nFor: ${thumb.brief}` : ""}`,
@@ -800,7 +800,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
 async function commentsBrief(session: Session, thumb: Thumbnail): Promise<string> {
   const listed = describeComments(thumb);
   if (listed === "") return "";
-  const pins = openComments(thumb).length > 0 ? await marked(session, thumb).catch(() => null) : null;
+  const pins = openComments(thumb).length > 0 ? await marked(session, thumb).catch(diag.warned("thumbnails", `${thumb.id}: its comments' pins for the prompt`, null)) : null;
   return [`# Comments the team pinned on it (open)\n${listed}`, pins !== null ? `With their pins, numbered (Read it): ${pins}` : ""].filter(Boolean).join("\n");
 }
 

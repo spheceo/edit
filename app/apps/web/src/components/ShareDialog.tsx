@@ -71,6 +71,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       void api
         .review(id)
         .then((given) => live && setReview(given))
+        // Noted by api.ts; the next look asks again.
         .catch(() => {});
     look();
     const timer = setInterval(look, sharing !== null || starting ? 1500 : 10_000);
@@ -103,8 +104,12 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
     if (key !== said) {
       setSaid(key);
-      void navigator.clipboard?.writeText(review.review.url).catch(() => {});
-      toast(`Shared v${latest}: link copied`, "info");
+      // Said as it is: a copy refused (the window not focused) leaves the link in the dialog to copy by hand.
+      const shared = `Shared v${latest}`;
+      void (navigator.clipboard?.writeText(review.review.url) ?? Promise.reject(new Error("no clipboard"))).then(
+        () => toast(`${shared}: link copied`, "info"),
+        () => toast(shared, "info"),
+      );
     }
   }, [review, sharing, latest, said, toast]);
 

@@ -68,6 +68,7 @@ export function Editor({ id }: { id: string }) {
         void api
           .resetAsked(id)
           .then(({ pending }) => alive && pending !== null && useEditor.setState({ resetAsked: true }))
+          // Noted by api.ts; the agent asks again in its turn if it still wants the reset.
           .catch(() => {});
         return api.mediaStatus(id).then(({ media }) => alive && useEditor.setState({ media }));
       })
@@ -77,12 +78,14 @@ export function Editor({ id }: { id: string }) {
       void cloudApi
         .open(id, clientId, true)
         .then((cloud) => alive && useEditor.setState({ cloud }))
+        // Noted by api.ts; the next beat says it again, well inside the lock's 75 s.
         .catch(() => {});
     }, HEARTBEAT_MS);
     return () => {
       alive = false;
       clearInterval(heartbeat);
       preview.pause();
+      // Leaving: a close that doesn't arrive is the same as one, once the beats stop (the lock goes after 75 s).
       void leave().finally(() => cloudApi.close(id, clientId).catch(() => {}));
     };
   }, [id]);

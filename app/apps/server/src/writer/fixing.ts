@@ -37,6 +37,20 @@ import * as store from "./store.ts";
 import * as versions from "./versions.ts";
 import { ANOTHER_MACHINE } from "../machine.ts";
 
+/**
+ * A reply or a release on the review that the fixing run carries on past when
+ * it fails: said in the log, since a note left claimed waits out its hold
+ * before anyone can fix it, and a reply that didn't land leaves the reviewer
+ * without the why.
+ */
+async function told(id: string, what: string, done: Promise<unknown>): Promise<void> {
+  try {
+    await done;
+  } catch (error) {
+    diag.warn("writer", `${id}: ${what} on the review failed: ${diag.messageOf(error)}`);
+  }
+}
+
 /** What a note came to: the script changed, it was answered (nothing to change), or it wasn't done (replied with why, left open). */
 type Outcome = { kind: "changed" | "answered" | "unchanged"; said: string };
 
@@ -105,7 +119,7 @@ async function fixNotes(data: string, id: string, noteIds: string[], ready: stri
     const approved = reviews.approval(data, id);
     if (approved !== null) {
       const rest = notes.slice(index).map((one) => one.id);
-      await reviews.release(rest).catch(() => undefined);
+      await told(id, `letting go of ${rest.length} notes`, reviews.release(rest));
       lines.push(`Stopped: v${approved.version} was approved, so the other ${rest.length} notes were left as they are.`);
       break;
     }
@@ -134,8 +148,8 @@ async function fixNotes(data: string, id: string, noteIds: string[], ready: stri
     // A suggestion ends accepted or rejected, every note of its edit together.
     if (reviews.isSuggestion(note)) {
       if (outcome instanceof Error) {
-        await reviews.release(members.map((member) => member.id)).catch(() => undefined);
-        await reviews.reply(data, note.id, `Edit couldn't carry this suggestion out: ${outcome.message}`).catch(() => undefined);
+        await told(id, `letting go of ${note.author}'s suggestion`, reviews.release(members.map((member) => member.id)));
+        await told(id, `replying to ${note.author}'s suggestion`, reviews.reply(data, note.id, `Edit couldn't carry this suggestion out: ${outcome.message}`));
         lines.push(`Couldn't take ${note.author}'s suggestion: ${outcome.message}`);
         continue;
       }
@@ -152,8 +166,8 @@ async function fixNotes(data: string, id: string, noteIds: string[], ready: stri
     }
     if (outcome instanceof Error) {
       // Let go of it, so it can be fixed again by hand once whatever broke is mended.
-      await reviews.release([note.id]).catch(() => undefined);
-      await reviews.reply(data, note.id, `Edit couldn't fix this one: ${outcome.message}`).catch(() => undefined);
+      await told(id, `letting go of ${note.author}'s note`, reviews.release([note.id]));
+      await told(id, `replying to ${note.author}'s note`, reviews.reply(data, note.id, `Edit couldn't fix this one: ${outcome.message}`));
       lines.push(`Couldn't fix ${note.author}'s note: ${outcome.message}`);
       continue;
     }
@@ -591,7 +605,11 @@ export async function acted(dir: string, script: Script, note: reviews.Note): Pr
   else if ((note.action === "extend" || note.action === "restore") && side === "before") [edit, done] = [{ op: "trim", id: name, edge: "in", wordId: word(first) } as Edit, `Started the clip earlier, from "${anchor.quote}".`];
   else if ((note.action === "extend" || note.action === "restore") && side === "after") [edit, done] = [{ op: "trim", id: name, edge: "out", wordId: word(last) } as Edit, `Ended the clip later, through "${anchor.quote}".`];
   else return null;
-  const peaks = await peaksOf(dir, script).catch(() => new Float32Array());
+  // Without its sound's peaks the trim lands on the word, not the nearest quiet.
+  const peaks = await peaksOf(dir, script).catch((error: unknown) => {
+    diag.warn("writer", `${dir}: the clip's edge goes on the word without its sound's peaks: ${diag.messageOf(error)}`);
+    return new Float32Array();
+  });
   const [clips, corrections, proposals] = apply(script, [edit], peaks, true);
   const out = structuredClone(script);
   out.clips = checkClips(clips, script.durationMs);

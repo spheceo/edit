@@ -936,11 +936,13 @@ pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, Strin
         Window::Email => {
             let middle = strip + ADDRESS_BAR * k / 2.0;
             let mut x = 16.0 * k;
-            for (index, item) in ["Reply", "Reply All", "Forward", "Print", "Delete"]
-                .iter()
-                .enumerate()
-            {
-                let colour = [0x2f8fe8, 0x2f8fe8, 0x2fa84f, 0x6b7fa8, 0xd2402a][index];
+            for (item, colour) in [
+                ("Reply", 0x2f8fe8),
+                ("Reply All", 0x2f8fe8),
+                ("Forward", 0x2fa84f),
+                ("Print", 0x6b7fa8),
+                ("Delete", 0xd2402a),
+            ] {
                 canvas.rect(
                     x,
                     middle - 8.0 * k,

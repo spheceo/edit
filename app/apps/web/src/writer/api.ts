@@ -32,6 +32,11 @@ const json = (body: unknown): RequestInit => ({
 export const editProject = (id: string) => http<{ project: string | null }>(`/api/writer/scripts/${id}/edit`);
 export const startEdit = (id: string) => http<{ project: string }>(`/api/writer/handoff/${id}/import`, { method: "POST" });
 
+/** The script page has `id` open (said again every 30 s): its cloud lock is kept while it does; who else holds it, if anyone. */
+export const openScriptLock = (id: string, client: string) => http<{ holder: string | null; writable: boolean }>(`/api/writer/scripts/${id}/open`, json({ client }));
+export const closeScriptLock = (id: string, client: string) => http<{ ok: boolean }>(`/api/writer/scripts/${id}/close`, json({ client }));
+export const takeOverScript = (id: string) => http<{ holder: string | null; writable: boolean }>(`/api/writer/scripts/${id}/takeover`, { method: "POST" });
+
 export const listScripts = () =>
   http<Summary[]>("/api/writer/scripts");
 

@@ -45,6 +45,8 @@ export const hooks = {
   withSharedKeys: (_dir: string, script: Script): Script => script,
   /** A script saved on this Mac (not a cloud pull): its edit follows (script_sync.ts). */
   written: (_script: Script): void => {},
+  /** Throws when another computer holds the script's cloud lock (locks.ts: 423, saying who). */
+  mayWrite: (_id: string): void => {},
 };
 
 export function read(dir: string): Script {
@@ -79,6 +81,7 @@ export function body(script: Script): Script {
 }
 
 export function write(dir: string, script: Script): void {
+  hooks.mayWrite(script.id);
   fs.mkdirSync(dir, { recursive: true });
   writeAtomic(join(dir, "script.json"), JSON.stringify(body(hooks.withSharedKeys(dir, script)), null, 2));
   hooks.written(script);

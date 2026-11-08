@@ -4,6 +4,7 @@
 // listener per address `bindAddresses` gives.
 
 import { TIMING } from "./sync_core.ts";
+import * as writerLocks from "./writer/locks.ts";
 import type { Server } from "bun";
 import * as fs from "node:fs";
 
@@ -289,7 +290,8 @@ export function start(home: string, host: string | null, port: number): { app: A
     }
     void (async () => {
       try {
-        await seams.cloudProjects.shutdown();
+        // Edits' and scripts' locks let go together, inside the quit budget.
+        await Promise.all([seams.cloudProjects.shutdown(), writerLocks.releaseAll()]);
       } catch (error) {
         if (!seams.isUnavailable(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
       }

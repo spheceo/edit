@@ -155,24 +155,31 @@ for (const one of WATCHED) {
   }
 }
 
-// A server that stops answering for a minute (after a minute's grace to start) is a hang: started again.
+// A server that stops answering for a minute (after a minute's grace to start) is a hang: started again. One whose
+// last answer said it was busy (an export, an agent turn) gets five: a heavy stretch held its answers past a minute
+// and every restart cut three agents' watches and exports off (Nov 8, every ~4 min for an hour).
 let misses = 0;
+let busyWhenLastAnswered = false;
 setInterval(() => {
   if (stopping || restarting !== null || child === null || Date.now() - startedAt < 60_000) {
     misses = 0;
     return;
   }
   void fetch(HEALTH, { signal: AbortSignal.timeout(5000) }).then(
-    (answer) => {
+    async (answer) => {
       misses = answer.ok ? 0 : misses + 1;
+      if (answer.ok) {
+        const said = (await answer.json().catch(() => ({}))) as { busy?: unknown };
+        busyWhenLastAnswered = Array.isArray(said.busy) && said.busy.length > 0;
+      }
     },
     () => {
       misses++;
     },
   ).then(() => {
-    if (misses >= 6) {
+    if (misses >= (busyWhenLastAnswered ? 30 : 6)) {
       misses = 0;
-      restart("the server stopped answering for a minute; starting it again");
+      restart(`the server stopped answering for ${busyWhenLastAnswered ? "five minutes (busy when it last answered)" : "a minute"}; starting it again`);
     }
   });
 }, 10_000);

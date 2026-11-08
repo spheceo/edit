@@ -6,6 +6,7 @@ real projects in for testing"):
     just copy-to-dev --list              prod's projects, newest first
     just copy-to-dev <project id|name>   copy it (again: dev's copy is replaced)
     just copy-to-dev <...> --dry-run     what it would copy, nothing written
+    just copy-to-dev <...> --force       even when it's open in a dev Edit (its changes there are lost)
 
 What goes: the project's body (Convex file storage), its footage's registry
 rows (`editMedia`), and on R2 every key the body names (originals, excerpts,
@@ -143,6 +144,11 @@ def main():
         fields = {name: row[name] for name in ("name", "originalKey", "originalReady", "proxyKey", "proxyReady", "size", "duration")
                   if row.get(name) is not None}
         dev.call("mutation", "edit:putMedia", source=row["source"], **fields)
+    # Open in a dev Edit: copying again replaces the body under it and takes its lock, and its own changes come
+    # back as a "(conflicted copy)" (Killer Pastor, Nov 8). Close it there first, or --force.
+    held = (dev.call("query", "edit:getProject", projectId=project_id) or {}).get("lock")
+    if held and held.get("holder") != HOLDER and "--force" not in sys.argv:
+        sys.exit(f"{card['name']} is open in a dev Edit ({held.get('holder')}): close it there first, or pass --force to replace it anyway")
     lock = dev.call("mutation", "edit:acquireLock", projectId=project_id, holder=HOLDER, force=True)
     dev.call("mutation", "edit:deleteProject", projectId=project_id, lockToken=lock["token"])
     lock = dev.call("mutation", "edit:acquireLock", projectId=project_id, holder=HOLDER, force=True)

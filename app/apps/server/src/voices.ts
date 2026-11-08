@@ -93,7 +93,20 @@ async function ask(path: string, init: RequestInit = {}): Promise<Response> {
  * the job beside it (`<keep>.job`) while pyannote works, so a restart follows
  * the same job.
  */
-export async function ofKey(key: string, keep: string): Promise<Turn[]> {
+export function ofKey(key: string, keep: string): Promise<Turn[]> {
+  // Excerpts of one recording heard at once share its one job (Female Police Captain's eight excerpts of one interrogation, Nov 8).
+  const asked = `${key}\n${keep}`;
+  let flight = flights.get(asked);
+  if (flight === undefined) {
+    flight = heardByKey(key, keep).finally(() => flights.delete(asked));
+    flights.set(asked, flight);
+  }
+  return flight;
+}
+
+const flights = new Map<string, Promise<Turn[]>>();
+
+async function heardByKey(key: string, keep: string): Promise<Turn[]> {
   try {
     const kept = JSON.parse(fs.readFileSync(keep, "utf8")) as { key?: unknown; turns?: unknown };
     if (kept.key === key) return readTurns(kept.turns);

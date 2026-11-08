@@ -10,7 +10,7 @@ test("a quote held under its reading time, or over a B-roll cut, is flagged; a l
     const project = made();
     {
       const video = project.tracks.find((track) => track.kind === "video")!.id;
-      project.tracks.push({ ...project.tracks.find((track) => track.kind === "video")!, id: "v2", name: "V2" }, { ...project.tracks.find((track) => track.kind === "video")!, id: "v3", name: "V3" });
+      project.tracks.push({ ...project.tracks.find((track) => track.kind === "video")!, id: "v2" }, { ...project.tracks.find((track) => track.kind === "video")!, id: "v3" });
       const quote = (id2: string, start: number, seconds: number, text: string) =>
         ({ id: id2, track: "v3", start, duration: Math.round(seconds * 30), name: "Red quote", color: "red", fade_in: 0, fade_out: 0, type: "text", text, style: {} } as never);
       project.clips.push(

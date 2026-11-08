@@ -447,8 +447,10 @@ export class Processor {
     const words = async (pyannote: boolean) => {
       if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
       // Heard again: properly (Scribe), not from YouTube's captions, which
-      // are what a second hearing is usually for.
-      const captions = again ? null : this.captionSource(source);
+      // are what a second hearing is usually for. With pyannote's voices, Scribe
+      // hears the words too (Sphe, Nov 8: "scribe + pyannote"; JJ's notes on the
+      // captions' words: "bit*", "slept", a "you" missing).
+      const captions = again || pyannote ? null : this.captionSource(source);
       if (captions !== null && await writeCaptionTranscript(this.store.home, captions, target)) return;
       await transcribe.run(source, target, keyterms, again, !pyannote);
     };

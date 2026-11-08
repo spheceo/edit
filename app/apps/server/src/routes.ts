@@ -18,7 +18,7 @@ import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import { nativeSources } from "./native_preview.ts";
-import { PLAYBACK_ROUTE, previewable } from "./cloud_playback.ts";
+import { PLAYBACK_ROUTE, playbackKey, previewable } from "./cloud_playback.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -26,7 +26,7 @@ import { badShape, pathEndingAt, readJson, showPath, type RouteContext, type Rou
 import { baseRouter } from "./http/server.ts";
 import { importPaths } from "./import.ts";
 import { routes as mediaRoutes } from "./media_tools.ts";
-import { isMediaPath, Semaphore } from "./media.ts";
+import { checkKey, isMediaPath, Semaphore } from "./media.ts";
 import type { ExportOptions, Project, Style } from "./model.ts";
 import { withProjectAsync } from "./native/index.ts";
 import * as patches from "./patch.ts";
@@ -548,10 +548,18 @@ function getProject({ app, params }: Context): Response {
 }
 
 /** The footage the timeline plays that isn't here and can't be fetched: the editor says so. */
-function missingFootage({ app, params }: Context): Response {
+async function missingFootage({ app, params }: Context): Promise<Response> {
   const live = liveOr404(app, params.id!);
-  const missing = missingMedia(live.project);
   const used = new Set(live.project.clips.flatMap((clip) => ("media" in clip && typeof clip.media === "string" ? [clip.media] : [])));
+  // And footage streamed from the cloud whose proxy the cloud doesn't have (it 404s: "Loading frame…" for good otherwise).
+  const streamed = live.project.media.filter((media) => used.has(media.id) && playbackKey(media.path) !== null);
+  const gone = new Set<string>();
+  for (let at = 0; at < streamed.length; at += 8) {
+    await Promise.all(streamed.slice(at, at + 8).map(async (media) => {
+      if ((await checkKey(playbackKey(media.path)!)) === false) gone.add(media.id);
+    }));
+  }
+  const missing = [...missingMedia(live.project), ...streamed.filter((media) => gone.has(media.id))];
   return json({
     used: live.project.media.filter((media) => used.has(media.id)).length,
     missing: missing.map((media) => ({ id: media.id, name: media.name, path: media.path })),

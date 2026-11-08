@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 
 import * as cloud from "../src/cloud.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
+import * as steps from "../src/import_steps.ts";
 import { playbackKey, playbackPath } from "../src/cloud_playback.ts";
 import { buildRouter } from "../src/routes.ts";
 import { respond } from "../src/http/server.ts";
@@ -871,6 +872,57 @@ test("a file is hashed once: imported again unchanged, it isn't read; changed, i
     expect(await cloudMedia.sha256File(file)).toBe(new Bun.CryptoHasher("sha256").update("other footage").digest("hex"));
   } finally {
     cloudMedia.keepHashesIn(null);
+    cleanup();
+  }
+});
+
+test("a proxy encode that never answers is stopped at its limit and leaves nothing a retry takes as made", async () => {
+  const fixture = home("proxy-timeout");
+  const proxy = steps.LIMITS.proxy;
+  try {
+    const raw = createStub();
+    raw.init({ home: fixture.home, cacheDir: `${fixture.home}/cache`, ffmpeg: "ffmpeg", ffprobe: "ffprobe", log: () => {} });
+    raw.makeCloudProxy = () => new Promise(() => {});
+    useNative(wrap(raw));
+    steps.LIMITS.proxy = () => 30;
+    const video = `${fixture.dir}/clip.mov`;
+    fs.writeFileSync(video, "footage");
+    const failed = await cloudMedia.importLocal(fixture.store.cacheDir(), video, VIDEO, "clip.mov").catch((error: unknown) => error);
+    expect(failed).toBeInstanceOf(steps.StepTimedOut);
+    expect(steps.whyOf(failed)).toBe("passing");
+    const proxies = `${fixture.store.cacheDir()}/cloud/proxies`;
+    const left = fs.existsSync(proxies) ? fs.readdirSync(proxies, { recursive: true }).filter((name) => String(name).endsWith(".mp4")) : [];
+    expect(left).toEqual([]);
+  } finally {
+    steps.LIMITS.proxy = proxy;
+    fixture.cleanup();
+  }
+});
+
+test("a streamed proxy whose key the cloud doesn't have is failed, not ready, and the editor's missing footage names it", async () => {
+  const fixture = home("streamed-missing");
+  const { app, store, cleanup } = fixture;
+  try {
+    const here = playbackPath("edit/proxies/drive/HEREabcdef01.mp4", app.port);
+    const gone = playbackPath("edit/proxies/drive/GONEabcdef01.mp4", app.port);
+    mock.cloud.objects.set("edit/proxies/drive/HEREabcdef01.mp4", new Uint8Array([1, 2, 3]));
+    const id = store.create("p", SETTINGS).project.id;
+    await store.update(id, "test", (p) => {
+      p.media.push(media("m1", here, { cloud: { source: "drive:HEREabcdef01", original: "edit/originals/drive/HEREabcdef01/a.mp4", proxy: "edit/proxies/drive/HEREabcdef01.mp4", size: 3 } }));
+      p.media.push(media("m2", gone, { cloud: { source: "drive:GONEabcdef01", original: "edit/originals/drive/GONEabcdef01/a.mp4", proxy: "edit/proxies/drive/GONEabcdef01.mp4", size: 3 } }));
+      p.clips.push({ type: "video", id: "c1", track: "v1", media: "m1", start: 0, duration: 30, source_in: 0, speed: 1 } as never, { type: "video", id: "c2", track: "v1", media: "m2", start: 30, duration: 30, source_in: 0, speed: 1 } as never);
+    });
+    const router = buildRouter();
+    const answer = (await respond(app, router, new Request(`http://localhost:7700/api/projects/${id}/missing`, { headers: { host: "localhost:7700" } }), null))!;
+    const said = (await answer.json()) as { used: number; missing: { id: string }[] };
+    expect(said.used).toBe(2);
+    expect(said.missing.map((one) => one.id)).toEqual(["m2"]);
+    // The status says so, where the preview would otherwise wait on "Loading frame…".
+    expect(app.media.status(here).proxy).toBe("ready");
+    const status = app.media.status(gone);
+    expect(status.proxy).toBe("failed");
+    expect(status.error).toContain("isn't in the cloud");
+  } finally {
     cleanup();
   }
 });

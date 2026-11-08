@@ -2717,6 +2717,11 @@ export async function wholeTranscript(source: string, target: string, scratch: s
 }
 
 mediaHooks.wholeTranscript = (source, target) => wholeTranscript(source, target, parent(target) ?? ".");
+// A streamed proxy is ready only while its key is there (media.ts `keyVerdict`): a cloud without it (offline, signed out) can't say.
+mediaHooks.keyAnswers = async (key) => {
+  if (!cloud.enabled()) throw new Error("the cloud is off");
+  return (await cloud.head(key)) !== null;
+};
 
 /** When each source's shared analysis was last looked for. *//** When each source's shared analysis was last looked for. */
 const checked = new Map<string, number>();

@@ -189,17 +189,38 @@ export class Processor {
     } catch {
       thumbCount = 0;
     }
-    const streamed = playbackKey(source) !== null;
-    const proxied = streamed || isFile(paths.proxyDone);
+    const key = playbackKey(source);
+    const streamed = key !== null;
+    // A streamed proxy is ready unless the cloud said it isn't there (asked once, kept a while: `keyVerdict`).
+    const gone = key !== null && this.askAbout(source, key) === false;
+    const proxied = (streamed && !gone) || isFile(paths.proxyDone);
     return {
-      proxy: proxied ? "ready" : "pending",
+      proxy: gone ? "failed" : proxied ? "ready" : "pending",
       proxy_progress: proxied ? 1 : 0,
+      ...(gone ? { error: MISSING_IN_CLOUD } : {}),
       light: streamed ? "skipped" : isFile(paths.light) ? "ready" : "pending",
       thumbs: thumbCount > 0 && isFile(paths.thumbs) ? "ready" : "pending",
       thumb_count: thumbCount,
       peaks: isFile(paths.peaks) ? "ready" : "pending",
       transcript: isFile(paths.transcript) ? "ready" : "pending",
     };
+  }
+
+  /** The cloud's verdict on a streamed proxy's key; unknown, it's asked, and a "not there" answer is said as the media's status. */
+  private askAbout(source: string, key: string): boolean | null {
+    const known = keyVerdict(key);
+    if (known !== null) return known;
+    void checkKey(key).then((there) => {
+      if (there !== false) return;
+      const now = this.statuses.get(mediaKey(source));
+      if (now === undefined || now.proxy === "failed") return;
+      this.set(source, (status) => {
+        status.proxy = "failed";
+        status.proxy_progress = 0;
+        status.error = MISSING_IN_CLOUD;
+      });
+    });
+    return null;
   }
 
   private entry(source: string): MediaStatus {
@@ -528,8 +549,47 @@ export class Processor {
   }
 }
 
+/** A streamed proxy whose key the cloud doesn't have: said as the media's error (and in the editor's missing footage). */
+export const MISSING_IN_CLOUD = "Its proxy isn't in the cloud: the footage can't play until it's imported again.";
+
+/** How long the cloud's answer about a key is kept: "there" for a while, "not there" briefly (an upload may be finishing). */
+const VERDICT_MS = { there: 10 * 60_000, missing: 60_000 };
+const verdicts = new Map<string, { there: boolean; at: number }>();
+const asking = new Map<string, Promise<boolean | null>>();
+
+/** Whether the cloud has `key`, as last asked (null: not asked lately, or a pieced proxy's address, which is no object of its own). */
+export function keyVerdict(key: string): boolean | null {
+  if (key.startsWith("edit/pieces/")) return true;
+  const known = verdicts.get(key);
+  if (known === undefined || Date.now() - known.at > (known.there ? VERDICT_MS.there : VERDICT_MS.missing)) return null;
+  return known.there;
+}
+
+/** Asks the cloud whether it has `key` (HEAD through the relay, one ask at a time per key); null when it couldn't say. */
+export function checkKey(key: string): Promise<boolean | null> {
+  const known = keyVerdict(key);
+  if (known !== null) return Promise.resolve(known);
+  const ask = mediaHooks.keyAnswers;
+  if (ask === null) return Promise.resolve(null);
+  const flying = asking.get(key);
+  if (flying !== undefined) return flying;
+  const flight = ask(key)
+    .then(
+      (there) => {
+        verdicts.set(key, { there, at: Date.now() });
+        return there as boolean | null;
+      },
+      () => null,
+    )
+    .finally(() => asking.delete(key));
+  asking.set(key, flight);
+  return flight;
+}
+
 /** What media.ts reaches without importing it: cloud_media's shared transcripts (set as it loads). */
 export const mediaHooks: {
+  /** Whether the cloud has a key (cloud_media: HEAD); rejects when it can't say. */
+  keyAnswers: ((key: string) => Promise<boolean>) | null;
   wholeTranscript: ((source: string, target: string) => Promise<boolean>) | null;
   /**
    * What a source's derived data (thumbnails, waveform, censored stretches)
@@ -538,7 +598,7 @@ export const mediaHooks: {
    * it. The results are still kept as the source's.
    */
   analysisInput: ((source: string) => Promise<string | null>) | null;
-} = { wholeTranscript: null, analysisInput: null };
+} = { keyAnswers: null, wholeTranscript: null, analysisInput: null };
 
 /**
  * The cloud source a proxy in this machine's cache is (`<cache>/cloud/proxies/<drive|youtube>/<id>/<start>-<end>.mp4`

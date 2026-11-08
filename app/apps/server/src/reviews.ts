@@ -304,8 +304,8 @@ export async function restoreArchived(
   }
 }
 
-/** Hooks for tests: the wait between tries of a full-quality upload. */
-export const fullUpload = { waitMs: (attempt: number): number => Math.min(attempt, 5) * 60_000, tries: 20 };
+/** A full-quality upload's wait between tries, its tries, and how often its progress is told to the review page (hooks for tests). */
+export const fullUpload = { waitMs: (attempt: number): number => Math.min(attempt, 5) * 60_000, tries: 20, tellMs: 20_000 };
 
 /**
  * The export itself, for the review page's Download button, sent once the
@@ -313,7 +313,7 @@ export const fullUpload = { waitMs: (attempt: number): number => Math.min(attemp
  * and each share waited on a 5–7 GB full-quality file after its 0.7 GB review
  * copy, an hour or more, and failed whenever a part's connection closed).
  * Held as an export being read until it's there (the archive waits), tried
- * again a minute or more apart; until then the Download button has nothing.
+ * again a minute or more apart; until then the review page shows how it's going.
  * Noted in jobs.json while it goes, so a restart carries on with it (Nov 7,
  * Predator Teacher: Edit restarted on JJ's Mac with 0.7 of v3's 4.9 GB up, and
  * nothing sent the rest, so the Download button found no file).
@@ -321,19 +321,37 @@ export const fullUpload = { waitMs: (attempt: number): number => Math.min(attemp
 export function fullBehind(home: string, projectId: string, name: string, path: string, key: string, version?: number): Promise<void> {
   const job = jobs.begin(home, "full", projectId, { name, path, key, ...(version === undefined ? {} : { version }) }, key);
   let moved = false;
+  // How it's going, on the review page where its Download button will be (Sphe, Nov 8: "we need a way to see progress of
+  // when we'll get the full quality download"): sent of total bytes, when, and this run's start, for the page's time left.
+  // Said now and then (a version's meta, which the page follows live), and the version never waits on it.
+  const tell = (meta: Record<string, unknown>) =>
+    version === undefined ? Promise.resolve() : cloud.mutation("reviews:setMeta", { sourceId: projectId, version, meta }).then(() => undefined);
+  let last = { sent: 0, total: fs.existsSync(path) ? fs.statSync(path).size : 0 };
+  let toldAt = 0;
   return withExport(path, async () => {
     for (let attempt = 1; ; attempt++) {
+      let run: { since: number; from: number } | null = null;
+      const say = (sent: number, total: number) => {
+        last = { sent, total };
+        run ??= { since: Date.now(), from: sent };
+        toldAt = Date.now();
+        void tell({ fullUpload: { sent, total, at: toldAt, since: run.since, from: run.from } }).catch(() => undefined);
+      };
+      // Said at once, before a part's gone (a run that carries on a restart says how far it is with its first part).
+      if (attempt === 1) void tell({ fullUpload: { ...last, at: Date.now(), since: Date.now(), from: last.sent } }).catch(() => undefined);
       try {
-        await cloud.uploadFile(path, key, () => {
+        await cloud.uploadFile(path, key, (sent, total) => {
           // Parts going up this run: the restarts before don't count against it.
           if (!moved) jobs.progressed(home, job);
           moved = true;
+          if (run === null || Date.now() - toldAt >= fullUpload.tellMs) say(sent, total);
+          else last = { sent, total };
         });
         // Named in its version only now: named at the publish, the page's Download button was there hours before the
         // file (Nov 8, Killer Pastor's v3: its 4.6 GB export still going up, and Download saved "media.json", the 404).
         if (version !== undefined) {
           try {
-            await cloud.mutation("reviews:setMeta", { sourceId: projectId, version, meta: { fullKey: key } });
+            await tell({ fullKey: key, fullUpload: null });
           } catch (error) {
             diag.warn("review", `${name}: the full-quality file is up, but v${version} couldn't be told: ${diag.messageOf(error)}`);
             return;
@@ -344,6 +362,7 @@ export function fullBehind(home: string, projectId: string, name: string, path: 
       } catch (error) {
         if (attempt >= fullUpload.tries) {
           diag.warn("review", `${name}: the full-quality file didn't go up after ${attempt} tries: ${diag.messageOf(error)}`);
+          await tell({ fullUpload: { ...last, at: Date.now(), failed: diag.messageOf(error).slice(0, 300) } }).catch(() => undefined);
           return;
         }
         diag.warn("review", `${name}: the full-quality file (try ${attempt}): ${diag.messageOf(error)}; trying again`);

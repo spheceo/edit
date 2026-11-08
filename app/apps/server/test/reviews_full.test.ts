@@ -45,25 +45,34 @@ test("the full-quality upload is listed in jobs.json while it goes, with what a 
   expect(listed(home)).toEqual([]);
 });
 
-// Nov 8, Killer Pastor's v3: named at the publish, the page's Download button saved "media.json" (the 404) for the hours its export took to go up.
-test("the version names its full-quality file only once it's up", async () => {
+// Nov 8, Killer Pastor's v3: named at the publish, the page's Download button saved "media.json" (the 404) for the hours its
+// export took to go up. Sphe: "we need a way to see progress of when we'll get the full quality download".
+test("the review page is told how the full-quality upload goes, and the version names the file only once it's up", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "edit-full-"));
   const file = path.join(home, "Killer Pastor.mp4");
   fs.writeFileSync(file, "export");
-  const told: unknown[] = [];
+  const told: { meta: Record<string, unknown> }[] = [];
   let up = false;
   spies.push(
-    spyOn(cloud, "uploadFile").mockImplementation(async () => {
-      expect(told).toEqual([]);
+    spyOn(cloud, "uploadFile").mockImplementation(async (_from: string, _key: string, progress?: (done: number, total: number) => void) => {
+      progress?.(2, 6);
+      progress?.(4, 6);
       up = true;
     }),
     spyOn(cloud, "mutation").mockImplementation(async (name: string, args: unknown) => {
-      expect(up).toBe(true);
-      told.push([name, args]);
+      expect(name).toBe("reviews:setMeta");
+      const given = args as { sourceId: string; version: number; meta: Record<string, unknown> };
+      expect([given.sourceId, given.version]).toEqual(["p2", 3]);
+      // The file named only once it's up.
+      if ("fullKey" in given.meta) expect(up).toBe(true);
+      told.push(given);
       return null as never;
     }),
   );
   await fullBehind(home, "p2", "Killer Pastor", file, "edit/reviews/p2/t/full.mp4", 3);
-  expect(told).toEqual([["reviews:setMeta", { sourceId: "p2", version: 3, meta: { fullKey: "edit/reviews/p2/t/full.mp4" } }]]);
+  // Said at the start, at its first part (4 of 6 within 20 s of that isn't said), then the file.
+  expect(told.map((one) => one.meta.fullUpload && (one.meta.fullUpload as { sent: number }).sent)).toEqual([0, 2, null]);
+  expect(told[1]!.meta.fullUpload).toEqual({ sent: 2, total: 6, at: expect.any(Number), since: expect.any(Number), from: 2 });
+  expect(told.at(-1)!.meta).toEqual({ fullKey: "edit/reviews/p2/t/full.mp4", fullUpload: null });
   expect(listed(home)).toEqual([]);
 });

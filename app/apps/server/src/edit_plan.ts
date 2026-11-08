@@ -1677,10 +1677,13 @@ export function audit(project: Project): { issues: Json[]; frames: number; clips
       ((clip.type === "video" && !(clip.name ?? "").includes("B-roll:")) ||
         (clip.type === "text" && !/^(Subtitle|Caption|Countdown|Film look · tag)/u.test(clip.name ?? "") && trackOf(project, clip.track)?.subtitles !== true)),
   );
-  // A courtroom's B-roll is the hearing's own fixed cameras: it holds a shot
-  // and pushes in on it instead (onscreen.ts's broll_recut; JJ, Nov 7: "I
-  // don't like how we move around in the B-roll footage almost every second").
-  for (const clip of project.style === "courtroom" ? [] : project.clips) {
+  // A courtroom's B-roll is the hearing's own fixed cameras, an
+  // interrogation's the room: it holds a shot and pushes in on it instead
+  // (onscreen.ts's broll_recut; JJ, Nov 7: "I don't like how we move around in
+  // the B-roll footage almost every second"; Nov 8, Killer Pastor's room: "It
+  // seems like our rule of changing the B-roll footage or changing the clips
+  // completely removes attention from what actually matters").
+  for (const clip of project.style === "courtroom" || project.style === "interrogation" ? [] : project.clips) {
     if (clip.type !== "video" || clip.track === base || !(clip.name ?? "").includes("B-roll:")) continue;
     if (clip.duration <= longest) continue;
     const own = level(clip.track);

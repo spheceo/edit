@@ -270,7 +270,12 @@ test("the_person_questioned_is_introduced_by_a_boxed_name_not_big_faint_letters"
 });
 
 test("a_long_room_shot_with_a_photo_over_part_of_it_counts_only_what_shows", () => {
-  const p = narrated("interrogation");
+  // An interrogation's room holds its shot (JJ, Nov 8: "don't change the B-roll… every other second"): never flagged long.
+  const held = narrated("interrogation");
+  held.media.push(media({ id: "room", name: "Room.mp4", path: "/footage/room.mp4", kind: "video", duration: 600, width: 720, height: 480 }));
+  held.clips.push(clip({ id: "shot", name: "Cut-in 1 · B-roll: the room", track: "v2", start: 0, duration: 300, type: "video", media: "room", source_in: 0, speed: 1 }));
+  expect(kinds(held, "long_broll_shot")).toEqual([]);
+  const p = narrated("bodycam");
   p.media.push(media({ id: "room", name: "Room.mp4", path: "/footage/room.mp4", kind: "video", duration: 600, width: 720, height: 480 }));
   p.media.push(media({ id: "photo", name: "Photo", path: "/found/photo.jpg", kind: "image", duration: 5, width: 1920, height: 1080 }));
   p.clips.push(clip({ id: "shot", name: "Cut-in 1 · B-roll: the room", track: "v2", start: 0, duration: 300, type: "video", media: "room", source_in: 0, speed: 1 }));

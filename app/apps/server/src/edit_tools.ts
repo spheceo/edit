@@ -1311,6 +1311,57 @@ export function graphicsShort(project: Project, outro: [number, number] | null):
   return out;
 }
 
+/** Seconds a viewer needs for a text on screen: a second and a half, then three words a second; never under QUOTE_HOLD. */
+const QUOTE_HOLD = 4;
+export const readingSeconds = (words: number): number => Math.max(QUOTE_HOLD, 1.5 + words / 3);
+
+/**
+ * Words on screen gone before they're read, or with the shot under them
+ * changing (`text_short`): a red quote or a big line of text (not subtitles,
+ * a window's parts or labels) held under `readingSeconds`, or over a cut in
+ * the B-roll or footage beneath it. JJ, Nov 8, on Killer Pastor's quotes of
+ * 8–15 words held 1.9–3.4 s: "This text right here doesn't stay there for
+ * long enough. We can't even read it before it disappears again"; "when we
+ * make the text sections longer, that we don't just make the text longer.
+ * It's also the footage that the text is on that has to be longer… we don't
+ * want to have this where we essentially change our B-roll while still
+ * keeping the same text." And often the fix is fewer: "consider if we even
+ * want to have it… some of the texts that we can remove that don't really
+ * serve any place."
+ */
+export function textsShort(project: Project): Json[] {
+  const fps = project.settings.fps;
+  const level = (track: string) => project.tracks.findIndex((own) => own.id === track);
+  const base = project.tracks.find((track) => track.kind === "video")?.id ?? null;
+  const out: Json[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "text" || trackOf(project, clip.track)?.subtitles === true || trackOf(project, clip.track)?.hidden === true) continue;
+    const name = clip.name ?? "";
+    const words = (clip.text ?? "").split(/\s+/u).filter(Boolean).length;
+    if (!(name === "Red quote" || (name === "" && words >= 4))) continue;
+    const seconds = clip.duration / fps;
+    const needs = readingSeconds(words);
+    const own = level(clip.track);
+    // A cut under it: B-roll or the footage beneath starting inside it (not on its first or last few frames).
+    const cut = project.clips.find(
+      (other) => other.type === "video" && level(other.track) < own && (other.track === base || (other.name ?? "").includes("B-roll")) && other.start > clip.start + 5 && other.start < clipEnd(clip) - 5,
+    );
+    if (seconds >= needs - 0.05 && cut === undefined) continue;
+    const short = seconds < needs - 0.05;
+    out.push({
+      kind: "text_short",
+      clip: clip.id,
+      start: clip.start,
+      seconds: round(seconds * 10) / 10,
+      words,
+      at_least: round(needs * 10) / 10,
+      ...(cut !== undefined ? { cut_under: cut.start } : {}),
+      fix: `${short ? `${words} words need ${round(needs * 10) / 10} s on screen: ` : ""}remove it if it only repeats what's heard and emphasises nothing; else ${short ? "hold it that long" : "keep it"} over ONE shot, the shot under it lengthened with it (no B-roll cut under the words), moving what follows later`,
+    });
+  }
+  return out;
+}
+
 /**
  * A File Viewer over a cut in the footage under it (`viewer_over_cut`): it
  * sits over one shot (JJ: "We keep the file viewer even while changing
@@ -1381,6 +1432,54 @@ export function soundEffectsLateHit(project: Project): Json[] {
 }
 /** Seconds of a sharp sound's file before its hit that may play first. */
 const LATE_HIT = 0.2;
+
+/** The transitions a riser builds into: their middle is the cut. */
+const TRANSITIONS = new Set(["Drop", "Flash", "Dip", "Light leak", "Bridge flash"]);
+
+/**
+ * A riser whose climax misses the cut it builds into (`riser_off_cut`): JJ,
+ * Nov 8, on Killer Pastor's four risers that ended 0.3 to 1.7 s before their
+ * bridges' flashes (the cuts moved after the risers were placed): "This riser
+ * appears too early. It's really, really important to understand that the
+ * risers and sound effects must be placed at their exact point… For a riser,
+ * the climax must hit at the exact time where we have our transition." Its
+ * climax is its "hit" when that's in its last 40 % (the loudest moment of a
+ * build), else its end; the cut is the next transition's middle (or a cut on
+ * the bottom video track) within 3 s after it, or just before.
+ */
+export function risersOffCut(project: Project): Json[] {
+  const fps = project.settings.fps;
+  const base = project.tracks.find((track) => track.kind === "video")?.id ?? null;
+  const cuts = [
+    ...project.clips.filter((clip) => TRANSITIONS.has(clip.name ?? "")).map((clip) => clip.start + Math.floor(clip.duration / 2)),
+    ...project.clips.filter((clip) => clip.track === base && clip.type === "video").flatMap((clip) => [clip.start, clipEnd(clip)]),
+  ].sort((a, b) => a - b);
+  const out: Json[] = [];
+  for (const clip of project.clips) {
+    if (clip.type !== "audio" || clip.volume_db <= -40 || trackOf(project, clip.track)?.muted === true) continue;
+    const media = project.media.find((one) => one.id === clip.media);
+    if (media === undefined || media.kind !== "audio" || !RISER.test(`${clip.name ?? ""} ${media.name}`) || media.duration >= 45) continue;
+    if ((clip.duration / fps) * clip.speed > 6) continue;
+    const hit = (media.markers ?? []).find((one) => one.name === sfx.HIT)?.time;
+    const playedTo = clip.source_in + (clip.duration / fps) * clip.speed;
+    const peak = hit !== undefined && hit >= media.duration * 0.6 && hit > clip.source_in && hit <= playedTo ? hit : playedTo;
+    const climax = clip.start + Math.round(((peak - clip.source_in) / clip.speed) * fps);
+    // The cut it's for: the first after its climax within 3 s, else one just before it.
+    const cut = cuts.find((at) => at >= climax - Math.round(0.5 * fps) && at <= climax + 3 * fps && at >= clip.start);
+    // Within a fifth of a second is on it (a riser ended on the cut peaks ~5 frames before: never flagged by the team).
+    if (cut === undefined || Math.abs(cut - climax) <= Math.round(0.2 * fps)) continue;
+    const start = clip.start + (cut - climax);
+    out.push({
+      kind: "riser_off_cut",
+      clip: clip.id,
+      start: clip.start,
+      cut,
+      frames_off: cut - climax,
+      fix: `its climax is ${Math.abs(cut - climax)} frames ${cut > climax ? "before" : "after"} the cut at frame ${cut}: move it to start ${start} (update_clips), so it peaks on the cut`,
+    });
+  }
+  return out;
+}
 
 /** What an arrest sounds like in bodycam footage. */
 const ARREST = /\b(you'?re|you are) (now )?under arrest\b|\bunder arrest\b|\bcuff (you|her|him)\b|\bhands behind your back\b/iu;
@@ -1477,10 +1576,12 @@ export function audited(app: App, project: Project, rev: number | null): Args {
     ...windowsUnderused(project),
     ...desktopsSparse(project),
     ...graphicsShort(project, sections.outro ?? null),
+    ...textsShort(project),
     ...viewersOverCuts(project),
     ...(markBlurs.offShot(project) as Json[]),
     ...soundEffectsLong(project),
     ...soundEffectsLateHit(project),
+    ...risersOffCut(project),
     ...(typing.typingSoundsOff(project) as Json[]),
     ...(pointerIssues(project) as Json[]),
     ...introUncaptioned(project, teasers),
@@ -1523,7 +1624,7 @@ const FIXABLE = [
   "subtitle_unheard", "subtitle_late", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",
   "off_script", "script_order", "voiceover_in_footage", "footage_ahead", "room_wide", "hook_unmarked", "tape_start_unmarked", "prologue_without_map", "text_on_face", "text_under_blur",
   "vignette_snaps", "line_under_black", "punch_in_off_face", "callout_off_speech", "profile_line_off_speech", "subtitle_coloured", "actual_label_in_window", "intro_long", "intro_no_arrest", "windows_underused", "desktop_sparse",
-  "blur_off_shot", "sfx_long", "sfx_late_hit", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "viewer_over_cut",
+  "blur_off_shot", "sfx_long", "sfx_late_hit", "riser_off_cut", "sfx_loud", "typing_sound_off", "subtitle_two_lines", "pointer_off_target", "graphic_short", "text_short", "viewer_over_cut",
   "intro_uncaptioned", "short_length", "short_unfilled", "short_subject_off", "short_unsubtitled", "short_no_music", "short_music_stops",
   "face_overused", "countdown_late", "end_new_picture", "stacked_copies", "pause_jump",
 ];
@@ -2485,7 +2586,11 @@ export async function placeSound(
     const builds = RISER.test(name);
     // Typing starts on the line's first letter: from the sound's own start, never lined up on its loudest key.
     const types = typing.TYPING.test(`${name} ${media.name}`);
-    const hit = builds ? media.duration : types ? 0 : ((own.find((marker) => marker.name === sfx.HIT) ?? own[0])?.time ?? 0);
+    // Its climax on the time (JJ, Nov 8: "the climax must hit at the exact time where we have our transition"): its
+    // "hit" when that's in its last 40 % (the build's loudest moment, its tail after the cut), else its end.
+    const marked = own.find((marker) => marker.name === sfx.HIT)?.time;
+    const climax = marked !== undefined && marked >= media.duration * 0.6 && marked <= media.duration ? marked : media.duration;
+    const hit = builds ? climax : types ? 0 : ((own.find((marker) => marker.name === sfx.HIT) ?? own[0])?.time ?? 0);
     // Trimmed, a sound with a hit keeps the stretch around it.
     const from = builds
       ? Math.max(media.duration - (sound.seconds ?? media.duration), 0)

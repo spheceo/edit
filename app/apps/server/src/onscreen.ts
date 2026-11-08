@@ -262,7 +262,8 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
     }
   }
   out.push(...subtitled.values());
-  if (project.style === "courtroom") out.push(...recuts(project, clips));
+  // A fixed camera held, not cut up: a courtroom's hearing, an interrogation's room (Nov 8).
+  if (project.style === "courtroom" || project.style === "interrogation") out.push(...recuts(project, clips));
   return { issues: out, pending: [...pending].sort() };
 }
 

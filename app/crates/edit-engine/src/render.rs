@@ -1330,9 +1330,16 @@ pub fn save_still(media: &Media, time: f64, out: &Path) -> Result<(), String> {
             ),
         }
     }
-    let output = Command::new(crate::util::ffmpeg())
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-ss"])
-        .arg(format!("{time:.3}"))
+    let mut command = Command::new(crate::util::ffmpeg());
+    command.args(["-hide_banner", "-loglevel", "error", "-y"]);
+    // A photo is its one frame, read with no seek: FFmpeg 8 gives no picture
+    // at all for a JPEG or PNG asked from -ss 0, and says nothing (Killer
+    // Pastor on Linux, Nov 8: still_frame "couldn't take the frame:" on two
+    // news photos; exports had the same, 6462ccee).
+    if media.kind != edit_core::MediaKind::Image {
+        command.arg("-ss").arg(format!("{time:.3}"));
+    }
+    let output = command
         .arg("-i")
         .arg(&media.path)
         .args(["-frames:v", "1"])
@@ -3131,6 +3138,37 @@ fn render_frames_watched(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A photo's still is taken with no seek (FFmpeg 8 gives nothing for a JPEG or PNG asked from -ss 0).
+    #[test]
+    fn a_photos_still_is_taken() {
+        let dir = temp_dir("still");
+        let photo = dir.join("photo.png");
+        let made = Command::new(crate::util::ffmpeg())
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:size=64x36",
+                "-frames:v",
+                "1",
+            ])
+            .arg(&photo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "photo", "path": photo, "kind": "image", "duration": 5.0,
+            "width": 64, "height": 36, "has_audio": false
+        }))
+        .unwrap();
+        let out = dir.join("still.png");
+        save_still(&media, 0.0, &out).unwrap();
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

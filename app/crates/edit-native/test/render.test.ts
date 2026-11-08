@@ -117,7 +117,8 @@ describe("export", () => {
 
   test("a longer export reports progress as it goes", async () => {
     if (!gpu) return;
-    const project = solidProject("p-progress", 30 * 40);
+    // Long enough to outlast a 200 ms report: with Linux's 4:2:0 made on the GPU (d282fe28), 40 s of a solid finished in ~0.3 s, before the first.
+    const project = solidProject("p-progress", 30 * 240);
     const options = { ...native.exportDefaults(), hardware: false };
     const { plan } = native.exportPlan({ json: JSON.stringify(project) }, options);
     const output = join(home, "progress.mp4");

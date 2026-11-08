@@ -27,16 +27,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 
 import * as accounts from "./accounts.ts";
+import * as busy from "./busy.ts";
 import type { App } from "./app.ts";
 import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
-import { importing } from "./drive_import.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
 import { memorySummary } from "./export_capacity.ts";
 import { useNow as memoryUse } from "./memory.ts";
-import * as ideaRuns from "./ideas/run.ts";
 import * as jobs from "./jobs.ts";
-import * as thumbnailRuns from "./thumbnails/run.ts";
 import * as planUse from "./plan_use.ts";
 import * as editTime from "./edit_time.ts";
 import { join } from "./paths.ts";
@@ -44,7 +42,6 @@ import * as presence from "./presence.ts";
 import * as problemReports from "./problem_reports.ts";
 import * as relay from "./relay.ts";
 import * as script from "./script.ts";
-import * as seams from "./seams.ts";
 import { restartSelf } from "./update.ts";
 import { BUILD } from "./version.ts";
 import * as writerCloud from "./writer/cloud.ts";
@@ -432,34 +429,8 @@ export async function unstick(app: App): Promise<string> {
   return said;
 }
 
-/**
- * What a restart would cut off now: an export, a share (from jobs.json, so one
- * a restart cut short and that is about to carry on counts too), an import,
- * Claude on a script, an agent turn. One list for everything that restarts Edit from afar (a
- * restart, an update), so none of them cuts off what another waits for
- * (Nov 1: an update waited only for agent turns, and would have stopped an
- * export part-way).
- */
-export function busyWith(app: App, agentTurns = true): string[] {
-  let uploading = false;
-  try {
-    uploading = seams.drive.uploading();
-  } catch (error) {
-    if (!seams.isUnavailable(error)) throw error;
-  }
-  const shares = jobs.list(app.store.home ?? null, "share").filter(jobs.live).length;
-  return [
-    app.exports.running() ? "an export" : "",
-    shares > 0 ? (shares === 1 ? "a share" : `${shares} shares`) : "",
-    uploading ? "an upload to Drive" : "",
-    (app.scripts as { running?: () => boolean } | undefined)?.running?.() || importing() ? "a footage import" : "",
-    writerImports.anyImporting() ? "a script's import" : "",
-    writerJobs.runningList().length > 0 ? "Claude on a script" : "",
-    agentTurns && ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() ?? turns(app).length > 0) ? "an agent turn" : "",
-    agentTurns && thumbnailRuns.anyRunning() ? "Claude on a thumbnail" : "",
-    agentTurns && ideaRuns.anyRunning() ? "Claude on an idea" : "",
-  ].filter(Boolean);
-}
+/** What a restart would cut off now (busy.ts, the one answer). */
+export const busyWith = busy.busyWith;
 
 /** Starts Edit again in place once the answer has gone back, unless something's running (it would be cut off). */
 export function restart(app: App): string {

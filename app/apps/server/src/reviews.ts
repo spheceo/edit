@@ -34,7 +34,7 @@ import * as notices from "./notices.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
-import * as remote from "./remote_actions.ts";
+import * as busy from "./busy.ts";
 import { chunkFolder, clipMap, deleteExport, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport, withWatermarkKey } from "./exports.ts";
 import { shareLine } from "./export_prep.ts";
 import { readState, writeAtomic } from "./files.ts";
@@ -1864,6 +1864,7 @@ export async function boxStills(home: string, projectId: string, shared: Shared 
 let asked = false;
 /** Projects whose Ready for changes is being worked here. */
 const readying = new Set<string>();
+busy.register(() => (readying.size > 0 ? "a Ready for changes fix" : sharing.size > 0 ? "a share" : null));
 
 /** Ready for changes is asked of this computer, as of its last check-in. */
 export function askedHere(): boolean {
@@ -1919,15 +1920,14 @@ async function decline(request: Request, reason: string): Promise<void> {
   diag.info("review", `${name}: Ready for changes handed back: ${reason}`);
 }
 
-/** Something runs in Edit on this computer: a fix, a share, an export, an import, an agent turn, Claude on a script (remote_actions' list, which has the shares from jobs.json). */
+/** Something runs in Edit on this computer: a fix, a share, an export, an import, an agent turn, Claude on a script (busy.ts, the one answer; the fixes and shares here are in it). */
 export function busyHere(app: App): boolean {
-  if (readying.size > 0 || sharing.size > 0) return true;
   try {
-    return remote.busyWith(app).length > 0;
+    return busy.busyWith(app).length > 0;
   } catch (error) {
     // A test's stubbed services: nothing of theirs is running.
     if (!seams.isUnavailable(error)) diag.warn("review", `telling whether this computer is busy: ${diag.messageOf(error)}`);
-    return false;
+    return readying.size > 0 || sharing.size > 0;
   }
 }
 

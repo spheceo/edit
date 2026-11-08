@@ -25,6 +25,9 @@ import { Loader } from "./Logo";
 import { toggleFullscreen, Viewer } from "./Viewer";
 import { rate } from "../lib/types";
 
+/** How often an open editor says so (the server keeps its lock while it does: sync_core.ts TIMING.HEARTBEAT, which a test checks this against). */
+const HEARTBEAT_MS = 30_000;
+
 export function Editor({ id }: { id: string }) {
   const project = useEditor((state) => state.project);
   const timelineHeight = useEditor((state) => state.timelineHeight);
@@ -74,7 +77,7 @@ export function Editor({ id }: { id: string }) {
         .open(id, clientId, true)
         .then((cloud) => alive && useEditor.setState({ cloud }))
         .catch(() => {});
-    }, 30_000);
+    }, HEARTBEAT_MS);
     return () => {
       alive = false;
       clearInterval(heartbeat);

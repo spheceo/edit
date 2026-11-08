@@ -26,6 +26,7 @@ import {
   list,
   creatorOf,
   cloudShape,
+  hooks as cloudHooks,
 } from "../src/cloud_projects.ts";
 import { baseRouter, respond } from "../src/http/server.ts";
 import type { Project } from "../src/model.ts";
@@ -33,7 +34,6 @@ import { newProject } from "../src/project.ts";
 import { nowMs, type Event } from "../src/store.ts";
 import { fixtureHome, scratch } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
-import { THIS_MACHINE } from "../src/machine.ts";
 
 const SETTINGS_1080 = { width: 1920, height: 1080, fps: 30 };
 
@@ -78,29 +78,51 @@ test("a_new_project_takes_the_lock_then_pushes_after_a_pause", () => {
   expect(entry.status(true).sync).toBe("synced");
 });
 
-test("a_held_lock_is_kept_while_working_and_let_go_when_idle_even_open", () => {
+// Nov 8 audit (2b): the lock went after a minute without a write even with
+// the editor open, so the next keystroke waited on the network to take it
+// again (and could be refused). It follows presence now.
+test("a_held_lock_follows_presence_open_with_no_writes_for_ten_minutes_then_gone_on_close_or_ttl", () => {
   const t0 = 1_000_000;
   const entry = new Entry({ rev: 0, dirty: false });
+  // Opened here: taken.
   entry.viewers.set("ui", t0);
-  // Looking on doesn't take it (it checks who has it); an agent turn here does.
-  expect(entry.step(t0)).toBe("Check");
-  expect(entry.step(t0, true)).toBe("Acquire");
+  expect(entry.step(t0)).toBe("Acquire");
   entry.acquired("token", t0);
-  entry.changedAt = t0;
-  expect(entry.step(at(t0, 10))).toBeNull();
-  entry.viewers.set("ui", at(t0, 30));
-  expect(entry.step(at(t0, 45))).toBe("Renew");
-  entry.renewedAt = at(t0, 45);
-  // A turn still running keeps it past the quiet minute.
-  expect(entry.step(at(t0, 70), true)).toBeNull();
-  // Open but idle (nothing changed for a minute, nothing running): let go, so a teammate can carry on.
-  entry.viewers.set("ui", at(t0, 69));
-  expect(entry.step(at(t0, 70))).toBe("Release");
+  // Ten minutes open with no write, the heartbeat every 30 s: renewed, never let go.
+  let renewals = 0;
+  for (let second = 1; second <= 600; second++) {
+    if (second % 30 === 0) entry.viewers.set("ui", at(t0, second));
+    const step = entry.step(at(t0, second));
+    expect(step === null || step === "Renew").toBe(true);
+    if (step === "Renew") {
+      renewals++;
+      entry.renewedAt = at(t0, second);
+    }
+  }
+  expect(renewals).toBe(40);
+  expect(entry.lock).toEqual({ kind: "held" });
+  // The heartbeat stops (the tab went): let go once the TTL has passed, not before.
+  expect(entry.step(at(t0, 600 + 74))).toBe("Renew");
+  entry.renewedAt = at(t0, 674);
+  expect(entry.step(at(t0, 600 + 76))).toBe("Release");
   entry.released();
-  expect(entry.lock).toEqual({ kind: "unknown" });
-  expect(entry.saved.token).toBeUndefined();
-  // Still open: it watches who has it, without taking it.
-  expect(entry.step(at(t0, 71))).toBe("Check");
+  // An agent turn here takes it with nobody looking, and keeps it while it runs.
+  expect(entry.step(at(t0, 700), true)).toBe("Acquire");
+  entry.acquired("token2", at(t0, 700));
+  expect(entry.step(at(t0, 1300), true)).toBe("Renew");
+  entry.renewedAt = at(t0, 1300);
+  // A write with nobody here keeps it a little (LINGER), then it goes.
+  entry.changedAt = at(t0, 1301);
+  expect(entry.step(at(t0, 1310))).toBeNull();
+  expect(entry.step(at(t0, 1317))).toBe("Release");
+  entry.released();
+  // Closed here: let go once pushed, even within the heartbeat.
+  entry.viewers.set("ui", at(t0, 1400));
+  expect(entry.step(at(t0, 1400))).toBe("Acquire");
+  entry.acquired("token3", at(t0, 1400));
+  entry.viewers.delete("ui");
+  entry.closing = true;
+  expect(entry.step(at(t0, 1401))).toBe("Release");
 });
 
 test("closing_pushes_at_once_then_releases", () => {
@@ -188,7 +210,7 @@ test("a_long_push_or_pull_keeps_the_lease_alive_beside_it", () => {
   entry.renewedAt = t0;
   entry.busy = "Push";
   // Nothing due yet, and the step itself can't renew while it runs.
-  expect(entry.keepAliveDue(at(t0, 30))).toBe(false);
+  expect(entry.keepAliveDue(at(t0, 10))).toBe(false);
   expect(entry.step(at(t0, 50))).toBeNull();
   expect(entry.keepAliveDue(at(t0, 50))).toBe(true);
   entry.renewing = true;
@@ -205,9 +227,12 @@ test("a_long_push_or_pull_keeps_the_lease_alive_beside_it", () => {
 test("a_token_from_before_a_restart_is_renewed_first", () => {
   const entry = new Entry({ rev: 5, dirty: false, token: "old" });
   expect(entry.lock).toEqual({ kind: "held" });
-  entry.viewers.set("ui", performance.now());
-  // A turn picked up again after the restart keeps it; idle, it's let go.
+  // A turn picked up again after the restart keeps it, as does an editor open on it; nobody here, it's let go.
   expect(entry.step(performance.now(), true)).toBe("Renew");
+  entry.renewedAt = performance.now();
+  entry.viewers.set("ui", performance.now());
+  expect(entry.step(performance.now())).toBeNull();
+  entry.viewers.clear();
   expect(entry.step(performance.now())).toBe("Release");
 });
 
@@ -250,7 +275,7 @@ test("settings_are_private_and_writes_follow_the_lock", () => {
       "p3-3": { rev: 0, dirty: true },
       "p4-4": { rev: 9, dirty: false, token: "lock" },
     });
-    if (process.env.EDIT_CLOUD_HOLDER === undefined) expect(kept.holder()).toBe("Sphe's Mac");
+    if (process.env.EDIT_CLOUD_HOLDER === undefined) expect(kept.holder()).toMatch(/^Sphe's Mac #[a-z0-9]{12}$/);
   } finally {
     cleanup();
   }
@@ -294,7 +319,7 @@ test("a new project takes the lock on its first push, which lands as rev 1 with 
     expect(projects.status(id)).toMatchObject({ sync: "synced", rev: 1, dirty: false });
     const row = mock.cloud.convex.projects.get(id)!;
     expect(row.rev).toBe(1);
-    expect(row.updatedBy).toBe("this-mac");
+    expect(row.updatedBy).toMatch(/^this-mac #[a-z0-9]{12}$/);
     expect(row.summary).toMatchObject({ clips: 0, media: 0, width: 1920, subtitles: false });
     expect(mock.cloud.convex.body(id)!.name).toBe("Case 2");
     // Let go: anyone may take it now.
@@ -323,7 +348,7 @@ test("a write to a project someone else holds is refused, saying who; one nobody
     expect(mock.calls("/v1/cloud/convex").length).toBe(asked);
     await store.update(mine, "agent", (project) => void (project.name = "Mine 2"));
     expect(projects.status(mine)).toMatchObject({ lock: "held", dirty: true, sync: "pending" });
-    expect(mock.cloud.convex.locks.get(mine)!.holder).toBe("this-mac");
+    expect(mock.cloud.convex.locks.get(mine)!.holder).toBe(projects.holder());
   } finally {
     cleanup();
   }
@@ -378,15 +403,28 @@ test("a conflict keeps this machine's changes as a conflicted copy and takes the
     expect(store.get(id)!.project.name).toBe("Case (their edit)");
     const copy = store.list().find((summary) => summary.name === "Case (my edit) (conflicted copy)");
     expect(copy).toBeDefined();
-    expect(projects.isCloud(copy!.id)).toBe(false);
     expect(projects.status(id)).toMatchObject({ sync: "conflict", rev: 2, dirty: false });
     expect(String(projects.status(id).message)).toBe(
-      `“Case (my edit)” was changed on another machine meanwhile, so the cloud's version is open. Your changes here are kept as “Case (my edit) (conflicted copy)” on ${THIS_MACHINE}.`,
+      "“Case (my edit)” was changed on another computer meanwhile, so the cloud's version is open. Your changes are kept as “Case (my edit) (conflicted copy)”, which the team sees too.",
     );
     const said = events.find((event) => event.type === "cloud-conflict");
     expect(said).toMatchObject({ id, copy: { id: copy!.id, name: "Case (my edit) (conflicted copy)" } });
     // Nothing of theirs was overwritten.
     expect(mock.cloud.convex.body(id)!.name).toBe("Case (their edit)");
+    // The copy is a cloud project of its own, pushed like any other: one copy, on every Home (Nov 8 audit: only on the Mac that made it).
+    expect(projects.isCloud(copy!.id)).toBe(true);
+    await runStep(app, projects, copy!.id, "Acquire");
+    await runStep(app, projects, copy!.id, "Push");
+    const elsewhere = fixtureHome("cloud-conflict-elsewhere", { machine: "kenobi-mac" });
+    try {
+      new Cloud(elsewhere.home, "kenobi-mac").attach(elsewhere.store);
+      const listed = (await list(elsewhere.app)) as { projects: Record<string, unknown>[] };
+      const copies = listed.projects.filter((project) => String(project.name).endsWith("(conflicted copy)"));
+      expect(copies.length).toBe(1);
+      expect(copies[0]).toMatchObject({ id: copy!.id, conflicted_of: { id, by: "this-mac" } });
+    } finally {
+      elsewhere.cleanup();
+    }
   } finally {
     cleanup();
   }
@@ -469,12 +507,15 @@ test("a save landing while the lock's first download runs is never written over"
 });
 
 test("losing the lock with changes not pushed keeps them as a copy and goes read-only on the new holder's version", async () => {
-  const { app, store, projects, cleanup } = setup("cloud-lost");
+  const { app, store, projects, events, cleanup } = setup("cloud-lost");
   try {
     const id = store.create("Case", SETTINGS_1080).project.id;
     await runStep(app, projects, id, "Acquire");
     await runStep(app, projects, id, "Push");
     await store.update(id, "test", (project) => void (project.name = "unpushed"));
+    const stopped: string[] = [];
+    const saved = cloudHooks.tookOver;
+    cloudHooks.tookOver = (_app, project) => void stopped.push(project);
     // Kenobi takes over (force) and saves.
     const token = mock.cloud.convex.lockFor(id, "kenobi");
     expect(token).toContain("their-token");
@@ -484,12 +525,16 @@ test("losing the lock with changes not pushed keeps them as a copy and goes read
     expect(store.get(id)!.project.name).toBe("kenobi's");
     expect(store.list().some((summary) => summary.name === "unpushed (conflicted copy)")).toBe(true);
     expect(String(projects.status(id).message)).toBe(
-      `kenobi took over “unpushed” before your last changes reached the cloud. They're kept as “unpushed (conflicted copy)” on ${THIS_MACHINE}.`,
+      "kenobi took over “unpushed” before your last changes reached the cloud. They're kept as “unpushed (conflicted copy)”, which the team sees too.",
     );
+    // Heard at that renewal: the editor and the agent panel are told, and a turn running on it is stopped (agent.ts).
+    expect(events.find((event) => event.type === "cloud-lost")).toMatchObject({ id, holder: "kenobi" });
+    expect(stopped).toEqual([id]);
+    cloudHooks.tookOver = saved;
     // Taking it back (force) shows their latest version, and it's ours again.
     await takeOver(app, id);
     expect(projects.status(id)).toMatchObject({ lock: "held", holder: null });
-    expect(mock.cloud.convex.locks.get(id)!.holder).toBe("this-mac");
+    expect(mock.cloud.convex.locks.get(id)!.holder).toBe(projects.holder());
   } finally {
     cleanup();
   }
@@ -507,7 +552,7 @@ test("opening a project only in the cloud downloads it, and an unknown one is no
     expect(projects.isCloud("p404-1")).toBe(false);
     // The cloud's list says where each is.
     const listed = (await list(app)) as { projects: Record<string, unknown>[]; holder: string };
-    expect(listed.holder).toBe("this-mac");
+    expect(listed.holder).toBe(projects.holder());
     expect(listed.projects.find((item) => item.id === "p42-1")).toMatchObject({ name: "From kenobi", local: true, here: true, rev: 1 });
   } finally {
     cleanup();
@@ -580,7 +625,7 @@ test("the cloud routes: settings (private, checked), status, open and close, tak
     const id = store.create("Case", SETTINGS_1080).project.id;
     const opened = await call("POST", `/api/projects/${id}/cloud/open`, { client: "ui-1" });
     expect(opened.body).toMatchObject({ cloud: true, lock: "held" });
-    expect(mock.cloud.convex.locks.get(id)!.holder).toBe("Sphe's Mac");
+    expect(mock.cloud.convex.locks.get(id)!.holder).toMatch(/^Sphe's Mac #[a-z0-9]{12}$/);
     const beat = await call("POST", `/api/projects/${id}/cloud/open`, { client: "ui-1", heartbeat: true });
     expect(beat.body.lock).toBe("held");
     expect((await call("GET", `/api/projects/${id}/cloud`)).body.cloud).toBe(true);

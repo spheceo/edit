@@ -190,7 +190,11 @@ export class CloudMock {
       if (typeof body.path !== "string" || !/^edit:[A-Za-z_][A-Za-z0-9_]*$/.test(body.path)) {
         return json(403, { error: "Only edit: functions can be called." });
       }
-      return json(200, this.convex.call(body.path.slice("edit:".length), (body.args ?? {}) as Record<string, unknown>, mock.url));
+      const name = body.path.slice("edit:".length);
+      const answer = this.convex.call(name, (body.args ?? {}) as Record<string, unknown>, mock.url);
+      // Done, but its answer lost on the way back (Edit quitting, a dropped connection).
+      if (this.convex.lose.delete(name)) return json(504, { error: "The connection was closed before the answer came back." });
+      return json(200, answer);
     });
     // R2 itself, behind the presigned URLs.
     mock.on("PUT", /^\/r2\//, (request) => this.r2Put(request));
@@ -352,6 +356,14 @@ export class ConvexMock {
       createdBy: row?.createdBy ?? createdBy,
     });
     return rev;
+  }
+
+  /** Functions whose next call is done but its answer lost (`loseNextAnswer`). */
+  readonly lose = new Set<string>();
+
+  /** The next call of `name` is done, and its answer never reaches Edit. */
+  loseNextAnswer(name: string): void {
+    this.lose.add(name);
   }
 
   /** Gives the lease to `holder` (another machine), live for `ms`. */

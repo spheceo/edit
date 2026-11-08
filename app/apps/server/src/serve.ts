@@ -3,6 +3,7 @@
 // package's services, the speaker watcher, cloud projects, Ctrl-C, and one
 // listener per address `bindAddresses` gives.
 
+import { TIMING } from "./sync_core.ts";
 import type { Server } from "bun";
 import * as fs from "node:fs";
 
@@ -278,7 +279,8 @@ export function start(home: string, host: string | null, port: number): { app: A
     if (quitting) process.exit(code);
     quitting = true;
     lastRun.quitting();
-    setTimeout(() => process.exit(code), 5_000).unref();
+    // TIMING.QUIT_BUDGET: one cloud call fits (sync_core.ts); a push left over is sent by the next start.
+    setTimeout(() => process.exit(code), TIMING.QUIT_BUDGET).unref();
     // The agents first: a turn left running goes on editing (and spending) with no Edit to answer it.
     try {
       app.agents.shutdown?.();

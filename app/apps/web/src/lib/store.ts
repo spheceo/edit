@@ -735,6 +735,9 @@ export function connectEvents() {
       useEditor.setState({ cloud: event.status });
     } else if (event.type === "cloud-conflict") {
       useEditor.getState().toast(event.message, "error");
+    } else if (event.type === "cloud-lost" && project && event.id === project.id) {
+      // Someone took over on their computer: read-only here now, and a turn running on it stopped (agent.ts lockLost).
+      useEditor.getState().toast(event.message, "error");
     } else if (event.type === "review-refused") {
       // A review note tried to take the agent outside its video (review_guard.ts).
       useEditor.getState().toast(event.message, "error");

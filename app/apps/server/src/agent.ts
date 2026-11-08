@@ -1096,6 +1096,20 @@ export class Agents implements seams.AgentPanel {
     return claude.ask(binary, workspace, model, effort, instructions, texts.join("\n\n"), shape, timeoutMs, images);
   }
 
+  /**
+   * Someone else took over `project` on their computer (cloud_projects
+   * `tookOver`): a turn running on it here could save nothing more, so it's
+   * stopped, said in the chat. Until Nov 8 it went on for up to 45 s, every
+   * write refused.
+   */
+  lockLost(project: string, holder: string): void {
+    const running = [...this.chats.entries()].filter(([key, chat]) => chat.running && projectOf(key) === project).map(([key]) => key);
+    for (const key of running) {
+      this.upsert(key, entry({ id: newId("error"), kind: "error", text: `${holder} took over this project, so this turn stopped: nothing more can be saved here. Take over in the editor to carry on.` }));
+      void this.stop(key).catch((error: unknown) => diag.warn("agent", `stopping ${key} after ${holder} took over: ${diag.messageOf(error)}`));
+    }
+  }
+
   async stop(project: string): Promise<void> {
     this.authPending.delete(project);
     this.saveAuthPending();

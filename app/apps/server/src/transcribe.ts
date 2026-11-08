@@ -703,6 +703,23 @@ export const transcribeFile = Effect.fn("transcribe.file")(function* (source: st
     const seconds = yield* lengthOf(audio);
     return seconds <= WHOLE_UP_TO ? yield* ask(audio, keyterms, again) : yield* hearLong(source, audio, seconds, target, keyterms, again, wholeVoices);
   }).pipe(Effect.scoped);
+  // Heard again, it never comes out much shorter than the transcript it replaces (Killer Pastor in dev, Nov 8: its
+  // 1 h 52 min recording heard again through a proxy that could only play its first 3 minutes left 323 words for
+  // the thousands it had, and its three excerpts, cut from it, none): the old one stands.
+  if (again) {
+    const before = yield* Effect.sync(() => {
+      try {
+        const kept = JSON.parse(fs.readFileSync(target, "utf8")) as { words?: { end?: number }[] };
+        return kept.words?.at(-1)?.end ?? 0;
+      } catch {
+        return 0;
+      }
+    });
+    const now = transcript.words.at(-1)?.end ?? 0;
+    if (before > 60 && now < before * 0.6) {
+      return yield* new AudioUnreadable({ message: `heard again it reached only ${Math.round(now)} s of the ${Math.round(before)} s it had (the audio cut short?)` });
+    }
+  }
   // The names asked with, even when refused: asked again they'd be refused again.
   if (keyterms.length > 0) transcript.keyterms = [...keyterms];
   // Two officers' bodycams: one voice to Scribe, two people. Never fails the transcript.

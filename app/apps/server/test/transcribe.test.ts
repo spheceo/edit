@@ -507,3 +507,22 @@ test("each transcription failure has a kind: what Edit asks again, what Try agai
   expect(kindOf(new TranscriptionRefused({ status: 402, message: "" }))).toBe("later");
   expect(kindOf(new TranscriptionRefused({ status: 400, message: "" }))).toBe("permanent");
 });
+
+// Killer Pastor in dev (Nov 8): heard again through a proxy that played only its first 3 minutes, a 1 h 52 min
+// recording's transcript became 323 words. Heard again, a much shorter transcript never replaces the one it had.
+test.skipIf(ffmpeg === null)("heard again, a transcript far shorter than the one it had is refused and the old one stands", async () => {
+  const { dir, cleanup } = scratch("transcribe-shorter");
+  try {
+    const source = `${dir}/tone.wav`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", source]).exitCode).toBe(0);
+    const target = `${dir}/cache/transcript.json`;
+    fs.mkdirSync(`${dir}/cache`);
+    const old = { model: "scribe_v2", language: "eng", words: [{ text: "long", start: 0, end: 1 }, { text: "ago", start: 600, end: 601 }] };
+    fs.writeFileSync(target, JSON.stringify(old));
+    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer()), 1);
+    await expect(run(source, target, [], true)).rejects.toThrow("heard again it reached only");
+    expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual(old);
+  } finally {
+    cleanup();
+  }
+});

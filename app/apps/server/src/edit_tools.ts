@@ -69,7 +69,8 @@ import * as seams from "./seams.ts";
 import { read, readStruct, SerdeError, type Field, type Struct } from "./serde.ts";
 import * as sfx from "./sfx.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
-import { isSubtitled, UpdateError, type Live, type Store } from "./store.ts";
+import { agentView, isSubtitled, revisionConflict, UpdateError, type Live, type Store } from "./store.ts";
+import * as patches from "./patch.ts";
 import * as framePicks from "./frame_picks.ts";
 import * as progress from "./progress.ts";
 import * as styles from "./styles.ts";
@@ -294,6 +295,11 @@ function getEditContext({ app, args, projectId }: ToolCall): Content[] {
 const seen = new Map<string, Live[]>();
 const SEEN_KEPT = 3;
 
+// Every agent tool's write is checked against the last of these (store.ts
+// agentCalls): what the agent read, with its own changes on top.
+agentView.known = (id) => seen.get(id)?.at(-1) ?? null;
+agentView.learned = (_id, rev, project) => void showAgent({ rev, project });
+
 /** `found`, noted as shown to the agent. */
 function showAgent(found: Live): Live {
   const id = found.project.id;
@@ -369,16 +375,13 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   const frames = reviewFrames(args.review_frames);
   const current = app.store.checkout(projectId);
   if (current === null) throw new Error("project vanished");
-  if (current.rev !== base) {
-    const was = seen.get(projectId)?.find((one) => one.rev === base);
-    const media = was !== undefined && onlyMediaChanged(was.project, current.project);
-    if (was === undefined || !(media || onlySoundChanged(was.project, current.project))) {
-      throw new Error(`revision conflict: expected ${base}, current ${current.rev}; nothing saved; refresh get_edit_context`);
-    }
-    diag.info(
-      "agent",
-      `${projectId}: the plan on rev ${base} goes on rev ${current.rev} (only ${media ? "media files" : "sounds and starring"} changed between)`,
-    );
+  // What the agent read at `base` (its own writes since included); the project as it is now, before the plan.
+  const was = seen.get(projectId)?.find((one) => one.rev === base);
+  /** Set when changes it hasn't read went in between: what it knows after is what it read with its plan on top. */
+  let unread: Project | null = null;
+  const before = app.store.get(projectId)?.project ?? null;
+  if (current.rev !== base && was === undefined) {
+    throw new Error(`revision conflict: expected ${base}, current ${current.rev}; nothing saved; refresh get_edit_context`);
   }
   const project = current.project;
   timeProfileLines(app, project, operations);
@@ -387,6 +390,15 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   const applied = diag.timeOn("agent", "plan: apply and validate", projectId, () =>
     editPlan.applyWith(project, operations, assets),
   );
+  // Changed since the agent read it (by hand, by another tool, in the background): the plan goes on the newer
+  // version unless it changes something that changed (media and sound changes never stop it).
+  if (was !== undefined && before !== null && was.project !== before) {
+    const background = onlyMediaChanged(was.project, before) || onlySoundChanged(was.project, before);
+    const clash = background ? [] : patches.overlap(patches.diff(was.project, before), patches.diff(before, project));
+    if (!background) unread = was.project;
+    if (clash.length > 0) throw new Error(revisionConflict(base, current.rev, clash));
+    if (current.rev !== base) diag.info("agent", `${projectId}: the plan on rev ${base} goes on rev ${current.rev} (${background ? "only media files or sounds" : "nothing it changes"} changed between)`);
+  }
   const dryRun = bool(args.dry_run) ?? false;
   const audit = audited(app, project, null);
   let saved: { rev: number; project: Project };
@@ -394,7 +406,9 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
     saved = { rev: current.rev, project };
   } else {
     try {
-      saved = showAgent(await app.store.replace(projectId, current.rev, project, ORIGIN));
+      const landed = await app.store.replace(projectId, current.rev, project, ORIGIN);
+      saved = landed;
+      showAgent(unread === null || before === null ? landed : { rev: landed.rev, project: patches.apply(unread, patches.diff(before, landed.project)) });
     } catch (error) {
       if (!(error instanceof UpdateError)) throw error;
       switch (error.kind) {

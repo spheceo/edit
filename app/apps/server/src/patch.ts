@@ -114,3 +114,46 @@ export function apply<T extends object>(base: T, patch: Patch): T {
   }
   return out as T;
 }
+
+/**
+ * Fields that count as no one's change when two patches meet: `next_id` only
+ * hands out ids (each change made on the newer version takes a fresh one).
+ */
+const SHARED = new Set(["next_id"]);
+
+/** What a patch changes, one name each: `<field>` set or removed, `<list>:<id>` put or removed, `<list>:order` reordered. */
+export function touched(patch: Patch): Set<string> {
+  const out = new Set<string>();
+  for (const key of [...Object.keys(patch.set), ...patch.unset]) if (!SHARED.has(key)) out.add(key);
+  for (const [key, list] of Object.entries(patch.lists)) {
+    for (const item of list.put) out.add(`${key}:${String((item as { id?: unknown } | null)?.id)}`);
+    for (const id of list.remove) out.add(`${key}:${id}`);
+    if (list.order !== undefined) out.add(`${key}:order`);
+  }
+  return out;
+}
+
+/** What both patches change (none: one can go on top of the other without touching what the other did). */
+export function overlap(a: Patch, b: Patch): string[] {
+  const theirs = touched(a);
+  return [...touched(b)].filter((name) => theirs.has(name));
+}
+
+/** `patch` in two: what touches none of `names`, and what does. */
+export function split(patch: Patch, names: Iterable<string>): { rest: Patch; clashing: Patch } {
+  const clash = new Set(names);
+  const rest: Patch = { set: {}, unset: [], lists: {} };
+  const clashing: Patch = { set: {}, unset: [], lists: {} };
+  for (const [key, value] of Object.entries(patch.set)) (clash.has(key) ? clashing : rest).set[key] = value;
+  for (const key of patch.unset) (clash.has(key) ? clashing : rest).unset.push(key);
+  for (const [key, list] of Object.entries(patch.lists)) {
+    const into = (side: Patch): ListPatch => (side.lists[key] ??= { put: [], remove: [] });
+    for (const item of list.put) into(clash.has(`${key}:${String((item as { id?: unknown } | null)?.id)}`) ? clashing : rest).put.push(item);
+    for (const id of list.remove) into(clash.has(`${key}:${id}`) ? clashing : rest).remove.push(id);
+    if (list.order !== undefined) into(clash.has(`${key}:order`) ? clashing : rest).order = list.order;
+  }
+  for (const side of [rest, clashing]) {
+    for (const [key, list] of Object.entries(side.lists)) if (list.put.length === 0 && list.remove.length === 0 && list.order === undefined) delete side.lists[key];
+  }
+  return { rest, clashing };
+}

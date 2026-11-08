@@ -13,6 +13,7 @@
 // here that changed what `get` returned would change every reader's copy.
 // `checkout` gives a copy to edit; `update` does read-modify-write in one go.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 
 import { creator } from "./accounts.ts";
@@ -26,6 +27,7 @@ import { native, type Prepared } from "./native/index.ts";
 import { canonical, extension, fileStem, join } from "./paths.ts";
 import { clipEnd, duration, mediaOf, newProject } from "./project.ts";
 import { asSerdeRead, jsonForSerde } from "./rust.ts";
+import * as patches from "./patch.ts";
 import { RELEASE } from "./version.ts";
 
 export { nextFileId, nowMs, writeAtomic } from "./files.ts";
@@ -69,6 +71,23 @@ export interface CloudHook {
 }
 
 export type Event = Record<string, unknown>;
+
+/**
+ * An agent tool call under way (mcp/index.ts `call`): every `update` it makes
+ * is checked against what the agent last read of the project (`agentView`),
+ * and refused with the conflict when it changes what changed since (by hand
+ * or by another tool), so the agent never silently wins over a hand edit
+ * (Nov 8 audit, 2d). `active` goes false when the call returns: work it left
+ * running in the background (a smoothed shot swapped in) isn't the agent's
+ * edit and isn't checked.
+ */
+export const agentCalls = new AsyncLocalStorage<{ active: boolean }>();
+
+/** What the agent last read of a project, and what it learns from its own writes (edit_tools.ts keeps it). */
+export const agentView = {
+  known: (_id: string): { rev: number; project: Project } | null => null,
+  learned: (_id: string, _rev: number, _project: Project): void => {},
+};
 
 /**
  * Everything clients hear about (`/api/ws`): project saves, media progress,
@@ -507,7 +526,7 @@ export class Store {
    * one into a conflict (edits count and collect as they go, so they aren't
    * run twice).
    */
-  async update<T>(id: string, origin: string, edit: (project: Project) => T): Promise<[Live, T]> {
+  async update<T>(id: string, origin: string, edit: (project: Project) => T, read?: { rev: number; project: Project }): Promise<[Live, T]> {
     if (this.get(id) === null) throw new Error(`no project ${id}`);
     const cloud = this.cloudHook;
     if (cloud !== null) {
@@ -530,9 +549,19 @@ export class Store {
     enforcePointers(current.project, project);
     const refused = refusalOf(current.project, project);
     if (refused !== null) throw new Error(refused);
+    // Made from what the caller read (an agent tool): refused when it changes what changed since, by hand or by another tool.
+    const call = agentCalls.getStore();
+    const knew = read ?? (call?.active === true ? agentView.known(id) : null);
+    const mine = knew === null ? null : patches.diff(current.project, project);
+    if (knew !== null && mine !== null && knew.project !== current.project) {
+      const clash = patches.overlap(patches.diff(knew.project, current.project), mine);
+      if (clash.length > 0) throw new Error(revisionConflict(knew.rev, current.rev, clash));
+    }
     try {
       const live = this.commitUnguarded(id, current.rev, this.prepare(id, project), origin);
       cloud?.wrote(id);
+      // What the agent knows now: what it read, with its own change on top (not what changed by hand meanwhile, which it hasn't read).
+      if (call?.active === true && knew !== null && mine !== null) agentView.learned(id, live.rev, knew.project === current.project ? live.project : patches.apply(knew.project, mine));
       return [live, value];
     } catch (error) {
       if (!(error instanceof UpdateError)) throw error;
@@ -695,6 +724,17 @@ export class Store {
     if (first === undefined) throw new Error("no projects yet; create one in the UI first");
     return first.id;
   }
+}
+
+/**
+ * Why a change made from revision `read` doesn't go on `current`: what it
+ * changes was changed since (by hand, or by another tool), named. The agent
+ * reads the project again (Nov 8 audit, 2d: its other tools silently won
+ * over hand edits).
+ */
+export function revisionConflict(read: number, current: number, clash: string[]): string {
+  const named = clash.slice(0, 6).map((name) => name.replace(":", " ")).join(", ");
+  return `revision conflict: expected ${read}, current ${current}; ${named}${clash.length > 6 ? ` and ${clash.length - 6} more` : ""} changed since you read ${clash.length === 1 ? "it" : "them"}; nothing saved; refresh get_edit_context`;
 }
 
 /** A project file's hash, for the revision kept beside it (fast, not a secret). */

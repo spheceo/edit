@@ -5,6 +5,7 @@
 // the preamble every tool call shares (which project it works on). The tools
 // themselves are registered by their packages (`registry.ts`).
 
+import { agentCalls } from "../store.ts";
 import * as reviewGuard from "../review_guard.ts";
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
@@ -133,8 +134,17 @@ export async function call(
     if (TOOLS.some((tool) => tool.name === name)) throw new Error(`${name} is not available`);
     throw new Error(`unknown tool ${name}`);
   }
-  if (!LONG.has(name)) return registered.handler({ app, args, projectId, scope });
-  return once(`${projectId}|${name}|${stableStringify({ ...args, project_id: null })}`, name, async () => registered.handler({ app, args, projectId, scope }));
+  // The agent's own edits, checked against what it read (store.ts agentCalls); not what it leaves running after.
+  const asAgent = async (): Promise<Content[]> => {
+    const state = { active: true };
+    try {
+      return await agentCalls.run(state, () => registered.handler({ app, args, projectId, scope }));
+    } finally {
+      state.active = false;
+    }
+  };
+  if (!LONG.has(name)) return asAgent();
+  return once(`${projectId}|${name}|${stableStringify({ ...args, project_id: null })}`, name, asAgent);
 }
 
 /**

@@ -30,8 +30,9 @@ routes = [{ pattern = "media.spheceo.com", custom_domain = true }]
 [vars]
 MEDIA_HOST = "media.spheceo.com"  # media.ts hands out signed proxy URLs on it (MEDIA_SECRET, a secret)
 # Who speaks when (Nov 8, diarize_jobs.ts): "pyannote" gives Edit pyannote's voices (with PYANNOTE_API_KEY), anything else Scribe's.
-# Off here until it has proven itself on dev; turning it on or off is a relay deploy, no Edit release.
-DIARIZE = "off"
+# On for the team from Nov 8 (Sphe: "we'll need pyannote in prod"), proven on dev on three of JJ's projects;
+# turning it off is "off" and a relay deploy, no Edit release. Builds before it never ask.
+DIARIZE = "pyannote"
 # Comma-separated voice IDs belonging to ELEVENLABS_VOICES_KEY; all others
 # (including the existing house voice) use ELEVENLABS_MAIN_KEY.
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"

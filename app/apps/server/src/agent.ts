@@ -224,7 +224,7 @@ const SETTLE_MS = 3_000;
 export const agentHooks = {
   unfinished: (_project: string): { note: string; count: number } | null => null,
   /** The fresh-eyes final pass after a whole edit (off on a trial server: the teaching loop runs it as its own step). */
-  freshEyes: process.env.EDIT_FRESH_EYES === "1" || process.env.EDIT_TRIALS !== "1",
+  freshEyes: process.env.EDIT_TRIALS !== "1",
 };
 
 /** Follow-ups Edit sends after one message at most, each only while the last cut the flags by a fifth or more. */

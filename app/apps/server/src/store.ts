@@ -149,7 +149,7 @@ export class Store {
    * Whether new projects are marked dev projects (`Project::origin` "dev"):
    * on any build that isn't a release (`just dev`, the dev server, the trial
    * server), so Home can hide and clear the test projects (Sphe, Oct 31: "the
-   * project list gets huge"). `EDIT_DEV_PROJECTS=0`/`1` overrides; off in tests.
+   * project list gets huge"). Off in tests.
    */
   marksDev = devBuild();
 
@@ -744,8 +744,6 @@ function fileHash(text: string): string {
 
 /** A dev build, as `Store.marksDev` says. */
 function devBuild(): boolean {
-  const given = process.env.EDIT_DEV_PROJECTS;
-  if (given === "1" || given === "0") return given === "1";
   return process.env.NODE_ENV !== "test" && !RELEASE;
 }
 

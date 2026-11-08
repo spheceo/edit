@@ -169,8 +169,8 @@ export async function buildOnce(app: App, data: string, id: string, note: string
  * Fresh eyes for a script (loop 7, Nov 2; Edit mode's FRESH_EYES, agent.ts):
  * once a build is saved, a second Opus turn reads it as the team reviews it,
  * with only the script, its sources and the house rules, and fixes what it
- * finds, saved narration written straight in. Off with EDIT_SCRIPT_FRESH_EYES=0
- * or a build asked with review: false.
+ * finds, saved narration written straight in. Off for a build asked with
+ * review: false.
  */
 export function freshEyesRequest(courtroom: boolean): string {
   const blocks = courtroom
@@ -180,8 +180,8 @@ export function freshEyesRequest(courtroom: boolean): string {
   return `Read this script once more with fresh eyes, as the team reviews it before recording, and fix what they would flag. ${opening} ${blocks} Every cut-in: does it turn what the viewer just saw rather than describe it again, carry what the footage can't show (the people's life, the motive, what changed), introduce anyone it speaks of? The format's shape and guides hold throughout. Change only what needs it; keep what already works, and say in a few lines what you changed and why.`;
 }
 
-// On by default since loop 7 S2–S3 (four builds with and without: fewer flags, less re-telling, crumbs merged, for about two minutes); EDIT_SCRIPT_FRESH_EYES=0 turns it off, a build may ask with review.
-export const scriptFreshEyes = (asked: boolean | undefined): boolean => asked ?? process.env.EDIT_SCRIPT_FRESH_EYES !== "0";
+// On by default since loop 7 S2–S3 (four builds with and without: fewer flags, less re-telling, crumbs merged, for about two minutes); a build may ask without it (review: false).
+export const scriptFreshEyes = (asked: boolean | undefined): boolean => asked ?? true;
 
 /**
  * A Google Doc the build's note links to, read with the team's sign-in and

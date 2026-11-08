@@ -24,7 +24,7 @@ import * as store from "./store.ts";
 import { THIS_MACHINE } from "../machine.ts";
 
 /** Where Writer kept its scripts on this Mac. */
-export const WRITER_FOLDER = (): string => process.env.EDIT_WRITER_FOLDER ?? join(userHome(), "Library", "Application Support", "com.spheceo.writer");
+export const WRITER_FOLDER = (): string => join(userHome(), "Library", "Application Support", "com.spheceo.writer");
 
 /** Background work Script mode's parts start with the server (the cloud, review polling…). */
 export const starters: ((app: App) => void)[] = [];

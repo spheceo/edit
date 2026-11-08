@@ -309,7 +309,7 @@ export function native(): Native {
       current = wrap(createStub());
       warn(
         "native",
-        "the native addon wasn't found (EDIT_NATIVE, or crates/edit-native built with napi): running on the stub, which renders, exports and measures nothing",
+        "the native addon wasn't found (beside the binary, or crates/edit-native built with napi): running on the stub, which renders, exports and measures nothing",
       );
     }
   }
@@ -338,10 +338,8 @@ export function initNative(config: Omit<InitConfig, "log">): Native {
   return addon;
 }
 
-/** Where the addon is: `EDIT_NATIVE`, else beside the binary or in the dev tree. */
+/** Where the addon is: beside the binary or in the dev tree. */
 export function findAddon(): string | null {
-  const given = process.env.EDIT_NATIVE;
-  if (given !== undefined && given !== "") return fs.existsSync(given) ? given : null;
   // napi's `--platform` names: darwin-arm64, darwin-x64, linux-x64-gnu (WSL).
   const platform = `${process.platform}-${process.arch}`;
   const names = [`edit-native.${platform}.node`, `edit-native.${platform}-gnu.node`, "edit-native.node"];

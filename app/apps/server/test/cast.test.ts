@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { casesOf, checked, itemsText, planCast, type CastPerson, type Seen } from "../src/cast.ts";
+import { byVoice, casesOf, checked, itemsText, planCast, type CastPerson, type Seen } from "../src/cast.ts";
 import { join } from "../src/paths.ts";
 import type { Word } from "../src/transcribe.ts";
 
@@ -154,4 +154,28 @@ test("a file's case is its script blocks' Case note, only for a script of more t
   expect([...casesOf({ script: { blocks: [block("m1", "1"), block("m2", "2"), block("m1", "1")] } } as never)]).toEqual([["m1", "Case 1"], ["m2", "Case 2"]]);
   expect(casesOf({ script: { blocks: [block("m1", "1"), block("m2", "1")] } } as never).size).toBe(0);
   expect(casesOf({ script: null } as never).size).toBe(0);
+});
+
+// Female Police Captain (Nov 8): one window swapped the two women's looks, and the cast followed the looks, so
+// Kimberly's voice in that excerpt was subtitled "Investigator". With pyannote's voices one voice of one recording
+// is one person.
+test("with pyannote's voices, a recording's voice is one person: a window that swapped two looks follows the voice", () => {
+  const item = (media: string, from: number, letter: string, voice: string, role: string, look: string, recording?: string): Seen =>
+    ({ media, from, to: from + 240, letter, voice, name: "", role, look, place: "", ...(recording ? { recording } : {}) });
+  const seen = [
+    item("m5", 0, "A", "speaker_1", "suspect", "long blonde hair", "youtube:JTr4372yI1g"),
+    item("m5", 0, "B", "speaker_3", "leader", "short blonde hair, blue shirt", "youtube:JTr4372yI1g"),
+    item("m6", 0, "A", "speaker_1", "suspect", "long blonde hair", "youtube:JTr4372yI1g"),
+    item("m6", 0, "B", "speaker_3", "leader", "short blonde hair, blue shirt", "youtube:JTr4372yI1g"),
+    // The swapped window: Kimberly's voice with the investigator's look, and the other way round.
+    item("m6", 240, "B", "speaker_1", "suspect", "short blonde hair, blue shirt", "youtube:JTr4372yI1g"),
+    item("m6", 240, "C", "speaker_3", "leader", "long blonde hair", "youtube:JTr4372yI1g"),
+  ];
+  const people: CastPerson[] = [
+    { name: "Kimberly", title: "Suspect", role: "suspect", members: [0, 2, 5] },
+    { name: null, title: "Investigator", role: "leader", members: [1, 3, 4] },
+  ];
+  expect(byVoice(people, seen).map((person) => person.members)).toEqual([[0, 2, 4], [1, 3, 5]]);
+  // Scribe's voices (no recording): the looks stand.
+  expect(byVoice(people, seen.map(({ recording: _r, ...rest }) => rest)).map((person) => person.members)).toEqual([[0, 2, 5], [1, 3, 4]]);
 });

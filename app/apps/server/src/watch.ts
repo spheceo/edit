@@ -20,6 +20,7 @@ import * as os from "node:os";
 import type { App } from "./app.ts";
 import * as bridges from "./bridges.ts";
 import * as castOf from "./cast.ts";
+import * as voices from "./voices.ts";
 import { parseTranscript, transcriptOf } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import * as jobs from "./jobs.ts";
@@ -1272,6 +1273,13 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   const sightingOf = new Map<string, number>();
   // A compilation's cases, so its people are their own case's (cast.ts).
   const caseOf = castOf.casesOf(project);
+  // The recording each file with pyannote's voices is, so one voice of it is one person (cast.ts byVoice).
+  const recordingOf = new Map<string, string>();
+  for (const [id, transcript] of transcripts) {
+    if (transcript.voices !== voices.MODEL) continue;
+    const source = mediaOf(project, id)?.cloud?.source;
+    recordingOf.set(id, typeof source === "string" && source !== "" ? source.split("#")[0]! : id);
+  }
   // Lines the model only guessed at: the few worth a look.
   const doubtful: unknown[] = [];
   const ordered = [...answers.values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -1332,6 +1340,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
         look: person.look,
         place: person.place,
         ...(caseOf.has(part.media) ? { case: caseOf.get(part.media)! } : {}),
+        ...(recordingOf.has(part.media) ? { recording: recordingOf.get(part.media)! } : {}),
       });
     }
     for (const line of answer.lines) {

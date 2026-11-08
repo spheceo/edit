@@ -66,6 +66,12 @@ export interface Seen {
   place: string;
   /** The compilation case the file belongs to ("Case 2"), when the project has more than one. */
   case?: string;
+  /**
+   * The recording the file is (or is an excerpt of), when its voices are
+   * pyannote's (voices.ts): one voice id is one person across the whole
+   * recording, so it outweighs a window's description (`byVoice`).
+   */
+  recording?: string;
 }
 
 /**
@@ -263,7 +269,41 @@ export function checked(value: unknown, seen: Seen[]): CastPerson[] | null {
     const title = roleTitle(role);
     out.push({ name: trim(item.name) === "" ? null : trim(item.name), title, role, members: [n] });
   });
-  return byCase(out, seen);
+  return byVoice(byCase(out, seen), seen);
+}
+
+/**
+ * Where the voices are pyannote's, one voice of one recording is one person:
+ * every item of it joins the person most of them are in. A window that
+ * swapped two people's looks no longer moves a voice to the other person
+ * (Female Police Captain, Nov 8: one window gave Kimberly's voice the
+ * investigator's blue shirt, and her lines in that excerpt were subtitled
+ * "Investigator", JJ: "in between the two women, where we have essentially
+ * swapped their roles"; eight of her nine windows had it right).
+ */
+export function byVoice(people: CastPerson[], seen: Seen[]): CastPerson[] {
+  const personOf = new Map<number, number>();
+  people.forEach((person, index) => person.members.forEach((n) => personOf.set(n, index)));
+  const groups = new Map<string, number[]>();
+  seen.forEach((item, n) => {
+    if (item.recording === undefined || item.voice === "" || !personOf.has(n)) return;
+    const key = `${item.recording}\u0000${item.voice}`;
+    groups.set(key, [...(groups.get(key) ?? []), n]);
+  });
+  const moved = new Map<number, number>();
+  for (const members of groups.values()) {
+    const votes = new Map<number, number>();
+    for (const n of members) votes.set(personOf.get(n)!, (votes.get(personOf.get(n)!) ?? 0) + 1);
+    const [winner] = [...votes].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]!;
+    for (const n of members) if (personOf.get(n) !== winner) moved.set(n, winner);
+  }
+  if (moved.size === 0) return people;
+  return people
+    .map((person, index) => ({
+      ...person,
+      members: [...person.members.filter((n) => !moved.has(n)), ...[...moved].filter(([, to]) => to === index).map(([n]) => n)].sort((a, b) => a - b),
+    }))
+    .filter((person) => person.members.length > 0);
 }
 
 /**

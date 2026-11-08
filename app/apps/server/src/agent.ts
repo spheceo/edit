@@ -267,6 +267,20 @@ function sharedForReview(home: string, project: string): boolean {
   }
 }
 
+/** Where the person's last message is in a chat's entries (-1 when there's none): Edit's own "(Edit, automatically)" ones don't count. */
+function lastAsked(entries: readonly Entry[]): number {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const item = entries[index]!;
+    if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) return index;
+  }
+  return -1;
+}
+
+/** Whether these entries ran a whole edit or its final pass (the edit-workflow or final-pass skill). */
+function ranWholeEdit(entries: readonly Entry[]): boolean {
+  return entries.some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
+}
+
 /** The turn that carries on one a restart cut short. */
 const RESUMED =
   "(Edit, automatically) Edit restarted while you were working, which cut your last turn off; your last tool call may not have finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.";
@@ -294,7 +308,12 @@ export class Agents implements seams.AgentPanel {
    * then cut it again (Nov 6).
    */
   hasRunningTurns(): boolean {
-    return [...this.chats.values()].some((chat) => chat.running) || this.queued.size > 0 || this.carryingOn();
+    return [...this.chats.values()].some((chat) => chat.running) || this.queued.size > 0 || this.retrying.size > 0 || this.carryingOn();
+  }
+
+  /** Whether a chat's turn is running, or Edit's own next one in it is about to start (a follow-up, the fresh-eyes pass, a retry after a busy model). */
+  private pending(key: string): boolean {
+    return this.chats.get(key)?.running === true || this.queued.has(key) || this.retrying.has(key);
   }
 
   private carryingOn(): boolean {
@@ -1308,7 +1327,7 @@ export class Agents implements seams.AgentPanel {
   /** Whether the project's agent has more coming: a turn of its chat or a sub-agent's running, or Edit's own next one about to start. */
   private busy(root: string): boolean {
     const mine = (key: string) => key === root || key.startsWith(`${root}${SUB}`);
-    return [...this.chats].some(([key, chat]) => mine(key) && chat.running) || [...this.queued].some(mine) || [...this.retrying].some(mine);
+    return [...new Set([...this.chats.keys(), ...this.queued, ...this.retrying])].some((key) => mine(key) && this.pending(key));
   }
 
   /** A turn ended: once its project's agent has nothing more coming (follow-ups, the fresh-eyes pass), the person is told how it went. */
@@ -1328,10 +1347,7 @@ export class Agents implements seams.AgentPanel {
     const chat = this.chats.get(root);
     const live = this.store.get(root);
     if (chat === undefined || live === null || chat.halted || reviewGuard.inReviewTurn(root)) return;
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
+    const asked = lastAsked(chat.entries);
     const message = chat.entries[Math.max(asked, 0)];
     if (message === undefined) return;
     const since = chat.entries.slice(asked + 1);
@@ -1408,13 +1424,8 @@ export class Agents implements seams.AgentPanel {
     const chat = this.withChat(project);
     // A whole edit or its final pass, in this message's turns (the user's last
     // message and Edit's follow-ups after it).
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
-    const whole = chat.entries
-      .slice(asked + 1)
-      .some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
+    const asked = lastAsked(chat.entries);
+    const whole = ranWholeEdit(chat.entries.slice(asked + 1));
     if (!whole) return void this.notesLeft(project, generation, chat, asked, mine);
     let left: { note: string; count: number } | null;
     try {
@@ -1517,11 +1528,8 @@ export class Agents implements seams.AgentPanel {
     const chat = this.withChat(project);
     if (chat.built !== null) return true;
     if (sharedForReview(this.store.home, projectOf(project))) return true;
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
-    return chat.entries.slice(0, Math.max(asked, 0)).some((item) => (item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text)) || (item.kind === "subagent" && item.text.startsWith("Fresh-eyes")));
+    const before = chat.entries.slice(0, Math.max(lastAsked(chat.entries), 0));
+    return ranWholeEdit(before) || before.some((item) => item.kind === "subagent" && item.text.startsWith("Fresh-eyes"));
   }
 
   /** The whole edit and its follow-ups are done: the turns after it revise it. */
@@ -1542,12 +1550,7 @@ export class Agents implements seams.AgentPanel {
   private freshEyes(project: string, generation: number): void {
     const chat = this.withChat(project);
     // Only after a whole edit or its final pass (as the follow-ups judge it).
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
-    const whole = chat.entries.slice(asked + 1).some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
-    if (!whole) return;
+    if (!ranWholeEdit(chat.entries.slice(lastAsked(chat.entries) + 1))) return;
     // The edit is done, follow-ups and all.
     this.markBuilt(project);
     if (agentHooks.freshEyes === false || this.reviewed.get(project) === generation) return;

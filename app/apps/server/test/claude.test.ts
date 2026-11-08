@@ -6,6 +6,8 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
+import * as jobs from "../src/jobs.ts";
+
 import { agentHooks, Agents, editToolsFailed, readChat, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
 import * as modelChoice from "../src/model_choice.ts";
@@ -251,23 +253,24 @@ test("a turn its agent stopped answering is ended, and edit quitting ends the re
 
 test("a restart carries on the turns its quit cut short, in the same conversation; a quit long ago doesn't", async () => {
   const { home, project, agents, queries } = claudeProject("claude-restart");
+  // The turns as jobs.json lists them (kind `turn`).
+  const turns = () => jobs.list(home.home, "turn").filter(jobs.live);
   try {
     await agents.send(project, "Start the editing workflow", null, null);
     queries[0]!.push({ type: "system", subtype: "init", session_id: "session-1" });
     await settle();
     agents.shutdown();
     await settle();
-    const noted = `${home.home}/agent/running-turns.json`;
-    expect(fs.existsSync(noted)).toBe(true);
+    expect(turns().map((job) => job.project)).toEqual([project]);
 
     // The new process: the chat read back from disk.
     const after = agentsWith(home);
     // Before it carries on (serve.ts waits up to 20 s for sign-in), the cut turn counts as running: no restart cuts it again.
     expect(after.agents.hasRunningTurns()).toBe(true);
-    after.agents.resumeInterrupted();
+    await after.agents.resumeInterrupted();
     await settle();
-    // Noted again: the turn carrying on is running.
-    expect(JSON.parse(fs.readFileSync(noted, "utf8")).projects).toEqual([project]);
+    // Listed still: the turn carrying on is running.
+    expect(turns().map((job) => job.project)).toEqual([project]);
     expect(after.asked.length).toBe(1);
     expect(after.asked[0]!.options.resume).toBe("session-1");
     expect(after.asked[0]!.prompt).toStartWith("(Edit, automatically) Edit restarted while you were working");
@@ -275,35 +278,36 @@ test("a restart carries on the turns its quit cut short, in the same conversatio
     after.agents.shutdown();
     await settle();
 
-    // A crash (no shutdown) leaves the note as the turn started it.
+    // A crash (no shutdown) leaves the turn listed as it started it.
     const crashed = agentsWith(home);
     await crashed.agents.send(project, "Go on", null, null);
-    expect(JSON.parse(fs.readFileSync(noted, "utf8")).projects).toEqual([project]);
+    expect(turns().map((job) => job.project)).toEqual([project]);
     const back = agentsWith(home);
-    back.agents.resumeInterrupted();
+    await back.agents.resumeInterrupted();
     await settle();
     expect(back.asked[0]!.prompt).toStartWith("(Edit, automatically) Edit restarted");
     back.agents.shutdown();
     crashed.agents.shutdown();
     await settle();
 
-    // A turn that ended leaves nothing noted.
+    // A turn that ended leaves nothing listed.
     const done = agentsWith(home);
     await done.agents.send(project, "One more", null, null);
     done.queries[0]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
     done.queries[0]!.end();
     await settle();
     expect(done.agents.withChat(project).running).toBe(false);
-    expect(fs.existsSync(noted)).toBe(false);
+    expect(turns()).toEqual([]);
 
-    // Closed hours ago: nothing starts by itself.
-    fs.writeFileSync(noted, JSON.stringify({ at: Date.now() - 3 * 3_600_000, projects: [project] }));
+    // Closed hours ago (an older build's running-turns.json, taken into jobs.json): nothing starts by itself.
+    fs.writeFileSync(`${home.home}/agent/running-turns.json`, JSON.stringify({ at: Date.now() - 3 * 3_600_000, projects: [project] }));
     const later = agentsWith(home);
     expect(later.agents.hasRunningTurns()).toBe(false);
-    later.agents.resumeInterrupted();
+    await later.agents.resumeInterrupted();
     await settle();
     expect(later.asked.length).toBe(0);
-    expect(fs.existsSync(noted)).toBe(false);
+    expect(fs.existsSync(`${home.home}/agent/running-turns.json`)).toBe(false);
+    expect(turns()).toEqual([]);
   } finally {
     home.cleanup();
   }

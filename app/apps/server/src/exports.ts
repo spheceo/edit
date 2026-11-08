@@ -46,9 +46,9 @@ export interface StartExtra {
 }
 
 /**
- * An export that failed, kept in `<home>/export-failures.json` (the panel's
- * outcomes are in memory and gone with a restart, an update's too) until the
- * project's next export succeeds: what an update tries again, once, with the
+ * An export that failed, kept in jobs.json as its export job, `failed` (the
+ * panel's outcomes are in memory and gone with a restart, an update's too),
+ * until the project's next export: what an update tries again, once, with the
  * same settings (retry_after_update.ts).
  */
 export interface ExportFailure {
@@ -65,29 +65,19 @@ export interface ExportFailure {
   share?: boolean;
 }
 
-const FAILURES = "export-failures.json";
-
-/** The exports that failed and haven't succeeded since, by project. */
+/** The exports that failed and haven't been exported since, by project. */
 export function failedExports(home: string): Record<string, ExportFailure> {
-  try {
-    const value = JSON.parse(fs.readFileSync(join(home, FAILURES), "utf8")) as unknown;
-    return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, ExportFailure>) : {};
-  } catch {
-    return {};
+  const out: Record<string, ExportFailure> = {};
+  for (const job of jobs.list(home, "export")) {
+    if (job.state !== "failed") continue;
+    const args = job.args as { options?: ExportOptions; output?: string; name?: string; drive?: boolean; keepLocal?: boolean; share?: boolean };
+    if (args.options === undefined || typeof args.output !== "string") continue;
+    out[job.project] = {
+      project: job.project, name: args.name ?? job.project, options: args.options, output: args.output, error: job.error ?? "failed", at: job.updated_ms, build: job.build ?? "",
+      ...(args.drive === true ? { drive: true } : {}), ...(args.keepLocal === true ? { keepLocal: true } : {}), ...(args.share === true ? { share: true } : {}),
+    };
   }
-}
-
-function noteFailure(home: string, project: string, failure: ExportFailure | null): void {
-  const all = failedExports(home);
-  if (failure === null) {
-    if (all[project] === undefined) return;
-    delete all[project];
-  } else all[project] = failure;
-  try {
-    writeAtomic(join(home, FAILURES), JSON.stringify(all, null, 1));
-  } catch (error) {
-    diag.warn("export", `couldn't note the failed exports: ${diag.messageOf(error)}`);
-  }
+  return out;
 }
 
 interface Running {
@@ -1082,7 +1072,6 @@ export class ExportRegistry implements seams.Exports {
       }
       emit("done", 1, { seconds: (performance.now() - started) / 1000, bytes, drive: upload });
       this.held.delete(id);
-      if (this.home !== null) noteFailure(this.home, id, null);
       try {
         remember(this.home ?? store.home, id, {
           path: output,
@@ -1114,9 +1103,8 @@ export class ExportRegistry implements seams.Exports {
         };
         // The export is done: its file is whole and listed. The archive is a job of its own, so a restart
         // meanwhile sends the file again instead of exporting it again (Nov 3: Kroger, 77 minutes, started
-        // over from nothing by a restart during its upload).
-        jobs.end(this.home, running.key);
-        const archive = jobs.begin(this.home, "archive", id, { output, key, record });
+        // over from nothing by a restart during its upload); handed over in one write, so no crash falls between.
+        const archive = jobs.handOff(this.home, running.key, { kind: "archive", project: id, args: { output, key, record }, step: "uploading" });
         try {
           await archiveFinished(this.home ?? store.home, id, output, key, record);
         } catch (error) {
@@ -1132,16 +1120,11 @@ export class ExportRegistry implements seams.Exports {
     } else {
       diag.record("export", "export", took, `${project.name}: ${result.error}`);
       emit("failed", 0, { error: result.error });
-      // Kept for the next build to try again (retry_after_update.ts).
-      if (this.home !== null) {
-        noteFailure(this.home, id, {
-          project: id, name: project.name, options, output, error: result.error, at: nowMs(), build: BUILD,
-          ...(upload ? { drive: true } : {}), ...(running.keepLocal ? { keepLocal: true } : {}), ...(running.share === true ? { share: true } : {}),
-        });
-      }
+      // Kept, failed, for the next build to try again (retry_after_update.ts).
+      jobs.settle(this.home, running.key, "failed", { error: result.error, build: BUILD, args: { name: project.name, ...(upload ? { drive: true } : {}) } });
     }
     this.jobs.delete(id);
-    jobs.end(this.home, running.key);
+    if (!(result.ok === false && !running.cancelled)) jobs.end(this.home, running.key);
     if (running.snapshot !== null) fs.rmSync(running.snapshot, { force: true });
     if (upload && result.ok) {
       try {

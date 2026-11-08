@@ -1625,20 +1625,28 @@ function startRender(app: App, job: MapShotJob, projectId: string): MapRender {
       }
       mapRenders.delete(job.key);
       frameListeners.delete(jobShots(job));
-      for (const project of made.projects) {
-        jobs.end(app.store.home, jobs.keyOf("map", project, job.key));
-        progress.end("map", project, job.key, made.failed === null);
-      }
       // A render that only ran out of time (tiles slow to come on a busy Mac)
       // goes again once by itself, a minute later, from the frames it has: the
       // agent can't, without map_view's arguments (loop 7 R1: "I don't have them
-      // any more, and guessing would start a new paid map session").
-      if (made.failed !== null && /took too long|stopped rendering/u.test(made.failed) && !retriedMaps.has(job.key)) {
+      // any more, and guessing would start a new paid map session"). Its job
+      // stays listed meanwhile (waiting), so a restart in that minute starts it
+      // again; one that failed for good is kept as failed, with why; only a
+      // finished render is crossed off.
+      const again = made.failed !== null && /took too long|stopped rendering/u.test(made.failed) && !retriedMaps.has(job.key);
+      for (const project of made.projects) {
+        const key = jobs.keyOf("map", project, job.key);
+        if (made.failed === null) jobs.end(app.store.home, key);
+        else if (again) jobs.settle(app.store.home, key, "waiting", { step: "trying again in a minute" });
+        else jobs.settle(app.store.home, key, "failed", { error: made.failed });
+        progress.end("map", project, job.key, made.failed === null);
+      }
+      if (again) {
         retriedMaps.add(job.key);
         await timing.sleep(60_000);
         for (const project of made.projects) {
           const first = jobFirst(job);
           if (resumeMap(app, project, first)) diag.info("agent", `map ${job.key} for ${project}: its render ran out of time; going again by itself`);
+          else jobs.settle(app.store.home, jobs.keyOf("map", project, job.key), "failed", { error: `${made.failed}; its stand-in or job file went before it could go again` });
         }
       }
     })();

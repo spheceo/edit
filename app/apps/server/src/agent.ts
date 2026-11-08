@@ -18,6 +18,7 @@ import { attachedText, pictures as attachedPictures, savedAttached, type Attache
 import * as claude from "./claude.ts";
 import { ClaudeSupport, type SupportAction, type SupportStatus } from "./claude_support.ts";
 import * as diag from "./diag.ts";
+import * as jobs from "./jobs.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
@@ -210,14 +211,8 @@ function stillOn(chat: Chat, generation: number): boolean {
 const SESSION_GONE =
   "(Edit, automatically) The earlier conversation couldn't be picked up again (Claude Code no longer has it), so this is a new one: get_edit_context shows what's already done. My message:";
 
-/**
- * The running turns, noted in `<home>/agent` as each starts and ends and
- * every minute while any runs, so a quit or a crash leaves the ones it cut.
- */
-const RUNNING = "running-turns.json";
-
-/** Edit back this soon after it last noted its turns was a restart: they carry on. */
-export const RESUME_WITHIN_MS = 10 * 60_000;
+/** Edit back this soon after it last noted a turn (jobs.json kind `turn`) was a restart: it carries on. */
+export const RESUME_WITHIN_MS = jobs.TURN_RESUME_MS;
 /** How long after a turn ends the person is told, so Edit's own next turn (a follow-up, the fresh-eyes pass) has started by then. */
 const SETTLE_MS = 3_000;
 
@@ -295,7 +290,7 @@ class Lock {
 export class Agents implements seams.AgentPanel {
   /**
    * Remote updates (and the dev server's restarts) wait for all agent turns to finish, a cut one still to carry on
-   * included: for up to 20 s after a restart (serve.ts waits for sign-in) it is only noted in `RUNNING`, and a restart
+   * included: for up to 20 s after a restart (serve.ts waits for sign-in) it is only listed in jobs.json, and a restart
    * then cut it again (Nov 6).
    */
   hasRunningTurns(): boolean {
@@ -303,12 +298,17 @@ export class Agents implements seams.AgentPanel {
   }
 
   private carryingOn(): boolean {
-    try {
-      const noted = JSON.parse(fs.readFileSync(join(this.dir, RUNNING), "utf8")) as { at?: unknown; projects?: unknown };
-      return typeof noted.at === "number" && nowMs() - noted.at <= RESUME_WITHIN_MS && Array.isArray(noted.projects) && noted.projects.length > 0;
-    } catch {
-      return false;
-    }
+    return jobs.list(this.home(), "turn").some((job) => jobs.live(job) && !this.noted.has(job.key) && nowMs() - job.updated_ms <= RESUME_WITHIN_MS);
+  }
+
+  private home(): string | null {
+    return (this.store as { home?: string }).home ?? null;
+  }
+
+  /** A chat's turn in jobs.json. */
+  private turnKey(chat: string): string {
+    const project = projectOf(chat);
+    return jobs.keyOf("turn", project, chat === project ? "" : chat);
   }
 
   /** The projects whose agent turn is running now. */
@@ -352,8 +352,10 @@ export class Agents implements seams.AgentPanel {
   private claudeQueries = new Map<string, claude.Query>();
   /** Looks for stalled turns while any runs. */
   private watchdog: ReturnType<typeof setInterval> | null = null;
-  /** Edit is quitting: the turns it ends stay noted as running (`RUNNING`). */
+  /** Edit is quitting: the turns it ends stay listed as running (jobs.json kind `turn`). */
   private quitting = false;
+  /** The turn jobs this run listed (and so may cross off). */
+  private noted = new Set<string>();
   /** The SDK's `query`, the user's `claude` and its model list (tests put stand-ins here). */
   claudeQuery: (params: { prompt: string | AsyncIterable<claude.UserMessage>; options: claude.Options }) => Promise<claude.Query> = async (params) =>
     (await claude.sdk()).query(params);
@@ -1172,13 +1174,31 @@ export class Agents implements seams.AgentPanel {
     }
   }
 
-  /** Notes the running turns the user hasn't stopped (`RUNNING`), or that none runs. */
+  /**
+   * Notes the running turns the user hasn't stopped in jobs.json (kind
+   * `turn`): one starting is listed, one running has its minute noted (and
+   * its restarts forgiven: it got further), one that ended is crossed off.
+   * Only this run's: a turn the last run left stays listed for its resumer.
+   */
   private noteRunning(): void {
-    const path = join(this.dir, RUNNING);
-    const projects = [...this.chats].filter(([, chat]) => chat.running && !chat.halted).map(([project]) => project);
+    const home = this.home();
     try {
-      if (projects.length === 0) fs.rmSync(path, { force: true });
-      else writeAtomic(path, JSON.stringify({ at: nowMs(), projects }));
+      const running = new Set([...this.chats].filter(([, chat]) => chat.running && !chat.halted).map(([chat]) => this.turnKey(chat)));
+      for (const key of this.noted) {
+        if (running.has(key)) continue;
+        jobs.end(home, key);
+        this.noted.delete(key);
+      }
+      for (const [chat, one] of this.chats) {
+        if (!one.running || one.halted) continue;
+        const key = this.turnKey(chat);
+        if (this.noted.has(key)) jobs.touch(home, key);
+        else {
+          const project = projectOf(chat);
+          jobs.begin(home, "turn", project, { chat }, chat === project ? "" : chat, "working");
+          this.noted.add(key);
+        }
+      }
     } catch (error) {
       diag.warn("agent", `noting the running turns: ${diag.messageOf(error)}`);
     }
@@ -1220,32 +1240,32 @@ export class Agents implements seams.AgentPanel {
    * carry on, each as a new turn of the same conversation, when it noted
    * them within RESUME_WITHIN_MS (a restart). A server restart for a code
    * change then costs an agent its last tool call, not its whole task.
+   * serve.ts's resumer does this for every kind at once; this is the turns
+   * alone (tests).
    */
-  resumeInterrupted(): void {
-    const path = join(this.dir, RUNNING);
-    let noted: { at?: unknown; projects?: unknown };
-    try {
-      noted = JSON.parse(fs.readFileSync(path, "utf8")) as typeof noted;
-    } catch {
-      return;
-    } finally {
-      fs.rmSync(path, { force: true });
-    }
-    if (typeof noted.at !== "number" || !Array.isArray(noted.projects) || nowMs() - noted.at > RESUME_WITHIN_MS) return;
-    for (const project of noted.projects) {
-      if (typeof project !== "string" || this.store.get(projectOf(project)) === null) continue;
-      diag.info("agent", `${project}: carrying on the turn the restart cut short`);
-      // The "Edit was closed" note is answered now: no longer a problem to show.
-      const chat = this.withChat(project);
-      for (const item of chat.entries) {
-        if (item.kind === "error" && item.status !== "done" && item.text.startsWith("Edit was closed during this turn")) {
-          this.upsert(project, { ...item, status: "done", detail: item.detail ?? item.text, text: "Edit restarted; the agent carried on where it stopped." });
-        }
+  resumeInterrupted(): Promise<void> {
+    const home = this.home();
+    return home === null ? Promise.resolve() : jobs.resume(home, { turn: (job) => this.resumeTurn(job) }, ["turn"]);
+  }
+
+  /** One turn the last run left running, carried on (jobs.ts resumer for `turn`). */
+  resumeTurn(job: jobs.Job): void {
+    const chat = typeof job.args.chat === "string" ? job.args.chat : job.project;
+    if (nowMs() - job.updated_ms > RESUME_WITHIN_MS) throw new jobs.Gone(`Edit was away ${diag.human(nowMs() - job.updated_ms)}, not a restart`);
+    if (this.store.get(projectOf(chat)) === null) throw new jobs.Gone("the project is gone");
+    if (this.withChat(chat).running) return;
+    diag.info("agent", `${chat}: carrying on the turn the restart cut short`);
+    // Listed still: as the turn carried on starts, this run takes the listing over (noteRunning), and crosses it off when it ends.
+    // The "Edit was closed" note is answered now: no longer a problem to show.
+    const one = this.withChat(chat);
+    for (const item of one.entries) {
+      if (item.kind === "error" && item.status !== "done" && item.text.startsWith("Edit was closed during this turn")) {
+        this.upsert(chat, { ...item, status: "done", detail: item.detail ?? item.text, text: "Edit restarted; the agent carried on where it stopped." });
       }
-      void this.send(project, RESUMED, null, null).catch((error: unknown) => {
-        diag.warn("agent", `carrying on the turn in ${project}: ${diag.messageOf(error)}`);
-      });
     }
+    void this.send(chat, RESUMED, null, null).catch((error: unknown) => {
+      diag.warn("agent", `carrying on the turn in ${chat}: ${diag.messageOf(error)}`);
+    });
   }
 
   private finish(project: string, error: string | null): void {

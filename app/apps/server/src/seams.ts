@@ -843,7 +843,9 @@ export interface Agents {
   /** Edit is quitting: running turns end and say so (and are noted to carry on), and the agents' processes are stopped. */
   shutdown?(): void;
   /** Edit is back: the turns its last quit cut short carry on, when that was a restart (minutes ago). */
-  resumeInterrupted?(): void;
+  resumeInterrupted?(): Promise<void>;
+  /** One turn the last run left running, carried on (jobs.ts's resumer for `turn`). */
+  resumeTurn?(job: import("./jobs.ts").Job): void;
 }
 
 /**

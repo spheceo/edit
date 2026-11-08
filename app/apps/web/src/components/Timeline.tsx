@@ -412,8 +412,9 @@ export function Timeline() {
       // Empty space: drag out a box to select clips (⇧/⌘ adds to the selection).
       const additive = event.shiftKey || event.metaKey || event.ctrlKey;
       if (!additive) state.select([]);
-      // A gap in the whole edit (nothing on any track there): selected, for Backspace to close.
-      const gap = additive ? null : gapAt(state.project!, Math.floor(xToFrame(x)));
+      // A gap between two clips on this track: selected, for Backspace to close (everything after moves up).
+      const row = rowAt(y);
+      const gap = additive || !row || row.track.locked ? null : gapAt(state.project!, row.track.id, Math.floor(xToFrame(x)));
       if (gap !== null) state.selectGap(gap);
       drag.current = { kind: "marquee", x0: x, y0: y, x, y, base: additive ? state.selection : [] };
       return;

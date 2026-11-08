@@ -590,7 +590,7 @@
     "name": "delete_clips"
   },
   {
-    "description": "Close the timeline's gaps (black and silence: nothing on any track plays). The one at `at`, or every one in the edit: everything after a gap slides back by its length, all tracks together (picture and sound stay in sync; in/out points move too). For a gap left where something was removed, or when the user asks to remove a gap.",
+    "description": "Close a gap (black and silence, or one between two clips). Everything after slides back, all tracks together (picture and sound stay in sync; in/out points move too). Without `at`, every stretch where nothing on any track plays. With `at`, the gap there: in the whole edit, else between two clips on `track` (the main footage's by default), taken out of the whole timeline, cutting what plays across it (a music bed), as the timeline's Backspace on a clicked gap does. For a gap left where something was removed, or when the user asks to remove a gap or silence.",
     "inputSchema": {
       "properties": {
         "at": {
@@ -599,6 +599,10 @@
         },
         "project_id": {
           "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "track": {
+          "description": "With at: the track whose gap between two clips to close (a track id); default the main footage track.",
           "type": "string"
         }
       },
@@ -2833,7 +2837,7 @@
   },
   {
     "name": "highlight_evidence",
-    "description": "Draw red marker ink over real screenshot words. on is commentary_card\u2019s photo clip id; rects are exact image-pixel boxes x/y/width/height. start/end in timeline frames stay inside that card. Strokes reveal sequentially, Multiply keeps the source\u2019s black text visible, and the marks inherit its slide/push and end with its shot. Does not alter or invent source text. dark:true for a dark post (X, dark mode: white words on black): the red goes behind the words with Screen, so they stay white on a red bar sweeping left to right, as the reference's tweets are highlighted.",
+    "description": "Draw red marker ink over real screenshot words. on is commentary_card\u2019s photo clip id; rects are exact image-pixel boxes x/y/width/height. start/end in timeline frames stay inside that card. Strokes reveal sequentially, Multiply keeps the source\u2019s black text visible, and the marks inherit its slide/push and end with its shot. Does not alter or invent source text. dark:true for a dark post (X, dark mode: white words on black): the red goes behind the words with Screen, so they stay white on a red bar sweeping left to right, as the reference's tweets are highlighted. One rectangle per line of the quote: a rectangle over several lines is split into one mark per line (the lines read off the screenshot).",
     "inputSchema": {
       "type": "object",
       "properties": {

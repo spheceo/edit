@@ -736,26 +736,35 @@ export function duplicateClips(project: Project, ids: Iterable<string>): string[
 }
 
 /**
- * The empty stretch of the timeline at `frame`: where nothing on any track
- * plays, before the last clip's end (frames, end exclusive); null on a clip.
- * The server's close_gaps finds the same (edit_tools.ts gapsOf).
+ * The empty stretch at `frame` on `track` (frames, end exclusive): from the
+ * end of its clip before to the start of its clip after; null on a clip or
+ * after its last one. Clicked on in the timeline, Backspace closes it.
  */
-export function gapAt(project: Project, frame: number): [number, number] | null {
+export function gapAt(project: Project, track: string, frame: number): [number, number] | null {
   let start = 0;
   let end = Number.POSITIVE_INFINITY;
-  let last = 0;
   for (const clip of project.clips) {
-    last = Math.max(last, clipEnd(clip));
+    if (clip.track !== track) continue;
     if (clip.start <= frame && clipEnd(clip) > frame) return null;
     if (clipEnd(clip) <= frame) start = Math.max(start, clipEnd(clip));
     if (clip.start > frame) end = Math.min(end, clip.start);
   }
-  return frame < last && end > start ? [start, end] : null;
+  return Number.isFinite(end) && end > start ? [start, end] : null;
 }
 
-/** Closes a gap: every clip after it slides back by its length, all tracks together; in/out points move too. */
+/**
+ * Takes [start, end) out of the whole timeline (a ripple delete of a gap):
+ * what plays across its edges on other tracks (a music bed, a subtitle) is
+ * cut there, what's inside goes, and everything after slides back by its
+ * length, all tracks together; in/out points move too. Marc, Nov 8: "Being
+ * able to select silence and delete it so all the elements afterwards move up
+ * would be really helpful." The server's remove_time does the same.
+ */
 export function closeGap(project: Project, [start, end]: [number, number]) {
-  if (project.clips.some((clip) => clip.start < end && clipEnd(clip) > start)) return;
+  if (end <= start) return;
+  splitAt(project, start);
+  splitAt(project, end);
+  project.clips = project.clips.filter((clip) => trackOf(project, clip.track)?.locked || !(clip.start >= start && clipEnd(clip) <= end));
   const length = end - start;
   for (const clip of project.clips) if (clip.start >= end) clip.start -= length;
   for (const key of ["mark_in", "mark_out"] as const) {

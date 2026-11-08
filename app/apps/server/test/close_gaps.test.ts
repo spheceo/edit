@@ -1,7 +1,7 @@
 // Sphe, Nov 8: "when there is a gap in the edit say after something was removed we should be able to tell the agent to remove that gap".
 import { expect, test } from "bun:test";
 
-import { closeGaps, gapsOf } from "../src/edit_tools.ts";
+import { closeGaps, gapOnTrack, gapsOf } from "../src/edit_tools.ts";
 import type { Clip } from "../src/model.ts";
 import { clip, project as made } from "./helpers/model.ts";
 
@@ -22,4 +22,18 @@ test("a timeline's gaps are where nothing on any track plays, and closing one sl
   expect(p.clips.find((one) => one.id === "two")!.start).toBe(120);
   expect(p.mark_out).toBe(160);
   expect(gapsOf(p)).toEqual([]);
+});
+
+test("a gap between two clips on one track, with something else across it, is still that track's gap", () => {
+  const p = made();
+  const v = p.tracks.find((track) => track.kind === "video")!.id;
+  p.clips.push(
+    clip({ id: "one", track: v, start: 0, duration: 100, type: "solid" }),
+    clip({ id: "two", track: v, start: 150, duration: 50, type: "solid" }),
+    clip({ id: "bed", track: "music", start: 0, duration: 300, type: "solid" }),
+  );
+  expect(gapsOf(p)).toEqual([]);
+  expect(gapOnTrack(p, v, 120)).toEqual([100, 150]);
+  expect(gapOnTrack(p, v, 50)).toBeNull();
+  expect(gapOnTrack(p, v, 250)).toBeNull();
 });

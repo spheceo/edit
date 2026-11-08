@@ -5,6 +5,7 @@ import * as commentaryGraphics from "./commentary_graphics.ts";
 import { importPaths } from "./import.ts";
 import { registerTool, text } from "./mcp/registry.ts";
 import type { Keyframe, Project, VideoClip } from "./model.ts";
+import { native } from "./native/index.ts";
 import { addTrack, clipEnd, freshId, mediaOf, sample } from "./project.ts";
 import { join } from "./paths.ts";
 import { stableStringify } from "./stable.ts";
@@ -16,6 +17,48 @@ export function rectOf(value: unknown, width: number, height: number): Rect {
   const r = value as Partial<Rect> | null;
   if (r == null || ![r.x, r.y, r.width, r.height].every((v) => typeof v === "number" && Number.isFinite(v)) || r.x! < 0 || r.y! < 0 || r.width! < 2 || r.height! < 2 || r.x! + r.width! > width || r.y! + r.height! > height) throw new Error("highlight rectangles must fit inside the original screenshot (x/y/width/height in image pixels)");
   return r as Rect;
+}
+
+/** A line of text read off the screenshot: its box as shares of the picture, (x0, y0, x1, y1). */
+export interface Line { b: [number, number, number, number]; t: string }
+
+/**
+ * One mark per line of text: a rectangle that covers two or more lines read
+ * off the screenshot becomes one rectangle per line, each fitted to that
+ * line's words inside it (Marc, Nov 8, on one big highlight over a four-line
+ * quote: "We should have 4 individual highlighter effects here instead of one
+ * big one"). A rectangle over one line, or where nothing was read, stays.
+ */
+export function perLine(rects: Rect[], lines: readonly Line[], width: number, height: number): Rect[] {
+  const out: Rect[] = [];
+  for (const r of rects) {
+    const inside = lines
+      .map((line) => ({ x0: line.b[0] * width, y0: line.b[1] * height, x1: line.b[2] * width, y1: line.b[3] * height }))
+      .filter((line) => {
+        const cx = (line.x0 + line.x1) / 2;
+        const cy = (line.y0 + line.y1) / 2;
+        return cx >= r.x && cx <= r.x + r.width && cy >= r.y && cy <= r.y + r.height;
+      })
+      .sort((a, b) => a.y0 - b.y0);
+    // Words read as two boxes on one line are one line.
+    const rows: { x0: number; y0: number; x1: number; y1: number }[] = [];
+    for (const line of inside) {
+      const last = rows.at(-1);
+      if (last !== undefined && (line.y0 + line.y1) / 2 < last.y1 - (last.y1 - last.y0) * 0.3) {
+        last.x0 = Math.min(last.x0, line.x0); last.x1 = Math.max(last.x1, line.x1); last.y0 = Math.min(last.y0, line.y0); last.y1 = Math.max(last.y1, line.y1);
+      } else rows.push({ ...line });
+    }
+    if (rows.length < 2) { out.push(r); continue; }
+    for (const row of rows) {
+      const pad = (row.y1 - row.y0) * 0.15;
+      const x0 = Math.max(r.x, row.x0 - pad);
+      const x1 = Math.min(r.x + r.width, row.x1 + pad);
+      const y0 = Math.max(0, Math.max(r.y - pad, row.y0 - pad));
+      const y1 = Math.min(height, Math.min(r.y + r.height + pad, row.y1 + pad));
+      if (x1 - x0 >= 2 && y1 - y0 >= 2) out.push({ x: Math.round(x0), y: Math.round(y0), width: Math.round(x1 - x0), height: Math.round(y1 - y0) });
+    }
+  }
+  return out;
 }
 
 function crc32(bytes: Uint8Array): number {
@@ -116,7 +159,15 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
   const p = app.store.get(projectId)?.project; if (!p || typeof args.on !== "string") throw new Error("on is the screenshot card clip id");
   const parent = on(p, args.on); const media = mediaOf(p, parent.media)!;
   if (!Array.isArray(args.rects) || args.rects.length < 1 || args.rects.length > 8) throw new Error("rects must contain 1–8 highlight rectangles");
-  const rects = args.rects.map((v) => rectOf(v, media.width, media.height));
+  const given = args.rects.map((v) => rectOf(v, media.width, media.height));
+  // One mark per line of the quote, whatever rectangles were given (the lines read off the screenshot).
+  let lines: Line[] = [];
+  try {
+    lines = ((await native().screenTextDetect(media.path, [media.width ?? 1920, media.height ?? 1080], [0]))[0] ?? []) as Line[];
+  } catch {
+    // Nothing read (no text finder here): the rectangles as given.
+  }
+  const rects = perLine(given, lines, media.width ?? 1920, media.height ?? 1080).slice(0, 16);
   const start = typeof args.start === "number" && Number.isInteger(args.start) ? args.start : parent.start;
   const end = typeof args.end === "number" && Number.isInteger(args.end) ? args.end : clipEnd(parent);
   // A dark post (X, a dark-mode page) keeps its white words white over the red
@@ -130,10 +181,11 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
   const horror = p.style === "horror";
   const paths = rects.map((r, i) => { const path = join(dir, `ink-${Date.now()}-${i}.png`); fs.writeFileSync(path, (horror ? roughMarkerPng : markerPng)(media.width, media.height, r)); return path; });
   const [, ids, errors] = await importPaths(app, projectId, paths, false, "agent"); if (ids.length !== paths.length) throw new Error(errors.join("; "));
+  let dropped = 0;
   const [, made] = await app.store.update(projectId, "agent", (project) => {
     const original = on(project, args.on as string); const made: string[] = [];
     for (let i = 0; i < rects.length; i++) {
-      const r = rects[i]!; const at = start + i * draw; if (at >= end) break;
+      const r = rects[i]!; const at = start + i * draw; if (at >= end) { dropped = rects.length - i; break; }
       const offset = at - original.start; const duration = end - at; const keyframes: Record<string, Keyframe[]> = {};
       // Bake the parent's Bezier move at timeline frames, so the mark sticks
       // to the source throughout its slide/push and never outlives that shot.
@@ -149,7 +201,13 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
     }
     return made;
   });
-  return text(stableStringify({ clips: made, on: args.on, note: "Editable Multiply ink over the original screenshot; reveal follows source coordinates and inherits its motion. Confirm the rectangles cover the exact quoted words." }));
+  return text(stableStringify({
+    clips: made,
+    on: args.on,
+    ...(rects.length > given.length ? { per_line: `the ${given.length} rectangle(s) given cover ${rects.length} lines of text: one mark per line` } : {}),
+    ...(dropped > 0 ? { not_placed: `${dropped} mark(s) would start after the card ends: lengthen the card or give fewer, larger draw_frames` } : {}),
+    note: "Editable Multiply ink over the original screenshot; reveal follows source coordinates and inherits its motion. Confirm the rectangles cover the exact quoted words.",
+  }));
 });
 
 registerTool("commentary_tweet", async ({ app, args, projectId }) => {

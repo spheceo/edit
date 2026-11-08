@@ -264,22 +264,34 @@ it("adds subtitles with glow and no name only in subtitle projects", () => {
   expect(subtitle.style.label).toBeUndefined();
 });
 
-// Sphe, Nov 8: "we can click on that gap between two clips and backspace".
-it("a gap is where nothing on any track plays, and closing it slides everything after it back", async () => {
+// Sphe, Nov 8: "we can click on that gap between two clips and backspace"; Marc: "Being able to select silence and
+// delete it so all the elements afterwards move up would be really helpful."
+it("a track's gap, deleted, comes out of the whole timeline: a music bed across it is cut, everything after moves up", async () => {
   const { gapAt, closeGap } = await import("./edit");
   const project = {
+    settings: { width: 1920, height: 1080, fps: 30 },
+    tracks: [{ id: "v1", kind: "video" }, { id: "a1", kind: "audio" }, { id: "m", kind: "audio" }],
     clips: [
-      { id: "a", track: "v1", start: 0, duration: 100 },
-      { id: "s", track: "a1", start: 80, duration: 40 },
-      { id: "b", track: "v1", start: 150, duration: 50 },
+      { id: "a", track: "v1", start: 0, duration: 100, type: "video", media: "x", source_in: 0, speed: 1, fade_in: 0, fade_out: 0 },
+      { id: "b", track: "v1", start: 150, duration: 50, type: "video", media: "x", source_in: 10, speed: 1, fade_in: 0, fade_out: 0 },
+      { id: "s", track: "a1", start: 90, duration: 20, type: "audio", media: "y", source_in: 0, speed: 1, fade_in: 0, fade_out: 0 },
+      { id: "bed", track: "m", start: 0, duration: 300, type: "audio", media: "z", source_in: 0, speed: 1, fade_in: 0, fade_out: 0 },
     ],
+    media: [],
+    markers: [],
     mark_out: 190,
-  } as unknown as Parameters<typeof gapAt>[0];
-  expect(gapAt(project, 50)).toBeNull();
-  expect(gapAt(project, 130)).toEqual([120, 150]);
-  expect(gapAt(project, 250)).toBeNull();
-  closeGap(project, [120, 150]);
-  expect(project.clips.find((clip) => clip.id === "b")!.start).toBe(120);
-  expect(project.mark_out).toBe(160);
-  expect(gapAt(project, 130)).toBeNull();
+  } as unknown as Parameters<typeof closeGap>[0];
+  expect(gapAt(project, "v1", 50)).toBeNull();
+  expect(gapAt(project, "v1", 130)).toEqual([100, 150]);
+  expect(gapAt(project, "v1", 250)).toBeNull();
+  closeGap(project, [100, 150]);
+  const clip = (id: string) => project.clips.find((one) => one.id === id)!;
+  expect(clip("b").start).toBe(100);
+  // The sound that ran into the gap ends at its start; the bed plays on without the cut stretch.
+  expect(clip("s").start + clip("s").duration).toBe(100);
+  expect(clip("bed").duration).toBe(100);
+  const rest = project.clips.find((one) => one.track === "m" && one.id !== "bed")!;
+  expect([rest.start, rest.duration]).toEqual([100, 150]);
+  expect(project.mark_out).toBe(140);
+  expect(gapAt(project, "v1", 120)).toBeNull();
 });

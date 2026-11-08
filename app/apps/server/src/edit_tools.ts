@@ -2674,21 +2674,42 @@ export function gapsOf(project: Project): [number, number][] {
  */
 async function closeGapsTool({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const at = num(args.at);
+  const track = str(args.track);
   const [, closed] = await app.store.update(projectId, ORIGIN, (project) => {
     const fps = fpsOf(project);
-    let gaps = gapsOf(project);
-    if (at !== null) {
-      const frame = Math.round(at * fps);
-      // The gap there, else the nearest within a second.
-      const near = gaps.filter(([start, end]) => frame >= start - fps && frame <= end + fps).sort((a, b) => Math.abs((a[0] + a[1]) / 2 - frame) - Math.abs((b[0] + b[1]) / 2 - frame));
-      gaps = near.slice(0, 1);
+    const label = ([start, end]: [number, number]) => `${fixed(start / fps, 2)}–${fixed(end / fps, 2)} s`;
+    if (at === null) {
+      // Every gap in the whole edit (nothing on any track there).
+      const gaps = gapsOf(project);
+      return [gaps.map(label), closeGaps(project, gaps.map(([start, end]) => ({ start, duration: end - start }) as Clip)), fps] as const;
     }
-    const spans = gaps.map(([start, end]) => ({ start, duration: end - start }) as Clip);
-    return [gaps.map(([start, end]) => `${fixed(start / fps, 2)}–${fixed(end / fps, 2)} s`), closeGaps(project, spans), fps] as const;
+    // The gap there: in the whole edit, else on `track` (the main footage's by default), taken out of the whole
+    // timeline as the timeline's Backspace does: what plays across it (a music bed) is cut, everything after moves up.
+    const frame = Math.round(at * fps);
+    const whole = gapsOf(project).find(([start, end]) => frame >= start - fps && frame <= end + fps);
+    const on = track ?? project.tracks.find((one) => one.kind === "video")?.id ?? null;
+    const gap = whole ?? (on === null ? null : gapOnTrack(project, on, frame));
+    if (gap === null) return [[], 0, fps] as const;
+    const done = cutTime(project, gap[0], gap[1]);
+    return [[label(gap)], done.frames, fps] as const;
   });
   const [where, frames, fps] = closed;
-  if (where.length === 0) return text(at === null ? "no gaps: something plays at every moment of the edit" : `no gap at ${fixed(at, 2)} s`);
-  return text(`closed ${where.length} gap${where.length === 1 ? "" : "s"} (${where.join(", ")}): ${fixed(frames / fps, 2)} s, everything after slid back`);
+  if (where.length === 0) return text(at === null ? "no gaps: something plays at every moment of the edit" : `no gap at ${fixed(at, 2)} s${track === null ? "" : ` on ${track}`}`);
+  return text(`closed ${where.length} gap${where.length === 1 ? "" : "s"} (${where.join(", ")}): ${fixed(frames / fps, 2)} s, everything after moved up`);
+}
+
+/** The empty stretch on `track` at `frame` (frames), from its clip before to its clip after; null on a clip or after its last. */
+export function gapOnTrack(project: Project, track: string, frame: number): [number, number] | null {
+  let start = 0;
+  let end = Number.POSITIVE_INFINITY;
+  for (const clip of project.clips) {
+    if (clip.track !== track) continue;
+    if (clip.start <= frame && clipEnd(clip) > frame) return null;
+    if (clipEnd(clip) <= frame) start = Math.max(start, clipEnd(clip));
+    if (clip.start > frame) end = Math.min(end, clip.start);
+  }
+  if (!Number.isFinite(end) || end <= start) return null;
+  return [start, end];
 }
 
 /** Closes the spans `gone` left where nothing else plays: everything after each slides back by its length, all tracks together. Returns frames closed. */

@@ -2645,6 +2645,14 @@ export async function wholeTranscript(source: string, target: string, scratch: s
   }
   if (!Array.isArray(whole.words)) return false;
   const [start, end] = [Number(from) / 1000, to === undefined ? Number.POSITIVE_INFINITY : Number(to) / 1000];
+  // A shared transcript that stops before the excerpt does isn't its words: the excerpt is heard itself (Killer
+  // Pastor in dev, Nov 8: its recording's shared transcript stopped at 3 minutes, and three excerpts later in it
+  // were given none).
+  const last = whole.words.at(-1)?.end ?? 0;
+  if (Number.isFinite(end) ? last < Math.min(end, start + 30) : last < start) {
+    diag.warn("cloud", `${source}: its recording's shared transcript stops at ${Math.round(last)} s, before this excerpt: heard on its own`);
+    return false;
+  }
   const words = whole.words
     .filter((word) => word.end > start && word.start < end)
     .map((word) => ({ ...word, start: Math.max(word.start - start, 0), end: Math.max(word.end - start, 0) }));

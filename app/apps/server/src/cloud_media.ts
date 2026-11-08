@@ -162,6 +162,11 @@ function originalFor(cache: string, key: string): Promise<string> {
   return here !== null ? Promise.resolve(here) : getUrl(key, 6 * HOUR);
 }
 
+/** This Mac's pieced proxies' context (where pieces are kept, how they're made): for native_preview.ts. */
+export function piecesHere(cache: string): pieces.Context {
+  return piecesContext(cache);
+}
+
 function piecesContext(cache: string): pieces.Context {
   let context = piecesContexts.get(cache);
   if (context === undefined) {

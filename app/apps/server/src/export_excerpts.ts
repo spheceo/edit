@@ -161,7 +161,7 @@ async function lengthOf(path: string, seconds: number): Promise<number | string>
 }
 
 /** Cuts seconds `from..to` of `url`'s picture into `out`, copied; `signal` ends FFmpeg. */
-async function cut(url: string, from: number, to: number, out: string, signal: AbortSignal): Promise<void> {
+export async function cut(url: string, from: number, to: number, out: string, signal: AbortSignal): Promise<void> {
   await tools.run(
     [
       tools.ffmpeg(),

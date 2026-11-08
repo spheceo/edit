@@ -611,6 +611,11 @@ export function ensureAudio(context: Context, base: string, layout: Layout, n: n
 }
 
 /** Whether piece `n`'s picture and sound are both on this Mac. */
+/** Whether piece `n`'s picture is on this Mac (made here or fetched). */
+export function pictureHere(context: Context, base: string, n: number): boolean {
+  return isFile(context.local(videoKey(base, n)));
+}
+
 function made(context: Context, base: string, layout: Layout, n: number): boolean {
   return isFile(context.local(videoKey(base, n))) && (layout.audio === null || isFile(context.local(audioKey(base, n))));
 }

@@ -48,6 +48,7 @@ import { carryAnalysis, localPath, readLocalOriginals, uploadingNow, writeLocalO
 import { createHash } from "node:crypto";
 
 import { pinned } from "./export_excerpts.ts";
+import { evicted as nativeEvicted } from "./native_preview.ts";
 import { openedTimes } from "./opened.ts";
 import { join } from "./paths.ts";
 import * as research from "./research.ts";
@@ -468,6 +469,8 @@ export function cleanCache(
         diag.warn("cache", `couldn't remove ${path}: ${diag.messageOf(error)}`);
         return;
       }
+      // A copy Edit.app's window reads: its page asks where to read from again (native_preview.ts).
+      nativeEvicted(app, path);
     }
     report.files += 1;
     report.bytes += bytes;

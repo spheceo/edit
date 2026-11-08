@@ -11,6 +11,7 @@ import * as localPreviews from "../src/local_previews.ts";
 import { nativeSources } from "../src/native_preview.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
 import { fixtureHome } from "./helpers/home.ts";
+import { clip } from "./helpers/model.ts";
 
 test("the cache loses rebuildable files of media nobody uses and old half-written ones, never paid analysis or what's in use", async () => {
   const { dir, app, store, cleanup } = fixtureHome("cache-clean");
@@ -271,6 +272,7 @@ test("a whole preview the native player reads stays through every clean under th
       await store.update(id, "test", (project) => {
         project.media.push({ id: "m1", name: `${name}.mp4`, path: playbackPath(proxy, app.port), kind: "video", duration: 1, fps: 30, width: 2, height: 2, has_audio: false,
           cloud: { source: `drive:${name}File01`, original: `edit/originals/drive/${name}File01/${name}.mp4`, proxy, size: 1000 } });
+        project.clips.push(clip({ id: "c1", type: "video", track: "v1", media: "m1", start: 0, duration: 30, source_in: 0 }));
       });
       const local = cloudMedia.localPath(cache, proxy);
       fs.mkdirSync(local.slice(0, local.lastIndexOf("/")), { recursive: true });
@@ -281,7 +283,7 @@ test("a whole preview the native player reads stays through every clean under th
       proxies[name] = proxy;
     }
     const sources = async (name: string) =>
-      ((await nativeSources(app, store.get(ids[name]!)!.project).json()) as { sources: Record<string, string> }).sources.m1;
+      ((await (await nativeSources(app, store.get(ids[name]!)!.project)).json()) as { sources: Record<string, string> }).sources.m1;
     // The native player reads both from here.
     expect(await sources("open")).toBe(copies.open!);
     expect(await sources("stale")).toBe(copies.stale!);
@@ -292,7 +294,13 @@ test("a whole preview the native player reads stays through every clean under th
     expect(cleanCache(app, false, Date.now(), { cacheBytes: 1e12, freeBytes: 0, free: 1e12 }).files).toBe(0);
     expect(fs.existsSync(copies.open!) && fs.existsSync(copies.stale!)).toBe(true);
     // Past it: the one opened three days ago goes; the one open an hour ago stays, however far past.
+    const heard: unknown[] = [];
+    const stop = store.subscribe((event) => heard.push(event));
     const report = cleanCache(app, false, Date.now(), { cacheBytes: 0, freeBytes: 0, free: 1e12 });
+    stop();
+    // The window reading it hears so (its page asks for its sources again), not at its next jump.
+    expect(heard).toContainEqual({ type: "native-sources", id: ids.stale });
+    expect(heard).not.toContainEqual({ type: "native-sources", id: ids.open });
     expect(report.removed).toContain(copies.stale!);
     expect(fs.existsSync(copies.stale!)).toBe(false);
     expect(fs.existsSync(copies.open!)).toBe(true);

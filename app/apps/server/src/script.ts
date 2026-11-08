@@ -30,6 +30,8 @@ import * as ranged from "./ranged_download.ts";
 import * as seams from "./seams.ts";
 import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
+import * as proc from "./effect/proc.ts";
+import { runPromise } from "./effect/runtime.ts";
 import type { Transcript, Word } from "./transcribe.ts";
 import { MODEL as CAPTIONS_MODEL } from "./youtube_captions.ts";
 import * as youtube from "./youtube.ts";
@@ -37,6 +39,7 @@ import * as posts from "./posts.ts";
 import { LINK_PREFIX as FINISHED_LINK, reviewCode, reviewOf } from "./finished.ts";
 import { finishCase, pendingCase } from "./case_insertion.ts";
 import * as durableJobs from "./jobs.ts";
+import * as steps from "./import_steps.ts";
 import { THIS_MACHINE } from "./machine.ts";
 
 export type { DriveHead, Excerpt, Parsed } from "./seams.ts";
@@ -54,14 +57,8 @@ export const timing = {
   retryWaits: [60_000, 5 * 60_000],
 };
 
-/**
- * Whether a download's failure may pass if tried again later (Edit does that
- * by itself), or needs the person (a file that's private, gone or blocked:
- * they give another link, or go on without it).
- */
-export function passing(error: string): boolean {
-  return !/isn't shared|can't find this file|deleted, or in the trash|Private video|This video is private|confirm your age|age.restricted|members.only|Join this channel|not available in your country|blocked it in your country|Video unavailable|has been removed|has been terminated|no longer available|download limit for this file|isn't a Drive file|isn't a YouTube video|has no bytes|A shared folder master|is not uploaded yet|pictures only, with no video|only shown to someone signed in/i.test(error);
-}
+/** Whether a failure may pass if tried again (import_steps.ts `whyOf`: anything but the person's). */
+export const passing = steps.passing;
 
 /** The footage files a script names, with what the person knows each by (its case, its file name). */
 export function footageLabel(project: Project, file: string): string {
@@ -76,8 +73,7 @@ export function footageLabel(project: Project, file: string): string {
 function waitingFor(app: App, id: string, file: string): Project {
   const live = app.store.get(id);
   if (live === null) throw new Error("no such project");
-  const job = app.scripts.get(id);
-  if (job !== null && RUNNING.includes(job.state)) throw new Error("The import is still working: wait for it to finish first.");
+  if (app.scripts.working(id)) throw new Error("The import is still working: wait for it to finish first.");
   if (laidOut(live.project)) throw new Error("This edit is already laid out: add footage to it with insert_compilation_case, or import it as media.");
   if (!(live.project.script?.blocks ?? []).some((block) => block.kind === "footage" && block.file === file)) throw new Error(`The script has no footage file ${file}.`);
   return live.project;
@@ -106,7 +102,7 @@ export async function replaceFootage(app: App, id: string, file: string, url: st
 /** Goes on without footage file `file`: its ranges leave the script, the rest is laid out. The person's "proceed without it". */
 export async function skipFootage(app: App, id: string, file: string): Promise<void> {
   // "*": every file it couldn't get, in one go (each skip starts the import again, so one at a time the second was refused).
-  const files = file === "*" ? (app.scripts.get(id)?.files ?? []).filter((one) => one.state === "failed").map((one) => one.file) : [file];
+  const files = file === "*" ? (app.scripts.get(id)?.files ?? []).filter((one) => one.state === "failed" || one.state === "waiting").map((one) => one.file) : [file];
   if (files.length === 0) throw new Error("Nothing is waiting to be skipped.");
   const project = waitingFor(app, id, files[0]!);
   if (!(project.script?.blocks ?? []).some((block) => block.kind === "footage" && !files.includes(block.file))) {
@@ -1268,37 +1264,109 @@ function shownJob(job: ScriptJob): ScriptJob {
     if (file.total !== undefined) shown.total = file.total;
     shown.state = file.state;
     if (file.error !== undefined) shown.error = file.error;
+    if (file.why !== undefined) shown.why = file.why;
     if (file.retry_at !== undefined) shown.retry_at = file.retry_at;
+    if (file.cut !== undefined) shown.cut = file.cut;
     return shown as unknown as FileJob;
   });
-  return job.error === undefined ? { state: job.state, files } : { state: job.state, error: job.error, files };
+  const out: ScriptJob = { state: job.state, files };
+  if (job.error !== undefined) out.error = job.error;
+  if (job.retry_at !== undefined) out.retry_at = job.retry_at;
+  if (job.after !== undefined && job.after.length > 0) out.after = job.after.map((one) => ({ ...one }));
+  return out;
 }
 
-/** Script imports in progress, per project. */
+/** A file's excerpts once fetched, for the ranges they were cut for: a resumed import uses them instead of fetching the file again. */
+interface Kept {
+  ranges: [number, number][];
+  excerpts: Excerpt[];
+}
+
+/** What a script import keeps in its job (kind `case`): the job as shown, and each fetched file's excerpts. */
+interface CaseArgs {
+  request?: string;
+  import?: ScriptJob;
+  made?: Record<string, Kept>;
+}
+
+/** How often a file's bytes are written to the job table while only they change (its states are written as they change). */
+const KEEP_EVERY_MS = 1000;
+
+/**
+ * Script imports, per project: on the page as they change (`script`
+ * events), and in the job table (`<home>/jobs.json`, kind `case`) a second
+ * or less behind, so a restart shows the same Downloads panel and carries on
+ * from what each file has. Only an import running in this process is
+ * `running()` or refuses a new `claim`; one read back from the table (a
+ * restart cut it short) is shown until its resumer claims it.
+ */
 export class Jobs {
   private jobs = new Map<string, ScriptJob>();
+  private made = new Map<string, Record<string, Kept>>();
+  private active = new Set<string>();
+  private written = new Map<string, string>();
+  private pending = new Map<string, ReturnType<typeof setTimeout>>();
+  private restored = false;
+
+  constructor(private home: string | null = null) {}
+
+  /** The imports the job table holds, read once (a restart). */
+  private restore(): void {
+    if (this.restored || this.home === null) return;
+    this.restored = true;
+    for (const durable of durableJobs.list(this.home, "case")) {
+      const args = durable.args as CaseArgs;
+      const kept = args.import;
+      if (kept === undefined || !Array.isArray(kept.files)) continue;
+      const job = structuredClone(kept);
+      // Cut short too often (jobs.ts gave it up): it stopped, and says why; Retry starts it again.
+      if (durable.state === "given_up" && RUNNING.includes(job.state)) {
+        job.state = "failed";
+        job.error = `The import was cut short by restarts (${durable.given_up ?? "given up"}). Retry carries it on from what it has.`;
+      }
+      this.jobs.set(durable.project, job);
+      if (args.made !== undefined) this.made.set(durable.project, structuredClone(args.made));
+      this.written.set(durable.project, signature(job));
+    }
+  }
+
+  private know(app: App): void {
+    if (this.home === null && app.store.home !== undefined) this.home = app.store.home;
+    this.restore();
+  }
 
   get(project: string): ScriptJob | null {
+    this.restore();
     const job = this.jobs.get(project);
     return job === undefined ? null : shownJob(job);
   }
 
-  /** Whether any project's import is still working. */
+  /** Whether any project's import is still working in this process. */
   running(): boolean {
-    return [...this.jobs.values()].some((job) => RUNNING.includes(job.state));
+    this.restore();
+    return [...this.active].some((project) => RUNNING.includes(this.jobs.get(project)?.state ?? "done"));
   }
 
-  /** Starts a job for `project` unless one is running; whether it did. */
-  claim(app: App, project: string, job: ScriptJob): boolean {
-    const current = this.jobs.get(project);
-    if (current !== undefined && RUNNING.includes(current.state)) return false;
+  /** Whether `project`'s import is working in this process now. */
+  working(project: string): boolean {
+    return this.active.has(project) && RUNNING.includes(this.jobs.get(project)?.state ?? "done");
+  }
+
+  /** Starts a job for `project` unless one is working here; whether it did. */
+  claim(app: App, project: string, job: ScriptJob, request?: string): boolean {
+    this.know(app);
+    if (this.working(project)) return false;
     this.jobs.set(project, structuredClone(job));
+    this.active.add(project);
+    durableJobs.begin(this.home, "case", project, { ...(request === undefined ? {} : { request }), import: shownJob(job), made: this.made.get(project) ?? {} });
+    this.written.set(project, signature(job));
     app.store.emit({ type: "script", id: project, job: shownJob(job) });
     return true;
   }
 
-  /** Changes `project`'s job (one is made if there's none) and says so. */
+  /** Changes `project`'s job (one is made if there's none), says so, and keeps it. */
   set(app: App, project: string, edit: (job: ScriptJob) => void): void {
+    this.know(app);
     let job = this.jobs.get(project);
     if (job === undefined) {
       job = { state: "downloading", files: [] };
@@ -1306,7 +1374,71 @@ export class Jobs {
     }
     edit(job);
     app.store.emit({ type: "script", id: project, job: shownJob(job) });
+    this.keep(project);
   }
+
+  /** The excerpts a fetched file gave, kept with the job. */
+  keepMade(project: string, file: string, ranges: [number, number][], excerpts: Excerpt[]): void {
+    const made = this.made.get(project) ?? {};
+    made[file] = { ranges, excerpts };
+    this.made.set(project, made);
+    this.keep(project, true);
+  }
+
+  /** A fetched file's excerpts kept from before, when they were cut for these ranges and are still there. */
+  keptMade(project: string, file: string, ranges: [number, number][]): Excerpt[] | null {
+    this.restore();
+    const kept = this.made.get(project)?.[file];
+    if (kept === undefined || JSON.stringify(kept.ranges) !== JSON.stringify(ranges)) return null;
+    // On this disk, each must still be here; in the cloud the registry has it.
+    if (kept.excerpts.length === 0 || kept.excerpts.some((excerpt) => excerpt.cloud === null && !fs.existsSync(excerpt.path))) return null;
+    return structuredClone(kept.excerpts);
+  }
+
+  /** The import ended here (done, failed or waiting): its job table entry as `settled` says, the excerpts kept only while it may go on. */
+  finish(project: string, settled: { state: "done" | "failed" | "waiting" | "end"; on?: "quota" | "encoder" } & durableJobs.Settled): void {
+    this.active.delete(project);
+    const timer = this.pending.get(project);
+    if (timer !== undefined) clearTimeout(timer);
+    this.pending.delete(project);
+    const job = this.jobs.get(project);
+    if (settled.state !== "waiting" && settled.state !== "failed") this.made.delete(project);
+    const key = durableJobs.keyOf("case", project);
+    if (settled.state === "end") return durableJobs.end(this.home, key);
+    const { state, on, ...fields } = settled;
+    durableJobs.settle(this.home, key, state, { ...fields, args: { ...(job === undefined ? {} : { import: shownJob(job) }), made: this.made.get(project) ?? {}, waiting_on: on ?? null } });
+    if (job !== undefined) this.written.set(project, signature(job));
+  }
+
+  /** Writes the job to the table: at once when a state changed, else within a second (bytes). */
+  private keep(project: string, now = false): void {
+    if (this.home === null || !this.active.has(project)) return;
+    const job = this.jobs.get(project);
+    if (job === undefined) return;
+    const write = () => {
+      this.pending.delete(project);
+      const current = this.jobs.get(project);
+      if (current === undefined || !this.active.has(project)) return;
+      durableJobs.patch(this.home, durableJobs.keyOf("case", project), { import: shownJob(current), made: this.made.get(project) ?? {} });
+      this.written.set(project, signature(current));
+    };
+    if (now || this.written.get(project) !== signature(job)) {
+      const timer = this.pending.get(project);
+      if (timer !== undefined) clearTimeout(timer);
+      write();
+      return;
+    }
+    if (!this.pending.has(project)) {
+      const timer = setTimeout(write, KEEP_EVERY_MS);
+      timer.unref?.();
+      this.pending.set(project, timer);
+    }
+  }
+}
+
+/** What's worth writing at once: the job's and each file's state, and what follows. */
+function signature(job: ScriptJob): string {
+  return JSON.stringify([job.state, job.error ?? null, job.retry_at ?? null, job.files.map((file) => [file.file, file.state, file.why ?? null, file.retry_at ?? null, file.cut?.done ?? null]), job.after ?? null]);
 }
 
 /** Asks for the first byte: the final headers say whether Drive will send the file (and its name and size) or a page instead. */
@@ -1385,6 +1517,11 @@ export function confirmLink(page: string): string | null {
     fields.push(`${name}=${decodeEntities(attribute(input, "value") ?? "")}`);
   }
   return endpoints.google(`${action}?${fields.join("&")}`);
+}
+
+/** Drive's page as an error: the person's when only they can change it (a download limit, a file nobody shared). */
+function pageError(problem: string): Error {
+  return problem === "Google Drive sent a page instead of the file." ? new Error(problem) : new steps.NeedsPerson(problem);
 }
 
 export function pageProblem(page: string): string {
@@ -1591,15 +1728,15 @@ export async function resolve(file: string, scratch: string): Promise<[url: stri
       page = "";
     }
     const link = confirmLink(page);
-    if (link === null) throw new Error(pageProblem(page));
+    if (link === null) throw pageError(pageProblem(page));
     url = link;
     head = await probe(url, scratch);
-    if (head.html) throw new Error(pageProblem(""));
+    if (head.html) throw pageError(pageProblem(""));
   }
   if (head.status === 403 || head.status === 401) {
-    throw new Error("This Drive file isn't shared. Set it so anyone with the link can view.");
+    throw new steps.NeedsPerson("This Drive file isn't shared. Set it so anyone with the link can view.");
   }
-  if (head.status === 404) throw new Error("Google Drive can't find this file (deleted, or in the trash).");
+  if (head.status === 404) throw new steps.NeedsPerson("Google Drive can't find this file (deleted, or in the trash).");
   if (head.status >= 400 || head.status === 0) throw new Error(`Google Drive answered ${head.status}.`);
   return [url, head];
 }
@@ -1640,31 +1777,35 @@ const HANDLE_SECONDS = 10.0;
 /** Ranges closer than this share one excerpt. */
 const MERGE_SECONDS = 120.0;
 
-/** Runs a tool to the end: its stdout and stderr, and whether it succeeded. */
-async function runTool(command: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-  const child = Bun.spawn(command, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-  return { ok: code === 0, stdout, stderr };
+/**
+ * Runs a tool to the end within `ms` (import_steps.ts `LIMITS`): its stdout
+ * and stderr, and whether it succeeded. Past its time its whole process
+ * group is ended and it fails with `StepTimedOut` (a passing failure: the
+ * file lands in failed and Retry works), never leaving the import running
+ * with nothing moving.
+ */
+async function runTool(command: string[], ms: number, what: string): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  const [program = "", ...args] = command;
+  try {
+    const done = await runPromise(proc.capture(program, args, ms));
+    return { ok: done.exitCode === 0, stdout: new TextDecoder().decode(done.stdout), stderr: done.stderr };
+  } catch (error) {
+    if ((error as { _tag?: unknown } | null)?._tag === "ProcessTimedOut") throw new steps.StepTimedOut(what, ms, false);
+    throw error;
+  }
 }
 
 /** Seconds of a file (or a presigned URL's object). */
 export async function durationOf(path: string): Promise<number> {
   let output: { stdout: string };
   try {
-    output = await runTool([
-      tools.ffprobe(),
-      "-v",
-      "error",
-      "-protocol_whitelist",
-      tools.protocols(path),
-      "-show_entries",
-      "format=duration",
-      "-of",
-      "csv=p=0",
-      ...tools.urlArgs(path),
-      path,
-    ]);
+    output = await runTool(
+      [tools.ffprobe(), "-v", "error", "-protocol_whitelist", tools.protocols(path), "-show_entries", "format=duration", "-of", "csv=p=0", ...tools.urlArgs(path), path],
+      steps.LIMITS.probe,
+      "Reading the footage's length",
+    );
   } catch (error) {
+    if (error instanceof steps.StepTimedOut) throw error;
     throw new Error(`ffprobe: ${diag.messageOf(error)}`);
   }
   const seconds = parseF64(trim(output.stdout));
@@ -1696,9 +1837,11 @@ export async function keyframeBefore(path: string, time: number): Promise<number
         `${display(from)}%${display(time + 0.001)}`,
         ...tools.urlArgs(path),
         path,
-      ]);
+      ], steps.LIMITS.probe, "Finding the excerpt's keyframe");
       text = output.stdout;
-    } catch {
+    } catch (error) {
+      // Stuck reading the footage is a failure of its own (tried again), never "no keyframe": that would cut from the start.
+      if (error instanceof steps.StepTimedOut) throw error;
       text = "";
     }
     let best: number | null = null;
@@ -1826,8 +1969,10 @@ export async function cut(source: string, start: number, to: number, out: string
       "-b:a",
       "192k",
       out,
-    ]);
+    ], steps.LIMITS.cut(to - start), "Cutting an excerpt");
   } catch (error) {
+    fs.rmSync(out, { force: true });
+    if (error instanceof steps.StepTimedOut) throw error;
     throw new Error(`ffmpeg: ${diag.messageOf(error)}`);
   }
   if (!output.ok) {
@@ -1954,8 +2099,10 @@ const cloudExcerptLane = new mediaModule.Semaphore(1);
 
 /**
  * Downloads the script's footage and lays the edit out. Safe to call again:
- * finished downloads are reused and placed blocks are skipped. Returns the
- * work started (tests wait on it), or null when there's nothing to start.
+ * files the job kept are reused, unfinished downloads resume, and placed
+ * blocks are skipped. A laid-out edit whose voice-over or research a restart
+ * cut short carries on with those. Returns the work started (tests wait on
+ * it), or null when there's nothing to start.
  */
 export function start(app: App, projectId: string, recut: boolean): Promise<void> | null {
   const live = app.store.get(projectId);
@@ -1963,51 +2110,81 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
   // A finished import is never resumed (only a Re-cut lays it out again).
   const inserting = pendingCase(live.project);
   if (recut && inserting) throw new Error("Finish the pending case insertion before Re-cut.");
-  if (!recut && laidOut(live.project) && !inserting) return null;
+  const prior = app.scripts.get(projectId);
+  if (!recut && laidOut(live.project) && !inserting) {
+    // Laid out before a restart cut its voice-over short: only what follows the layout.
+    if (prior === null || prior.state !== "voicing" || app.scripts.working(projectId)) return null;
+    if (!app.scripts.claim(app, projectId, { ...prior, state: "voicing" })) return null;
+    return catchBugsAsync("the script import", () => followOn(app, projectId, null, recut, timing.now())).catch((error: unknown) => {
+      app.scripts.set(app, projectId, (job) => {
+        job.state = "done";
+        job.after = afterLine(job.after, "voiceover", "failed", isBug(error) ? crashed("the voice-over", error) : diag.messageOf(error));
+      });
+      app.scripts.finish(projectId, { state: "done" });
+    });
+  }
   // The job belongs to the script it started with: one attached since stops it.
   const source = live.project.script?.source ?? null;
   const files = missingFiles(live.project);
+  const before = new Map((prior?.files ?? []).map((file) => [file.file, file]));
+  // Each file as far as the job got it: one fetched keeps its excerpts (nothing fetched again), one part-way shows its bytes and resumes.
+  const fetched: ([string, Excerpt[]] | undefined)[] = files.map((file) => {
+    const kept = app.scripts.keptMade(projectId, file, fileRanges(live.project, file));
+    return kept === null || recut ? undefined : [file, kept];
+  });
   const job: ScriptJob = {
     state: "downloading",
-    files: files.map((file) => ({ file, bytes: 0, state: "queued" })),
+    files: files.map((file, index) => {
+      const was = before.get(file);
+      const row: FileJob = { file, bytes: was?.bytes ?? 0, state: fetched[index] !== undefined ? "done" : "queued" };
+      if (was?.name !== undefined) row.name = was.name;
+      if (was?.total !== undefined) row.total = was.total;
+      return row;
+    }),
   };
-  if (!app.scripts.claim(app, projectId, job)) return null;
+  if (!app.scripts.claim(app, projectId, job, inserting ? inserting.id : undefined)) return null;
   // Every import is kept until it ends, so one a restart cuts off (an update,
   // a crash) carries on by itself when Edit is back: the first horror import
   // (Nov 4) was cut off by a restart and left its project empty, its first
   // message waiting for good.
-  const durable = durableJobs.begin(app.store.home, "case", projectId, inserting ? { request: inserting.id } : {});
   const id = projectId;
+  let settled = false;
+  const finish = (how: Parameters<typeof app.scripts.finish>[1]) => {
+    settled = true;
+    app.scripts.finish(id, how);
+  };
   const work = async () => {
     // As tokio::spawn: the job runs after the caller has answered with it (files still queued).
     await Promise.resolve();
     const began = timing.now();
     const title = app.store.get(id)?.project.name ?? id;
-    diag.info("script", `${title}: getting ${files.length} footage ${files.length === 1 ? "file" : "files"} ready (${cloudEnabled() ? "from the cloud" : `to ${THIS_MACHINE}`})`);
-    const fetched: ([string, Excerpt[]] | undefined)[] = new Array(files.length);
-    const errors: (string | undefined)[] = new Array(files.length);
+    const fresh = fetched.filter((one) => one === undefined).length;
+    diag.info("script", `${title}: getting ${files.length} footage ${files.length === 1 ? "file" : "files"} ready (${cloudEnabled() ? "from the cloud" : `to ${THIS_MACHINE}`})${fresh < files.length ? `, ${files.length - fresh} kept from before` : ""}`);
+    const errors: (unknown | undefined)[] = new Array(files.length);
     const fetchOne = async (index: number, file: string) => {
       app.scripts.set(app, id, (job) => {
         const entry = job.files[index];
         if (entry === undefined) return;
         entry.state = "downloading";
         delete entry.error;
+        delete entry.why;
         delete entry.retry_at;
       });
       errors[index] = undefined;
       const fileBegan = timing.now();
       try {
-        if (file.startsWith("sha256:") && !cloudEnabled()) throw new Error("A shared folder master needs Edit's cloud connection. Sign in and retry.");
-        if (reviewOf(file) !== null && !cloudEnabled()) throw new Error("A finished video from its review link needs Edit's cloud connection: sign in to Edit.");
-        const [bytes, name, cut] = cloudEnabled()
-          ? await footageToCloud(app, id, index, file)
-          : await footageToDisk(app, id, index, file);
+        if (file.startsWith("sha256:") && !cloudEnabled()) throw new steps.NeedsPerson("A shared folder master needs Edit's cloud connection. Sign in and retry.");
+        if (reviewOf(file) !== null && !cloudEnabled()) throw new steps.NeedsPerson("A finished video from its review link needs Edit's cloud connection: sign in to Edit.");
+        const [bytes, name, cut] = cloudEnabled() ? await footageToCloud(app, id, index, file) : await footageToDisk(app, id, index, file);
+        const ranges = fileRanges(app.store.get(id)?.project ?? live.project, file);
+        app.scripts.keepMade(id, file, ranges, cut);
         app.scripts.set(app, id, (job) => {
           const entry = job.files[index];
           if (entry === undefined) return;
           entry.state = "done";
           entry.bytes = bytes;
           entry.total = bytes;
+          delete entry.cut;
           if (name === null) delete entry.name;
           else entry.name = name;
         });
@@ -2015,23 +2192,28 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
         diag.info("script", `${title}: file ${index + 1} of ${files.length} ready (${name ?? file}, ${cut.length} ${cut.length === 1 ? "piece" : "excerpts"}, ${diag.human(timing.now() - fileBegan)})`);
       } catch (error) {
         if (isBug(error)) throw error;
-        diag.warn("script", `${title}: file ${index + 1} of ${files.length} (${file}) failed after ${diag.human(timing.now() - fileBegan)}: ${diag.messageOf(error)}`);
-        errors[index] = diag.messageOf(error);
+        const why = steps.whyOf(error);
+        diag.warn("script", `${title}: file ${index + 1} of ${files.length} (${file}) failed after ${diag.human(timing.now() - fileBegan)} (${why}): ${diag.messageOf(error)}`);
+        errors[index] = error;
         app.scripts.set(app, id, (job) => {
           const entry = job.files[index];
           if (entry === undefined) return;
           entry.state = "failed";
           entry.error = diag.messageOf(error);
+          entry.why = why;
+          delete entry.cut;
         });
       }
     };
+    const toFetch = (index: number) => fetched[index] === undefined;
     // A few at once (ten files took the sum of their times, the bar sitting on the first).
-    await Promise.all(files.map((file, index) => cloudDownloads.with(() => fetchOne(index, file))));
+    await Promise.all(files.map((file, index) => (toFetch(index) ? cloudDownloads.with(() => fetchOne(index, file)) : Promise.resolve())));
     // Edit tries again by itself, a little later, whatever might pass (a
-    // dropped connection, a busy Google, YouTube's bot check): the person is
-    // asked only about what retrying can't fix, never to press Retry.
+    // dropped connection, a busy Google, YouTube's bot check, a step past its
+    // time): the person is asked only about what retrying can't fix, never to
+    // press Retry. What waits by itself (credit, the encoder) waits for the job table to wake it.
     for (const wait of timing.retryWaits) {
-      const again = files.flatMap((_, index) => (fetched[index] === undefined && passing(errors[index] ?? "") ? [index] : []));
+      const again = files.flatMap((_, index) => (toFetch(index) && steps.whyOf(errors[index] ?? "") === "passing" ? [index] : []));
       if (again.length === 0) break;
       const at = nowMs() + wait;
       app.scripts.set(app, id, (job) => {
@@ -2045,104 +2227,220 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       if ((app.store.get(id)?.project.script?.source ?? null) !== source) break;
       await Promise.all(again.map((index) => cloudDownloads.with(() => fetchOne(index, files[index]!))));
     }
-    // Still missing after that: the edit isn't laid out with a hole in it. It
-    // waits for the person to give another link or go on without it.
-    const missing = files.filter((_, index) => fetched[index] === undefined).length;
-    if (missing > 0 && !inserting) {
+    // Still missing after that: the edit isn't laid out with a hole in it.
+    const missing = files.flatMap((_, index) => (toFetch(index) ? [index] : []));
+    if (missing.length > 0 && !inserting) {
+      const whys = missing.map((index) => steps.whyOf(errors[index] ?? ""));
+      // Only credit or the encoder in the way: it waits by itself, woken by the job table. Anything else is the person's (another link, skip, Retry).
+      const byItself = whys.every((why) => why === "quota" || why === "encoder");
+      const retryAt = whys.includes("quota") ? steps.retryAt("quota", nowMs()) : null;
       app.scripts.set(app, id, (job) => {
         job.state = "waiting";
-        job.error = `${missing} of ${files.length} footage files couldn't be downloaded`;
+        for (const [n, index] of missing.entries()) {
+          const entry = job.files[index];
+          if (entry === undefined) continue;
+          if (byItself) {
+            entry.state = "waiting";
+            if (whys[n] === "quota" && retryAt !== null) entry.retry_at = retryAt;
+            else delete entry.retry_at;
+          } else delete entry.retry_at;
+        }
+        if (byItself) {
+          job.error = waitingLine(whys, missing.length, files.length, retryAt);
+          if (retryAt !== null) job.retry_at = retryAt;
+          else delete job.retry_at;
+        } else {
+          job.error = `${missing.length} of ${files.length} footage files couldn't be downloaded`;
+          delete job.retry_at;
+        }
       });
-      diag.warn("script", `${title}: waiting for the person: ${missing} of ${files.length} files couldn't be downloaded (${diag.human(timing.now() - began)})`);
+      diag.warn("script", `${title}: ${byItself ? "waiting by itself" : "waiting for the person"}: ${missing.length} of ${files.length} files couldn't be downloaded (${diag.human(timing.now() - began)})`);
+      finish(
+        byItself
+          ? retryAt === null
+            ? { state: "waiting", step: "waiting for the encoder", until: "encoder", on: "encoder" }
+            : { state: "waiting", step: "waiting for credit", retry_at: retryAt, on: "quota" }
+          : { state: "waiting", step: "waiting for the person", until: "person" },
+      );
       return;
     }
     const done = fetched.filter((file): file is [string, Excerpt[]] => file !== undefined);
     app.scripts.set(app, id, (job) => {
       job.state = "placing";
+      delete job.error;
+      delete job.retry_at;
     });
     let result: string | null = null;
+    let late: string[] = [];
     try {
       if ((app.store.get(id)?.project.script?.source ?? null) !== source) throw new Error("another script was attached while this one was importing: this import stops");
       if (inserting && done.length !== files.length) throw new Error("The new case is not fully downloaded. Retry it; the existing edit has not been moved.");
-      await diag.timeAsync("script", "script: lay out", () => place(app, id, done, recut));
+      late = await diag.timeAsync("script", "script: lay out", () => place(app, id, done, recut));
     } catch (error) {
       if (isBug(error)) throw error;
+      if (error instanceof CreditWait) {
+        // The words decide every cut: laid out once the plan has credit again, tried every half hour.
+        const at = steps.retryAt("quota", nowMs())!;
+        app.scripts.set(app, id, (job) => {
+          job.state = "waiting";
+          job.error = error.message;
+          job.retry_at = at;
+        });
+        diag.warn("script", `${title}: waiting for the transcription plan's credit: ${error.message}`);
+        finish({ state: "waiting", step: "waiting for credit", retry_at: at, on: "quota" });
+        return;
+      }
       result = diag.messageOf(error);
     }
-    const laidOut = result === null;
-    // Laid out: the cut-ins get their voice-over, spoken and split across them.
-    // A courtroom video's too (the team couldn't get one made for Judge EXPLODES,
-    // Oct 22): a recording added later takes its place (place_voiceovers).
-    const now = app.store.get(id);
-    if (laidOut) {
+    if (result !== null) {
       app.scripts.set(app, id, (job) => {
-        job.state = "voicing";
+        job.state = "failed";
+        job.error = result!;
       });
-      // A kind of video narrated by the team's recording: the one given with
-      // the script (audio in the project, not on the timeline) is placed on
-      // the cut-ins it reads; only what it doesn't read is voiced, as a stand-in.
-      if (!inserting && NARRATION[app.store.get(id)?.project.style ?? "bodycam"] === "recording") {
-        try {
-          await fetchRecording(app, id);
-        } catch (error) {
-          if (isBug(error)) throw error;
-          diag.warn("script", `${title}: getting the voice-over recording: ${diag.messageOf(error)}`);
-        }
-      }
-      const project = app.store.get(id)?.project;
-      if (!inserting && project !== undefined && NARRATION[project.style] === "recording" && unplacedAudio(project)) {
-        try {
-          await diag.timeAsync("script", "script: place the recording", () => seams.voiceover.place(app, id, null));
-        } catch (error) {
-          if (isBug(error)) throw error;
-          diag.warn("script", `${title}: placing the voice-over recording: ${diag.messageOf(error)}`);
-        }
-      }
-      // Tried again by itself after a pause (a dropped connection to the
-      // voice service); a used-up allowance isn't asked again today.
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id, true));
-          result = null;
-          break;
-        } catch (error) {
-          if (isBug(error)) throw error;
-          result = `The voice-over couldn't be made: ${diag.messageOf(error)}`;
-          const wait = timing.retryWaits[attempt];
-          if (wait === undefined || /used up|allowance|budget/i.test(diag.messageOf(error))) break;
-          diag.warn("script", `${title}: ${result}; trying again in ${diag.human(wait)}`);
-          await timing.sleep(wait);
-        }
-      }
+      diag.warn("script", `${title}: import stopped: ${result} in ${diag.human(timing.now() - began)}`);
+      finish({ state: "failed", error: result });
+      return;
     }
-    app.scripts.set(app, id, (job) => {
-      const failed = job.files.filter((file) => file.state === "failed").length;
-      job.state = result !== null || failed > 0 ? "failed" : "done";
-      const error = result ?? (failed > 0 ? `${failed} of ${job.files.length} files couldn't be downloaded.` : null);
-      if (error === null) delete job.error;
-      else job.error = error;
-      diag.log(job.state === "done" ? "info" : "warn", "script", `${title}: import ${job.state === "done" ? "done" : `stopped: ${error}`} in ${diag.human(timing.now() - began)}`);
-    });
-    // A new edit starts with the case's research, so the articles and images
-    // are waiting by the time the editing gets to them. Not a Short: it shows
-    // only its own footage (no maps, photos or articles to wait for).
-    const home = app.store.home;
-    const researched = seams.research.articles(home, id).length > 0 || seams.research.items(home, id).length > 0;
-    if (laidOut && !recut && !inserting && !researched && !(now !== null && now !== undefined && isEssay(now.project.style)) && now?.project.style !== "shorts") {
-      try {
-        await seams.agentPanel(app).send(id, RESEARCH, null, null);
-      } catch (error) {
-        diag.warn("script", `research didn't start for ${id}: ${diag.messageOf(error)}`);
-      }
+    // Laid out: the import's part is done. What follows has its own lines, never failing it.
+    if (late.length > 0) {
+      app.scripts.set(app, id, (job) => {
+        job.after = afterLine(job.after, "words", "waiting", `Laid out without words for ${late.length === 1 ? late[0] : `${late.length} files (${late.slice(0, 3).join(", ")}${late.length > 3 ? "…" : ""})`}: their cuts are the Doc's times. Transcription is still running.`);
+      });
+      diag.warn("script", `${title}: laid out without words for ${late.join(", ")}: transcription still running after ${Math.round(steps.LIMITS.transcript / 60_000)} min`);
     }
+    await followOn(app, id, inserting ? inserting.id : null, recut, began);
+    settled = true;
   };
   // A crash fails the import instead of leaving it mid-way for good.
   return catchBugsAsync("the script import", work).catch((error: unknown) => {
+    const message = isBug(error) ? crashed("the script import", error) : diag.messageOf(error);
     app.scripts.set(app, id, (job) => {
       job.state = "failed";
-      job.error = isBug(error) ? crashed("the script import", error) : diag.messageOf(error);
+      job.error = message;
     });
-  }).finally(() => { if (durable) durableJobs.end(app.store.home, durable); });
+    if (!settled) finish({ state: "failed", error: message });
+  });
+}
+
+/** Thrown by `place` when footage waits for its words on the transcription plan's credit. */
+class CreditWait extends Error {}
+
+/** The import's line while it waits by itself. */
+function waitingLine(whys: steps.Why[], missing: number, total: number, retryAt: number | null): string {
+  const files = `${missing} of ${total} footage files`;
+  if (whys.includes("quota")) return `The transcription plan is out of credit: ${files} wait for it${retryAt === null ? "" : `; Edit tries again at ${clockTime(retryAt)}`}.`;
+  return `The hardware encoder is busy with an export: ${files} wait until it's free.`;
+}
+
+/** "14:30": a time of day on this computer. */
+function clockTime(ms: number): string {
+  const at = new Date(ms);
+  return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+}
+
+/** One follow-on's line, set (the others kept, in their order). */
+function afterLine(after: ScriptJob["after"], step: NonNullable<ScriptJob["after"]>[number]["step"], state: NonNullable<ScriptJob["after"]>[number]["state"], note?: string): NonNullable<ScriptJob["after"]> {
+  const out = (after ?? []).filter((one) => one.step !== step);
+  out.push(note === undefined ? { step, state } : { step, state, note });
+  const order = ["words", "recording", "voiceover", "research"];
+  return out.sort((a, b) => order.indexOf(a.step) - order.indexOf(b.step));
+}
+
+/**
+ * What follows the layout: the team's recording placed, the voice-over
+ * spoken and split across the cut-ins, the case's research. Each says how it
+ * went on its own line of the job (`after`); none fails the import, which
+ * ends done: the edit is laid out and plays.
+ */
+async function followOn(app: App, id: string, inserting: string | null, recut: boolean, began: number): Promise<void> {
+  const title = app.store.get(id)?.project.name ?? id;
+  app.scripts.set(app, id, (job) => {
+    job.state = "voicing";
+  });
+  const say = (step: NonNullable<ScriptJob["after"]>[number]["step"], state: NonNullable<ScriptJob["after"]>[number]["state"], note?: string) =>
+    app.scripts.set(app, id, (job) => {
+      job.after = afterLine(job.after, step, state, note);
+    });
+  // A kind of video narrated by the team's recording: the one given with
+  // the script (audio in the project, not on the timeline) is placed on
+  // the cut-ins it reads; only what it doesn't read is voiced, as a stand-in.
+  if (inserting === null && NARRATION[app.store.get(id)?.project.style ?? "bodycam"] === "recording") {
+    try {
+      await fetchRecording(app, id);
+    } catch (error) {
+      if (isBug(error)) throw error;
+      diag.warn("script", `${title}: getting the voice-over recording: ${diag.messageOf(error)}`);
+    }
+  }
+  const project = app.store.get(id)?.project;
+  if (inserting === null && project !== undefined && NARRATION[project.style] === "recording" && unplacedAudio(project)) {
+    say("recording", "running");
+    try {
+      await diag.timeAsync("script", "script: place the recording", () => seams.voiceover.place(app, id, null));
+      say("recording", "done");
+    } catch (error) {
+      if (isBug(error)) throw error;
+      diag.warn("script", `${title}: placing the voice-over recording: ${diag.messageOf(error)}`);
+      say("recording", "failed", `The team's recording couldn't be placed: ${diag.messageOf(error)}`);
+    }
+  }
+  // Laid out: the cut-ins get their voice-over, spoken and split across them.
+  // A courtroom video's too (the team couldn't get one made for Judge EXPLODES,
+  // Oct 22): a recording added later takes its place (place_voiceovers).
+  // Tried again by itself after a pause (a dropped connection to the voice
+  // service); a used-up allowance isn't asked again today.
+  say("voiceover", "running");
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await diag.timeAsync("script", "script: voice-over", () =>
+        steps.bounded("the voice-over", steps.LIMITS.voiceover, () => (inserting !== null ? seams.voiceover.generateCase(app, id, inserting) : seams.voiceover.generate(app, id, true))),
+      );
+      say("voiceover", "done");
+      break;
+    } catch (error) {
+      if (isBug(error)) throw error;
+      const said = `The voice-over couldn't be made: ${diag.messageOf(error)}`;
+      const wait = timing.retryWaits[attempt];
+      if (wait === undefined || /used up|allowance|budget/i.test(diag.messageOf(error))) {
+        diag.warn("script", `${title}: ${said} (the edit is laid out; Make the voice-over again from the agent)`);
+        say("voiceover", "failed", said);
+        break;
+      }
+      diag.warn("script", `${title}: ${said}; trying again in ${diag.human(wait)}`);
+      await timing.sleep(wait);
+    }
+  }
+  app.scripts.set(app, id, (job) => {
+    job.state = "done";
+    delete job.error;
+    delete job.retry_at;
+  });
+  diag.info("script", `${title}: import done in ${diag.human(timing.now() - began)}`);
+  // A new edit starts with the case's research, so the articles and images
+  // are waiting by the time the editing gets to them. Not a Short: it shows
+  // only its own footage (no maps, photos or articles to wait for).
+  const home = app.store.home;
+  const now = app.store.get(id);
+  const researched = seams.research.articles(home, id).length > 0 || seams.research.items(home, id).length > 0;
+  if (!recut && inserting === null && !researched && !(now !== null && now !== undefined && isEssay(now.project.style)) && now?.project.style !== "shorts") {
+    try {
+      await seams.agentPanel(app).send(id, RESEARCH, null, null);
+      say("research", "done", "The agent is researching the case.");
+    } catch (error) {
+      diag.warn("script", `research didn't start for ${id}: ${diag.messageOf(error)}`);
+      say("research", "failed", `The research didn't start: ${diag.messageOf(error)}`);
+    }
+  }
+  app.scripts.finish(id, { state: "done" });
+}
+
+/** Retry, another link, skip, a remote resume or unstick, or the job table waking it: one way to carry an import on. What it did, in a word. */
+export function carryOn(app: App, id: string): "started" | "working" | "finished" | "nothing" {
+  if (app.scripts.working(id)) return "working";
+  const live = app.store.get(id);
+  if (live === null) return "nothing";
+  if (!unfinished(live.project) && app.scripts.get(id)?.state !== "voicing") return "finished";
+  return start(app, id, false) !== null ? "started" : "nothing";
 }
 
 /** A file's download progress, into its row of the job (a few times a second). */
@@ -2261,7 +2559,7 @@ async function footageToCloud(app: App, id: string, index: number, file: string)
  * cut from its cue words, and puts every block it can on the timeline.
  * `recut` first clears what an earlier layout placed.
  */
-async function place(app: App, id: string, done: [string, Excerpt[]][], recut: boolean): Promise<void> {
+async function place(app: App, id: string, done: [string, Excerpt[]][], recut: boolean): Promise<string[]> {
   // Excerpts on this disk are imported as files; cloud ones come made.
   const all = done.flatMap(([, cutUp]) => cutUp);
   const made = all.filter((excerpt) => excerpt.cloud !== null);
@@ -2316,7 +2614,10 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
   app.scripts.set(app, id, (job) => {
     job.state = "transcribing";
   });
-  const heard = await transcripts(app, live.project);
+  const said: Unheard = { late: [], credit: [] };
+  const heard = await transcripts(app, live.project, undefined, false, said);
+  // The plan out of credit: the words decide every cut, so it waits for them (the job table tries again).
+  if (said.credit.length > 0) throw new CreditWait(`The transcription plan is out of credit: ${said.credit.length === 1 ? "1 file waits" : `${said.credit.length} files wait`} for ${said.credit.length === 1 ? "its" : "their"} words before the edit is laid out; Edit tries again every ${Math.round(steps.QUOTA_RETRY_MS.value / 60_000)} min.`);
 
   app.scripts.set(app, id, (job) => {
     job.state = "placing";
@@ -2345,6 +2646,7 @@ async function place(app: App, id: string, done: [string, Excerpt[]][], recut: b
     layOut(project);
     if (inserting) finishCase(project, previous);
   });
+  return said.late;
 }
 
 /**
@@ -2471,7 +2773,13 @@ interface Heard {
  * the words. Media without sound, or whose transcription fails, are left out:
  * their ranges keep the times the Doc wrote.
  */
-async function transcripts(app: App, project: Project, within: (block: ScriptBlock) => boolean = () => true, wordless = false): Promise<Map<string, Heard>> {
+/** What `transcripts` couldn't hear: still being heard when its wait ran out (`late`), or refused for the plan's credit (`credit`), by name. */
+interface Unheard {
+  late: string[];
+  credit: string[];
+}
+
+async function transcripts(app: App, project: Project, within: (block: ScriptBlock) => boolean = () => true, wordless = false, unheard: Unheard = { late: [], credit: [] }): Promise<Map<string, Heard>> {
   const used = new Set<string>();
   for (const block of project.script?.blocks ?? []) {
     if (pendingCase(project) && placed(project, block)) continue;
@@ -2503,8 +2811,15 @@ async function transcripts(app: App, project: Project, within: (block: ScriptBlo
         }
         return { words: transcript.words, peaks, model: transcript.model };
       }
-      if (stage === "failed") return null;
-      if (timing.now() - started > 30 * 60 * 1000) return null;
+      if (stage === "failed") {
+        const why = app.media.status(item.path).transcript_error;
+        if (why !== undefined && steps.whyOf(why) === "quota") unheard.credit.push(item.name);
+        return null;
+      }
+      if (timing.now() - started > steps.LIMITS.transcript) {
+        unheard.late.push(item.name);
+        return null;
+      }
       await timing.sleep(2000);
     }
   };

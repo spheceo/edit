@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import { Effect } from "effect";
 
 import * as diag from "./diag.ts";
+import * as encoder from "./encoder.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
 import { nowMs, readState, writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
@@ -51,7 +52,9 @@ export type Kind =
   | "idea"
   | "thumbnail"
   /** A smooth playback render (playback_render.ts): listed so `busyWith` sees it; not resumed. */
-  | "playback";
+  | "playback"
+  /** A Writer script's import waiting on the transcription plan's credit (writer/imports.ts): woken to try again. */
+  | "script";
 
 export type State = "queued" | "running" | "waiting" | "done" | "failed" | "given_up";
 
@@ -76,6 +79,10 @@ export interface Job {
   retry?: string;
   /** Why it isn't started again any more (state given_up); unstick clears it. */
   given_up?: string;
+  /** State waiting: when the one resumer wakes it to try again (ms since the epoch). */
+  retry_at?: number;
+  /** State waiting: what it waits on instead of a time: the hardware encoder to be free, or the person (never woken by itself). */
+  until?: "encoder" | "person";
 }
 
 /** Thrown by a resumer when there's nothing left to start again (the project, clip or file is gone): the job is crossed off. */
@@ -189,13 +196,30 @@ export function step(home: string | null, key: string, step: string, args: Recor
     if (job === undefined) return false;
     job.step = step;
     job.state = "running";
+    delete job.retry_at;
+    delete job.until;
     Object.assign(job.args, args);
     job.updated_ms = nowMs();
   });
 }
 
-/** A job ends and is kept: `done` (what it did is shown), `failed` (its error and build kept for a retry), or `waiting` (it carries on later by itself). */
-export function settle(home: string | null, key: string, state: "done" | "failed" | "waiting", fields: { error?: string; build?: string; step?: string; args?: Record<string, unknown> } = {}): void {
+/** What a job is settled with. `retry_at` and `until` only for `waiting`: when, or on what, it's woken. */
+export interface Settled {
+  error?: string;
+  build?: string;
+  step?: string;
+  args?: Record<string, unknown>;
+  retry_at?: number;
+  until?: "encoder" | "person";
+}
+
+/**
+ * A job ends and is kept: `done` (what it did is shown), `failed` (its error
+ * and build kept for a retry), or `waiting`: it carries on later by itself,
+ * at the next start, at `retry_at`, or once the encoder is free (`until`), or
+ * when the person answers (`until: "person"`; never woken by itself).
+ */
+export function settle(home: string | null, key: string, state: "done" | "failed" | "waiting", fields: Settled = {}): void {
   if (home === null) return;
   change(home, (jobs) => {
     const job = jobs.find((one) => one.key === key);
@@ -204,8 +228,14 @@ export function settle(home: string | null, key: string, state: "done" | "failed
   });
 }
 
-function settled(job: Job, state: "done" | "failed" | "waiting", fields: { error?: string; build?: string; step?: string; args?: Record<string, unknown> }): void {
+function settled(job: Job, state: "done" | "failed" | "waiting", fields: Settled): void {
   job.state = state;
+  delete job.retry_at;
+  delete job.until;
+  if (state === "waiting") {
+    if (fields.retry_at !== undefined) job.retry_at = fields.retry_at;
+    if (fields.until !== undefined) job.until = fields.until;
+  }
   if (fields.step !== undefined) job.step = fields.step;
   if (fields.args !== undefined) Object.assign(job.args, fields.args);
   if (state === "failed") {
@@ -307,6 +337,8 @@ export function takeOver(home: string, kinds?: readonly Kind[]): Job[] {
     let changed = false;
     for (const job of jobs) {
       if (!live(job) || (kinds !== undefined && !kinds.includes(job.kind))) continue;
+      // Waiting on a time, the encoder or the person: not cut short by the restart; woken when it's due (`wake`).
+      if (asleep(job)) continue;
       changed = true;
       if (job.attempts >= MOST_RESUMES) {
         job.state = "given_up";
@@ -320,6 +352,62 @@ export function takeOver(home: string, kinds?: readonly Kind[]): Job[] {
     return changed;
   });
   return out;
+}
+
+/** A waiting job with something to wait for (a time, the encoder, the person): `wake` starts it, never a restart. */
+function asleep(job: Job): boolean {
+  return job.state === "waiting" && (job.retry_at !== undefined || job.until !== undefined);
+}
+
+/** Whether a sleeping job is due: its time has come, or the encoder it waits for is free. */
+function due(job: Job, now: number): boolean {
+  if (!asleep(job)) return false;
+  if (job.until === "person") return false;
+  if (job.until === "encoder" && encoder.busy()) return false;
+  return job.retry_at === undefined || job.retry_at <= now;
+}
+
+/**
+ * The waiting jobs that are due, marked running and handed back (their count
+ * untouched: nothing cut them short). Only `kinds`, when given.
+ */
+export function dueNow(home: string, kinds?: readonly Kind[]): Job[] {
+  const out: Job[] = [];
+  const now = nowMs();
+  change(home, (jobs) => {
+    for (const job of jobs) {
+      if (!due(job, now) || (kinds !== undefined && !kinds.includes(job.kind))) continue;
+      job.state = "running";
+      job.step = "trying again";
+      delete job.retry_at;
+      delete job.until;
+      job.updated_ms = now;
+      out.push(job);
+    }
+    return out.length > 0;
+  });
+  return out;
+}
+
+/** How often the waiting jobs are looked at (a quota's 30 min, an export's end). */
+export const WAKE_MS = { value: 30_000 };
+const waking = new Map<string, ReturnType<typeof setInterval>>();
+
+/** Starts the waiting jobs that are due now (the timer does this every `WAKE_MS`; tests call it). */
+export function wake(home: string, kinds?: readonly Kind[]): Promise<void> {
+  const resumers = registered.get(home);
+  if (resumers === undefined) return Promise.resolve();
+  const list = dueNow(home, kinds);
+  if (list.length === 0) return Promise.resolve();
+  return startAll(home, list, resumers, "waited");
+}
+
+/** Wakes the waiting jobs as they fall due, from now until Edit quits. */
+function keepWaking(home: string): void {
+  if (waking.has(home)) return;
+  const timer = setInterval(() => void wake(home).catch((error: unknown) => diag.warn("jobs", `waking waiting jobs: ${diag.messageOf(error)}`)), WAKE_MS.value);
+  timer.unref?.();
+  waking.set(home, timer);
 }
 
 /** The jobs not started again any more (cut short too often), for the diagnostics. */
@@ -337,14 +425,14 @@ export const RESUME_MS = { value: 60_000 };
 /** The resumers this run was started with, by data folder, so unstick can start given-up jobs without a restart. */
 const registered = new Map<string, Resumers>();
 
-function startAll(home: string, list: Job[], resumers: Resumers): Promise<void> {
+function startAll(home: string, list: Job[], resumers: Resumers, why: "restart" | "waited" = "restart"): Promise<void> {
   return runPromise(
     Effect.forEach(
       list,
       (job) => {
         const run = resumers[job.kind];
         if (run === undefined) return Effect.void;
-        return Effect.logInfo(`starting ${job.key} again${job.step ? ` from ${job.step}` : ""} (cut short by a restart)`).pipe(
+        return Effect.logInfo(`starting ${job.key} again${job.step ? ` from ${job.step}` : ""} (${why === "restart" ? "cut short by a restart" : "its wait is over"})`).pipe(
           Effect.andThen(Effect.tryPromise(async () => run(job))),
           Effect.timeoutOrElse({ duration: RESUME_MS.value, orElse: () => Effect.logWarning(`${job.key} is still starting after ${Math.round(RESUME_MS.value / 1000)} s; the others go on`) }),
           Effect.catch((error) => {
@@ -368,8 +456,16 @@ function startAll(home: string, list: Job[], resumers: Resumers): Promise<void> 
  * `kinds`, when given (tests).
  */
 export function resume(home: string, resumers: Resumers, kinds?: readonly Kind[]): Promise<void> {
-  if (kinds === undefined) registered.set(home, resumers);
+  if (kinds === undefined) {
+    registered.set(home, resumers);
+    keepWaking(home);
+  }
   return startAll(home, takeOver(home, kinds), resumers);
+}
+
+/** The resumers registered for `home` (tests register theirs to wake waiting jobs). */
+export function useResumers(home: string, resumers: Resumers): void {
+  registered.set(home, resumers);
 }
 
 /**

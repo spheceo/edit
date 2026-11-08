@@ -22,6 +22,7 @@ import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
 import { archiveFinished, ExportRegistry, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
+import * as encoder from "./encoder.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
@@ -337,6 +338,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   });
   // Once listening (the agents reach Edit's MCP on this port) and signed in
   // again (or 20 s on, signed out): the jobs and agent turns a restart cut short.
+  // An export holds the hardware encoder (encoder.ts): an import's encode beside it isn't called stuck, and one that waits for it is woken when it ends.
+  encoder.register(() => (app.exports.running() ? "an export" : null));
   void Promise.race([signedIn.catch(() => undefined), Bun.sleep(20_000)]).then(() => resumeJobs(app));
   if (update.enabled()) {
     void update
@@ -376,11 +379,9 @@ function resumeJobs(app: App): void {
   void jobs.resume(app.store.home, {
     case: (job) => {
       project(job.project);
-      // Nothing left to import (laid out since), and no import of it running to own the job: crossed off.
-      const running = app.scripts.get(job.project)?.state;
-      if (seams.script.start(app, job.project, false) === null && !["downloading", "transcribing", "placing", "voicing"].includes(running ?? "")) {
-        throw new jobs.Gone("its import has nothing left to do");
-      }
+      // Carried on from what the job kept (script.carryOn: the same way Retry, a remote resume and unstick do). Nothing left to do: crossed off.
+      const did = seams.script.carryOn(app, job.project);
+      if (did === "finished" || did === "nothing") throw new jobs.Gone("its import has nothing left to do");
     },
     export: async (job) => {
       // Jobs from before Nov 3 may name a Modal or Relay-worker backend: every export renders here now.

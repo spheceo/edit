@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 
 import { readState } from "../src/files.ts";
+import * as encoder from "../src/encoder.ts";
 import * as jobs from "../src/jobs.ts";
 import { scratch } from "./helpers/home.ts";
 
@@ -272,6 +273,38 @@ test("a job that's still going (a turn's minute) has its time noted and its rest
     expect(jobs.get(dir, key)).toMatchObject({ attempts: 0 });
     expect(jobs.get(dir, key)!.updated_ms).toBeGreaterThan(before);
   } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a job waiting on a time, the encoder or the person isn't cut short by a restart; it's woken when it's due", async () => {
+  const dir = home();
+  let exporting = true;
+  const undo = encoder.register(() => (exporting ? "an export" : null));
+  try {
+    for (const [project, fields] of [
+      ["later", { retry_at: Date.now() + 60_000 }],
+      ["due", { retry_at: Date.now() - 1 }],
+      ["encoder", { until: "encoder" as const }],
+      ["person", { until: "person" as const }],
+    ] as const) {
+      jobs.begin(dir, "case", project, {});
+      jobs.settle(dir, jobs.keyOf("case", project), "waiting", { step: "waiting", ...fields });
+    }
+    // None was cut short: a restart hands none back, and counts none.
+    expect(jobs.takeOver(dir)).toEqual([]);
+    expect(read(dir).every((job) => job.attempts === 0 && job.state === "waiting")).toBe(true);
+    const woken: string[] = [];
+    jobs.useResumers(dir, { case: (job) => void woken.push(job.project) });
+    await jobs.wake(dir);
+    expect(woken).toEqual(["due"]);
+    exporting = false;
+    await jobs.wake(dir);
+    expect(woken).toEqual(["due", "encoder"]);
+    // The person's answer, never a timer, carries the last one on; the first waits for its time.
+    expect(read(dir).filter((job) => job.state === "waiting").map((job) => job.project).sort()).toEqual(["later", "person"]);
+  } finally {
+    undo();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

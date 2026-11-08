@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 
 import { join } from "./paths.ts";
 import * as youtube from "./youtube.ts";
+import { NeedsPerson } from "./import_steps.ts";
 
 export const PREFIX = "post:";
 
@@ -87,8 +88,8 @@ export async function download(home: string, url: string, dir: string, progress:
     if (code !== 0 || got === undefined) {
       const why = err.trim().split("\n").filter((line) => line.startsWith("ERROR")).pop()?.replace(/^ERROR:\s*(\[[^\]]+\]\s*)?/u, "").slice(0, 300) ?? "the download failed or timed out";
       // Said plainly, and never tried again by itself: neither changes on its own.
-      if (/no video in this post|no video formats found/iu.test(why)) throw new Error(`That post is pictures only, with no video to play. Go on without it (the edit can show it as a screenshot), or give another link.`);
-      if (/empty media response|login required|log in|cookies/iu.test(why)) throw new Error(`That post is only shown to someone signed in to ${siteOf(url)?.split(".")[0] ?? "the site"}. Go on without it, or give another link to the same video.`);
+      if (/no video in this post|no video formats found/iu.test(why)) throw new NeedsPerson(`That post is pictures only, with no video to play. Go on without it (the edit can show it as a screenshot), or give another link.`);
+      if (/empty media response|login required|log in|cookies/iu.test(why)) throw new NeedsPerson(`That post is only shown to someone signed in to ${siteOf(url)?.split(".")[0] ?? "the site"}. Go on without it, or give another link to the same video.`);
       throw new Error(`${nameOf(url)}: ${why}`);
     }
     const size = fs.statSync(join(dir, got)).size;

@@ -682,31 +682,19 @@ let dropped = false;
 let downTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
- * Shows a script import's progress, and picks it up again if it stopped
- * (the server restarted mid-download): downloads resume where they left off.
+ * Shows a script import's progress. Carrying one on after a restart is the
+ * server's (its job table resumes it from what each file had); the page only
+ * shows what it says, the Downloads tab open while it works or waits.
  */
 export async function syncScriptJob(id: string) {
   const project = useEditor.getState().project;
   if (project?.id !== id || !project.script) return;
   try {
-    const { job, unfinished } = await api.scriptJob(id);
+    const { job } = await api.scriptJob(id);
     if (useEditor.getState().project?.id !== id) return;
     const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing" || job.state === "voicing");
-    // Running, or waiting for the person's answer about footage it couldn't fetch: the Downloads tab, open.
+    // Running, or waiting (for the person's answer, or by itself): the Downloads tab, open.
     useEditor.setState(running || job?.state === "waiting" ? { scriptJob: job, mediaTab: "downloads", showMedia: true } : { scriptJob: job });
-    // A failed run waits for Retry; an import that stopped part-way (blocks never
-    // placed) carries on by itself. A placed block whose clip is gone was removed
-    // on purpose (a cut-in card replaced by B-roll): never put it back.
-    // Laid out once (any block placed): finished, never resumed (only a Re-cut lays it out again; the server refuses too).
-    const laidOut = project.script.blocks.some((block) => block.clip || (block.kind === "narration" && block.voiceover));
-    const neverPlaced = !laidOut && project.script.blocks.some((block) => !block.clip);
-    // Only an import that stopped part-way, never one that finished: a finished edit
-    // whose blocks lost their clip links was laid out again on top of itself when it
-    // was opened (Mom Leaves 5 Kids, Oct 23: a second copy after 30:50).
-    if (unfinished && neverPlaced && !running && job?.state !== "failed" && job?.state !== "waiting" && job?.state !== "done") {
-      const resumed = await api.resumeScript(id);
-      if (useEditor.getState().project?.id === id) useEditor.setState({ scriptJob: resumed.job });
-    }
   } catch {
     // Offline: the next reconnect tries again.
   }

@@ -30,6 +30,7 @@ export function register(what: () => string | null): () => void {
 interface ScriptJobs {
   get?(project: string): { state: string } | null;
   running?(): boolean;
+  working?(project: string): boolean;
 }
 
 const RUNNING_IMPORT = new Set(["downloading", "transcribing", "placing", "voicing"]);
@@ -42,7 +43,10 @@ export function workingOn(app: App, key: string): boolean {
   }
   const agents = app.agents as { runningProjects?: () => string[] } | undefined;
   if (agents?.runningProjects?.().includes(key) === true) return true;
-  const job = (app.scripts as ScriptJobs | undefined)?.get?.(key) ?? null;
+  const scripts = app.scripts as ScriptJobs | undefined;
+  // Working here, not one read back after a restart that its resumer hasn't picked up yet.
+  if (scripts?.working !== undefined) return scripts.working(key);
+  const job = scripts?.get?.(key) ?? null;
   return job !== null && RUNNING_IMPORT.has(job.state);
 }
 

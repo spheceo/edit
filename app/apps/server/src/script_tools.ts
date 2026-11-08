@@ -339,8 +339,7 @@ registerTool("insert_compilation_case", async ({ app, args, projectId }) => {
   if (!live) throw new Error("no such project");
   if (!kinds.mayEdit(live.project.style)) throw new Error(kinds.cantMake(`edit.${live.project.style}`));
   await app.store.mayWrite(projectId);
-  const running = app.scripts.get(projectId);
-  if (running && ["downloading", "transcribing", "placing", "voicing"].includes(running.state)) throw new Error("Wait for the project's current script import to finish.");
+  if (app.scripts.working(projectId)) throw new Error("Wait for the project's current script import to finish.");
   if (!hasCase(live.project, request)) {
     // A supplied finished Doc is reused exactly, also when it is the only
     // source being added to an already edited compilation.
@@ -580,8 +579,7 @@ async function scriptAttach(context: RouteContext<App>): Promise<Response> {
   const given = await body(context, SCRIPT_BODY);
   const url = given.url as string;
   // One script per edit: never over one importing or already laid out (it would double the timeline).
-  const running = app.scripts.get(id);
-  if (running !== null && ["downloading", "transcribing", "placing", "voicing"].includes(running.state)) throw new ApiError(409, "a script is importing into this project: wait for it, or make a new project");
+  if (app.scripts.working(id)) throw new ApiError(409, "a script is importing into this project: wait for it, or make a new project");
   const now = app.store.get(id)?.project;
   if (now !== undefined && script.laidOut(now)) throw new ApiError(409, "this project already has a script laid out: make a new project for another script, or Re-cut this one");
   // A script makes a full edit: only of a style the signed-in person may edit (kinds.ts).

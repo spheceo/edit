@@ -313,15 +313,21 @@ export interface DriveHead {
   total: number | null;
 }
 
-/** Script imports in progress, per project. */
+/** Script imports, per project (script.ts `Jobs`: kept in the job table as they change). */
 export interface ScriptJobs {
   get(project: string): ScriptJob | null;
-  /** Starts a job for `project` unless one is running; whether it did (says so as a `script` event). */
-  claim(app: App, project: string, job: ScriptJob): boolean;
+  /** Starts a job for `project` unless one is working here; whether it did (says so as a `script` event). */
+  claim(app: App, project: string, job: ScriptJob, request?: string): boolean;
   /** Changes `project`'s job and says so (a `script` event). */
   set(app: App, project: string, edit: (job: ScriptJob) => void): void;
-  /** Whether any project's import is downloading or laying out (an update waits for it). */
+  /** Whether any project's import is downloading or laying out here (an update waits for it). */
   running(): boolean;
+  /** Whether `project`'s import is working in this process now (one read back after a restart isn't, until it's resumed). */
+  working(project: string): boolean;
+  /** The import ended here: kept in the job table as `settled` says (`end` crosses it off). */
+  finish(project: string, settled: { state: "done" | "failed" | "waiting" | "end"; on?: "quota" | "encoder"; error?: string; step?: string; retry_at?: number; until?: "encoder" | "person" }): void;
+  keepMade(project: string, file: string, ranges: [number, number][], excerpts: Excerpt[]): void;
+  keptMade(project: string, file: string, ranges: [number, number][]): Excerpt[] | null;
 }
 
 export interface ScriptSeam {
@@ -354,6 +360,8 @@ export interface ScriptSeam {
   spans(ranges: [number, number][], duration: number): [number, number][];
   /** Downloads the script's footage and lays it out in the background; the work, or null when one runs already. */
   start(app: App, projectId: string, recut: boolean): Promise<void> | null;
+  /** Carries an import on from what its job kept (the job table's resumer, Retry, a remote resume, unstick): what it did. */
+  carryOn(app: App, id: string): "started" | "working" | "finished" | "nothing";
   summary(parsed: Parsed): Json;
   unfinished(project: Project): boolean;
   /** `/api/scripts/preview`, `/api/projects/{id}/script`, `/api/projects/{id}/script/job`. */
@@ -959,7 +967,7 @@ export function stubServices(home: string): {
     exports: stub("exports"),
     updater: stub("updater"),
     agents: stub("agents"),
-    scripts: new scriptModule.Jobs(),
+    scripts: new scriptModule.Jobs(home),
     library: stub("library"),
     voices: new voiceModule.Voices(home),
   };

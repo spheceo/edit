@@ -1755,9 +1755,13 @@ const BUDGET = 36_000;
  */
 export function importStatus(app: App, p: Project): Args | null {
   const job = app.scripts.get(p.id);
+  // Waiting by itself (the transcription plan's credit, the encoder): nothing to ask the person.
+  const byItself = job?.state === "waiting" && !job.files.some((file) => file.state === "failed");
   return job === null || job.state === "done"
     ? null
-    : job.state === "waiting"
+    : byItself
+      ? { state: "waiting", note: `${job.error ?? "The import waits"} It carries on by itself: don't edit yet, and don't ask the user for other links.` }
+      : job.state === "waiting"
       ? {
           state: "waiting",
           missing: job.files

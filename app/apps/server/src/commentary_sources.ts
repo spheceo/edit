@@ -30,7 +30,7 @@ registerTool("capture_evidence", async ({ app, args, projectId }) => {
   const result = await capture(args.url, path, typeof args.phrase === "string" ? args.phrase : "", typeof args.selector === "string" ? args.selector : "", args.full_page === true);
   const [, ids, errors] = await importPaths(app, projectId, [path], false, "agent");
   const media = ids[0]; if (media === undefined) throw new Error(errors.join("; "));
-  keep(app, projectId, `capture:${media}`, { ...result, media, captured: Date.now() });
+  keep(app, projectId, `capture:${media}`, { ...result, asked: args.url, media, captured: Date.now() });
   return text(stableStringify({ media, url: result.url, title: result.title, note: "Real page capture, not reconstructed content. Inspect it before use: a site may show a consent/login page or irrelevant UI. Add a commentary_card, then highlight_evidence on its returned photo clip." }));
 });
 export interface BrollRange { url: string; start: number; end: number; purpose: string; }
@@ -108,7 +108,8 @@ export function excerptFor(cut: { from: number; to: number }[], pick: { start: n
   return cut.reduce((best, e, i) => (e.from <= pick.start + 0.05 && e.to > pick.start + 0.5 && (best < 0 || e.to > cut[best]!.to) ? i : best), -1);
 }
 
-function keep(app: App, project: string, key: string, value: unknown): void {
+/** A source the agent brought in, kept in research/<project>/broll.json (note_links.ts reads which ones the edit shows). */
+export function keep(app: App, project: string, key: string, value: unknown): void {
   const path = join(app.store.home, "research", project, "broll.json");
   fs.mkdirSync(parent(path)!, { recursive: true });
   let saved: Args = {};

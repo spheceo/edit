@@ -14,6 +14,7 @@ import type { App } from "./app.ts";
 import { clipColorFrom, clipFrom, defaultTextAnimation, defaultTextStyle, defaultTransform, keyframesFrom, textAnimationFrom, textStyleFrom, transformFrom } from "./clips.ts";
 import * as cutin from "./cutin.ts";
 import * as commentaryAudit from "./commentary_audit.ts";
+import { unusedNoteLinks } from "./note_links.ts";
 import { FRAME_SCALE, frameKey as screenFrameKey } from "./desktop_screen.ts";
 import * as diag from "./diag.ts";
 import * as uploads from "./uploads.ts";
@@ -1564,6 +1565,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
   const parts = sections.parts;
   const teasers = parts.filter((part) => part.kind === "intro").map((part): [number, number] => [part.start, part.end]);
   const extra = isEssay(project.style) ? [
+    ...(unusedNoteLinks(app, project) as Json[]),
     ...hooks.offScript(project, heard),
     ...hooks.cutMidWord(project, heard),
     ...hooks.narrationCutOff(project, heard),
@@ -1630,7 +1632,7 @@ export function audited(app: App, project: Project, rev: number | null): Args {
 const FIXABLE = [
   "commentary_uncovered_narration", "commentary_placeholder", "commentary_music_over_source", "commentary_static_source", "commentary_repeated_range", "commentary_text_heavy",
   "commentary_flash", "commentary_short_card", "commentary_source_overuse", "commentary_graphics_monotony",
-  "commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture", "commentary_leak_overuse",
+  "commentary_punch_overuse", "commentary_label_overuse", "commentary_sound_without_picture", "commentary_leak_overuse", "note_link_unused",
   "cut_mid_word", "bridge_unillustrated", "long_broll_shot", "broll_recut", "glimpse", "popups_together", "text_late", "silent_popup", "silent_transition", "teaser_wide", "dead_air",
   "letterboxed", "watermarked_picture", "burned_subtitles", "picture_on_face", "name_not_introduced", "unsubtitled_speech",
   "subtitle_unheard", "subtitle_late", "music_loud", "music_bed_long", "music_repeated", "music_change_mid_narration", "music_stops_mid_narration",

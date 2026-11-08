@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { deflateSync } from "node:zlib";
 import { clipFrom } from "./clips.ts";
 import * as commentaryGraphics from "./commentary_graphics.ts";
+import { keep } from "./commentary_sources.ts";
 import { importPaths } from "./import.ts";
 import { registerTool, text } from "./mcp/registry.ts";
 import type { Keyframe, Project, VideoClip } from "./model.ts";
@@ -249,6 +250,7 @@ registerTool("tweet_reference", async ({ app, args, projectId }) => {
       if (got.ok) { const path = join(dir, `avatar-${handle}.jpg`); fs.writeFileSync(path, new Uint8Array(await got.arrayBuffer())); avatar = (await importPaths(app, projectId, [path], false, "agent"))[1][0] ?? null; }
     } catch { /* the post shows without its avatar */ }
   }
+  keep(app, projectId, `tweet:${args.url}`, { url: args.url, avatar, text: postText(post.html ?? "") });
   return text(stableStringify({ url: args.url, name: post.author_name ?? null, handle, date, text: postText(post.html ?? ""), avatar,
     note: "For commentary_tweet: name, handle, time (the date, or as the screenshot shows it), text exactly as posted, avatar; its picture from capture_evidence or a still_frame crop. highlight the phrase the narration is about." }));
 });

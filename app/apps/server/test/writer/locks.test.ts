@@ -110,6 +110,10 @@ beforeEach(() => {
   keepsLocks = true;
   loseCommit = false;
   locks.resetForTests();
+  // The cloud's waits after a refusal are kept by script id for the whole
+  // process: cloud_sync.test.ts ends with this file's X (the same id) still
+  // waiting, and run before this file (CI's Mac order) nothing here pushed.
+  cloud.tryAllAgain();
 });
 
 afterEach(() => {

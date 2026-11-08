@@ -205,7 +205,15 @@ export function buildRouter(): Router<App> {
     .get("/api/export/encoders", exportEncoders)
     .get("/api/exports/activity", ({ app }) => {
       const visible = new Set(app.store.visible().map(project => project.id));
-      const edits = (app.exports.activity?.() ?? []).filter(job => visible.has(job.id));
+      // A share's export is the share's: while the share goes on past it (the review copy, the upload, the publish) it's
+      // shown going, with the share's own line, and a share that failed after it shows why; never "done" before it's up.
+      const edits = (app.exports.activity?.() ?? []).filter(job => visible.has(job.id)).map((job) => {
+        if (job.state !== "done") return job;
+        const { line, share } = reviews.shareNow(app.store.home, job.id);
+        if (line !== null) return { ...job, state: "running" as const, phase: `Sharing: ${line}` };
+        if (share?.state === "failed" && share.at >= job.updated_ms) return { ...job, state: "failed" as const, error: share.error ?? "the share failed" };
+        return job;
+      });
       // Script shares join the same queue. Only the ones running: a share has no file, and a settled one is not kept (it would linger in this process and show up in the activity check).
       const shares = writerReviews.shareQueue().filter(share => writer.seesScript(writer.dataOf(app), share.id)).map(share => ({
         id: share.id,
@@ -1139,9 +1147,16 @@ async function retryExport({ app, params }: Context): Promise<Response> {
   const id = params.id!;
   liveOr404(app, id);
   const held = app.exports.replay?.(id) ?? null;
-  if (held === null) throw bad("nothing to retry");
-  if (held.extra.share === true) {
-    const started = reviews.exportAndShare(app, id, held.options, held.extra.replace === true, held.extra.note, held.extra.watermark);
+  // A share that failed after its export carries on from where it stopped; its export isn't made again.
+  let again: Promise<{ url: string; version: number }> | null = null;
+  try {
+    again = reviews.retryShare(app, id);
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
+  if (again === null && held === null) throw bad("nothing to retry");
+  if (again !== null || held?.extra.share === true) {
+    const started = again ?? reviews.exportAndShare(app, id, held!.options, held!.extra.replace === true, held!.extra.note, held!.extra.watermark);
     started.catch((error: unknown) => {
       const message = diag.messageOf(error);
       if (message === "the share was cancelled" || message === "the export was cancelled") return;
@@ -1156,7 +1171,7 @@ async function retryExport({ app, params }: Context): Promise<Response> {
     return json(first === null ? { started: true } : first.done);
   }
   try {
-    return json({ path: await app.exports.start(app.store, app.library, app.store.get(id)!.project, held.options, held.output, held.extra) });
+    return json({ path: await app.exports.start(app.store, app.library, app.store.get(id)!.project, held!.options, held!.output, held!.extra) });
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

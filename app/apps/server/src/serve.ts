@@ -333,14 +333,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   });
   // Once listening (the agents reach Edit's MCP on this port) and signed in
   // again (or 20 s on, signed out): the jobs and agent turns a restart cut short.
-  void Promise.race([signedIn.catch(() => undefined), Bun.sleep(20_000)]).then(() => {
-    resumeJobs(app);
-    try {
-      app.agents.resumeInterrupted?.();
-    } catch (error) {
-      diag.warn("agent", `carrying on cut turns: ${diag.messageOf(error)}`);
-    }
-  });
+  void Promise.race([signedIn.catch(() => undefined), Bun.sleep(20_000)]).then(() => resumeJobs(app));
   if (update.enabled()) {
     void update
       .check(update.readChannel(home))
@@ -365,7 +358,11 @@ function optional(area: string, work: () => void): void {
   }
 }
 
-/** Starts again the exports, uploads, smoothing, watches and map renders a restart cut short (jobs.ts). */
+/**
+ * Starts again everything a restart cut short (jobs.ts), from the one table:
+ * exports, archives, shares, fixes, agent turns, Ideas and Thumbnails runs,
+ * uploads, smoothing, watches and map renders.
+ */
 function resumeJobs(app: App): void {
   const project = (id: string) => {
     const live = app.store.get(id);
@@ -387,11 +384,14 @@ function resumeJobs(app: App): void {
       // The timeline it was started with, not edits made since.
       const current = project(job.project);
       const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
-      // A share's export carries on as the share it was: watermarked again, then shared.
+      // A share's export is its share's: the share job carries it on (and starts it again under this key).
       if (share === true) {
+        const owner = jobs.get(app.store.home, jobs.keyOf("share", job.project));
+        if (owner !== undefined && jobs.live(owner)) throw new jobs.Gone("its share carries it on");
+        // From a build before shares were jobs: listed as a share now, at its export.
         void reviews
           .resumeShare(app, job.project, asked, options, { ...(replace === true ? { replace } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) })
-          .catch((error: unknown) => diag.warn("review", `sharing ${job.project} after the restart: ${diag.messageOf(error)}`));
+          .catch((error: unknown) => diag.warn("review", `sharing ${job.project} after the restart (key ${job.key}): ${diag.messageOf(error)}`));
         return;
       }
       await app.exports.start(app.store, app.library, asked, options, output, { drive, ...(keepLocal === true ? { keepLocal } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) });
@@ -423,6 +423,18 @@ function resumeJobs(app: App): void {
       const { name, path, key, version } = job.args as { name: string; path: string; key: string; version?: number };
       if (!fs.existsSync(path)) throw new jobs.Gone(`${path} is gone`);
       void reviews.fullBehind(app.store.home, job.project, name, path, key, version);
+    },
+    share: (job) => reviews.resumeShareJob(app, job),
+    fix: (job) => reviews.resumeFix(app, job),
+    turn: (job) => {
+      if (app.agents.resumeTurn === undefined) throw new jobs.Gone("no agent panel here");
+      app.agents.resumeTurn(job);
+    },
+    idea: (job) => ideas.resumeRun(app, job),
+    thumbnail: (job) => thumbnails.resumeRun(app, job),
+    // Smooth playback renders are made again when wanted; listed only so a restart or an update waits for them.
+    playback: () => {
+      throw new jobs.Gone("made again when it's wanted");
     },
     map: (job) => {
       const { first } = job.args as { first: string };

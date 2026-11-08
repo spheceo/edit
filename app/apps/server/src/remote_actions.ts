@@ -130,6 +130,8 @@ export async function attention(app: App, setup: { id: string; ok: boolean; titl
   }
   for (const [project, quiet] of turns(app)) if (quiet > QUIET_MS) out.push(`Project ${project}: its agent turn has said nothing for ${Math.round(quiet / 60_000)} min (unstick stops it).`);
   for (const job of jobs.givenUp(app.store.home)) out.push(`Job ${job.key}: not started again (${job.given_up}) (unstick starts it again).`);
+  // An idea's or thumbnail's ending that never reached the cloud: its page still says Claude is working.
+  for (const job of jobs.list(app.store.home)) if ((job.kind === "idea" || job.kind === "thumbnail") && job.state === "failed") out.push(`Job ${job.key}: ${job.error ?? "how it ended never reached the cloud"}.`);
   return out;
 }
 
@@ -182,11 +184,8 @@ export function work(app: App): string[] {
   for (const [project, quiet] of turns(app)) out.push(`agent turn on ${project}: last said something ${Math.round(quiet / 1000)} s ago`);
   for (const [id, title, job] of writerJobs.runningList()) out.push(`Claude on script ${id} "${title}": ${(job as { stage?: string }).stage ?? "working"}`);
   out.push(`scripts' cloud: ${JSON.stringify(writerCloud.statusNow())}`);
-  try {
-    const listed = JSON.parse(fs.readFileSync(join(app.store.home, "jobs.json"), "utf8")) as { kind?: string; project?: string; given_up?: string }[];
-    for (const job of listed) out.push(`background job: ${job.kind ?? "?"}${job.project ? ` on ${job.project}` : ""}${job.given_up ? ` (given up: ${job.given_up})` : ""}`);
-  } catch {
-    // None noted.
+  for (const job of jobs.list(app.store.home)) {
+    out.push(`background job: ${job.kind}${job.project ? ` on ${job.project}` : ""}: ${job.state}${job.step ? `, ${job.step}` : ""}${job.error ? ` (${job.error})` : ""}${job.given_up ? ` (given up: ${job.given_up})` : ""}`);
   }
   return out;
 }
@@ -434,8 +433,9 @@ export async function unstick(app: App): Promise<string> {
 }
 
 /**
- * What a restart would cut off now: an export, an import, Claude on a script,
- * an agent turn. One list for everything that restarts Edit from afar (a
+ * What a restart would cut off now: an export, a share (from jobs.json, so one
+ * a restart cut short and that is about to carry on counts too), an import,
+ * Claude on a script, an agent turn. One list for everything that restarts Edit from afar (a
  * restart, an update), so none of them cuts off what another waits for
  * (Nov 1: an update waited only for agent turns, and would have stopped an
  * export part-way).
@@ -447,8 +447,10 @@ export function busyWith(app: App, agentTurns = true): string[] {
   } catch (error) {
     if (!seams.isUnavailable(error)) throw error;
   }
+  const shares = jobs.list(app.store.home ?? null, "share").filter(jobs.live).length;
   return [
     app.exports.running() ? "an export" : "",
+    shares > 0 ? (shares === 1 ? "a share" : `${shares} shares`) : "",
     uploading ? "an upload to Drive" : "",
     (app.scripts as { running?: () => boolean } | undefined)?.running?.() || importing() ? "a footage import" : "",
     writerImports.anyImporting() ? "a script's import" : "",

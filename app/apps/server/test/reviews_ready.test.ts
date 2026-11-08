@@ -291,8 +291,7 @@ test("Share again: with nothing to claim, it goes straight to exporting and shar
     // The fixture has no export on record, so the share itself stops there; it's said, and kept to try again.
     expect(said().at(-1)).toMatchObject({ state: "failed" });
     expect(String(said().at(-1)!.error)).toContain("The fixes are in, but sharing v2 failed");
-    const saved = JSON.parse(fs.readFileSync(`${home}/reviews.json`, "utf8")) as { unshared?: Record<string, true> };
-    expect(saved.unshared?.[id]).toBe(true);
+    expect(reviews.unshared(home, id)).toBe(true);
   } finally {
     cleanup();
   }

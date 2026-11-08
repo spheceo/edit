@@ -458,8 +458,21 @@ export interface ReviewNote {
   fixing: boolean;
 }
 
+/** How a project's last share stands (its job on the server): running (its step), done (published: up on the link), or failed (why). */
+export interface ShareState {
+  state: "running" | "done" | "failed";
+  step: string | null;
+  at: number;
+  version?: number;
+  url?: string;
+  error?: string;
+}
+
 export interface Review {
+  /** Where its share is while it runs: the same line Home and the Exports panel show. */
   sharing: string | null;
+  /** How the last share stands; "Up on the link" only once it's `done`. */
+  share?: ShareState | null;
   /** The channel whose watermark this project's shares carry (a picture id in the Watermarks folder), or none. */
   watermark?: string | null;
   review: { url: string; versions: { n: number; path: string }[]; approved: { version: number; by: string; at: number } | null } | null;

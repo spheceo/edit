@@ -707,6 +707,8 @@ export async function watchWindow(
   lines: WatchLine[],
   names: Record<string, string>,
   force: boolean,
+  /** What its frames are cut from, when not `source`: a pieced proxy's original (media.analysisInput). */
+  input: string = source,
 ): Promise<[Answer, number, boolean]> {
   const key = cacheKey(mediaKey(source), window, lines);
   const cached = join(dir, `${key}.json`);
@@ -734,8 +736,8 @@ export async function watchWindow(
   const what = `${source} ${clock(window.start)}–${clock(window.end)}`;
   try {
     const cache = parent(dir);
-    if (cache !== null) await cut(source, cache, window, clip);
-    else await cutAt(source, null, window, clip, 1);
+    if (cache !== null) await cut(input, cache, window, clip);
+    else await cutAt(input, null, window, clip, 1);
   } catch (error) {
     if (isBug(error)) throw error;
     fs.rmSync(clip, { force: true });
@@ -1227,7 +1229,10 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
     const names = { ...(transcripts.get(part.media)?.speakers ?? {}) };
     const dir = join(parent(app.media.paths(part.source).transcript) ?? app.store.cacheDir(), "watch");
     try {
-      return await diag.timeAsync("watch", "watch window", () => watchWindow(part.source, dir, title, window, lines, names, options.force));
+      // A pieced proxy's frames come from its original: cut through the proxy, every window made pieces of the
+      // whole tape at once (Killer Pastor's 1 h 52 min interrogation in dev, Nov 8: Edit past 23 GB, three times).
+      const input = await app.media.analysisInput(part.source);
+      return await diag.timeAsync("watch", "watch window", () => watchWindow(part.source, dir, title, window, lines, names, options.force, input));
     } finally {
       progress.step("watch", projectId, "watch", ++watched, jobs.length);
     }
@@ -1283,6 +1288,8 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   // Lines the model only guessed at: the few worth a look.
   const doubtful: unknown[] = [];
   const ordered = [...answers.values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const stage = (what: string) => diag.info("watch", `${projectId}: ${what} (${Math.round(process.memoryUsage().rss / 1e6)} MB)`);
+  stage(`reading ${ordered.length} windows' answers`);
   for (const [p, w, answer] of ordered) {
     const part = parts[p]!;
     const window = part.windows[w]!;
@@ -1378,7 +1385,9 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   // Who is who across the windows: one person, one name, whatever voices
   // diarisation gave them (cast.ts).
   // Matched across windows by Claude too (ai_claude.ts), not Gemini.
+  stage(`answers read: ${sightings.length} people seen, who is who next`);
   const reconciled = await castOf.reconcile(sightings, join(app.store.cacheDir(), "watch-cast"), aiClaude.spills);
+  stage("who is who answered");
   if (reconciled !== null) cost += reconciled.cost;
   const cast = reconciled !== null && "people" in reconciled ? reconciled : null;
   // Never quiet: without a cast a person split by diarisation stays two people.
@@ -1475,6 +1484,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       secondLooks.push(entry);
     });
   }
+  stage("second looks done; the corrections next");
   // The corrections, into each file's transcript.
   const examples: unknown[] = [];
   let changed = 0;

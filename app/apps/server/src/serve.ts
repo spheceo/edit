@@ -386,7 +386,6 @@ function resumeJobs(app: App): void {
       if (did === "finished" || did === "nothing") throw new jobs.Gone("its import has nothing left to do");
     },
     export: async (job) => {
-      // Jobs from before Nov 3 may name a Modal or Relay-worker backend: every export renders here now.
       const { options, output, drive, keepLocal, share, note, watermark, replace } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
       // The timeline it was started with, not edits made since.
       const current = project(job.project);

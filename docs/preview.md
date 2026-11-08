@@ -39,7 +39,7 @@ last) with a `.json` saying which picture it shows. `lib/playback.ts` shows it i
 save: play follows the video's clock, a seek sets its time, and nothing is decoded live.
 An edit drops back to the live preview below until the next render lands (a smooth play
 that goes stale pauses there), and the page asks for none while the agent is mid-turn.
-Since Nov 2 (Sphe: Edit off Modal) it renders on this Mac whatever its footage, and plays
+It renders on this Mac whatever its footage, and plays
 a chunk at a time while it renders (`playback_stream.ts`, `lib/smoothStream.ts`): the
 render does the chunks from the viewer's playhead first (`Plan.focus`, the page sends its
 frame), the minute from it before the sound's mix and the rest after, and the page appends
@@ -50,16 +50,6 @@ chunks): with the render done, a seek anywhere shows it in 0.5–1.6 s and it pl
 with it under way, the first chunk showed 17 s after the render started (it had waited
 142 s for the whole sound's mix), and on a Mac with nothing cached and the machine loaded,
 138 s. The whole render took 16 min 49 s here (48 fps).
-Until Nov 2 an edit whose footage is all in the cloud rendered on Modal instead (`modal_exports.run`,
-the house export's pool, its sections and sound cached there so a render after an edit
-redoes only what it touched), kept in R2 as `edit/playback/<project>/<picture hash>.mp4`
-(any Mac opening the same picture uses it at once) and streamed to the viewer through
-`streamFromCloud`'s blocks; the one it replaces is removed. Measured Oct 31 on the
-16-Year-Old (26 min, cloud footage): 3 min 04 s on Modal against ~50 min here, then 6 s
-played in 6 s with no frame dropped and no stall while two imports loaded this Mac. Measured Oct 31: the 48 s Vanilla Extract short (cloud
-footage) rendered in 68 s and played 515 frames with none dropped; the first render of a
-long cloud edit reads all its footage once from R2 (about 13 frames/s from South Africa).
-
 
 `apps/web/src/lib/playback.ts` owns the playhead, Web Audio clock and complete-scene
 presentation. The WASM engine still evaluates and draws through the same renderer

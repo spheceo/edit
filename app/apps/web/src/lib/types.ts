@@ -214,6 +214,8 @@ export interface ProjectSummary {
   created_by?: Creator;
   /** Made on a dev build (`Project::origin` "dev"): marked Dev on Home, hidden or cleared there. */
   dev?: boolean;
+  /** Its note (`Project::note`), left from Home's ⋯. */
+  note?: string;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

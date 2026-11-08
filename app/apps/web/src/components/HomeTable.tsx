@@ -9,8 +9,8 @@
 // it's brought back), the Later list's rows bring it back sooner, and on its
 // day a row is marked Back until someone opens it.
 
-import { AlarmClock, Captions, Check, CircleCheck, Clock, Ellipsis, FileText, Film, Lightbulb, Undo2 } from "lucide-react";
-import { createContext, useContext, type ReactNode } from "react";
+import { AlarmClock, Captions, Check, CircleCheck, Clock, Ellipsis, FileText, Film, Lightbulb, StickyNote, Undo2 } from "lucide-react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
 import { asideChoices, asleep, backLabel, type Later, type LaterEntry, type LaterKey } from "../lib/later";
 export { layoutFor } from "../lib/home-layout";
@@ -18,7 +18,8 @@ import { ago } from "../lib/time";
 import { STYLES, type Creator, type Style } from "../lib/types";
 import { openMenu, toggleMenu, type MenuItem } from "./ContextMenu";
 import { StartedBy } from "./StartedBy";
-import { cx } from "./ui";
+import { useEditor } from "../lib/store";
+import { Button, cx, Modal } from "./ui";
 
 /** A row takes up the table's columns (subgrid), so they line up row to row. */
 export const COLUMNS = "col-span-full grid grid-cols-subgrid items-center";
@@ -245,4 +246,108 @@ export function RowButtons({ aside, items, width = 200 }: { aside: ReactNode; it
       </button>
     </div>
   );
+}
+
+/** A note is kept to this many characters (the server's NOTE_LIMIT). */
+const NOTE_LIMIT = 500;
+
+/**
+ * A note on a script or an edit, beside its name (JJ, Nov 8: "to make it easier
+ * for one to write a note to self when we're at scale"): its first words, all of
+ * it on hover, and a click opens it to change. `onEdit` absent: shown only (a
+ * script or edit that isn't on this computer).
+ */
+export function NoteMark({ note, onEdit }: { note: string | undefined; onEdit?: () => void }) {
+  if (!note) return null;
+  return (
+    <button
+      type="button"
+      title={note}
+      disabled={onEdit === undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        onEdit?.();
+      }}
+      className={cx(CHIP, "max-w-[45%] shrink cursor-pointer font-normal text-secondary transition-colors enabled:hover:bg-line-strong enabled:hover:text-fg disabled:cursor-default")}
+    >
+      <StickyNote size={12} className="shrink-0 text-warning" />
+      <span className="truncate">{note}</span>
+    </button>
+  );
+}
+
+/**
+ * A row's note: its ⋯ item (Add note, or Edit note), its mark beside the name,
+ * and the dialog that writes it. `save` stores it (empty: none); null when it
+ * can't be changed from here.
+ */
+export function useNote(note: string | undefined, title: string, save: ((note: string) => Promise<void>) | null) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const edit = save === null ? undefined : () => {
+    setText(note ?? "");
+    setOpen(true);
+  };
+  const store = async (value: string) => {
+    if (save === null) return;
+    setBusy(true);
+    try {
+      await save(value.trim());
+      setOpen(false);
+    } catch (error) {
+      useEditor.getState().toastError(error, `save the note on “${title}”`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const items: MenuItem[] = edit === undefined ? [] : [{ label: note ? "Edit note" : "Add note", icon: <StickyNote size={14} />, onSelect: edit }];
+  const mark = <NoteMark note={note} onEdit={edit} />;
+  const dialog = (
+    <Modal open={open} onClose={() => setOpen(false)} width={420}>
+      <form
+        className="p-6"
+        onClick={(event) => event.stopPropagation()}
+        onSubmit={(event) => {
+          event.preventDefault();
+          void store(text);
+        }}
+      >
+        <h2 className="text-[18px] font-semibold tracking-[-0.3px]">{note ? "Edit note" : "Add note"}</h2>
+        <p className="mt-1 truncate text-[13px] text-muted">{title}</p>
+        <textarea
+          autoFocus
+          value={text}
+          rows={3}
+          maxLength={NOTE_LIMIT}
+          placeholder="Goes on Sam's channel"
+          onChange={(event) => setText(event.target.value)}
+          onFocus={(event) => event.currentTarget.setSelectionRange(event.currentTarget.value.length, event.currentTarget.value.length)}
+          onKeyDown={(event) => {
+            // Enter saves; Shift+Enter is a new line.
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              void store(text);
+            }
+          }}
+          className="mt-4 w-full resize-none rounded-md border border-line bg-panel px-3 py-2 text-[14px] text-fg outline-none placeholder:text-faint focus:border-line-strong"
+        />
+        <div className="mt-[22px] flex items-center gap-2">
+          {note ? (
+            <Button variant="subtle" type="button" disabled={busy} onClick={() => void store("")}>
+              Remove note
+            </Button>
+          ) : null}
+          <span className="flex-1" />
+          <Button variant="subtle" type="button" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={busy || text.trim() === (note ?? "")}>
+            Save
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+  return { items, mark, dialog };
 }

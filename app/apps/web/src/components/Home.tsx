@@ -20,10 +20,11 @@ import { prefetchScript } from "../writer/opened";
 import { CAN, useGrants } from "../writer/can";
 import type { Kind } from "../writer/types";
 import { useKept } from "../lib/kept";
+import { creditCopies } from "../lib/copies";
 import { askExportFolder } from "./ExportFolder";
 import { ProblemView } from "./ProblemView";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
-import { AsideStatus, BackMark, BY, Category, CATEGORY, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, LENGTH, LengthCell, layoutFor, NAME, PILL, ROW, RowButtons, StatusCell, TableShape, Updated, useAside, withAside } from "./HomeTable";
+import { AsideStatus, BackMark, BY, Category, CATEGORY, CHIP, COLUMNS, contextMenu, CreatorCell, KindMark, LaterContext, LENGTH, LengthCell, layoutFor, NAME, NoteMark, PILL, ROW, RowButtons, StatusCell, TableShape, Updated, useAside, useNote, withAside } from "./HomeTable";
 import { HomeSidebar, nameOf, OpenSidebar, placeOf, placeOfSection, PLACES, useSidebarOpen, type Place as Spot, type Section, type Where } from "./HomeSidebar";
 import { ThumbnailGrid, useMakeThumbnail } from "../thumbnails/list";
 import { Loader, Tile } from "./Logo";
@@ -221,7 +222,8 @@ export function Home() {
   // Whether a script is a compilation: the cloud's list says, else this Mac's copy.
   const withKind = (one: WriterScriptRow): WriterScriptRow => {
     const here = localScripts.find((local) => local.id === one.id);
-    return { ...one, compilation: one.compilation ?? here?.compilation, runFailed: one.runFailed ?? here?.runFailed ?? null };
+    // Its note: this Mac's copy's when it has one (a note just left here), else the list's.
+    return { ...one, compilation: one.compilation ?? here?.compilation, runFailed: one.runFailed ?? here?.runFailed ?? null, note: here !== undefined ? here.note : one.note };
   };
   // An import running (or stopped) on this Mac isn't in the cloud's list until
   // it's in: listed from here meanwhile, so it shows in Importing at once (JJ,
@@ -245,6 +247,7 @@ export function Home() {
     built: false,
     style: null,
     ...("compilation" in one && one.compilation !== undefined ? { compilation: one.compilation } : {}),
+    ...("note" in one && one.note ? { note: one.note } : {}),
   }));
   const listedScripts = [...scripts, ...pending];
   const scriptOf = new Map(listedScripts.flatMap((one) => {
@@ -349,6 +352,9 @@ export function Home() {
       items.push({ id: `card-${card.id}`, key: laterKey("card", card.id), section: "ideas", stage: "board", at: Number.MAX_SAFE_INTEGER, title: card.name, mine: true, row: () => <CardTableRow card={card} onOpened={refreshIdeas} /> });
     }
   }
+
+  // A "(conflicted copy)" is whose its original is, not the Mac's that kept it (lib/copies.ts).
+  creditCopies(items);
 
   // Set aside still (in Later), or back on its day and not opened yet (marked Back, first in its list).
   const entryOf = (item: Item) => (item.key === null ? undefined : later.entries.get(item.key));
@@ -812,6 +818,12 @@ export function stageOf(row: Listed, state: ProjectStatus | undefined): Stage {
 export const VIEW = "edit.home.view";
 /** The kind of video Home's lists are filtered to (remembered on this browser). */
 const KIND = "edit.home.kind";
+/** A row's menu with its note's item after Rename (or first, when it has no Rename). */
+function withNote(items: MenuItem[], note: MenuItem[]): MenuItem[] {
+  const at = items.findIndex((item) => "label" in item && item.label === "Rename");
+  return at < 0 ? [...note, ...items] : [...items.slice(0, at + 1), ...note, ...items.slice(at + 1)];
+}
+
 /** Mine or Everyone (remembered on this browser). */
 const MINE = "edit.home.mine";
 
@@ -1154,6 +1166,8 @@ export type ScriptIssueRow = {
   sharing?: { startedAt: number };
   /** Its script being written (a build running on this Mac). */
   building?: boolean;
+  /** Its note, left from Home's ⋯. */
+  note?: string;
   /** Stopped on a failure this build meets again however often it's retried (a 413): Retry isn't offered until an update. */
   retryHelps?: false;
 };
@@ -1497,7 +1511,18 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
   const { project, onChanged, remote, state } = props;
   const card = useProject(project, onChanged, props.cloudOn, props.status, remote, script?.id ?? null);
   const aside = useAside(laterKey("edit", project.id), project.name);
-  const items = withAside(card.items, aside.items);
+  const note = useNote(
+    project.note,
+    project.name,
+    project.problem
+      ? null
+      : async (text) => {
+          const live = await api.project(project.id);
+          await api.saveProject(project.id, live.rev, { ...live.project, note: text === "" ? undefined : text }, clientId);
+          onChanged();
+        },
+  );
+  const items = withAside(withNote(card.items, note.items), aside.items);
   return (
     <>
       <div
@@ -1518,6 +1543,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
             </span>
           )}
           {project.dev === true && <DevBadge />}
+          {card.nameInput === null && note.mark}
         </div>
         <Category style={project.style} compilation={script?.compilation} />
         <StatusCell>
@@ -1544,6 +1570,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
         <RowButtons aside={aside.button} items={items} width={190} />
       </div>
       {card.dialogs}
+      {note.dialog}
     </>
   );
 }
@@ -1581,6 +1608,18 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
       : [];
   // Its ⋯ (and right click), as an edit's: open it, and (when this Mac has it) rename or delete it; Later's too.
   const aside = useAside(laterKey("script", script.id), script.title || "Untitled script");
+  // Its note, left from here when this Mac has the script (even while it imports).
+  const note = useNote(
+    script.note,
+    script.title || "Untitled script",
+    here
+      ? async (text) => {
+          const writer = await import("../writer/api");
+          await writer.setScriptNote(script.id, text);
+          onChanged();
+        }
+      : null,
+  );
   const items = withAside(
     [
       { label: "Open script", icon: <FileText size={14} />, onSelect: () => navigate(`/scripts/${script.id}`) },
@@ -1593,6 +1632,7 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
       ...(here
         ? ([
             { label: "Rename", icon: <Pencil size={14} />, onSelect: () => setRenaming(script.title) },
+            ...note.items,
             ...categoryItem,
             { separator: true },
             { label: "Delete…", icon: <Trash2 size={14} />, danger: true, onSelect: () => setDeleting(true) },
@@ -1670,6 +1710,7 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
         <span className={NAME} title={script.title}>
           {script.title || "Untitled script"}
         </span>
+        {note.mark}
       </div>
       <Category style={script.style} compilation={script.compilation} />
       <StatusCell>
@@ -1718,6 +1759,7 @@ function ScriptTableRow({ script, importing, writing, sharing, here, onChanged, 
       <Updated at={script.updatedAt} title={script.updatedBy ? `by ${script.updatedBy}` : undefined} />
       <RowButtons aside={aside.button} items={items} width={180} />
     </div>
+      {note.dialog}
       <Modal open={renaming !== null} onClose={() => setRenaming(null)} width={420}>
         <form
           className="p-6"
@@ -1811,6 +1853,7 @@ function CloudTableRow({ project, script = null, onChanged }: { project: CloudPr
           <span className={NAME} title={project.name}>
             {project.name}
           </span>
+          <NoteMark note={summary.note} />
         </div>
         <Category style={summary.style} compilation={script?.compilation} />
         <StatusCell>
@@ -1941,6 +1984,10 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
   const [prompt, setPrompt] = useState("");
   const [sources, setSources] = useState<Source[] | null>(null);
   const [reading, setReading] = useState(false);
+  /** What each footage line was found to be, while the dialog is open: a line checked once isn't checked again. */
+  const checkedLines = useRef(new Map<string, Source[]>());
+  /** Reuse ticked or unticked by hand, by link: kept when the list is shown again. */
+  const ticked = useRef(new Map<string, boolean>());
   const [preview, setPreview] = useState<{ url: string; result?: Preview; error?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1966,6 +2013,8 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
     setText(start?.text ?? "");
     setPrompt("");
     setSources(null);
+    checkedLines.current.clear();
+    ticked.current.clear();
     setPreview(null);
     setError(null);
     setPicked(start !== null);
@@ -1993,21 +2042,32 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
             lines.push(...card.lines);
           } else lines.push(line);
         }
-        // The links at once; what each is (YouTube takes a few seconds a video) as it comes.
-        if (alive) setSources(lines.flatMap((line) => line.match(LINK) ?? []).map((url) => ({ url, title: "", durationMs: null, reuse: /^REUSE\b/i.test(lines.find((one) => one.includes(url)) ?? ""), problem: null })));
-        const checked = await writer.checkVideos(lines);
-        // A link YouTube didn't answer for (slow, or a sign-in asked) is checked once more on its own, behind the rest: Create
-        // doesn't wait on it, and only if it fails again does its row say so (Nov 6, Marius: four of six links showed only their URL).
-        const again = new Set(checked.filter((one) => one.title === "" && one.problem === null && one.warning !== null && /youtu/.test(one.url)).map((one) => one.url));
-        if (!alive) return;
-        setError(null);
-        setSources(checked.map((one) => ({ url: one.url, title: one.title, durationMs: one.durationMs, reuse: one.reuse, ...(one.earlier ? { earlier: one.earlier } : {}), problem: one.problem, warning: one.warning, again: again.has(one.url) })));
-        setReading(false);
-        for (const url of again) {
-          const [found] = await writer.checkVideos([url]).catch(() => []);
-          if (!alive) return;
-          setSources((all) => (all ?? []).map((one) => (one.url !== url ? one : found ? { ...one, title: found.title, durationMs: found.durationMs, problem: found.problem, warning: found.warning, again: false } : { ...one, again: false })));
-        }
+        // The links at once; what each is (YouTube takes a few seconds a video) as it comes. A line already checked in this
+        // dialog keeps its answer, so taking a link out (or adding one) checks only what's new (Nov 8, Marius: "it would be
+        // good if it doesn't have to recheck all just because you remove one link").
+        const known = checkedLines.current;
+        const linked = lines.filter((line) => line.match(LINK) !== null);
+        const shown = () =>
+          linked
+            .flatMap((line) => known.get(line) ?? (line.match(LINK) ?? []).map((url): Source => ({ url, title: "", durationMs: null, reuse: /^REUSE\b/i.test(line), problem: null, again: true })))
+            .map((one) => ({ ...one, reuse: ticked.current.get(one.url) ?? one.reuse }));
+        if (alive) setSources(shown());
+        const fresh = linked.filter((line) => !known.has(line));
+        // Four lines asked about at once, each on its own so its answer is its line's.
+        let next = 0;
+        const lane = async () => {
+          for (let at = next++; at < fresh.length && alive; at = next++) {
+            const line = fresh[at]!;
+            let checked = await writer.checkVideos([line]);
+            // A link YouTube didn't answer for (slow, or a sign-in asked) is asked once more before its row says so (Nov 6,
+            // Marius: four of six links showed only their URL).
+            if (checked.some((one) => one.title === "" && one.problem === null && one.warning !== null && /youtu/.test(one.url))) checked = await writer.checkVideos([line]).catch(() => checked);
+            known.set(line, checked.map((one) => ({ url: one.url, title: one.title, durationMs: one.durationMs, reuse: one.reuse, ...(one.earlier ? { earlier: one.earlier } : {}), problem: one.problem, warning: one.warning })));
+            if (alive) setSources(shown());
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(4, fresh.length) }, lane));
+        if (alive) setError(null);
       } catch (cause) {
         if (alive) setError((cause as Error).message);
       } finally {
@@ -2192,7 +2252,10 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
                       <input
                         type="checkbox"
                         checked={one.reuse}
-                        onChange={(event) => setSources((all) => (all ?? []).map((other, at) => (at === index ? { ...other, reuse: event.target.checked } : other)))}
+                        onChange={(event) => {
+                          ticked.current.set(one.url, event.target.checked);
+                          setSources((all) => (all ?? []).map((other, at) => (at === index ? { ...other, reuse: event.target.checked } : other)));
+                        }}
                       />
                       Reuse
                     </label>

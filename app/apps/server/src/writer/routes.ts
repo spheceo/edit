@@ -150,6 +150,15 @@ export function routes(router: Router<App>): void {
         return detail(data, edits.rename(data, id(context), String(title ?? "")));
       });
     })
+    // Its note (Home's ⋯ Add note): saved even while it imports or Claude writes it, being a file of its own.
+    .put("/api/writer/scripts/{id}/note", async (context) => {
+      const { note } = await body<{ note?: unknown }>(context);
+      return answer(() => {
+        const data = dataOf(context.app);
+        readFor(data, id(context));
+        return { note: store.writeNote(store.scriptDir(data, id(context)), typeof note === "string" ? note : "") };
+      });
+    })
     .put("/api/writer/scripts/{id}/kind", async (context) => {
       const { kind } = await body<{ kind?: Kind }>(context);
       return answer(() => {

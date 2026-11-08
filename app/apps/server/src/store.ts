@@ -670,6 +670,7 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   if (project.drive !== undefined && project.drive !== null) summary.drive = project.drive as DriveFile;
   if (project.created_by !== undefined && project.created_by !== null) summary.created_by = project.created_by;
   if (project.origin === "dev") summary.dev = true;
+  if (typeof project.note === "string" && project.note !== "") summary.note = project.note;
   const missing = missingMedia(project);
   const used = usedMedia(project).length;
   if (used > 0) summary.media_used = used;

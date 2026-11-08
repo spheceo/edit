@@ -135,7 +135,40 @@ export function summary(script: Script, dir?: string): Summary {
     createdAt: script.createdAt,
     kind: script.kind ?? "interrogation",
     ...(script.createdBy ? { createdBy: script.createdBy } : {}),
+    ...(() => {
+      const note = dir === undefined ? "" : readNote(dir);
+      return note === "" ? {} : { note };
+    })(),
   };
+}
+
+/**
+ * A note left on a script from Home's ⋯ (JJ, Nov 8: "to make it easier for one
+ * to write a note to self when we're at scale"). Its own file, not a field of
+ * script.json: an import or a build writes the script it holds back whole, and
+ * would take a note left meanwhile away. It syncs as the script's other files do.
+ */
+export const NOTE_FILE = "note.json";
+export const NOTE_LIMIT = 500;
+
+export function readNote(dir: string): string {
+  try {
+    const kept = JSON.parse(fs.readFileSync(join(dir, NOTE_FILE), "utf8")) as { note?: unknown };
+    return typeof kept.note === "string" ? kept.note : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Sets (or, empty, clears) the note; kept as an empty note rather than deleted, so the clearing syncs too. */
+export function writeNote(dir: string, note: string): string {
+  const given = note.replace(/\p{Cc}+/gu, " ").trim();
+  if ([...given].length > NOTE_LIMIT) throw new Error(`Keep a note to ${NOTE_LIMIT} characters.`);
+  if (!fs.existsSync(join(dir, "script.json"))) throw new Error("That script isn't on this computer.");
+  if (given === "" && !fs.existsSync(join(dir, NOTE_FILE))) return given;
+  writeAtomic(join(dir, NOTE_FILE), JSON.stringify({ note: given, at: Date.now() }));
+  libraryChanged();
+  return given;
 }
 
 /** Every script here, newest change first; footage a commentary was written from carries that commentary's title. */
@@ -158,7 +191,7 @@ function stampOf(path: string): string {
 }
 
 function listedIn(dir: string): { row: Summary; title: string; sources: string[] } | null {
-  const stamp = `${stampOf(join(dir, "script.json"))}|${stampOf(join(dir, "chat.json"))}`;
+  const stamp = `${stampOf(join(dir, "script.json"))}|${stampOf(join(dir, "chat.json"))}|${stampOf(join(dir, NOTE_FILE))}`;
   const had = listedCache.get(dir);
   if (had !== undefined && had.stamp === stamp) return had;
   let script: Script;

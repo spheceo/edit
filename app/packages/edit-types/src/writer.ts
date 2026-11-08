@@ -166,6 +166,8 @@ export type Summary = {
   /** The last share failed: why. */
   shareFailed?: { error: string; at: number };
   createdBy?: Creator;
+  /** A note someone left on it from Home's ⋯ ("goes on Sam's channel"): the team's, shown beside its name. */
+  note?: string;
   /** Footage a commentary was written from: that commentary's title. The list keeps it inside it. */
   inCommentary?: string;
   /** The cloud refused its last save: what it said. Shown as "Not in the cloud". */

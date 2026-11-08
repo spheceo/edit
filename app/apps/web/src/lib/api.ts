@@ -394,6 +394,8 @@ export interface WriterScriptRow {
   compilation?: boolean;
   /** Its last Claude run ended without finishing (an API error, Edit closing, stopped): when, and what it said. */
   runFailed?: { at: number; error: string } | null;
+  /** Its note, left from Home's ⋯. */
+  note?: string;
 }
 
 export interface ProjectStatus {

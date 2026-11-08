@@ -72,6 +72,11 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub origin: Option<String>,
+    /// A note someone left on it from Home's ⋯ ("goes on Sam's channel"):
+    /// the team's, shown beside its name on Home. None when there's none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub note: Option<String>,
 }
 
 /// The account that started a project (accounts.spheceo.com).
@@ -1817,6 +1822,7 @@ impl Project {
             people: Vec::new(),
             created_by: None,
             origin: None,
+            note: None,
         };
         for kind in [
             TrackKind::Video,

@@ -73,4 +73,9 @@ created_by?: Creator,
  * test projects from real ones; None for real projects (and ones from
  * before). Promoting a dev project clears it.
  */
-origin?: string, };
+origin?: string, 
+/**
+ * A note someone left on it from Home's ⋯ ("goes on Sam's channel"):
+ * the team's, shown beside its name on Home. None when there's none.
+ */
+note?: string, };

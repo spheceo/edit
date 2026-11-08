@@ -844,6 +844,8 @@ export function summary(project: Project): Record<string, unknown> {
     width: project.settings.width,
     // A test project (dev_projects.ts): hidden on Home with the rest, on Macs that only have it in the cloud too.
     ...(project.origin === "dev" ? { dev: true } : {}),
+    // Its note, shown on Home on Macs that only have it in the cloud too.
+    ...(typeof project.note === "string" && project.note !== "" ? { note: project.note } : {}),
   };
 }
 

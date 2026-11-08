@@ -413,3 +413,22 @@ test("each server start counts a project's revisions from its own base, so a pag
     second.cleanup();
   }
 });
+
+// JJ, Nov 8: a note to self on an edit, from Home's ⋯, kept with the project and shown in its summaries.
+test("a project's note is kept through a save, listed, and gone once cleared", async () => {
+  const { store, cleanup } = fixtureHome("store-note");
+  try {
+    const live = store.create("Cops Discover Horrifying Secret", SETTINGS);
+    const id = live.project.id;
+    const noted = { ...structuredClone(live.project), note: "goes on Sam's channel" } as Project;
+    const saved = await store.replace(id, live.rev, noted, "test");
+    expect(store.get(id)!.project.note).toBe("goes on Sam's channel");
+    expect(store.list().find((entry) => entry.id === id)!.note).toBe("goes on Sam's channel");
+    const { note: _gone, ...cleared } = noted;
+    await store.replace(id, saved.rev, cleared as Project, "test");
+    expect(store.get(id)!.project.note).toBeUndefined();
+    expect(store.list().find((entry) => entry.id === id)!.note).toBeUndefined();
+  } finally {
+    cleanup();
+  }
+});

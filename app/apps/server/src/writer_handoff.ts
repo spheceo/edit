@@ -248,18 +248,18 @@ function creatorOf(value: unknown): Creator | null {
 /** Writer's scripts in the cloud, newest first (deleted ones left out), each with the Edit project made from it here. */
 export async function list(
   app: App,
-): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; createdBy: Creator | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null; clips: number; durationMs: number; built: boolean; style: Style | null; compilation: boolean; runFailed: { at: number; error: string } | null }[]> {
+): Promise<{ id: string; title: string; rev: number; updatedAt: number; updatedBy: string | null; createdBy: Creator | null; project: string | null; handoff: { at: number; by: string | null; changed: boolean } | null; clips: number; durationMs: number; built: boolean; style: Style | null; compilation: boolean; runFailed: { at: number; error: string } | null; note?: string }[]> {
   const made = imports(app.store.home);
   if (!cloud.enabled()) throw new Error("Writer's scripts need Edit's cloud (the relay token)");
   const rows = (await cloud.query("writer:listScripts", {})) as Record<string, unknown>[];
   // A commentary's sources are part of it, not scripts of their own (Script mode hides them too): only this Mac's copies say which.
   let sources = new Set<string>();
   // This Mac's copies: one changed here since the cloud's (a rename, a new category) shows as it is here until its push lands.
-  let here = new Map<string, { title: string; kind: string | undefined; updatedAt: number }>();
+  let here = new Map<string, { title: string; kind: string | undefined; updatedAt: number; note: string }>();
   try {
     const local = writerStore.list(writerStore.dataDir(app.store.home));
     sources = new Set(local.flatMap((one) => (one.inCommentary ? [one.id] : [])));
-    here = new Map(local.map((one) => [one.id, { title: one.title, kind: one.kind, updatedAt: one.updatedAt }]));
+    here = new Map(local.map((one) => [one.id, { title: one.title, kind: one.kind, updatedAt: one.updatedAt, note: one.note ?? "" }]));
   } catch {
     // No scripts here yet.
   }
@@ -282,7 +282,7 @@ export async function list(
       createdBy: creatorOf(row.createdBy),
       // From Writer's library row: a built script has its footage cut into clips (a source being researched is one whole clip, or none).
       ...(() => {
-        const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown; sourceKind?: unknown; compilation?: unknown; runFailed?: unknown };
+        const summary = (row.summary ?? {}) as { clipCount?: unknown; durationMs?: unknown; status?: unknown; kind?: unknown; sourceKind?: unknown; compilation?: unknown; runFailed?: unknown; note?: unknown };
         const clips = typeof summary.clipCount === "number" ? summary.clipCount : 0;
         // Its kind of video, once Writer's row says it (as its script's `kind`): this Mac's, when its copy is newer.
         // A category changed here showed the old one until the push landed, ~8 s later (JJ, Nov 6: "it doesn't change when I click it").
@@ -291,7 +291,9 @@ export async function list(
         // Over several videos, and whether Claude's last run on it failed (Home's category and Needs you, whichever Mac made it).
         const failed = summary.runFailed as { at?: unknown; error?: unknown } | null | undefined;
         const runFailed = failed && typeof failed.at === "number" && typeof failed.error === "string" ? { at: failed.at, error: failed.error } : null;
-        return { clips, durationMs: typeof summary.durationMs === "number" ? summary.durationMs : 0, built: clips > 1 || (style === "commentary" && summary.status === "ready"), style, compilation: summary.compilation === true, runFailed };
+        // Its note: this Mac's when it has the script (a note left here shows before its push lands), else the cloud's.
+        const note = here.get(String(row.scriptId ?? ""))?.note ?? (typeof summary.note === "string" ? summary.note : "");
+        return { clips, durationMs: typeof summary.durationMs === "number" ? summary.durationMs : 0, built: clips > 1 || (style === "commentary" && summary.status === "ready"), style, compilation: summary.compilation === true, runFailed, ...(note !== "" ? { note } : {}) };
       })(),
       // Sent to Edit from Writer ("Send to Edit"), and whether it changed since.
       handoff: (() => {

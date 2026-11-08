@@ -53,6 +53,8 @@ export interface CloudProject {
     subtitles?: boolean;
     /** A test project (made on a dev build, or marked by hand). */
     dev?: boolean;
+    /** Its note, left from Home's ⋯. */
+    note?: string;
   } | null;
   /** Who started it (the relay records them from their sign-in); null for projects from before. */
   created_by?: Creator | null;

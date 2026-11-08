@@ -7,9 +7,17 @@
 //! Only Edit.app has a bundle for macOS to post as: the window `edit app`
 //! starts (`<home>/bin/Edit`, a bare program) says it through AppleScript
 //! instead, which can't open the page.
+//!
+//! Settings → Notifications asks how it stands (`notices_status`), turns it on
+//! (`notices_allow`: macOS's question again while it may still ask, else its
+//! Notifications settings for Edit, since macOS asks only once) and sends a
+//! test (`notices_test`), so a "Don't Allow" clicked by mistake is undone in
+//! one click.
 
 use std::process::Command;
-use std::sync::OnceLock;
+use std::ptr::NonNull;
+use std::sync::{mpsc, OnceLock};
+use std::time::Duration;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -17,9 +25,10 @@ use objc2::runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread};
 use objc2_foundation::{NSBundle, NSError, NSString};
 use objc2_user_notifications::{
-    UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
+    UNAuthorizationOptions, UNAuthorizationStatus, UNMutableNotificationContent, UNNotification,
     UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
-    UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    UNNotificationSettings, UNNotificationSound, UNUserNotificationCenter,
+    UNUserNotificationCenterDelegate,
 };
 use tauri::{AppHandle, Manager};
 
@@ -124,17 +133,102 @@ pub fn init(app: &AppHandle) {
     center.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     // The center keeps its delegate weakly: this one lives as long as the app.
     std::mem::forget(delegate);
-    let answered = RcBlock::new(|granted: Bool, _error: *mut NSError| {
-        if !granted.as_bool() {
+    ask(&center, |granted| {
+        if !granted {
             eprintln!(
-                "edit: notifications aren't allowed for Edit (System Settings → Notifications)"
+                "edit: notifications aren't allowed for Edit (Settings → Notifications turns them on)"
             );
         }
     });
+}
+
+/// macOS's question, whether Edit may notify (asked once: after an answer it says that answer again).
+fn ask(center: &UNUserNotificationCenter, answered: impl Fn(bool) + 'static) {
+    let answered =
+        RcBlock::new(move |granted: Bool, _error: *mut NSError| answered(granted.as_bool()));
     center.requestAuthorizationWithOptions_completionHandler(
         UNAuthorizationOptions::Alert | UNAuthorizationOptions::Sound,
         &answered,
     );
+}
+
+/// How Edit's notifications stand: "on", "off" (turned off for Edit), "ask"
+/// (never answered), or "none" (a bare program, which can't have them).
+fn status() -> &'static str {
+    if !bundled() {
+        return "none";
+    }
+    let (send, receive) = mpsc::channel();
+    let answered = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
+        // SAFETY: macOS hands the handler live settings for its duration.
+        let _ = send.send(unsafe { settings.as_ref() }.authorizationStatus());
+    });
+    UNUserNotificationCenter::currentNotificationCenter()
+        .getNotificationSettingsWithCompletionHandler(&answered);
+    match receive.recv_timeout(Duration::from_secs(5)) {
+        Ok(UNAuthorizationStatus::Denied) => "off",
+        Ok(UNAuthorizationStatus::NotDetermined) | Err(_) => "ask",
+        Ok(_) => "on",
+    }
+}
+
+/// Turns them on as far as Edit can: asks macOS while it may still ask
+/// (waiting for the answer), else opens its Notifications settings on Edit,
+/// where the person switches Allow on. How they stand after.
+fn allow() -> &'static str {
+    match status() {
+        "ask" => {
+            let (send, receive) = mpsc::channel();
+            ask(
+                &UNUserNotificationCenter::currentNotificationCenter(),
+                move |granted| {
+                    let _ = send.send(granted);
+                },
+            );
+            // The person has as long as they like to answer; a few minutes, then it's looked at again.
+            let _ = receive.recv_timeout(Duration::from_secs(300));
+            status()
+        }
+        "off" => {
+            let id = NSBundle::mainBundle()
+                .bundleIdentifier()
+                .map_or_else(|| "com.spheceo.edit".to_owned(), |id| id.to_string());
+            let _ = Command::new("open")
+                .arg(format!(
+                    "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={id}"
+                ))
+                .spawn();
+            "off"
+        }
+        other => other,
+    }
+}
+
+#[tauri::command]
+pub async fn notices_status() -> String {
+    tauri::async_runtime::spawn_blocking(status)
+        .await
+        .unwrap_or("ask")
+        .to_owned()
+}
+
+#[tauri::command]
+pub async fn notices_allow() -> String {
+    tauri::async_runtime::spawn_blocking(allow)
+        .await
+        .unwrap_or("ask")
+        .to_owned()
+}
+
+/// A notification now, as one about finished work would come (shown even with Edit in front).
+#[tauri::command]
+pub fn notices_test(path: String) {
+    post(&Notice {
+        key: "test".to_owned(),
+        title: "Notifications are on".to_owned(),
+        body: "This is how Edit tells you a draft, a revision or a share is done.".to_owned(),
+        path,
+    });
 }
 
 /// Posts `notice` in Notification Center.

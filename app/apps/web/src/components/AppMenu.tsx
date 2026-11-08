@@ -1,4 +1,4 @@
-// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens. Settings: who's signed in, YouTube and updates.
+// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens. Settings: who's signed in, notifications, YouTube and updates.
 
 import { Bug, ChevronDown, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -7,6 +7,7 @@ import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
 import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
+import { permission, sendTest, turnOn, type Permission, type TurnedOn } from "../lib/notices";
 import { toggleMenu, type MenuItem } from "./ContextMenu";
 import { api, type YoutubeSignIn } from "../lib/api";
 import { ProblemView } from "./ProblemView";
@@ -345,6 +346,69 @@ function YoutubeGroup() {
   );
 }
 
+/**
+ * Whether Edit may tell you work is done while you're elsewhere, and one
+ * button: Turn on (the question again, or the system's own setting when the
+ * answer was no) or, once on, Send a test. Looked at again whenever the window
+ * comes back, so returning from System Settings shows it on.
+ */
+function NotificationsGroup() {
+  const [state, setState] = useState<Permission | null>(null);
+  const [then, setThen] = useState<TurnedOn["then"] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    const look = () => void permission().then(setState);
+    look();
+    window.addEventListener("focus", look);
+    return () => window.removeEventListener("focus", look);
+  }, []);
+  if (state === null || state === "none") return null;
+  const on = () => {
+    setBusy(true);
+    void turnOn()
+      .then((done) => {
+        setState(done.now);
+        setThen(done.then);
+      })
+      .catch(() => setThen("browser"))
+      .finally(() => setBusy(false));
+  };
+  const test = () => {
+    void sendTest().then(() => {
+      setSent(true);
+      setTimeout(() => setSent(false), 2500);
+    });
+  };
+  const detail =
+    state === "on"
+      ? "On: you’re told when a draft, a revision or a share is done while you’re elsewhere."
+      : then === "system"
+        ? "Turn on Allow notifications for Edit in System Settings, then come back."
+        : then === "reopening"
+          ? "Opening Edit’s window again with them on…"
+          : then === "browser"
+            ? "This browser blocks them: allow notifications for this site from the icon beside the address."
+            : state === "off"
+              ? "Off: Edit can’t tell you when a draft, a revision or a share is done while you’re elsewhere."
+              : "Edit can tell you when a draft, a revision or a share is done while you’re elsewhere.";
+  return (
+    <Group title="Notifications">
+      <Row name="When work is done" detail={detail}>
+        {state === "on" ? (
+          <Button onClick={test} disabled={sent}>
+            {sent ? "Sent" : "Send a test"}
+          </Button>
+        ) : (
+          <Button onClick={on} disabled={busy || then === "reopening"}>
+            {busy ? "Waiting…" : "Turn on"}
+          </Button>
+        )}
+      </Row>
+    </Group>
+  );
+}
+
 /** Edit's settings, laid out as Writer's: who's signed in, then YouTube and updates; the build and Done at the foot. */
 function SettingsDialog() {
   const person = useAccount((state) => (state.account?.signed_in ? state.account.person : null));
@@ -368,6 +432,7 @@ function SettingsDialog() {
       <DialogHeader title="Settings" />
       <div className="flex max-h-[72vh] flex-col gap-[18px] overflow-y-auto px-6">
         {person && <p className="text-[13px] text-muted">Signed in as {person.email}</p>}
+        <NotificationsGroup />
         <YoutubeGroup />
         <ExportsSettings />
         <StorageSettings />

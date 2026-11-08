@@ -15,10 +15,14 @@ import * as os from "node:os";
 
 import icon from "../../../assets/brand/edit-icon-1024.png" with { type: "file" };
 
+import type { App } from "./app.ts";
 import { chrome } from "./broll.ts";
 import * as diag from "./diag.ts";
+import { json } from "./http/errors.ts";
+import { readJson, type Router } from "./http/router.ts";
 import { join, parent } from "./paths.ts";
 import { RELEASE } from "./version.ts";
+import { reopenWindow } from "./window.ts";
 
 /** The host Edit's window opens: its own, so the window has its own app ID. */
 export const WINDOW_HOST = "edit.localhost";
@@ -39,25 +43,43 @@ export function windowCommand(home: string, port: number): string[] | null {
     "--no-default-browser-check",
     // Nothing kept in this profile needs the desktop's keyring (Edit's sign-in is the server's): no unlock prompt.
     "--password-store=basic",
+    // Reopened by Edit (Settings → Notifications), it was closed on purpose: no "restore pages?".
+    "--hide-crash-restore-bubble",
     "--window-size=1600,1000",
   ];
+}
+
+/** Whether a Chrome is running on `profile` now: its lock names this machine and a live process (one killed leaves its lock). */
+function chromeOn(profile: string): boolean {
+  let target: string;
+  try {
+    target = fs.readlinkSync(join(profile, "SingletonLock"));
+  } catch {
+    return false;
+  }
+  const at = target.lastIndexOf("-");
+  const pid = Number(target.slice(at + 1));
+  // Another machine's lock (a shared home): not ours to judge.
+  if (at < 0 || target.slice(0, at) !== os.hostname() || !Number.isInteger(pid)) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Lets Edit's page in the window show the desktop's notifications without
  * asking (notices.ts: a draft is ready while Edit is behind other windows):
  * the window's own Chrome profile allows them for its origin. Written before
- * Chrome starts; a Chrome already running on the profile keeps its own copy
- * (and writes it back on quit), so it's left alone then.
+ * Chrome starts, since it reads its profile only then (and a Chrome running
+ * on it writes its own copy back on quit). A block set in the window stays,
+ * unless `again` (Settings → Notifications → Turn on).
  */
-export function allowNotifications(home: string, port: number): void {
+export function allowNotifications(home: string, port: number, again = false): void {
   const profile = join(home, "window");
-  try {
-    fs.lstatSync(join(profile, "SingletonLock"));
-    return;
-  } catch {
-    // Chrome isn't running on it.
-  }
+  if (chromeOn(profile)) return;
   const path = join(profile, "Default", "Preferences");
   let prefs: Record<string, unknown> = {};
   try {
@@ -75,13 +97,35 @@ export function allowNotifications(home: string, port: number): void {
   };
   const allowed = within(within(within(within(prefs, "profile"), "content_settings"), "exceptions"), "notifications");
   const origin = `http://${WINDOW_HOST}:${port},*`;
-  if ((allowed[origin] as { setting?: unknown } | undefined)?.setting === 1) return;
+  const now = (allowed[origin] as { setting?: unknown } | undefined)?.setting;
+  if (now === 1 || (now !== undefined && !again)) return;
   allowed[origin] = { setting: 1 };
   try {
     keep(path, JSON.stringify(prefs));
   } catch (error) {
     diag.warn("app", `letting Edit's window show notifications: ${diag.messageOf(error)}`);
   }
+}
+
+/**
+ * Settings → Notifications → Turn on, in Linux's window after a block: Chrome
+ * won't ask again and won't open its settings from outside, so the window is
+ * closed, its profile allowed again, and opened back on the same page (about
+ * two seconds). Answered first; false when this Edit has no window of its own.
+ */
+export function routes(router: Router<App>): void {
+  router.post("/api/notifications/reopen", async (context) => {
+    const given = (await readJson<{ path?: unknown }>(context).catch(() => ({}))) as { path?: unknown };
+    const path = typeof given.path === "string" && given.path.startsWith("/") ? given.path : "/";
+    if (process.platform !== "linux") return json({ reopening: false });
+    const { home } = context.app.store;
+    const { port } = context.app;
+    const done = reopenWindow(`http://${WINDOW_HOST}:${port}${path}`, () => allowNotifications(home, port, true));
+    // Its answer goes before the window does.
+    const answer = await Promise.race([done.then((reopening) => ({ reopening })), Bun.sleep(300).then(() => ({ reopening: true }))]);
+    void done.catch((error: unknown) => diag.warn("app", `reopening Edit's window: ${diag.messageOf(error)}`));
+    return json(answer);
+  });
 }
 
 /** Where the desktop looks for the user's apps and their icons. */

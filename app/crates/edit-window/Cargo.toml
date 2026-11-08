@@ -24,7 +24,7 @@ objc2 = { version = "0.6", features = ["exception"] }
 edit-engine = { path = "../edit-engine" }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSValue", "NSGeometry", "NSBundle", "NSError", "objc2-core-foundation"] }
 # Notifications in Notification Center (src/notices.rs).
-objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "bitflags", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "bitflags", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter"] }
 block2 = "0.6"
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "CFString"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGColor", "CGColorSpace"] }

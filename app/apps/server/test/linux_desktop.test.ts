@@ -26,18 +26,32 @@ test.skipIf(chrome() === null)("the window is Chrome's app window onto edit.loca
   expect(command).toContain("--user-data-dir=/home/sphe/.edit/window");
 });
 
-test("the window's Chrome profile lets Edit's page notify without asking, keeping what else it has; never under a running Chrome", () => {
+test("the window's Chrome profile lets Edit's page notify without asking, keeping what else it has; a block stays until Turn on; never under a running Chrome", () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "edit-window-prefs-"));
+  const allowed = (port: number, setting: number) => ({ content_settings: { exceptions: { notifications: { [`http://edit.localhost:${port},*`]: { setting } } } } });
   try {
     const prefs = path.join(home, "window", "Default", "Preferences");
     allowNotifications(home, 7700);
-    expect(JSON.parse(fs.readFileSync(prefs, "utf8"))).toEqual({ profile: { content_settings: { exceptions: { notifications: { "http://edit.localhost:7700,*": { setting: 1 } } } } } });
+    expect(JSON.parse(fs.readFileSync(prefs, "utf8"))).toEqual({ profile: allowed(7700, 1) });
     fs.writeFileSync(prefs, JSON.stringify({ browser: { kept: true }, profile: { name: "Edit" } }));
     allowNotifications(home, 7701);
-    expect(JSON.parse(fs.readFileSync(prefs, "utf8"))).toEqual({ browser: { kept: true }, profile: { name: "Edit", content_settings: { exceptions: { notifications: { "http://edit.localhost:7701,*": { setting: 1 } } } } } });
-    // Chrome running on the profile (its lock, a dangling link) keeps its own copy.
+    expect(JSON.parse(fs.readFileSync(prefs, "utf8"))).toEqual({ browser: { kept: true }, profile: { name: "Edit", ...allowed(7701, 1) } });
+    // Blocked in the window (Chrome writes 2): kept at the next start, allowed again by Turn on.
+    fs.writeFileSync(prefs, JSON.stringify({ profile: allowed(7700, 2) }));
+    allowNotifications(home, 7700);
+    expect(JSON.parse(fs.readFileSync(prefs, "utf8"))).toEqual({ profile: allowed(7700, 2) });
+    allowNotifications(home, 7700, true);
+    expect(JSON.parse(fs.readFileSync(prefs, "utf8"))).toEqual({ profile: allowed(7700, 1) });
+    // A lock a killed Chrome left (its process gone) doesn't stop it.
     fs.writeFileSync(prefs, "{}");
-    fs.symlinkSync("mandalorian-1234", path.join(home, "window", "SingletonLock"));
+    const lock = path.join(home, "window", "SingletonLock");
+    fs.symlinkSync(`${os.hostname()}-999999999`, lock);
+    allowNotifications(home, 7700);
+    expect(JSON.parse(fs.readFileSync(prefs, "utf8"))).toEqual({ profile: allowed(7700, 1) });
+    // Chrome running on the profile (a live process's lock) keeps its own copy.
+    fs.rmSync(lock);
+    fs.symlinkSync(`${os.hostname()}-${process.pid}`, lock);
+    fs.writeFileSync(prefs, "{}");
     allowNotifications(home, 7700);
     expect(fs.readFileSync(prefs, "utf8")).toBe("{}");
   } finally {

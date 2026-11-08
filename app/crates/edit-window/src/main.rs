@@ -98,6 +98,9 @@ fn run(url: &str, server: Option<(Server, u16)>, watch_stdin: bool) -> ! {
                 preview::preview_project,
                 preview::preview_frame,
                 preview::preview_close,
+                notices::notices_status,
+                notices::notices_allow,
+                notices::notices_test,
             ]);
     let app = builder
         .setup(move |app| {

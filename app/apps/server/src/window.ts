@@ -100,6 +100,9 @@ export function windowHelper(home: string): string | null {
   return candidates.find((candidate) => isFile(candidate)) ?? null;
 }
 
+/** The window open now: its command and process (null headless, or while it's being reopened). */
+let open: { command: string[]; child: Bun.Subprocess<"pipe", "inherit", "inherit"> } | null = null;
+
 /**
  * Opens the editor in its window (`command`: the helper onto a URL on a Mac,
  * Chrome's app window on Linux, linux_desktop.ts) and runs until it closes:
@@ -108,19 +111,46 @@ export function windowHelper(home: string): string | null {
  */
 export function runWindow(command: string[]): void {
   let restarting = false;
-  const child = Bun.spawn(command, { stdin: "pipe", stdout: "inherit", stderr: "inherit" });
   // An update execs a new `edit app`, which opens a fresh window: this one goes first.
   onRestart(() => {
     restarting = true;
-    child.kill();
+    open?.child.kill();
   });
-  void child.exited.then(async (code) => {
-    if (restarting) return;
-    try {
-      await seams.cloudProjects.shutdown();
-    } catch (error) {
-      if (!seams.isUnavailable(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
-    }
-    process.exit(code === 0 ? 0 : code);
-  });
+  const start = (given: string[]) => {
+    const child = Bun.spawn(given, { stdin: "pipe", stdout: "inherit", stderr: "inherit" });
+    open = { command: given, child };
+    void child.exited.then(async (code) => {
+      // Reopened (reopenWindow): the new window carries on.
+      if (restarting || open?.child !== child) return;
+      try {
+        await seams.cloudProjects.shutdown();
+      } catch (error) {
+        if (!seams.isUnavailable(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
+      }
+      process.exit(code === 0 ? 0 : code);
+    });
+  };
+  reopener = async (url, between) => {
+    const now = open;
+    if (now === null) return false;
+    open = null;
+    now.child.kill("SIGTERM");
+    await now.child.exited;
+    between();
+    start(now.command.map((arg) => (arg.startsWith("--app=") && url !== null ? `--app=${url}` : arg)));
+    return true;
+  };
+  start(command);
+}
+
+let reopener: ((url: string | null, between: () => void) => Promise<boolean>) | null = null;
+
+/**
+ * Closes Edit's window and opens it again (on `url`, Linux's Chrome window),
+ * `between` run once it has gone: Chrome reads its profile only as it
+ * starts (linux_desktop.ts `allowNotifications`). False when this Edit has
+ * no window of its own (headless, or a window opened onto another Edit).
+ */
+export async function reopenWindow(url: string | null, between: () => void): Promise<boolean> {
+  return reopener === null ? false : reopener(url, between);
 }

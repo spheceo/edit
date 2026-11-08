@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "page",
-  "description": "Edit's page (served by its own server on this Mac) may move the window from its top bars (data-tauri-drag-region) and draw its preview natively (src/preview.rs), nothing else.",
+  "description": "Edit's page (served by its own server on this Mac) may move the window from its top bars (data-tauri-drag-region) and draw its preview natively (src/preview.rs), and ask how its notifications stand, turn them on and send a test (src/notices.rs), nothing else.",
   "windows": [
     "main"
   ],
@@ -17,6 +17,9 @@
     "allow-preview-place",
     "allow-preview-project",
     "allow-preview-frame",
-    "allow-preview-close"
+    "allow-preview-close",
+    "allow-notices-status",
+    "allow-notices-allow",
+    "allow-notices-test"
   ]
 }

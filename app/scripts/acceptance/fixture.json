@@ -1,0 +1,17 @@
+{
+  "_": "The acceptance run's project (scripts/acceptance.ts): footage FFmpeg makes from its own test sources at run time, two cuts, a title and an audio clip. Times in seconds.",
+  "name": "Acceptance",
+  "settings": { "width": 1280, "height": 720, "fps": 30 },
+  "footage": [
+    { "file": "bars.mp4", "video": "testsrc2=size=1280x720:rate=30", "audio": "sine=frequency=440:sample_rate=48000", "seconds": 7 },
+    { "file": "colours.mp4", "video": "testsrc=size=1280x720:rate=30", "audio": "sine=frequency=660:sample_rate=48000", "seconds": 4 },
+    { "file": "music.m4a", "audio": "sine=frequency=220:sample_rate=48000", "seconds": 9 }
+  ],
+  "clips": [
+    { "type": "video", "file": "bars.mp4", "start": 0, "duration": 3, "source_in": 0 },
+    { "type": "video", "file": "colours.mp4", "start": 3, "duration": 3, "source_in": 0.5 },
+    { "type": "video", "file": "bars.mp4", "start": 6, "duration": 3, "source_in": 3.5 },
+    { "type": "audio", "file": "music.m4a", "start": 0, "duration": 9, "source_in": 0, "volume_db": -12 }
+  ],
+  "title": { "text": "Acceptance", "start": 0.5, "duration": 2.5 }
+}

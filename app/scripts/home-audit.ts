@@ -9,7 +9,12 @@
 // marked done, all brought back at the end. Screenshots go to OUT.
 //
 //   bun scripts/home-audit.ts            (HOME_UI=https://localhost:5173 HOME_API=http://localhost:7700 OUT=/tmp/home-audit)
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+//
+// HOME_WIDTHS narrows the widths (scripts/acceptance.ts: 1440,960, against a
+// fresh server). Signed out, nothing is set aside: the layouts are audited as
+// they are (HOME_SIGN_IN=skip tells the page sign-in isn't needed).
+const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const WIDTHS = (process.env.HOME_WIDTHS ?? "1600,1440,1280,1100,960").split(",").map(Number);
 const BASE = process.env.HOME_UI ?? "https://localhost:5173";
 const API = process.env.HOME_API ?? "http://localhost:7700";
 const OUT = process.env.OUT ?? "/tmp/home-audit";
@@ -27,10 +32,19 @@ const pageErrors: string[] = [];
 ws.onmessage = (event) => {
   const m = JSON.parse(String(event.data));
   if (m.id !== undefined) pending.get(m.id)?.(m);
+  if (m.method === "Fetch.requestPaused") void noSignIn(m.params.requestId);
   if (m.method === "Runtime.exceptionThrown") pageErrors.push(JSON.stringify(m.params.exceptionDetails).slice(0, 300));
 };
 const send = (method: string, params: Record<string, unknown> = {}) => new Promise<any>((resolve) => { const id = ++next; pending.set(id, resolve); ws.send(JSON.stringify({ id, method, params })); });
 await send("Page.enable"); await send("Runtime.enable");
+// HOME_SIGN_IN=skip (a signed-out server's, scripts/acceptance.ts): the page is told sign-in isn't needed, so Home shows.
+async function noSignIn(requestId: string) {
+  const { body, base64Encoded } = (await send("Fetch.getResponseBody", { requestId })).result;
+  const account = JSON.parse(base64Encoded ? Buffer.from(body, "base64").toString() : body);
+  account.required = false;
+  await send("Fetch.fulfillRequest", { requestId, responseCode: 200, responseHeaders: [{ name: "content-type", value: "application/json" }], body: Buffer.from(JSON.stringify(account)).toString("base64") });
+}
+if (process.env.HOME_SIGN_IN === "skip") await send("Fetch.enable", { patterns: [{ urlPattern: "*/api/account", requestStage: "Response" }] });
 const js = async (expression: string) => {
   const answer = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true });
   if (answer.result?.exceptionDetails) throw new Error(`${expression.slice(0, 60)}: ${JSON.stringify(answer.result.exceptionDetails).slice(0, 300)}`);
@@ -52,15 +66,19 @@ const me = ((await (await fetch(`${API}/api/account`, { headers: { host: "localh
 const mine = (p: { created_by?: { sub?: string } | null }) => me !== "" && p.created_by?.sub === me;
 const edits = [...new Set([...projects.projects, ...inCloud].filter(mine).map((p) => `edit:${p.id}`))].filter((key) => !taken.has(key));
 const firstFree = (list: string[], what: string) => { const found = list.find((key) => !taken.has(key)); if (found === undefined) throw new Error(`no ${what} to set aside`); return found; };
-if (edits.length < 3) throw new Error("the audit needs three edits not in Later");
+const signedIn = me !== "";
+if (signedIn && edits.length < 3) throw new Error("the audit needs three edits not in Later");
+if (!signedIn) console.log("signed out: nothing set aside");
 const ours = <T extends { createdBy?: { sub?: string } | null }>(list: T[]) => list.filter((one) => me !== "" && one.createdBy?.sub === me);
-const keys = [edits[0]!, firstFree(ours(scripts).map((one) => `script:${one.id}`), "script"), ...(ours(ideas.ideas).length > 0 ? [firstFree(ours(ideas.ideas).map((one) => `idea:${one.id}`), "idea")] : [])];
-const backKey = edits[1]!;
-const doneKey = edits[2]!;
-for (const key of keys) console.log("aside", key, (await post({ key })).status);
-console.log("done", doneKey, (await post({ key: doneKey, done: true })).status);
-console.log("back soon", backKey, (await post({ key: backKey, until: Date.now() + 15_000 })).status);
-await sleep(16_000);
+const keys = signedIn ? [edits[0]!, firstFree(ours(scripts).map((one) => `script:${one.id}`), "script"), ...(ours(ideas.ideas).length > 0 ? [firstFree(ours(ideas.ideas).map((one) => `idea:${one.id}`), "idea")] : [])] : [];
+const backKey = edits[1];
+const doneKey = edits[2];
+if (signedIn) {
+  for (const key of keys) console.log("aside", key, (await post({ key })).status);
+  console.log("done", doneKey, (await post({ key: doneKey, done: true })).status);
+  console.log("back soon", backKey, (await post({ key: backKey, until: Date.now() + 15_000 })).status);
+  await sleep(16_000);
+}
 
 const AUDIT = `(() => {
   const problems = [];
@@ -130,7 +148,7 @@ try {
   await send("Page.navigate", { url: `${BASE}/` });
   await sleep(5000);
   let checked = 0;
-  for (const width of [1600, 1440, 1280, 1100, 960]) {
+  for (const width of WIDTHS) {
     await size(width);
     for (const mode of ["Mine", "Everyone"]) {
       await pill(mode);
@@ -153,7 +171,7 @@ try {
   }
   console.log(`checked ${checked} layouts`);
   // Menus: the ⋯ of a row of each kind, then its Set aside submenu, inside the window and beside each other.
-  await size(960);
+  await size(Math.min(...WIDTHS));
   await pill("Everyone");
   for (const view of ["Edits/Editing", "Scripts/Ready to edit", "Ideas", "Later", "Edits"]) {
     await nav(view); await sleep(400);
@@ -182,9 +200,10 @@ try {
   process.exitCode = total === 0 ? 0 : 1;
 } catch (error) {
   console.log("FAIL", (error as Error).message);
+  process.exitCode = 1;
 } finally {
   // Brought back even across a server restart (the dev server restarts on any saved file): tried for a minute each.
-  for (const key of [...keys, backKey, doneKey]) {
+  for (const key of signedIn ? [...keys, backKey!, doneKey!] : []) {
     for (let tries = 0; tries < 20; tries++) {
       const answer = await post({ key, back: true }).catch(() => null);
       if (answer?.ok) break;

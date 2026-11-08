@@ -1284,14 +1284,21 @@ mod background_tests {
     #[test]
     fn background_work_stops_while_foreground_work_runs() {
         // A one-second job, with an export taking the foreground for 1.5 s
-        // of it: it's held, then finishes with its output.
+        // of it: it's held, then finishes with its output. Ten short sleeps,
+        // not one: a stopped shell can't start its next, where one `sleep 1`
+        // forked before the stop ran on regardless (CI's Linux, Nov 8: 1.6 s;
+        // it passed only when other tests' exports held it longer).
         let held = std::thread::spawn(|| {
             let _export = foreground();
             std::thread::sleep(Duration::from_millis(1500));
         });
         std::thread::sleep(Duration::from_millis(100));
         let started = Instant::now();
-        let out = run_background(Command::new("sh").args(["-c", "sleep 1; echo done"])).unwrap();
+        let out = run_background(Command::new("sh").args([
+            "-c",
+            "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.1; done; echo done",
+        ]))
+        .unwrap();
         held.join().unwrap();
         assert_eq!(String::from_utf8_lossy(&out).trim(), "done");
         assert!(

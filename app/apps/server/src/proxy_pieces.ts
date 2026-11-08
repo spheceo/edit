@@ -244,13 +244,28 @@ export interface Context {
 }
 
 const layouts = new Map<string, Layout>();
+/** Layouts the cloud didn't have, and when it said so: not asked for again within MISSING_MS. */
+const missing = new Map<string, { at: number; message: string }>();
+const MISSING_MS = 60_000;
 
 /** The layout of pieced proxy `base`: here, or R2's. */
 export async function layoutOf(context: Context, base: string): Promise<Layout> {
   const known = layouts.get(base);
   if (known !== undefined) return known;
   const file = context.local(layoutKey(base));
-  if (!isFile(file)) await context.fetch(layoutKey(base), file);
+  if (!isFile(file)) {
+    // A layout the cloud just said it hasn't is not asked for again for a minute: every read of the proxy asked
+    // for it, several times a second, and logged each failure (Killer Pastor copied to dev without its pieces, Nov 8).
+    const missed = missing.get(base);
+    if (missed !== undefined && Date.now() - missed.at < MISSING_MS) throw new Error(missed.message);
+    try {
+      await context.fetch(layoutKey(base), file);
+    } catch (error) {
+      missing.set(base, { at: Date.now(), message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+    missing.delete(base);
+  }
   const layout = JSON.parse(fs.readFileSync(file, "utf8")) as Layout;
   if (layout.v !== 1 || !(layout.total > 0)) throw new Error(`${base}: not a pieced proxy's layout`);
   layouts.set(base, layout);

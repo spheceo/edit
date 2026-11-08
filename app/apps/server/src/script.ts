@@ -1988,7 +1988,7 @@ export function unfinished(project: Project): boolean {
   // Laid out once (every range is placed in one go, after the downloads): finished,
   // whatever's been removed or never came since. Only a Re-cut lays it out again.
   if (pendingCase(project)) return true;
-  if (laidOut(project)) return false;
+  if (laidOut(project)) return unvoiced(project);
   // Only blocks never placed: one placed and since removed was removed on purpose.
   return missingFiles(project).length > 0 || script.blocks.some((block) => !placed(project, block));
 }
@@ -2043,7 +2043,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
   // A finished import is never resumed (only a Re-cut lays it out again).
   const inserting = pendingCase(live.project);
   if (recut && inserting) throw new Error("Finish the pending case insertion before Re-cut.");
-  if (!recut && laidOut(live.project) && !inserting) return null;
+  if (!recut && laidOut(live.project) && !inserting) return unvoiced(live.project) ? voiceOnly(app, projectId) : null;
   // The job belongs to the script it started with: one attached since stops it.
   const source = live.project.script?.source ?? null;
   const files = missingFiles(live.project);
@@ -2158,42 +2158,7 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       app.scripts.set(app, id, (job) => {
         job.state = "voicing";
       });
-      // A kind of video narrated by the team's recording: the one given with
-      // the script (audio in the project, not on the timeline) is placed on
-      // the cut-ins it reads; only what it doesn't read is voiced, as a stand-in.
-      if (!inserting && NARRATION[app.store.get(id)?.project.style ?? "bodycam"] === "recording") {
-        try {
-          await fetchRecording(app, id);
-        } catch (error) {
-          if (isBug(error)) throw error;
-          diag.warn("script", `${title}: getting the voice-over recording: ${diag.messageOf(error)}`);
-        }
-      }
-      const project = app.store.get(id)?.project;
-      if (!inserting && project !== undefined && NARRATION[project.style] === "recording" && unplacedAudio(project)) {
-        try {
-          await diag.timeAsync("script", "script: place the recording", () => seams.voiceover.place(app, id, null));
-        } catch (error) {
-          if (isBug(error)) throw error;
-          diag.warn("script", `${title}: placing the voice-over recording: ${diag.messageOf(error)}`);
-        }
-      }
-      // Tried again by itself after a pause (a dropped connection to the
-      // voice service); a used-up allowance isn't asked again today.
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id, true));
-          result = null;
-          break;
-        } catch (error) {
-          if (isBug(error)) throw error;
-          result = `The voice-over couldn't be made: ${diag.messageOf(error)}`;
-          const wait = timing.retryWaits[attempt];
-          if (wait === undefined || /used up|allowance|budget/i.test(diag.messageOf(error))) break;
-          diag.warn("script", `${title}: ${result}; trying again in ${diag.human(wait)}`);
-          await timing.sleep(wait);
-        }
-      }
+      result = await voiceCutIns(app, id, title, inserting);
     }
     app.scripts.set(app, id, (job) => {
       const failed = job.files.filter((file) => file.state === "failed").length;
@@ -2223,6 +2188,91 @@ export function start(app: App, projectId: string, recut: boolean): Promise<void
       job.error = isBug(error) ? crashed("the script import", error) : diag.messageOf(error);
     });
   }).finally(() => { if (durable) durableJobs.end(app.store.home, durable); });
+}
+
+/**
+ * The cut-ins' voice-over, once the script is laid out: the recording given
+ * with it placed (a kind of video the team narrates), the rest spoken with the
+ * house voice and split across them. What went wrong, or null.
+ */
+async function voiceCutIns(app: App, id: string, title: string, inserting: ReturnType<typeof pendingCase>): Promise<string | null> {
+  let result: string | null = null;
+  // A kind of video narrated by the team's recording: the one given with
+  // the script (audio in the project, not on the timeline) is placed on
+  // the cut-ins it reads; only what it doesn't read is voiced, as a stand-in.
+  if (!inserting && NARRATION[app.store.get(id)?.project.style ?? "bodycam"] === "recording") {
+    try {
+      await fetchRecording(app, id);
+    } catch (error) {
+      if (isBug(error)) throw error;
+      diag.warn("script", `${title}: getting the voice-over recording: ${diag.messageOf(error)}`);
+    }
+  }
+  const project = app.store.get(id)?.project;
+  if (!inserting && project !== undefined && NARRATION[project.style] === "recording" && unplacedAudio(project)) {
+    try {
+      await diag.timeAsync("script", "script: place the recording", () => seams.voiceover.place(app, id, null));
+    } catch (error) {
+      if (isBug(error)) throw error;
+      diag.warn("script", `${title}: placing the voice-over recording: ${diag.messageOf(error)}`);
+    }
+  }
+  // Tried again by itself after a pause (a dropped connection to the
+  // voice service); a used-up allowance or quota isn't asked again (a spent
+  // ElevenLabs quota was asked twice more, minutes apart, Nov 8).
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await diag.timeAsync("script", "script: voice-over", () => inserting ? seams.voiceover.generateCase(app, id, inserting.id) : seams.voiceover.generate(app, id, true));
+      result = null;
+      break;
+    } catch (error) {
+      if (isBug(error)) throw error;
+      result = `The voice-over couldn't be made: ${diag.messageOf(error)}`;
+      const wait = timing.retryWaits[attempt];
+      if (wait === undefined || /used up|allowance|budget|quota/i.test(diag.messageOf(error))) break;
+      diag.warn("script", `${title}: ${result}; trying again in ${diag.human(wait)}`);
+      await timing.sleep(wait);
+    }
+  }
+  return result;
+}
+
+/**
+ * An import that laid the script out but couldn't voice it, carried on from
+ * there: only the voice-over, the edit untouched (Retry, a restart, remote
+ * support). Before, a laid-out script was finished whatever its cut-ins held,
+ * so Retry was refused and the only way back was a Re-cut of the whole edit.
+ */
+function voiceOnly(app: App, id: string): Promise<void> | null {
+  if (!app.scripts.claim(app, id, { state: "voicing", files: [] })) return null;
+  const durable = durableJobs.begin(app.store.home, "case", id, {});
+  const title = app.store.get(id)?.project.name ?? id;
+  const work = async () => {
+    await Promise.resolve();
+    const began = timing.now();
+    const result = await voiceCutIns(app, id, title, null);
+    app.scripts.set(app, id, (job) => {
+      job.state = result === null ? "done" : "failed";
+      if (result === null) delete job.error;
+      else job.error = result;
+    });
+    diag.log(result === null ? "info" : "warn", "script", `${title}: voice-over ${result === null ? "done" : `stopped: ${result}`} in ${diag.human(timing.now() - began)}`);
+  };
+  return catchBugsAsync("the script's voice-over", work).catch((error: unknown) => {
+    app.scripts.set(app, id, (job) => {
+      job.state = "failed";
+      job.error = isBug(error) ? crashed("the script's voice-over", error) : diag.messageOf(error);
+    });
+  }).finally(() => { if (durable) durableJobs.end(app.store.home, durable); });
+}
+
+/**
+ * Whether a laid-out script still has cut-ins the import never voiced (its
+ * voice-over failed: the Doc of Nov 8 stopped at a spent ElevenLabs quota):
+ * untouched import cards with no voice-over, never one edited on purpose.
+ */
+export function unvoiced(project: Project): boolean {
+  return laidOut(project) && seams.voiceover.narrationRecovery(project).some((line) => line.state === "missing");
 }
 
 /** A file's download progress, into its row of the job (a few times a second). */

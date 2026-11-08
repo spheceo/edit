@@ -33,3 +33,8 @@ Sphe's Doc (https://docs.google.com/document/d/1GIw2TVCO3MwvciNrNq1LJ7gxHfdFG7vA
 ### 6. A horror edit could start over silent cut-ins
 **Why.** The import stopped after three tries at the voice-over (21:19), with the script laid out, so the project counts as imported (`script.unfinished` is false once laid out). The house and commentary workflows say to `generate_voiceover` when the import couldn't; horror's didn't.
 **Fix.** The horror workflow's first step: cut-ins with no voice-over get `generate_voiceover` first, unless the user gave the narrator's recording; never edit over silent cards.
+
+### 7. An import stopped at its voice-over couldn't be carried on
+**Broke.** Retrying the import (the editor's Retry, `POST /script/job`) answered "this script's import finished: Re-cut to lay it out again", and after a restart `unfinished` was false with all 26 cut-ins silent. The only way back was a Re-cut, which lays the whole edit out again.
+**Why.** A laid-out script counted as finished whatever its cut-ins held (`script.laidOut`), in `start`, `unfinished` and the route alike.
+**Fix.** `script.unvoiced`: laid out with untouched import cards that have no voice-over (`narrationRecovery`'s "missing"; never a cut-in edited on purpose). Such an import is unfinished, and starting it again (Retry, a restart's recovery, remote support) runs only the voice-over step (`voiceOnly`, the import's own `voiceCutIns`), the edit untouched. A spent quota now stops the retries at once ("quota", as "used up" did): it was asked twice more, minutes apart. Test: `script_tools.test.ts` ("an import stopped at its voice-over is carried on from there").

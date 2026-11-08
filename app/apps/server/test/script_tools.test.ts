@@ -351,3 +351,42 @@ test("place_voiceovers with some recordings keeps the cut-ins they don't read", 
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null || ffprobe === null)("an import stopped at its voice-over is carried on from there: the cut-ins voiced, the edit untouched", async () => {
+  // The horror Doc of Nov 8: laid out, then ElevenLabs' quota was spent. Retry was refused ("this script's import
+  // finished: Re-cut to lay it out again"), and after a restart nothing said the cut-ins were silent.
+  const [{ app, cleanup }] = withAgents("script-voice-resume");
+  mock.doc("DOCvoiceResume1", DOC);
+  // The first ask is refused, and a spent quota isn't asked again minutes later.
+  const asked = mock.calls("/v1/speech").length;
+  mock.on("POST", "/v1/speech", () => Response.json({ error: "ElevenLabs: This request exceeds your quota of 1334160. You have 15 credits remaining, while 1048 credits are required for this request. (quota_exceeded)" }, { status: 401 }), 1);
+  try {
+    const http = serve(app);
+    const id = app.store.create("Kent crash", { width: 1920, height: 1080, fps: 30 }).project.id;
+    expect((await http("POST", `/api/projects/${id}/script`, { url: "https://docs.google.com/document/d/DOCvoiceResume1/edit" }))[0]).toBe(200);
+    while (!["done", "failed"].includes(app.scripts.get(id)?.state ?? "")) await Bun.sleep(20);
+    expect(app.scripts.get(id)!.state).toBe("failed");
+    expect(app.scripts.get(id)!.error).toContain("quota");
+    expect(mock.calls("/v1/speech").length - asked).toBe(1);
+    const laid = app.store.get(id)!.project;
+    expect(laid.script!.blocks.some((block) => block.kind === "narration" && block.voiceover)).toBe(false);
+    // Still unfinished, whatever happened to the job since.
+    expect(await http("GET", `/api/projects/${id}/script/job`)).toMatchObject([200, { unfinished: true }]);
+    // Retry: only the voice-over.
+    const [status, resumed] = await http("POST", `/api/projects/${id}/script/job`);
+    expect(status).toBe(200);
+    expect((resumed as { job: ScriptJob }).job.state).toBe("voicing");
+    while (!["done", "failed"].includes(app.scripts.get(id)?.state ?? "")) await Bun.sleep(20);
+    expect(app.scripts.get(id)!.state).toBe("done");
+    const voiced = app.store.get(id)!.project;
+    const narration = voiced.script!.blocks.find((block) => block.kind === "narration")!;
+    expect(narration.kind === "narration" && voiced.clips.find((clip) => clip.id === narration.voiceover)?.type).toBe("audio");
+    // The footage is where the layout put it.
+    const footage = (p: typeof laid) => p.clips.filter((clip) => clip.type === "video").map((clip) => [clip.media, clip.source_in]);
+    expect(footage(voiced)).toEqual(footage(laid));
+    expect(await http("GET", `/api/projects/${id}/script/job`)).toMatchObject([200, { unfinished: false }]);
+    expect((await http("POST", `/api/projects/${id}/script/job`))[0]).toBe(409);
+  } finally {
+    cleanup();
+  }
+}, 60_000);

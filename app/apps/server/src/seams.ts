@@ -394,6 +394,8 @@ export interface VoiceoverSeam {
   /** Speaks the script's cut-ins with the house voice and lays the takes on them. */
   generate(app: App, id: string, missingOnly?: boolean): Promise<Json>;
   generateCase(app: App, id: string, request: string): Promise<Json>;
+  /** Each cut-in's narration: placed, missing (an untouched import card), or review (edited on purpose). */
+  narrationRecovery(project: Project): { cut_in: number; clip?: string; state: "placed" | "missing" | "review"; why?: string }[];
   isVoiceover(project: Project, clip: Clip): boolean;
   place(app: App, id: string, media: string[] | null): Promise<Json>;
   send(app: App, voiceId: string, id: string): Promise<Json>;

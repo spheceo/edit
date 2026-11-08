@@ -610,7 +610,7 @@ async function scriptResume(context: RouteContext<App>): Promise<Response> {
     throw new ApiError(423, diag.messageOf(error));
   }
   const live = projectOr404(app, id);
-  if (!recut && script.laidOut(live.project) && !pendingCase(live.project)) throw new ApiError(409, "this script's import finished: Re-cut to lay it out again");
+  if (!recut && script.laidOut(live.project) && !pendingCase(live.project) && !script.unvoiced(live.project)) throw new ApiError(409, "this script's import finished: Re-cut to lay it out again");
   void script.start(app, id, recut);
   return sortedJson({ job: app.scripts.get(id) });
 }

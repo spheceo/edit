@@ -303,6 +303,11 @@ pub fn output_size(options: &ExportOptions, width: u32, height: u32) -> (u32, u3
     }
 }
 
+/// Frames tagged BT.709 TV range: FFmpeg 8 wrote the primaries and transfer
+/// of untagged frames as unknown, -color_primaries and -color_trc or not
+/// (Nov 8: every export from Linux; `pipe_writer` tags its chunks the same).
+pub const BT709: &str = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709";
+
 /// The video filter graph from the rendered frames (`[0:v]`) to `[vout]`.
 pub fn video_graph(options: &ExportOptions, source: (u32, u32), output: (u32, u32)) -> String {
     let (w, h) = output;
@@ -336,14 +341,14 @@ pub fn video_graph(options: &ExportOptions, source: (u32, u32), output: (u32, u3
     };
     let tail = match options.format {
         Format::Prores => {
-            format!("[c]{rate}scale=out_color_matrix=bt709:out_range=tv,format=yuv422p10le[vout]")
+            format!("[c]{rate}scale=out_color_matrix=bt709:out_range=tv,format=yuv422p10le,{BT709}[vout]")
         }
         Format::Gif => {
             "[c]fps=15,split[g0][g1];[g0]palettegen=stats_mode=diff[gp];[g1][gp]paletteuse=dither=bayer:bayer_scale=4[vout]"
                 .to_owned()
         }
         Format::Png => "[c]format=rgb24[vout]".to_owned(),
-        _ => format!("[c]{rate}scale=out_color_matrix=bt709:out_range=tv,format=yuv420p[vout]"),
+        _ => format!("[c]{rate}scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,{BT709}[vout]"),
     };
     format!("{canvas};{tail}")
 }
@@ -800,7 +805,7 @@ mod tests {
         assert!(
             graph.contains("gblur")
                 && graph.contains("overlay")
-                && graph.ends_with("format=yuv420p[vout]")
+                && graph.ends_with(&format!("format=yuv420p,{BT709}[vout]"))
         );
         vertical.fps = Some(60);
         assert!(video_graph(&vertical, (1920, 1080), (1080, 1920)).contains("[c]fps=60,scale="));

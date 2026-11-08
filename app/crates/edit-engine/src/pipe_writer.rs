@@ -1,9 +1,10 @@
 //! A chunk's video file written by FFmpeg, off macOS: what `mac_media::Writer`
 //! (AVAssetWriter on the media engine) is to a Mac, with the same calls, so a
-//! chunked export (`chunks.rs`) runs the same everywhere. Frames go in as RGBA
-//! on FFmpeg's stdin; it converts them to BT.709 TV-range 4:2:0 as every
-//! FFmpeg export does (`export::video_graph`) and encodes them on NVENC where an
-//! NVIDIA card answers, else with libx264, at the bitrate the export asks.
+//! chunked export (`chunks.rs`) runs the same everywhere. Frames go in on
+//! FFmpeg's stdin as BT.709 TV-range 4:2:0, converted on the GPU
+//! (`Renderer::copy_output_yuv420_to`), or as RGBA that FFmpeg converts as
+//! every FFmpeg export does (`export::video_graph`); it encodes them on NVENC
+//! where an NVIDIA card answers, else with libx264, at the bitrate the export asks.
 
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
@@ -20,6 +21,8 @@ pub struct WriterOptions {
     pub finished: bool,
     /// The index at the front of the file; only when nothing remuxes it after.
     pub faststart: bool,
+    /// Frames come as the GPU's 4:2:0 planes, not RGBA.
+    pub yuv420: bool,
 }
 
 pub struct Writer {
@@ -28,6 +31,7 @@ pub struct Writer {
     stderr: Option<std::thread::JoinHandle<String>>,
     width: u32,
     height: u32,
+    yuv420: bool,
     written: i64,
 }
 
@@ -60,7 +64,7 @@ impl Writer {
                 "-f",
                 "rawvideo",
                 "-pix_fmt",
-                "rgba",
+                if options.yuv420 { "yuv420p" } else { "rgba" },
                 "-s",
                 &format!("{width}x{height}"),
                 "-framerate",
@@ -68,8 +72,16 @@ impl Writer {
                 "-i",
                 "pipe:0",
                 "-vf",
-                "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
             ])
+            // The frames tagged BT.709 themselves (`export::BT709`).
+            .arg(if options.yuv420 {
+                crate::export::BT709.to_owned()
+            } else {
+                format!(
+                    "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,{}",
+                    crate::export::BT709
+                )
+            })
             .args(if encoders.nvenc {
                 crate::export::nvenc_args(options.hevc, options.bitrate)
             } else {
@@ -134,11 +146,13 @@ impl Writer {
             stderr,
             width,
             height,
+            yuv420: options.yuv420,
             written: 0,
         })
     }
 
-    /// Frame `index` of the file (rows `stride` bytes apart), in order.
+    /// Frame `index` of the file (rows `stride` bytes apart), in order; with
+    /// `yuv420`, the GPU's planes as they're read back (no stride, no order).
     pub fn frame(
         &mut self,
         index: i64,
@@ -146,24 +160,34 @@ impl Writer {
         stride: usize,
         order: Order,
     ) -> Result<(), String> {
-        if order != Order::Rgba {
+        if order != Order::Rgba && !self.yuv420 {
             return Err("the chunk writer takes RGBA".to_owned());
         }
         if index != self.written {
             return Err(format!("frame {index} came after {}", self.written - 1));
         }
         let stdin = self.stdin.as_mut().ok_or("the encoder was finished")?;
-        let row = self.width as usize * 4;
         let mut sent = Ok(());
-        for line in pixels.chunks(stride).take(self.height as usize) {
-            sent = match line.get(..row) {
-                Some(line) => stdin
-                    .write_all(line)
+        if self.yuv420 {
+            let bytes = self.width as usize * self.height as usize * 3 / 2;
+            sent = match pixels.get(..bytes) {
+                Some(planes) => stdin
+                    .write_all(planes)
                     .map_err(|_| "the encoder stopped early"),
                 None => Err("GPU readback came back short"),
             };
-            if sent.is_err() {
-                break;
+        } else {
+            let row = self.width as usize * 4;
+            for line in pixels.chunks(stride).take(self.height as usize) {
+                sent = match line.get(..row) {
+                    Some(line) => stdin
+                        .write_all(line)
+                        .map_err(|_| "the encoder stopped early"),
+                    None => Err("GPU readback came back short"),
+                };
+                if sent.is_err() {
+                    break;
+                }
             }
         }
         if let Err(what) = sent {

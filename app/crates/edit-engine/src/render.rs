@@ -2353,6 +2353,8 @@ fn native_options(
         key_interval: options.key_interval(f64::from(project.settings.fps)),
         finished: true,
         faststart: alone,
+        #[cfg(not(target_os = "macos"))]
+        yuv420: false,
     }))
 }
 
@@ -2485,7 +2487,21 @@ enum Sink {
 }
 
 impl Sink {
-    /// Timeline frame `frame` (RGBA, rows `stride` bytes apart).
+    /// Takes its frames as the GPU's 4:2:0 (`Renderer::copy_output_yuv420_to`)
+    /// when it can: FFmpeg's chunks of a `width`×`height` render off a Mac.
+    fn take_yuv420(&mut self, width: u32, height: u32) -> bool {
+        #[cfg(not(target_os = "macos"))]
+        if let Sink::Chunks(chunks) = self {
+            chunks.settings.yuv420 =
+                chunks.size == (width, height) && Renderer::yuv420_fits(width, height);
+            return chunks.settings.yuv420;
+        }
+        let _ = (width, height);
+        false
+    }
+
+    /// Timeline frame `frame` (RGBA, rows `stride` bytes apart; or 4:2:0
+    /// planes after `take_yuv420`).
     fn write(&mut self, _frame: i64, pixels: &[u8], stride: usize) -> Result<(), String> {
         match self {
             #[cfg(target_os = "macos")]
@@ -2796,7 +2812,16 @@ fn render_frames_watched(
     let mut renderer = new_renderer(width, height)?;
     let device = renderer.device().clone();
     let row = renderer.output_row_bytes() as usize;
-    let buffers: Vec<wgpu::Buffer> = (0..READBACKS).map(|_| renderer.output_buffer()).collect();
+    let yuv420 = sink.take_yuv420(width, height);
+    let buffers: Vec<wgpu::Buffer> = (0..READBACKS)
+        .map(|_| {
+            if yuv420 {
+                renderer.yuv420_buffer()
+            } else {
+                renderer.output_buffer()
+            }
+        })
+        .collect();
     let total = ranges
         .iter()
         .map(|(from, to)| to - from)
@@ -2946,7 +2971,11 @@ fn render_frames_watched(
                 let slot = free.recv().map_err(|_| "the encoder stopped".to_owned())?;
                 on_encode += waiting.elapsed();
                 let buffer = buffers.get(slot).ok_or("no readback buffer")?;
-                let submission = renderer.copy_output_to(buffer);
+                let submission = if yuv420 {
+                    renderer.copy_output_yuv420_to(buffer)
+                } else {
+                    renderer.copy_output_to(buffer)
+                };
                 let (mapped_tx, mapped) = mpsc::channel();
                 buffer
                     .slice(..)
@@ -3184,6 +3213,92 @@ mod tests {
                 (loudest as i64 - 4800).abs() < 96,
                 "cut {index}: click at {loudest} samples, expected 4800"
             );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Off a Mac a chunked export's picture is converted to 4:2:0 on the GPU
+    /// (`Renderer::copy_output_yuv420_to`), a whole one by FFmpeg: the two
+    /// come out the same picture, tagged BT.709 TV range alike.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn the_gpus_420_is_ffmpegs() {
+        let dir = temp_dir("yuv420");
+        let bars = dir.join("bars.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("testsrc2=size=320x180:rate=30:duration=1")
+            .args(["-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv444p"])
+            .arg(&bars)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let project: Project = serde_json::from_value(json!({
+            "version": 1, "id": "p", "name": "t",
+            "settings": {"width": 320, "height": 180, "fps": 30},
+            "media": [{"id": "m", "name": "bars", "path": bars, "kind": "video", "duration": 1.0,
+                "width": 320, "height": 180, "fps": 30, "has_audio": false}],
+            "tracks": [{"id": "v", "kind": "video"}],
+            "clips": [{"id": "c", "track": "v", "type": "video", "media": "m",
+                "source_in": 0.0, "start": 0, "duration": 30}],
+        }))
+        .unwrap();
+        let options = ExportOptions {
+            quality: crate::export::Quality::High,
+            ..ExportOptions::default()
+        };
+        let plan = export_plan(&project, &options).unwrap();
+        let (gpu, ffmpeg) = (dir.join("gpu.mp4"), dir.join("ffmpeg.mp4"));
+        let cancel = AtomicBool::new(false);
+        let cache = dir.join("cache");
+        export_file(
+            &project,
+            &options,
+            &plan,
+            &gpu,
+            &cache,
+            &HashMap::new(),
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        export(&project, &options, &plan, &ffmpeg, &dir, &cancel, |_| {}).unwrap();
+        let probe = |path: &Path| {
+            let output = Command::new(crate::util::ffprobe())
+                .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
+                .args(["stream=pix_fmt,color_space,color_range,color_primaries,color_transfer"])
+                .args(["-of", "csv=p=0"])
+                .arg(path)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        assert_eq!(probe(&gpu), "yuv420p,tv,bt709,bt709,bt709");
+        assert_eq!(probe(&gpu), probe(&ffmpeg));
+        let compared = Command::new(crate::util::ffmpeg())
+            .args(["-hide_banner", "-i"])
+            .arg(&gpu)
+            .arg("-i")
+            .arg(&ffmpeg)
+            .args(["-lavfi", "[0:v][1:v]psnr", "-f", "null", "-"])
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&compared.stderr);
+        let psnr = |plane: &str| -> f64 {
+            said.split(&format!(" {plane}:"))
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .and_then(|value| value.parse().ok())
+                .unwrap_or_else(|| panic!("no PSNR {plane} in {said}"))
+        };
+        eprintln!(
+            "GPU against FFmpeg: Y {} U {} V {} dB",
+            psnr("y"),
+            psnr("u"),
+            psnr("v")
+        );
+        for plane in ["y", "u", "v"] {
+            assert!(psnr(plane) > 38.0, "{plane}: {said}");
         }
         std::fs::remove_dir_all(dir).ok();
     }
@@ -4016,23 +4131,42 @@ mod tests {
             }))
             .unwrap()
         };
+        // Nothing decoded: how fast the picture goes to the encoder alone.
+        let title: Project = serde_json::from_value(json!({
+            "version": 1, "id": "p", "name": "t",
+            "settings": {"width": 1920, "height": 1080, "fps": 30},
+            "media": [],
+            "tracks": [{"id": "v1", "kind": "video"}, {"id": "v2", "kind": "video"}],
+            "clips": [
+                {"id": "s", "track": "v1", "type": "solid", "fill": [0.1, 0.2, 0.4, 1.0],
+                    "start": 0, "duration": 600},
+                {"id": "t", "track": "v2", "type": "text", "text": "A title over a colour",
+                    "start": 0, "duration": 600},
+            ],
+        }))
+        .unwrap();
         // Twice each, alternating: the first export also warms the GPU up.
         for (label, covered) in [
-            ("B-roll alone", false),
-            ("B-roll over footage", true),
-            ("B-roll alone", false),
-            ("B-roll over footage", true),
+            ("A title alone", None),
+            ("B-roll alone", Some(false)),
+            ("B-roll over footage", Some(true)),
+            ("A title alone", None),
+            ("B-roll alone", Some(false)),
+            ("B-roll over footage", Some(true)),
         ] {
-            let project = project(covered);
+            let project = covered.map_or_else(|| title.clone(), project);
             let options = ExportOptions::default();
             let plan = crate::export::plan(&options, &project, false).unwrap();
+            // The app's export, in chunks; none kept from the last run.
+            std::fs::remove_dir_all(crate::chunks::folder(&dir, &project.id)).ok();
             let started = Instant::now();
-            export(
+            export_file(
                 &project,
                 &options,
                 &plan,
                 &dir.join("out.mp4"),
                 &dir,
+                &HashMap::new(),
                 &AtomicBool::new(false),
                 |_| {},
             )

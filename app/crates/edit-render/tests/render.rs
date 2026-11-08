@@ -980,3 +980,116 @@ fn a_bounded_blur_matches_the_whole_frame_blur() {
         "a pixel moved by {worst} levels ({differing} values differ)"
     );
 }
+
+/// The output's 4:2:0 for an export's encoder (`copy_output_yuv420_to`):
+/// BT.709 TV range, chroma filtered as swscale does, the planes tight,
+/// matching the RGBA read back to within rounding; pure red is the
+/// standard's 63, 102, 240.
+#[test]
+#[allow(clippy::unwrap_used)]
+fn the_output_reads_back_as_bt709_420() {
+    let (w, h) = (64u32, 12u32);
+    let Some(mut r) = renderer(w, h) else {
+        return;
+    };
+    let mut seed = 7u32;
+    let pattern: Vec<u8> = (0..w * h)
+        .flat_map(|_| {
+            let mut next = || {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (seed >> 16) as u8
+            };
+            [next(), next(), next(), 255]
+        })
+        .collect();
+    r.upload_video_rgba("pattern", w, h, &pattern);
+    let mut scene = Scene {
+        width: w,
+        height: h,
+        layers: vec![Layer::Video {
+            clip: "pattern".into(),
+            media: "pattern".into(),
+            source_time: 0.0,
+            transform: Transform::default(),
+            opacity: 1.0,
+            crop: Default::default(),
+            frame: None,
+            blend: BlendMode::Normal,
+        }],
+    };
+    let read = |r: &mut Renderer| {
+        let buffer = r.yuv420_buffer();
+        r.copy_output_yuv420_to(&buffer);
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        r.device()
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+        let planes = slice.get_mapped_range().unwrap().to_vec();
+        buffer.unmap();
+        planes
+    };
+    assert!(Renderer::yuv420_fits(w, h));
+    assert!(!Renderer::yuv420_fits(1350, 1080));
+    r.render(&scene);
+    let rgba = r.read_output().unwrap();
+    let planes = read(&mut r);
+    assert_eq!(planes.len(), (w * h * 3 / 2) as usize);
+    let (kr, kb) = (0.2126f64, 0.0722f64);
+    // BT.709 luma of 0..255 values, 0..1.
+    let luma = |rgb: [f64; 3]| (kr * rgb[0] + (1.0 - kr - kb) * rgb[1] + kb * rgb[2]) / 255.0;
+    let pixel = |x: u32, y: u32| {
+        let p = &rgba[((y * w + x) * 4) as usize..][..3];
+        [f64::from(p[0]), f64::from(p[1]), f64::from(p[2])]
+    };
+    let near = |got: u8, want: f64, what: String| {
+        assert!(
+            (f64::from(got) - want).abs() <= 0.51,
+            "{what}: {got} for {want:.2}"
+        );
+    };
+    for y in 0..h {
+        for x in 0..w {
+            let want = 16.0 + 219.0 * luma(pixel(x, y));
+            near(planes[(y * w + x) as usize], want, format!("Y {x},{y}"));
+        }
+    }
+    // Pairs across averaged, then swscale's bicubic halving down (B 0, C 0.6).
+    let taps = [
+        -0.0140625, -0.0421875, 0.1203125, 0.4359375, 0.4359375, 0.1203125, -0.0421875, -0.0140625,
+    ];
+    let (cw, ch) = (w / 2, h / 2);
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let mut rgb = [0.0f64; 3];
+            for (tap, weight) in taps.iter().enumerate() {
+                let row = (cy as i64 * 2 - 3 + tap as i64).clamp(0, i64::from(h) - 1) as u32;
+                let (left, right) = (pixel(cx * 2, row), pixel(cx * 2 + 1, row));
+                for c in 0..3 {
+                    rgb[c] += weight * (left[c] + right[c]) / 2.0;
+                }
+            }
+            let l = luma(rgb);
+            let cb = 128.0 + 224.0 * (rgb[2] / 255.0 - l) / (2.0 * (1.0 - kb));
+            let cr = 128.0 + 224.0 * (rgb[0] / 255.0 - l) / (2.0 * (1.0 - kr));
+            let at = (cy * cw + cx) as usize;
+            near(planes[(w * h) as usize + at], cb, format!("U {cx},{cy}"));
+            near(
+                planes[(w * h + cw * ch) as usize + at],
+                cr,
+                format!("V {cx},{cy}"),
+            );
+        }
+    }
+    scene.layers = vec![Layer::Solid {
+        color: Rgba([1.0, 0.0, 0.0, 1.0]),
+        opacity: 1.0,
+        gradient: None,
+    }];
+    r.render(&scene);
+    let planes = read(&mut r);
+    let (luma_bytes, chroma) = ((w * h) as usize, (cw * ch) as usize);
+    assert!(planes[..luma_bytes].iter().all(|&y| y == 63));
+    assert!(planes[luma_bytes..][..chroma].iter().all(|&u| u == 102));
+    assert!(planes[luma_bytes + chroma..].iter().all(|&v| v == 240));
+}

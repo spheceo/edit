@@ -214,6 +214,9 @@ pub struct Renderer {
     output: Target,
     #[cfg(not(target_arch = "wasm32"))]
     readback: Option<wgpu::Buffer>,
+    /// The output as an export's 4:2:0 (made on first use, for this output).
+    #[cfg(not(target_arch = "wasm32"))]
+    yuv420: Option<Yuv420>,
     layer_layout: wgpu::BindGroupLayout,
     over_pipeline: wgpu::RenderPipeline,
     multiply_pipeline: wgpu::RenderPipeline,
@@ -242,6 +245,14 @@ pub struct Renderer {
     /// the blank, each video's and text's texture) and made again for a new
     /// uniform buffer. With the frame each was last used in.
     binds: RefCell<HashMap<wgpu::TextureView, (wgpu::BindGroup, u64)>>,
+}
+
+/// The conversion of the output to 4:2:0 and the planes it writes.
+#[cfg(not(target_arch = "wasm32"))]
+struct Yuv420 {
+    pipeline: wgpu::ComputePipeline,
+    group: wgpu::BindGroup,
+    planes: wgpu::Buffer,
 }
 
 /// Resolution of the sound levels a waveform reads (as the media cache's peaks.bin).
@@ -503,6 +514,8 @@ impl Renderer {
             output,
             #[cfg(not(target_arch = "wasm32"))]
             readback: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            yuv420: None,
             layer_layout,
             over_pipeline,
             multiply_pipeline,
@@ -583,6 +596,7 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.readback = None;
+            self.yuv420 = None;
         }
     }
 
@@ -1521,6 +1535,103 @@ impl Renderer {
                 depth_or_array_layers: 1,
             },
         );
+        self.queue.submit([encoder.finish()])
+    }
+
+    /// Whether `copy_output_yuv420_to` can convert a `width`×`height` output:
+    /// a width of whole 8-pixel blocks and an even height (others are read
+    /// back as RGBA and converted by FFmpeg).
+    pub fn yuv420_fits(width: u32, height: u32) -> bool {
+        width > 0 && height > 0 && width.is_multiple_of(8) && height.is_multiple_of(2)
+    }
+
+    /// Bytes of the output as 4:2:0: Y, then U, then V, tightly packed.
+    pub fn yuv420_bytes(&self) -> u64 {
+        u64::from(self.width) * u64::from(self.height) * 3 / 2
+    }
+
+    /// A buffer `copy_output_yuv420_to` can fill.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn yuv420_buffer(&self) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("edit yuv420 readback"),
+            size: self.yuv420_bytes(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// `copy_output_to` for an export's encoder: the last rendered frame as
+    /// BT.709 TV-range 4:2:0 planar (`shaders/yuv420.wgsl`), converted on the
+    /// GPU. 1.5 bytes a pixel read back instead of 4, and nothing left for
+    /// FFmpeg to convert: its conversion on the CPU held a Linux export to
+    /// 80–125 frames a second (Nov 8: 8 ms a frame spent writing it to
+    /// FFmpeg, 0.007 reading it back). Only for `yuv420_fits` sizes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn copy_output_yuv420_to(&mut self, buffer: &wgpu::Buffer) -> wgpu::SubmissionIndex {
+        let bytes = self.yuv420_bytes();
+        let yuv420 = self.yuv420.get_or_insert_with(|| {
+            let module = self
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("edit yuv420"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("shaders/yuv420.wgsl").into()),
+                });
+            let pipeline = self
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("edit yuv420"),
+                    layout: None,
+                    module: &module,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+            let planes = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("edit yuv420 planes"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("edit yuv420"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&self.output.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: planes.as_entire_binding(),
+                    },
+                ],
+            });
+            Yuv420 {
+                pipeline,
+                group,
+                planes,
+            }
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("edit yuv420"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("edit yuv420"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&yuv420.pipeline);
+            pass.set_bind_group(0, &yuv420.group, &[]);
+            pass.dispatch_workgroups(
+                (self.width / 8).div_ceil(8),
+                (self.height / 2).div_ceil(8),
+                1,
+            );
+        }
+        encoder.copy_buffer_to_buffer(&yuv420.planes, 0, buffer, 0, bytes);
         self.queue.submit([encoder.finish()])
     }
 

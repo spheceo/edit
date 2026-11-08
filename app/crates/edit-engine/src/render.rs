@@ -338,12 +338,7 @@ impl VideoReader {
             &mut self.frame,
         )?;
         #[cfg(not(target_os = "macos"))]
-        {
-            // FFmpeg decodes stills elsewhere: its first (only) frame.
-            self.restart(0.0)?;
-            self.read_ffmpeg(0.0)?;
-            self.stop();
-        }
+        self.decode_still_ffmpeg()?;
         #[cfg(target_os = "macos")]
         if self.source.key.order == Order::Bgra {
             for pixel in self.frame.as_chunks_mut::<4>().0 {
@@ -352,6 +347,60 @@ impl VideoReader {
         }
         self.has_frame = true;
         self.copied = false;
+        Ok(())
+    }
+
+    /// A still through FFmpeg (elsewhere than a Mac): its one frame, with no
+    /// seek and no `fps`. FFmpeg 8 gives nothing at all for a picture asked
+    /// from `-ss 0`: every JPEG and PNG on Linux, so the first photo in an
+    /// export failed it ("failed to fill whole buffer", Cops Realize, Nov 8).
+    #[cfg(not(target_os = "macos"))]
+    fn decode_still_ffmpeg(&mut self) -> Result<(), String> {
+        self.stop();
+        let path = &self.source.key.path;
+        let output = Command::new(crate::util::ffmpeg())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-protocol_whitelist",
+                crate::util::protocols(path),
+            ])
+            .args(crate::util::url_args(path))
+            .arg("-i")
+            .arg(path)
+            .args([
+                "-an",
+                "-frames:v",
+                "1",
+                "-vf",
+                &format!("scale={}:{}:flags=bicubic", self.width, self.height),
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                match self.source.key.order {
+                    Order::Rgba => "rgba",
+                    Order::Bgra => "bgra",
+                },
+                "pipe:1",
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| format!("ffmpeg: {error}"))?;
+        if output.stdout.len() != self.frame.len() {
+            let why = String::from_utf8_lossy(&output.stderr);
+            let why = why.trim();
+            return Err(format!(
+                "could not decode {}: {}",
+                path.display(),
+                if why.is_empty() {
+                    "FFmpeg gave no picture"
+                } else {
+                    why
+                }
+            ));
+        }
+        self.frame.copy_from_slice(&output.stdout);
         Ok(())
     }
 
@@ -3833,6 +3882,47 @@ mod tests {
                     assert_eq!(counted(&frame), n, "native at {time:.4}");
                 }
             }
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_photo_reads_as_its_one_frame() {
+        // FFmpeg 8 gave no picture for a JPEG or PNG read from `-ss 0`.
+        let dir = temp_dir("photo");
+        for name in ["photo.jpg", "photo.png"] {
+            let path = dir.join(name);
+            let made = Command::new(crate::util::ffmpeg())
+                .args([
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=64x36",
+                    "-frames:v",
+                    "1",
+                ])
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            let media: Media = serde_json::from_value(json!({
+                "id": "m", "name": "m", "path": path, "kind": "image",
+                "duration": 5.0, "width": 64, "height": 36, "fps": 0
+            }))
+            .unwrap();
+            let mut reader =
+                VideoReader::open(Source::new(&media, path.clone(), (32, 18), Order::Rgba));
+            let frame = reader.frame_at(2.0).unwrap();
+            assert_eq!(frame.len(), 32 * 18 * 4, "{name}");
+            assert!(
+                frame[0] > 200 && frame[1] < 60 && frame[2] < 60,
+                "{name}: {:?}",
+                &frame[..4]
+            );
         }
         std::fs::remove_dir_all(dir).ok();
     }

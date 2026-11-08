@@ -189,8 +189,16 @@ async function waitTool({ app, args, projectId }: ToolCall): Promise<Content[]> 
   const kinds = given.length === 0 ? WORK : given;
   // An export the registry holds that progress never heard of (one carried on after a restart, Nov 8: the agent was told
   // nothing was running, then "this project already has an export running" every time it asked for one): waited on too.
-  const exporting = () => kinds.includes("export") && app.exports.runningFor?.(projectId) != null;
-  const before = progress.summary(projectId, kinds) ?? (exporting() ? `the export into ${app.exports.runningFor?.(projectId)?.output.split("/").pop() ?? "its file"}` : null);
+  const exporting = () => {
+    if (!kinds.includes("export")) return false;
+    try {
+      return app.exports.runningFor?.(projectId) != null;
+    } catch {
+      // No export registry here (a test's app): nothing of it to wait on.
+      return false;
+    }
+  };
+  const before = progress.summary(projectId, kinds) ?? (exporting() ? "the export into its file" : null);
   if (before === null) return text("nothing of that is running: go on");
   const estimate = progress.remainingMs(projectId, kinds) ?? 0;
   const most = clamp(uint(args.at_most) ?? Math.ceil(estimate / 1000) + 5, 1, 300);

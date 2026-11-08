@@ -272,7 +272,7 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     expect(await (await send("/api/exports/activity")).json()).toMatchObject([{ id, name: "Teen: the edit?", state: "running", path }]);
     const second = await send(`/api/projects/${id}/export`, jsonBody("POST", { path: output }));
     expect(await second.json()).toEqual({
-      error: "this project already has an export running",
+      error: 'this project already has an export running (into teen.mp4): wait for it (wait {for: ["export"]}) or cancel it',
     });
     const busy = await send("/api/update", { method: "POST" });
     expect([busy.status, await busy.json()]).toEqual([409, { error: "an export is running; update when it's done" }]);

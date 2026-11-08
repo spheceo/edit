@@ -105,3 +105,34 @@ test("an excerpt of a cloud recording takes its stretch of the whole recording's
     cleanup();
   }
 });
+
+test("a whole recording pyannote can't hear: the excerpt takes its own audio's voices, and the recording isn't asked again", async () => {
+  const { dir, cleanup } = scratch("voices-fallback");
+  try {
+    const ffmpeg = Bun.which("ffmpeg");
+    if (ffmpeg === null) return;
+    const source = `${dir}/excerpt.wav`;
+    expect(Bun.spawnSync([ffmpeg, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=2", source]).exitCode).toBe(0);
+    mock.cloud.convex.media.set("youtube:OfywwsMVroM", { source: "youtube:OfywwsMVroM", name: "Interrogation.mp4", originalKey: "edit/originals/youtube/OfywwsMVroM/big.mp4", originalReady: true, size: 1809515991 } as never);
+    let wholeAsked = 0;
+    mock.on("POST", "/v1/diarize/jobs", (request) => {
+      const key = request.json<{ key: string }>().key;
+      if (key.startsWith("edit/originals/")) wholeAsked++;
+      return Response.json({ id: key.startsWith("edit/originals/") ? "job-big1" : "job-own1" }, { status: 202 });
+    });
+    mock.on("GET", "/v1/diarize/jobs/job-big1", () => Response.json({ error: "pyannote couldn't hear it: Could not load audio" }, { status: 502 }));
+    mock.on("GET", "/v1/diarize/jobs/job-own1", () => Response.json({ segments: [{ start: 0, end: 2, speaker: "SPEAKER_00" }] }));
+    voices.setOnForTests(true);
+    for (const n of [1, 2]) {
+      const target = `${dir}/m${n}/transcript.json`;
+      fs.mkdirSync(`${dir}/m${n}`, { recursive: true });
+      fs.writeFileSync(target, serialize({ model: "scribe_v2", words: [word("Hello", 0.2, 0.6, "speaker_4")] }));
+      expect(await voices.revoice(`${dir}/cache`, source, target, `youtube:OfywwsMVroM#${n}000-${n}900`)).toBe(true);
+      expect((JSON.parse(fs.readFileSync(target, "utf8")) as { words: Word[] }).words[0]!.speaker).toBe("speaker_0");
+    }
+    expect(wholeAsked).toBe(1);
+  } finally {
+    voices.setOnForTests(null);
+    cleanup();
+  }
+});

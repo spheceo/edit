@@ -227,6 +227,29 @@ export function label(words: Word[], turns: readonly Turn[]): void {
   });
 }
 
+/**
+ * A whole recording's voices, or null when pyannote can't hear it (Killer
+ * Pastor's 1.8 GB original, Nov 8: "Could not load audio"), then remembered
+ * for a day, so its excerpts each take their own audio's voices instead of
+ * asking again and again.
+ */
+async function wholeRecording(cacheDir: string, key: string): Promise<Turn[] | null> {
+  const keep = join(cacheDir, "voices", `${new Bun.CryptoHasher("sha256").update(key).digest("hex").slice(0, 32)}.json`);
+  try {
+    if (Date.now() - Number(fs.readFileSync(`${keep}.failed`, "utf8")) < 24 * 3600_000) return null;
+  } catch {
+    // Never failed.
+  }
+  try {
+    return await ofKey(key, keep);
+  } catch (error) {
+    diag.warn("voices", `${key}: its whole recording's voices: ${diag.messageOf(error)}; each excerpt is heard on its own`);
+    fs.mkdirSync(parent(keep) ?? ".", { recursive: true });
+    writeAtomic(`${keep}.failed`, String(Date.now()));
+    return null;
+  }
+}
+
 /** A cloud source's whole recording and where an excerpt of it starts and ends (seconds), when it has one. */
 async function recordingOf(source: string): Promise<{ key: string; start: number; end: number } | null> {
   const match = /^([^#]+)(?:#(\d+)-(\d+))?$/u.exec(source);
@@ -257,13 +280,15 @@ export async function revoice(cacheDir: string, source: string, target: string, 
     const began = Date.now();
     const recording = cloudSource === null ? null : await recordingOf(cloudSource);
     let turns: Turn[];
-    if (recording !== null) {
-      const whole = await ofKey(recording.key, join(cacheDir, "voices", `${new Bun.CryptoHasher("sha256").update(recording.key).digest("hex").slice(0, 32)}.json`));
+    const whole = recording === null ? null : await wholeRecording(cacheDir, recording.key);
+    let from = "its whole recording";
+    if (recording !== null && whole !== null) {
       turns = whole
         .filter((turn) => turn.end > recording.start && turn.start < recording.end)
         .map((turn) => ({ start: Math.max(0, turn.start - recording.start), end: Math.min(turn.end, recording.end) - recording.start, speaker: turn.speaker }));
     } else {
       turns = await ofFile(source, `${target}.voices.json`);
+      from = "its own audio";
     }
     // Read again: nothing written meanwhile is lost.
     const now = JSON.parse(fs.readFileSync(target, "utf8")) as Transcript;
@@ -273,7 +298,7 @@ export async function revoice(cacheDir: string, source: string, target: string, 
     await cameras.split(source, now).catch((error: unknown) => diag.warn("voices", `${source}: reading its bodycams: ${diag.messageOf(error)}`));
     writeAtomic(target, serialize(now));
     const voices = new Set(now.words.map((word) => word.speaker).filter(Boolean)).size;
-    diag.info("voices", `${source}: pyannote's voices (${voices}) from ${recording !== null ? "its whole recording" : "its own audio"} in ${Math.round((Date.now() - began) / 1000)} s`);
+    diag.info("voices", `${source}: pyannote's voices (${voices}) from ${from} in ${Math.round((Date.now() - began) / 1000)} s`);
     return true;
   } catch (error) {
     diag.warn("voices", `${source}: pyannote's voices: ${diag.messageOf(error)}; its voices stay as they were`);

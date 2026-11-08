@@ -44,3 +44,26 @@ test("the full-quality upload is listed in jobs.json while it goes, with what a 
   expect(sent).toEqual([`${file} -> edit/reviews/p1/t/full.mp4`]);
   expect(listed(home)).toEqual([]);
 });
+
+// Nov 8, Killer Pastor's v3: named at the publish, the page's Download button saved "media.json" (the 404) for the hours its export took to go up.
+test("the version names its full-quality file only once it's up", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "edit-full-"));
+  const file = path.join(home, "Killer Pastor.mp4");
+  fs.writeFileSync(file, "export");
+  const told: unknown[] = [];
+  let up = false;
+  spies.push(
+    spyOn(cloud, "uploadFile").mockImplementation(async () => {
+      expect(told).toEqual([]);
+      up = true;
+    }),
+    spyOn(cloud, "mutation").mockImplementation(async (name: string, args: unknown) => {
+      expect(up).toBe(true);
+      told.push([name, args]);
+      return null as never;
+    }),
+  );
+  await fullBehind(home, "p2", "Killer Pastor", file, "edit/reviews/p2/t/full.mp4", 3);
+  expect(told).toEqual([["reviews:setMeta", { sourceId: "p2", version: 3, meta: { fullKey: "edit/reviews/p2/t/full.mp4" } }]]);
+  expect(listed(home)).toEqual([]);
+});

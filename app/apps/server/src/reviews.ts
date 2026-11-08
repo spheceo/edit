@@ -318,8 +318,8 @@ export const fullUpload = { waitMs: (attempt: number): number => Math.min(attemp
  * Predator Teacher: Edit restarted on JJ's Mac with 0.7 of v3's 4.9 GB up, and
  * nothing sent the rest, so the Download button found no file).
  */
-export function fullBehind(home: string, projectId: string, name: string, path: string, key: string): Promise<void> {
-  const job = jobs.begin(home, "full", projectId, { name, path, key }, key);
+export function fullBehind(home: string, projectId: string, name: string, path: string, key: string, version?: number): Promise<void> {
+  const job = jobs.begin(home, "full", projectId, { name, path, key, ...(version === undefined ? {} : { version }) }, key);
   let moved = false;
   return withExport(path, async () => {
     for (let attempt = 1; ; attempt++) {
@@ -329,6 +329,16 @@ export function fullBehind(home: string, projectId: string, name: string, path: 
           if (!moved) jobs.progressed(home, job);
           moved = true;
         });
+        // Named in its version only now: named at the publish, the page's Download button was there hours before the
+        // file (Nov 8, Killer Pastor's v3: its 4.6 GB export still going up, and Download saved "media.json", the 404).
+        if (version !== undefined) {
+          try {
+            await cloud.mutation("reviews:setMeta", { sourceId: projectId, version, meta: { fullKey: key } });
+          } catch (error) {
+            diag.warn("review", `${name}: the full-quality file is up, but v${version} couldn't be told: ${diag.messageOf(error)}`);
+            return;
+          }
+        }
         diag.info("review", `${name}: the full-quality file is up for the review's Download button`);
         return;
       } catch (error) {
@@ -428,7 +438,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         await cloud.uploadFile(copy, `${prefix}/video.mp4`, tick("uploading"), signal);
         haltShare(projectId);
         await cloud.uploadFile(poster, `${prefix}/poster.jpg`, () => haltShare(projectId), signal);
-        // The export itself, for the page's Download button (`fullKey`), goes up after the version (fullBehind).
+        // The export itself, for the page's Download button, goes up after the version, which names it (`fullKey`) once it's up (fullBehind).
       }
       if (latest !== null && latest !== undefined) {
         const shared = read(home).shared[projectId]!;
@@ -438,7 +448,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         });
         fs.rmSync(copy, { force: true });
         diag.info("review", `${live.project.name}: v${latest.n} replaced with ${chosen.name} at ${shared.url}`);
-        void fullBehind(home, projectId, live.project.name, chosen.path, fullKey);
+        void fullBehind(home, projectId, live.project.name, chosen.path, fullKey, latest.n);
         return { url: shared.url, version: latest.n };
       }
       haltShare(projectId);
@@ -448,7 +458,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         sharing.set(projectId, "making it v1");
         const durationMs = Math.round((chosen.frames / fps) * 1000);
         const answer = (await cloud.mutation("reviews:compress", {
-          sourceId: projectId, key: `${prefix}/video.mp4`, meta: { fps, durationMs, timeline, fullKey, posterKey: `${prefix}/poster.jpg`, ...extra }, by: app.machine,
+          sourceId: projectId, key: `${prefix}/video.mp4`, meta: { fps, durationMs, timeline, posterKey: `${prefix}/poster.jpg`, ...extra }, by: app.machine,
         })) as { reviewId: string; url: string; version: number; removed: number[] };
         update(home, (state) => {
           state.shared[projectId] = { reviewId: answer.reviewId, url: answer.url, versions: [{ n: 1, timeline, path: chosen.path, fps, durationMs, clips }] };
@@ -456,7 +466,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         });
         fs.rmSync(copy, { force: true });
         diag.info("review", `${live.project.name}: compressed to v1 (removed v${answer.removed.join(", v")}) at ${answer.url}`);
-        void fullBehind(home, projectId, live.project.name, chosen.path, fullKey);
+        void fullBehind(home, projectId, live.project.name, chosen.path, fullKey, 1);
         return { url: answer.url, version: 1 };
       }
       haltShare(projectId);
@@ -467,7 +477,7 @@ export async function share(app: App, projectId: string, path: string | null, re
         title: live.project.name,
         kind: "video",
         key: `${prefix}/video.mp4`,
-        meta: { fps, durationMs, timeline, fullKey, ...extra },
+        meta: { fps, durationMs, timeline, ...extra },
         posterKey: `${prefix}/poster.jpg`,
         by: app.machine,
       })) as { reviewId: string; url: string; version: number };
@@ -480,7 +490,7 @@ export async function share(app: App, projectId: string, path: string | null, re
       });
       fs.rmSync(copy, { force: true });
       diag.info("review", `${live.project.name}: shared v${answer.version} at ${answer.url}`);
-      void fullBehind(home, projectId, live.project.name, chosen.path, fullKey);
+      void fullBehind(home, projectId, live.project.name, chosen.path, fullKey, answer.version);
       return { url: answer.url, version: answer.version };
     });
   } finally {

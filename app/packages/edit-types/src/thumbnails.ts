@@ -203,6 +203,8 @@ export type ThumbRun = {
   holder: string;
   by: string;
   startedAt: number;
+  /** Its Mac's lease: renewed every minute while it runs; lapsed, another Mac may take the run (run_lease.ts). */
+  renewedAt?: number;
   endedAt?: number;
   step?: string;
   error?: string;

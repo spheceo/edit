@@ -476,6 +476,8 @@ export interface Review {
   /** The channel whose watermark this project's shares carry (a picture id in the Watermarks folder), or none. */
   watermark?: string | null;
   review: { url: string; versions: { n: number; path: string }[]; approved: { version: number; by: string; at: number } | null } | null;
+  /** What the next share makes: its version, and whether it replaces the latest (no reviewer comments on it). Null before the first. */
+  next?: { version: number; replace: boolean } | null;
   notes: ReviewNote[];
 }
 

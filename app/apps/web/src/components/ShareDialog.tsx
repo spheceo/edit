@@ -172,8 +172,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
-  // A reviewer's comment on the latest version (not a reply) means the next share is a new version. The server decides the same way.
-  const commented = latest !== null && (review?.notes.some((note) => note.version === latest && note.reply_to === null && note.from_app !== true) ?? false);
+  // The server's answer: a reviewer's comment on the latest version makes the next share a new version, else it replaces it.
+  const next = review?.next ?? null;
   const exporting = exportState?.state === "queued" || exportState?.state === "running";
   const status = shareStatus({ exportState, sharing, share: lastShare, linked: link !== null, stopped });
   const ended = !busy && !exporting && (status.kind === "share-failed" || status.kind === "export-failed" || status.kind === "cancelled");
@@ -333,7 +333,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
             Close
           </Button>
           <Button variant="primary" disabled={busy || retrying || projectDuration(project) <= 0} onClick={() => void share()}>
-            {busy ? "Sharing…" : link && latest !== null ? (commented ? `Share v${latest + 1}` : `Replace v${latest}`) : "Share"}
+            {busy ? "Sharing…" : link && next !== null ? (next.replace ? `Replace v${next.version}` : `Share v${next.version}`) : "Share"}
           </Button>
         </div>
       </div>

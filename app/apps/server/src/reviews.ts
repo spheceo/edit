@@ -2292,6 +2292,18 @@ export function shareReplacesLatest(versionCount: number, commentsOnLatest: numb
   return versionCount > 0 && commentsOnLatest === 0;
 }
 
+/**
+ * What `project`'s next share makes: the version, and whether it replaces the
+ * latest (`shareReplacesLatest`). The one answer the Share routes, a fix's
+ * share and the Share dialog's button (the review's `next`) read.
+ */
+export function nextShare(home: string, project: string): { version: number; replace: boolean } {
+  const versions = read(home).shared[project]?.versions ?? [];
+  const latest = versions.reduce((most, one) => Math.max(most, one.n), 0);
+  const replace = shareReplacesLatest(versions.length, onLatest(home, project).length);
+  return { version: replace ? latest : latest + 1, replace };
+}
+
 /** The reviewers' notes (not replies, not the agent's) on a project's latest shared version. */
 export function onLatest(home: string, project: string): Note[] {
   const state = read(home);
@@ -2453,10 +2465,7 @@ async function shareAgain(app: App, project: string, reviewId: string): Promise<
 /** Exports and shares the fixes: in place of the latest version unless it has comments, else as the next one; the share ends the request on the page. `note`: what the Exports panel says beside its export ("Trying again after the update"). */
 export async function shareFixes(app: App, project: string, reviewId: string | null, name: string, note?: string): Promise<void> {
   const home = app.store.home;
-  const versions = read(home).shared[project]?.versions ?? [];
-  const latest = versions.reduce((most, one) => Math.max(most, one.n), 0);
-  const replace = shareReplacesLatest(versions.length, onLatest(home, project).length);
-  const next = replace ? latest : latest + 1;
+  const { version: next, replace } = nextShare(home, project);
   await progress(reviewId, { state: "sharing", stage: replace ? `Exporting v${next} again (no comments on it)` : `Exporting v${next}` });
   let listed = false;
   try {
@@ -2493,6 +2502,8 @@ export function view(app: App, projectId: string): unknown {
     // The channel whose watermark its shares carry (a picture id in the Watermarks folder), or none.
     watermark: state.shareWatermark?.[projectId] ?? null,
     review: shared === undefined ? null : { url: shared.url, versions: shared.versions.map((one) => ({ n: one.n, path: one.path })), approved: shared.approved ?? null },
+    // What the next share makes (the dialog's button says it): the server's own rule, never worked out again on the page.
+    next: shared === undefined ? null : nextShare(app.store.home, projectId),
     notes: notes.map((note) => {
       const version = shared?.versions.find((one) => one.n === note.version);
       const frame = live === null || note.ms === null ? null : frameNow(live.project, version, note.ms);
@@ -2755,8 +2766,7 @@ export function routes(router: Router<App>): void {
     const home = context.app.store.home;
     const options = typeof given?.options === "object" && given.options !== null && !Array.isArray(given.options) ? (given.options as Partial<ExportOptions>) : (read(home).shareOptions?.[id] ?? {});
     // Comments decide. No comments on the latest version: this replaces it. Any comment: the next version. The dialog's flags do not override that.
-    const versions = read(home).shared[id]?.versions.length ?? 0;
-    const replace = shareReplacesLatest(versions, onLatest(home, id).length);
+    const { replace } = nextShare(home, id);
     // The dialog's watermark: a channel's picture id, or null for none; from Home, the last Share's.
     const watermark = typeof given?.watermark === "string" && given.watermark !== "" ? given.watermark : given?.watermark === null ? null : undefined;
     const started = exportAndShare(context.app, id, options, replace, undefined, watermark);
@@ -2793,9 +2803,7 @@ export function routes(router: Router<App>): void {
     const id = context.params.id ?? "";
     const path = typeof given?.path === "string" ? given.path : null;
     // The same rule as Share: a commented latest version is kept, and a new export takes the next number.
-    const home = context.app.store.home;
-    const versions = read(home).shared[id]?.versions.length ?? 0;
-    const replace = shareReplacesLatest(versions, onLatest(home, id).length);
+    const { replace } = nextShare(context.app.store.home, id);
     // A minute or two (the review copy, the upload): it runs on, and the review says how it's going.
     const started = share(context.app, id, path, replace);
     started.catch((error: unknown) => {

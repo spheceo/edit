@@ -118,17 +118,23 @@ test("a note that came in during a pulled fix is claimed by hand, as the first w
     await reviews.poll(app);
     await reviews.unfixed(app, id, "n1", "answered");
     running = false;
-    const end = Date.now() + 5_000;
+    // Each wait has its own deadline: on GitHub's Macs the claim took most of a shared 5 s, the follow was still
+    // going when the fixture went, and its last write failed into the next tests (Nov 8).
+    const until = (ms: number) => Date.now() + ms;
+    let end = until(15_000);
     while (!calls.some((call) => call.path === "reviews:claim" && (call.args.noteIds as string[]).includes("n4")) && Date.now() < end) await Bun.sleep(20);
     const late = calls.find((call) => call.path === "reviews:claim" && (call.args.noteIds as string[]).includes("n4"));
     expect(late?.args).toMatchObject({ noteIds: ["n4"], manual: true, machine: machine.id() });
+    end = until(15_000);
+    while (sends < 1 && Date.now() < end) await Bun.sleep(20);
     expect(sends).toBe(1);
     // The follow ends before the fixture goes.
+    end = until(15_000);
     while (Date.now() < end && (await reviews.pullFeedback(app, id).catch((error: Error) => error.message)).includes("being fixed already")) await Bun.sleep(20);
   } finally {
     cleanup();
   }
-});
+}, 60_000);
 
 test("a project never shared for review has nothing to pull", async () => {
   const { app, cleanup } = fixtureHome("pull-unshared");

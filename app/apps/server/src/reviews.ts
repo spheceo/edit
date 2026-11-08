@@ -1934,7 +1934,13 @@ function noteFix(home: string, project: string, taken: Taken | null): void {
   const all = takenFixes(home);
   if (taken === null) delete all[project];
   else all[project] = taken;
-  writeAtomic(join(home, FIXES), JSON.stringify(all));
+  try {
+    writeAtomic(join(home, FIXES), JSON.stringify(all));
+  } catch (error) {
+    // Never thrown: a fix's end is noted in a `finally` before the project stops being busy (`readying`), and a
+    // write that failed there left the project busy for good (CI, Nov 8: the next tests' check-ins all waited).
+    diag.warn("review", `noting the fixes under way: ${diag.messageOf(error)}`);
+  }
 }
 
 /**

@@ -150,6 +150,16 @@ export function configurePlayback(app: App): void {
   };
   app.store.setMediaResolver((project) => {
     for (const media of project.media) {
+      // A picture whose path is another computer's (a project made on another Mac, or on Linux): its copy here,
+      // fetched from the cloud if it isn't yet (Instagram Reels opened on Linux, Nov 8: 122 of its pictures were
+      // the Mac's /Users/… paths, and render_frame couldn't decode them).
+      if (media.kind === "image" && media.cloud != null && !isFile(media.path) && cloud.validKey(media.cloud.original)) {
+        const key = media.cloud.original;
+        const here = localPath(app.store.cacheDir(), key);
+        if (media.path !== here) media.path = here;
+        if (!isFile(here)) void fetchKey(key, here).catch((error: unknown) => diag.warn("cloud", `fetching the picture ${media.name}: ${diag.messageOf(error)}`));
+        continue;
+      }
       if (media.kind === "image" || media.cloud == null) continue;
       const key = streamKey(media.cloud, "proxy");
       if (key === null) continue; // An upload still needs its local source.

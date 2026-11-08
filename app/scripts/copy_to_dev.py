@@ -11,7 +11,8 @@ What goes: the project's body (Convex file storage), its footage's registry
 rows (`editMedia`), and on R2 every key the body names (originals, excerpts,
 proxies), each footage's original and proxy, the analysis beside them that
 costs money to redo (`edit/analysis/…`: transcripts, faces, seats, the
-watcher's answers) and the project's research (`edit/research/projects/<id>/`).
+watcher's answers), a pieced proxy's folder (`edit/pieces/…`: its layout and
+pieces) and the project's research (`edit/research/projects/<id>/`).
 R2 objects already in dev with the same size are skipped, so copying again
 is quick. Prod is only read; nothing in it changes.
 
@@ -108,6 +109,11 @@ def main():
         proxy = row.get("proxyKey") or ""
         if proxy.startswith("edit/proxies/") and proxy.endswith(".mp4"):
             prefixes.append("edit/analysis/" + proxy[len("edit/proxies/"):-len(".mp4")] + "/")
+    # A pieced proxy (`edit/pieces/v3/<kind>/<id>/proxy.mp4`) is its folder: the layout and the pieces made so far
+    # (Killer Pastor, Nov 8: without its layout.json dev asked for it again and again and the footage never played).
+    for key in list(keys):
+        if key.startswith("edit/pieces/") and key.endswith("/proxy.mp4"):
+            prefixes.append(key[: -len("proxy.mp4")])
     for prefix in prefixes:
         keys.update(listed(src_s3, src_bucket, prefix))
     keys = sorted(key for key in keys if key.startswith("edit/") and ".." not in key)

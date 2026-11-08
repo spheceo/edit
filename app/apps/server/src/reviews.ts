@@ -43,7 +43,7 @@ import type { Clip, ExportOptions, Project, ScriptJob } from "./model.ts";
 import { join } from "./paths.ts";
 import { defaultExportPath } from "./server_seam.ts";
 import { clipEnd, fps as fpsOf, trackOf } from "./project.ts";
-import { copyProblem, lengthsOf } from "./review_check.ts";
+import { lengthsOf, oddPieces, reviewCopyProblem } from "./review_check.ts";
 import { cachedTranscripts } from "./edit_tools.ts";
 import { Semaphore } from "./media.ts";
 import { native } from "./native/index.ts";
@@ -436,16 +436,16 @@ export async function share(app: App, projectId: string, path: string | null, re
           }
           if (!pieced) await reviewCopy(pick.path, copy);
         }
-        // Never shared unless it plays as the export (review_check.ts): one
+        // Never shared unless it plays as the export and decodes (review_check.ts): one
         // that doesn't (from pieces, or kept from before) is made whole again,
         // and if that's wrong too the share stops and says why.
         const exportedLengths = await lengthsOf(pick.path);
-        let problem = copyProblem(await lengthsOf(copy), exportedLengths, fps);
+        let problem = await reviewCopyProblem(copy, exportedLengths, fps);
         if (problem !== null) {
           diag.warn("review", `${projectId}: the review copy doesn't match its export (${problem}); making it whole`);
           fs.rmSync(copy, { force: true });
           await reviewCopy(pick.path, copy);
-          problem = copyProblem(await lengthsOf(copy), exportedLengths, fps);
+          problem = await reviewCopyProblem(copy, exportedLengths, fps);
           if (problem !== null) {
             fs.rmSync(copy, { force: true });
             throw new Error(`the review copy came out wrong (${problem}), so nothing was shared`);
@@ -899,6 +899,14 @@ async function reviewCopyFromChunks(cache: string, project: string, source: stri
       }),
     ),
   );
+  // Joined as they are, every piece plays with the first's encoder setup: an
+  // odd one (libx264 where the rest are on the hardware) goes, to be made again
+  // next time, and this copy is made whole.
+  const odd = await oddPieces(last.chunks.map((chunk) => pieceOf(chunk.key)));
+  if (odd.length > 0) {
+    for (const piece of odd) fs.rmSync(piece, { force: true });
+    throw new Error(`${odd.length} of ${last.chunks.length} pieces were encoded unlike the rest`);
+  }
   const list = join(dir, "pieces.txt");
   fs.writeFileSync(list, last.chunks.map((chunk) => `file '${pieceOf(chunk.key).replaceAll("'", "'\\''")}'`).join("\n"));
   const partial = `${dest}.partial.mp4`;

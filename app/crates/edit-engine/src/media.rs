@@ -1283,43 +1283,68 @@ mod background_tests {
 
     #[test]
     fn background_work_stops_while_foreground_work_runs() {
-        // A one-second job, with an export taking the foreground for 1.5 s
-        // of it: it's held, then finishes with its output. Ten short sleeps,
-        // not one: a stopped shell can't start its next, where one `sleep 1`
-        // forked before the stop ran on regardless (CI's Linux, Nov 8: 1.6 s;
-        // it passed only when other tests' exports held it longer).
-        let held = std::thread::spawn(|| {
-            let _export = foreground();
-            std::thread::sleep(Duration::from_millis(1500));
-        });
-        std::thread::sleep(Duration::from_millis(100));
-        let started = Instant::now();
-        let out = run_background(Command::new("sh").args([
-            "-c",
-            "for i in 1 2 3 4 5 6 7 8 9 10; do sleep 0.1; done; echo done",
-        ]))
-        .unwrap();
-        held.join().unwrap();
+        // Watched, not timed: the job is seen stopped (ps says T) while an
+        // export holds the foreground, and finishing once it's let go. It
+        // was a stopwatch (held 1.5 s, so done after 2.2 s), and a loaded
+        // runner's late thread made it 1.6 s (CI's Linux, Nov 8, twice).
+        let dir = std::env::temp_dir().join(format!("edit-background-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = format!(
+            "echo $$ > '{0}/pid'; while [ ! -f '{0}/go' ]; do sleep 0.02; done; echo done",
+            dir.display()
+        );
+        let job =
+            std::thread::spawn(move || run_background(Command::new("sh").args(["-c", &script])));
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let pid = loop {
+            if let Ok(pid) = std::fs::read_to_string(dir.join("pid")) {
+                if !pid.trim().is_empty() {
+                    break pid.trim().to_owned();
+                }
+            }
+            assert!(Instant::now() < deadline, "the job never started");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let state = || {
+            let out = Command::new("ps")
+                .args(["-o", "state=", "-p", &pid])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        let export = foreground();
+        while !state().starts_with('T') {
+            assert!(
+                Instant::now() < deadline,
+                "never stopped for the export: {}",
+                state()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Stopped, it can't see this until it's continued.
+        std::fs::write(dir.join("go"), "").unwrap();
+        assert!(state().starts_with('T'));
+        assert!(!job.is_finished());
+        drop(export);
+        let out = job.join().unwrap().unwrap();
         assert_eq!(String::from_utf8_lossy(&out).trim(), "done");
-        assert!(
-            started.elapsed() >= Duration::from_millis(2200),
-            "{:?}",
-            started.elapsed()
-        );
-        // An import's proxy (Pause::Never) runs on beside the export.
-        let held = std::thread::spawn(|| {
-            let _export = foreground();
-            std::thread::sleep(Duration::from_millis(1500));
+        let _ = std::fs::remove_dir_all(&dir);
+        // An import's proxy (Pause::Never) runs to its end beside the export.
+        let export = foreground();
+        let (sent, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sent.send(run_paused(
+                Command::new("sh").args(["-c", "echo ran"]),
+                Pause::Never,
+            ));
         });
-        std::thread::sleep(Duration::from_millis(100));
-        let started = Instant::now();
-        run_paused(Command::new("sh").args(["-c", "sleep 0.3"]), Pause::Never).unwrap();
-        assert!(
-            started.elapsed() < Duration::from_millis(1000),
-            "{:?}",
-            started.elapsed()
-        );
-        held.join().unwrap();
+        let out = finished
+            .recv_timeout(Duration::from_secs(30))
+            .expect("held while the export ran")
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out).trim(), "ran");
+        drop(export);
         // Smooth playback's render doesn't take the foreground.
         as_background(|| {
             assert!(!foreground().0);

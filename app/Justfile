@@ -209,18 +209,63 @@ publish: check
 # channel (the default) offer it at the top of the editor.
 # Ship a nightly: tag main's head nightly-<N> (the next number) and push.
 # Checked first, like publish: a nightly reaches every install on the
-# default channel, so it never ships on an unchecked tree.
-nightly: check
+# default channel, so it never ships on an unchecked tree. One a day at most
+# (Sphe, Nov 8: sixteen in a week made the team the test suite): a second
+# within 20 hours needs `--force "<why>"`, kept in the tag's message and the
+# release's notes. The team's note (two lines, then every change by its plan
+# item: scripts/nightly-notes.ts) is printed before tagging and becomes the
+# pre-release's body. release.yml waits for Check on the tagged commit, Mac
+# and Linux, and ships nothing past a red one, so a commit whose Check has
+# already failed is refused here.
+[positional-arguments]
+nightly *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    forced=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --force) forced="${2:-}"; [ -n "$forced" ] || { echo 'just nightly --force "why it can'"'"'t wait"'; exit 1; }; shift 2 ;;
+            *) echo 'just nightly [--force "why it can'"'"'t wait"]'; exit 1 ;;
+        esac
+    done
     [ "$(git branch --show-current)" = "main" ] || { echo "publish from main"; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "commit your changes first"; exit 1; }
     git fetch -q --tags origin
     last="$(git tag --list 'nightly-*' | sed 's/^nightly-//' | sort -n | tail -1)"
+    if [ -n "$last" ]; then
+        # When it was tagged (an annotated tag), else when GitHub published it, else its commit.
+        at="$(git tag --list "nightly-$last" --format='%(taggerdate:unix)')"
+        [ -n "$at" ] || at="$(gh release view "nightly-$last" --json publishedAt --jq '.publishedAt | fromdateiso8601' 2>/dev/null || true)"
+        [ -n "$at" ] || at="$(git log -1 --format=%ct "nightly-$last")"
+        hours=$(( ($(date +%s) - at) / 3600 ))
+        if [ "$hours" -lt 20 ] && [ -z "$forced" ]; then
+            echo "nightly-$last went out ${hours} h ago: one nightly a day at most."
+            echo 'If this one can'"'"'t wait: just nightly --force "what it fixes, for whom"'
+            exit 1
+        fi
+    fi
+    # Check already failed on this commit (its push to main): it would never ship.
+    sha="$(git rev-parse HEAD)"
+    if [ "$(git rev-parse origin/main)" = "$sha" ]; then
+        verdict="$(gh run list --workflow Check --commit "$sha" --event push --limit 1 --json conclusion --jq '.[0].conclusion // ""' 2>/dev/null || true)"
+        if [ "$verdict" = failure ]; then
+            echo "Check failed on $sha: fix it on main first (there is no override)."
+            echo "  https://github.com/spheceo/edit/actions/workflows/check.yml"
+            exit 1
+        fi
+    fi
+    just check
     tag="nightly-$(( ${last:-0} + 1 ))"
-    git tag "$tag"
+    previous="$(git tag --list 'nightly-*' 'v*' --sort=-creatordate --merged HEAD | head -1)"
+    echo
+    echo "The team's note for $tag:"
+    bun scripts/nightly-notes.ts "$previous" HEAD "$forced" | sed 's/^/  /'
+    echo
+    message="$tag"
+    if [ -n "$forced" ]; then message="$(printf '%s\n\nForced: %s' "$tag" "$forced")"; fi
+    git tag -a "$tag" -m "$message"
     git push origin main "$tag"
-    echo "Pushed $tag. GitHub Actions builds and publishes it (~10 min):"
+    echo "Pushed $tag. GitHub Actions waits for Check on it (Mac and Linux), then builds and publishes it (~10 min after):"
     echo "  https://github.com/spheceo/edit/actions/workflows/release.yml"
 
 # The Bun server on :7700 (restarted on TS changes, and when the addon is

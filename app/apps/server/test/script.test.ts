@@ -32,6 +32,7 @@ import {
   safeName,
   spans,
   CUT_IN_SECONDS,
+  CHAPTER_NOTE,
   CUT_IN_PAD,
   padsOf,
   WORD_PAD,
@@ -630,4 +631,41 @@ test("a range beside a cut-in gets room at that side only", () => {
   expect(padsOf(blocks, 0)).toEqual([WORD_PAD, CUT_IN_PAD]);
   expect(padsOf(blocks, 2)).toEqual([CUT_IN_PAD, WORD_PAD]);
   expect(padsOf(blocks, 3)).toEqual([WORD_PAD, CUT_IN_PAD]);
+});
+
+test("a script that opens on narration keeps it; chapter titles and producer's lines are never voiced", () => {
+  // The horror Doc of Nov 8: a cold open and a whole case before its first range, chapter titles in bold or as
+  // headings (each with its comments), and "Total time = 29.5min" at the end. All of it before the first range used
+  // to be dropped as the Doc's heading, with a hundred comments; the titles were voiced.
+  const doc = `<html><head><title>Horror</title><style>.c6{color:#000000;font-weight:700;font-style:italic}.c16{background-color:#00ff00;font-weight:700}</style></head><body>
+<p><span>In November 2025, a man in his early sixties would start a brand new YouTube channel.</span><sup><a href="#cmnt1" id="cmnt_ref1">[a]</a></sup><span> He would post almost every day.</span></p>
+<p><span>He never says who those people were.</span></p>
+<p><span class="c6">The darling of the AV world</span><sup><a href="#cmnt2" id="cmnt_ref2">[b]</a></sup></p>
+<p><span>In April 2002, Kuriyama founded a company in Tokyo.</span></p>
+<h2><span>Case 2: Stephen Clancy Hill</span></h2>
+<p><span>He was taken to the hospital. He did not survive&hellip; (</span><a href="https://www.google.com/url?q=https://youtu.be/DEgDurDqMWE?t%3D1&amp;sa=D">0:00-0:18</a><span>)</span></p>
+<p><span>The two other men were wounded but expected to survive, the police said.</span></p>
+<p><span class="c16">Total time = 29.5min</span></p>
+<div><p><a href="#cmnt_ref1" id="cmnt1">[a]</a><span>Show the channel screenshot, zoom in slowly.</span></p></div>
+<div><p><a href="#cmnt_ref2" id="cmnt2">[b]</a><span>Before the VO: Animation 7 chapter title slide-up.</span></p></div>
+</body></html>`;
+  const blocks = parse(doc).blocks;
+  expect(blocks.map((block) => block.kind)).toEqual(["narration", "narration", "narration", "footage", "narration"]);
+  const [open, chapter, beside, footage, last] = blocks as [Narration, Narration, Narration, Footage, Narration];
+  expect(open.text).toBe("In November 2025, a man in his early sixties would start a brand new YouTube channel. He would post almost every day.\n\nHe never says who those people were.");
+  expect(open.notes).toEqual(["Show the channel screenshot, zoom in slowly."]);
+  // A title starts a cut-in of its own and leaves its comments on it, never in its words.
+  expect(chapter.text).toBe("In April 2002, Kuriyama founded a company in Tokyo.");
+  expect(chapter.notes).toEqual([`${CHAPTER_NOTE}The darling of the AV world`, "Before the VO: Animation 7 chapter title slide-up."]);
+  // The narration beside the first range is the voice-over's too.
+  expect(beside.text).toBe("He was taken to the hospital. He did not survive…");
+  expect(beside.notes).toEqual([`${CHAPTER_NOTE}Case 2: Stephen Clancy Hill`]);
+  expect(footage.file).toBe("youtube:DEgDurDqMWE");
+  expect(last.text).toBe("The two other men were wounded but expected to survive, the police said.");
+});
+
+test("a Writer Doc's heading lines still aren't narration", () => {
+  const blocks = parse(DOC).blocks;
+  expect(blocks[0]!.kind).toBe("footage");
+  expect(blocks.some((block) => block.kind === "narration" && /Kent|Duration|FOIA/.test(block.text))).toBe(false);
 });

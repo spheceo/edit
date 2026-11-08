@@ -322,10 +322,14 @@ interface Para {
   text: string;
   links: [number, number, string][];
   refs: [number, string][];
+  /** A Doc heading (Heading 1–6), or a paragraph whose words are all bold. */
+  heading: boolean;
+  /** How many of its letters are bold. */
+  bold: number;
 }
 
-function newPara(): Para {
-  return { text: "", links: [], refs: [] };
+function newPara(heading = false): Para {
+  return { text: "", links: [], refs: [], heading, bold: 0 };
 }
 
 /** Google Docs' HTML export: paragraphs, links, and the comments at the end. */
@@ -340,6 +344,10 @@ function readHtml(html: string): [string, Para[], Map<string, string>] {
   let comment: string | null = null;
   let inTitle = false;
   let hidden = false;
+  let style = "";
+  // Docs marks bold with a class whose rule has font-weight:700, on spans.
+  let boldClasses: Set<string> | null = null;
+  const spans: boolean[] = [];
   let rest = html;
   while (rest !== "") {
     if (rest.startsWith("<")) {
@@ -362,6 +370,16 @@ function readHtml(html: string): [string, Para[], Map<string, string>] {
         case "script":
           hidden = !closing;
           break;
+        case "span": {
+          if (closing) {
+            spans.pop();
+            break;
+          }
+          boldClasses ??= new Set([...style.matchAll(/\.([\w-]+)\{[^}]*font-weight:\s*(?:700|800|900|bold)/g)].map((m) => m[1]!));
+          const classes = (attribute(tag, "class") ?? "").split(/\s+/);
+          spans.push(classes.some((name) => boldClasses!.has(name)) || /font-weight:\s*(?:700|bold)/.test(attribute(tag, "style") ?? ""));
+          break;
+        }
         case "p":
         case "li":
         case "h1":
@@ -376,7 +394,7 @@ function readHtml(html: string): [string, Para[], Map<string, string>] {
             if (comment !== null) addComment(comment, "\n");
             else paras.push(para);
           }
-          if (!closing) current = newPara();
+          if (!closing) current = newPara(name.startsWith("h"));
           break;
         }
         case "br":
@@ -420,10 +438,17 @@ function readHtml(html: string): [string, Para[], Map<string, string>] {
       const raw = end < 0 ? rest : rest.slice(0, end);
       rest = end < 0 ? "" : rest.slice(end);
       const text = decodeEntities(raw);
-      if (hidden || marker) continue;
+      if (hidden) {
+        style += text;
+        continue;
+      }
+      if (marker) continue;
       if (inTitle) title += text;
       else if (comment !== null) addComment(comment, text);
-      else if (current !== null) current.text += text;
+      else if (current !== null) {
+        current.text += text;
+        if (spans.at(-1) === true) current.bold += (text.match(/\p{L}/gu) ?? []).length;
+      }
     }
   }
   if (current !== null && comment === null) paras.push(current);
@@ -807,6 +832,36 @@ async function fetchRecording(app: App, id: string): Promise<void> {
   if (ids[0] === undefined) throw new Error(errors[0] ?? "the recording didn't import");
 }
 
+/** A producer's line about the video, never voiced: "Total time = 29.5min", "Duration: 27m", "Runtime - 12 min". */
+const META_LINE = /^(total\s+)?(time|duration|length|run\s?time|word count)\s*[:=\-–—]/iu;
+
+/**
+ * A paragraph of narration: a sentence of eight words or more, ended as one.
+ * A script whose voice-over opens before its first range (a horror cold open:
+ * "In November 2025, a man in his early sixties would start a brand new
+ * YouTube channel.") starts there; a title, a "FOIA Kent Police - Mother
+ * Finds Out…" heading or "Total Duration: 27m" never does.
+ */
+function prose(text: string): boolean {
+  const words = text.split(/\s+/).filter((word) => /\p{L}/u.test(word));
+  return words.length >= 8 && /[.!?…]["'”’)\]]*$/u.test(text);
+}
+
+/**
+ * A chapter title written on its own line: a Doc heading, or a short line all
+ * in bold that doesn't end as a sentence ("The trial", "Case 2: Stephen Clancy
+ * Hill", "Ending"). It's shown on screen, never voiced (the horror Doc of Nov 8:
+ * "Before the VO: Animation 7 chapter title slide-up 'The trial'").
+ */
+function chapterTitle(para: Para, text: string): boolean {
+  const letters = (text.match(/\p{L}/gu) ?? []).length;
+  if (letters === 0 || text.split(/\s+/).length > 12 || /[.!?…]["'”’)\]]*$/u.test(text)) return false;
+  return para.heading || para.bold >= letters;
+}
+
+/** The note a chapter title leaves on the narration after it. */
+export const CHAPTER_NOTE = "Chapter title (on screen, not voiced): ";
+
 /** Reads a script Doc's HTML export into footage ranges and narration. */
 export function parse(html: string): Parsed {
   const [title, paras, comments] = readHtml(html);
@@ -829,7 +884,16 @@ export function parse(html: string): Parsed {
   let last: [string, string] | null = only;
   const blocks: ScriptBlock[] = [];
   const cases: { after: number; doc: string }[] = [];
-  let seenFootage = false;
+  // The voice-over has begun: at the first range, or at the first paragraph of
+  // narration before it.
+  let started = false;
+  // A chapter title's note (and the comments on it), for the next block.
+  let pending: string[] = [];
+  const take = (found: string[]) => {
+    const all = [...pending, ...found];
+    pending = [];
+    return all;
+  };
   // "Reuse: <link>" on a narration: a finished video of ours plays after it,
   // whole (its range is set to the whole file once it's downloaded).
   const reuse = (found: string[]) => {
@@ -871,6 +935,9 @@ export function parse(html: string): Parsed {
   // some other file.
   let unbound: string[] = [];
   const narrate = (text: string, given: string[], own = false) => {
+    const titled = pending.length > 0;
+    given = take(given);
+    own ||= titled;
     const found = unbound.length > 0 ? [`No link given for ${unbound.join(" + ")}: choose those moments from the story's own footage`, ...given] : given;
     unbound = [];
     const previous = blocks[blocks.length - 1];
@@ -894,15 +961,25 @@ export function parse(html: string): Parsed {
     }
     if (ranges.length === 0) {
       const text = collapse(para.text);
-      // The video opens on the first timestamp: anything before it is the
-      // Doc's heading (title, "Assets:", durations), never a cut-in.
+      if (!started && prose(text) && !chapterTitle(para, text)) started = true;
+      // A producer's line ("Total time = 29.5min") is never voiced; a chapter
+      // title is shown, not voiced: both leave their comments to what's next.
+      if (started && text !== "" && (META_LINE.test(text) || chapterTitle(para, text))) {
+        if (!META_LINE.test(text)) pending.push(`${CHAPTER_NOTE}${text}`);
+        pending.push(...notes(para.refs, comments));
+        docLinks(para.links);
+        continue;
+      }
+      // The video opens on the first timestamp or the first narration:
+      // anything before it is the Doc's heading (title, "Assets:",
+      // durations), never a cut-in.
       // A line of no words ("—", "__") only separates parts of the Doc.
-      if (text === "" || !seenFootage || !/[\p{L}\p{N}]/u.test(text)) {
+      if (text === "" || !started || !/[\p{L}\p{N}]/u.test(text)) {
         // A reused script linked before the first range opens the video:
         // in the text, or in a comment on it (card 1's Doc: "REUSE"
         // highlighted, the reused script's link in the comment on it; the
         // user, Oct 29: "it seems we missed the reuse comment").
-        if (seenFootage || blocks.length === 0) {
+        if (started || blocks.length === 0) {
           docLinks(para.links);
           caseNotes(notes(para.refs, comments));
         }
@@ -931,10 +1008,10 @@ export function parse(html: string): Parsed {
     }
     // Narration written on from the ranges in the same paragraph: before,
     // between and after them, in order.
-    const said = (from: number, to: number) => (seenFootage ? besideRanges(para.text.slice(from, to)) : null);
+    const said = (from: number, to: number) => (started ? besideRanges(para.text.slice(from, to)) : null);
     const gaps = ranges.map((range, index) => said(index === 0 ? 0 : ranges[index - 1]!.end, range.start));
     const tail = ranges.length > 0 ? said(ranges[ranges.length - 1]!.end, para.text.length) : null;
-    seenFootage = true;
+    started = true;
     // Doc links in a paragraph of ranges: each after the ranges before it.
     const docsHere = para.links.filter(([, , url]) => docId(url) !== null && footageFile(url) === null);
     let docAt = 0;
@@ -992,7 +1069,7 @@ export function parse(html: string): Parsed {
         start,
         end: Math.max(range.to, start + 0.1),
         label: collapse(para.text.slice(range.start, range.end)).replace(/[‑–—]/g, "-"),
-        notes: rangeNotes,
+        notes: take(rangeNotes),
       };
       const words = cueWords(rangeNotes);
       if (words !== null) block.words = words;
@@ -1008,6 +1085,9 @@ export function parse(html: string): Parsed {
     }
     docsBefore(Number.MAX_SAFE_INTEGER);
   }
+  // A title or comment after the last line stays with the last block.
+  const lastBlock = blocks.at(-1);
+  if (lastBlock !== undefined && pending.length > 0) lastBlock.notes = [...(lastBlock.notes ?? []), ...take([]).filter((note) => !note.startsWith(CHAPTER_NOTE))];
   if (recording !== null) {
     const narration = blocks.find((block) => block.kind === "narration");
     if (narration !== undefined) narration.notes = [`${RECORDING_NOTE}${recording}`, ...(narration.notes ?? [])];

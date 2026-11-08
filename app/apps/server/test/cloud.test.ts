@@ -205,6 +205,88 @@ test("a big upload that stops picks up where it was: only the parts R2 doesn't h
   }
 });
 
+/**
+ * R2 behind a connection that hangs up (Nov 8 audit, item I: "a relay that
+ * drops the socket mid-upload"): a raw socket, so the drop is the network's,
+ * not an answer. Parts for which `drop` says so are cut off as their headers
+ * arrive; the rest land in the mock's upload.
+ */
+function droppingR2(drop: (part: number) => boolean): { url: (key: string, uploadId: string, part: number) => string; sent: number[]; stop: () => void } {
+  const sent: number[] = [];
+  const server = Bun.listen<{ buffer: Buffer }>({
+    hostname: "127.0.0.1",
+    port: 0,
+    socket: {
+      open(socket) {
+        socket.data = { buffer: Buffer.alloc(0) };
+      },
+      data(socket, chunk) {
+        socket.data.buffer = Buffer.concat([socket.data.buffer, chunk]);
+        const end = socket.data.buffer.indexOf("\r\n\r\n");
+        if (end < 0) return;
+        const head = socket.data.buffer.subarray(0, end).toString();
+        const url = new URL(head.split(" ")[1]!, "http://r2");
+        const part = Number(url.searchParams.get("partNumber"));
+        if (drop(part)) {
+          socket.terminate();
+          return;
+        }
+        const length = Number(/content-length: *(\d+)/i.exec(head)?.[1] ?? 0);
+        if (socket.data.buffer.length < end + 4 + length) return;
+        const body = new Uint8Array(socket.data.buffer.subarray(end + 4, end + 4 + length));
+        socket.data.buffer = Buffer.alloc(0);
+        sent.push(part);
+        mock.cloud.uploads.get(url.searchParams.get("uploadId")!)!.parts.set(part, body);
+        socket.write(`HTTP/1.1 200 OK\r\netag: ${etagOf(body)}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n`);
+        socket.end();
+      },
+    },
+  });
+  return {
+    url: (key, uploadId, part) => `http://127.0.0.1:${server.port}/${key}?partNumber=${part}&uploadId=${uploadId}`,
+    sent,
+    stop: () => server.stop(true),
+  };
+}
+
+test("a big upload whose connection keeps dropping stops, then picks up from the part it was on: nothing sent twice", async () => {
+  const { dir, cleanup } = scratch("cloud-dropped");
+  let online = false;
+  let done = false;
+  const r2 = droppingR2((part) => !online && part >= 4);
+  try {
+    cloud.timing.filePart = MIB;
+    cloud.timing.resumableFrom = MIB;
+    cloud.keepUploadJournalsIn(`${dir}/uploads`);
+    const key = "edit/test/dropped.mp4";
+    const data = pattern(4 * MIB + 321);
+    const file = `${dir}/original.mp4`;
+    fs.writeFileSync(file, data);
+    // This file's part URLs through the dropping socket; every other upload's (and this one's after the test) as the mock gives them.
+    mock.on("POST", "/v1/cloud/r2/multipart/urls", (request) => {
+      const body = request.json<{ key: string; uploadId: string; parts: number[] }>();
+      const url = (part: number) => (body.key === key && !done ? r2.url(body.key, body.uploadId, part) : mock.cloud.url(body.key, { partNumber: String(part), uploadId: body.uploadId }));
+      return Response.json({ urls: Object.fromEntries(body.parts.map((part) => [String(part), url(part)])) });
+    });
+    // The connection drops on part 4 every time it's tried: a passing failure, asked again, then the upload stops.
+    await expect(cloud.uploadFile(file, key)).rejects.toThrow();
+    expect(diag.lines(40).some((line) => /part 4 of edit\/test\/dropped\.mp4 failed \(try 1\)/.test(line.message))).toBe(true);
+    expect(mock.cloud.objects.has(key)).toBe(false);
+    expect(r2.sent.toSorted()).toEqual([1, 2, 3]);
+    expect(fs.readdirSync(`${dir}/uploads`).length).toBe(1);
+    // Back online (the Mac's Wi-Fi, a restart): only what R2 doesn't hold goes.
+    online = true;
+    await cloud.uploadFile(file, key);
+    expect(r2.sent.toSorted()).toEqual([1, 2, 3, 4, 5]);
+    expect(Buffer.from(mock.cloud.objects.get(key)!).equals(Buffer.from(data))).toBe(true);
+    expect(fs.readdirSync(`${dir}/uploads`)).toEqual([]);
+  } finally {
+    done = true;
+    r2.stop();
+    cleanup();
+  }
+});
+
 test("an upload R2 let go of, or a file that changed, begins again", async () => {
   const { dir, cleanup } = scratch("cloud-resume-again");
   try {

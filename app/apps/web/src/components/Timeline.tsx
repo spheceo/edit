@@ -500,7 +500,14 @@ export function Timeline() {
         state.beginGesture();
         canvas.style.cursor = "grabbing";
       }
-      const base = state.gestureBase!;
+      // Read now, not from `state`: that's the store from before beginGesture, whose gestureBase is still null, so the first
+      // move of every clip drag threw ("null is not an object (evaluating 'e.clips')", 12 on Marc's Mac, Nov 8). Null here
+      // means the gesture was ended under the pointer (a project from elsewhere taken mid-drag): the drag ends with it.
+      const base = useEditor.getState().gestureBase;
+      if (base === null) {
+        drag.current = null;
+        return;
+      }
       const moving = base.clips.filter((clip) => current.ids.has(clip.id));
       let delta = Math.round((x - current.x) / ppf);
       const minStart = Math.min(...moving.map((clip) => clip.start));
@@ -534,7 +541,11 @@ export function Timeline() {
         }
       });
     } else if (current.kind === "trim") {
-      const base = state.gestureBase!;
+      const base = state.gestureBase;
+      if (base === null) {
+        drag.current = null;
+        return;
+      }
       const clip = base.clips.find((candidate) => candidate.id === current.clip.id)!;
       let delta = Math.round((x - current.x) / ppf);
       const edgeFrame = current.edge === "start" ? clip.start : clipEnd(clip);

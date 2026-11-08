@@ -234,6 +234,10 @@ pub struct Renderer {
     sampler: wgpu::Sampler,
     blank: Target,
     videos: HashMap<String, Target>,
+    /// A 4:2:0 video's planes as uploaded (`upload_video_yuv420`), by the
+    /// same key as its picture in `videos`, and their conversion.
+    video_planes: HashMap<String, VideoPlanes>,
+    yuv420_in: Option<wgpu::RenderPipeline>,
     texts: HashMap<String, TextSlot>,
     fonts: FontBook,
     glyphs: GlyphCache,
@@ -253,6 +257,13 @@ struct Yuv420 {
     pipeline: wgpu::ComputePipeline,
     group: wgpu::BindGroup,
     planes: wgpu::Buffer,
+}
+
+/// A 4:2:0 video's Y, U and V textures and the bind group converting them.
+struct VideoPlanes {
+    size: (u32, u32),
+    textures: [wgpu::Texture; 3],
+    group: wgpu::BindGroup,
 }
 
 /// Resolution of the sound levels a waveform reads (as the media cache's peaks.bin).
@@ -532,6 +543,8 @@ impl Renderer {
             sampler,
             blank,
             videos: HashMap::new(),
+            video_planes: HashMap::new(),
+            yuv420_in: None,
             texts: HashMap::new(),
             fonts: FontBook::default(),
             glyphs: GlyphCache::default(),
@@ -694,8 +707,172 @@ impl Renderer {
         );
     }
 
+    /// `upload_video` for a frame as BT.709 TV-range 4:2:0 planes (Y, U, V,
+    /// tight; an even `width` and `height`): turned into the video's RGBA on
+    /// the GPU (`shaders/yuv420_in.wgsl`) as FFmpeg would have on the CPU, so
+    /// a decoder pipes 1.5 bytes a pixel and converts nothing. FFmpeg's
+    /// conversion halved a 1080p decoder, 161 frames a second against 313
+    /// (Nov 8).
+    pub fn upload_video_yuv420(&mut self, media: &str, width: u32, height: u32, planes: &[u8]) {
+        let (luma, chroma) = (
+            width as usize * height as usize,
+            (width / 2) as usize * (height / 2) as usize,
+        );
+        let (Some(y), Some(u), Some(v)) = (
+            planes.get(..luma),
+            planes.get(luma..luma + chroma),
+            planes.get(luma + chroma..luma + 2 * chroma),
+        ) else {
+            return;
+        };
+        let pipeline = self
+            .yuv420_in
+            .get_or_insert_with(|| {
+                let module = self
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("edit yuv420 in"),
+                        source: wgpu::ShaderSource::Wgsl(
+                            include_str!("shaders/yuv420_in.wgsl").into(),
+                        ),
+                    });
+                self.device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("edit yuv420 in"),
+                        layout: None,
+                        vertex: wgpu::VertexState {
+                            module: &module,
+                            entry_point: Some("vs"),
+                            buffers: &[],
+                            compilation_options: Default::default(),
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &module,
+                            entry_point: Some("fs"),
+                            targets: &[Some(SOURCE_FORMAT.into())],
+                            compilation_options: Default::default(),
+                        }),
+                        primitive: Default::default(),
+                        depth_stencil: None,
+                        multisample: Default::default(),
+                        multiview_mask: None,
+                        cache: None,
+                    })
+            })
+            .clone();
+        let made = self
+            .video_planes
+            .get(media)
+            .is_some_and(|planes| planes.size == (width, height));
+        if !made {
+            let plane = |label: &str, width: u32, height: u32| {
+                self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: width.max(1),
+                        height: height.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                })
+            };
+            let textures = [
+                plane("edit video Y", width, height),
+                plane("edit video U", width / 2, height / 2),
+                plane("edit video V", width / 2, height / 2),
+            ];
+            let views = textures
+                .each_ref()
+                .map(|texture| texture.create_view(&Default::default()));
+            let entries: Vec<wgpu::BindGroupEntry> = views
+                .iter()
+                .enumerate()
+                .map(|(binding, view)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: wgpu::BindingResource::TextureView(view),
+                })
+                .collect();
+            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("edit yuv420 in"),
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            self.video_planes.insert(
+                media.to_owned(),
+                VideoPlanes {
+                    size: (width, height),
+                    textures,
+                    group,
+                },
+            );
+        }
+        let Some(planes) = self.video_planes.get(media) else {
+            return;
+        };
+        for (texture, bytes, row) in [
+            (&planes.textures[0], y, width),
+            (&planes.textures[1], u, width / 2),
+            (&planes.textures[2], v, width / 2),
+        ] {
+            let size = texture.size();
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(size.height),
+                },
+                size,
+            );
+        }
+        let group = planes.group.clone();
+        self.video_texture_in(media, width, height, SOURCE_FORMAT);
+        let Some(target) = self.videos.get(media) else {
+            return;
+        };
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("edit yuv420 in"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("edit yuv420 in"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
     pub fn forget_video(&mut self, media: &str) {
         self.videos.remove(media);
+        self.video_planes.remove(media);
     }
 
     /// Sound levels a waveform reads for `media`: peaks.bin from the media cache.
@@ -1434,6 +1611,8 @@ impl Renderer {
         self.texts
             .retain(|_, slot| frame - slot.last_used < TEXT_TTL);
         self.videos.retain(|key, _| scene.layers.iter().any(|layer| matches!(layer, Layer::Video { clip, media, .. } if key == clip || key == media)));
+        let videos = &self.videos;
+        self.video_planes.retain(|key, _| videos.contains_key(key));
     }
 
     /// Draws the last rendered frame into `view` (e.g. a canvas surface),

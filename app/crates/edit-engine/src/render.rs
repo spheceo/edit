@@ -105,6 +105,95 @@ pub enum Order {
     /// The video decoder's and encoder's own order: no conversion on the CPU
     /// (the renderer samples a BGRA texture the same as an RGBA one).
     Bgra,
+    /// BT.709 TV-range 4:2:0 planes, as the source holds them: an export's
+    /// decoder off a Mac, for footage already in it (`yuv420_source`), turned
+    /// into RGBA on the GPU (`Renderer::upload_video_yuv420`).
+    Yuv420,
+}
+
+/// Whether an export's decoder can hand over `path`'s frames as the 4:2:0
+/// they are (`Order::Yuv420`): off a Mac, video that is 8-bit 4:2:0 BT.709 TV
+/// range already, so FFmpeg converts nothing and the GPU's RGBA is what its
+/// own was. Anything else (BT.601 or untagged, full range, 10-bit or HDR)
+/// stays FFmpeg's to convert, as before: brought to BT.709 first it came out
+/// 34-50 dB from that. A cloud original is probed by its first excerpt (a
+/// stream copy of it); one with none isn't probed. Once per file.
+fn yuv420_source(path: &Path) -> bool {
+    if cfg!(target_os = "macos") {
+        return false;
+    }
+    static PROBED: std::sync::OnceLock<Mutex<HashMap<PathBuf, bool>>> = std::sync::OnceLock::new();
+    let probed = PROBED.get_or_init(Default::default);
+    if let Some(known) = probed.lock().get(path) {
+        return *known;
+    }
+    let file = if crate::util::is_url(path) {
+        crate::excerpts::of(path)
+            .and_then(|excerpts| excerpts.first().map(|excerpt| excerpt.path.clone()))
+            .filter(|file| file.is_file())
+    } else {
+        Some(path.to_path_buf())
+    };
+    let fits = file.is_some_and(|file| {
+        Command::new(crate::util::ffprobe())
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
+            .args([
+                "stream=pix_fmt,color_space,color_range",
+                "-of",
+                "default=nw=1",
+            ])
+            .arg(&file)
+            .output()
+            .is_ok_and(|output| {
+                let said = String::from_utf8_lossy(&output.stdout);
+                let field = |name: &str| {
+                    said.lines()
+                        .find_map(|line| line.strip_prefix(&format!("{name}=")))
+                        .unwrap_or("")
+                        .trim()
+                        .to_owned()
+                };
+                output.status.success()
+                    && field("pix_fmt") == "yuv420p"
+                    && field("color_space") == "bt709"
+                    && matches!(field("color_range").as_str(), "tv" | "unknown")
+            })
+    });
+    probed.lock().insert(path.to_path_buf(), fits);
+    fits
+}
+
+/// How an export's decoder hands over `media` decoded at `size`: as the
+/// 4:2:0 it is when that's BT.709 (`yuv420_source`) and it's decoded at its
+/// own size. Scaled down in 4:2:0 its colour would keep half the frame's
+/// resolution, not the source's: sharp coloured edges 10% of a frame off
+/// FFmpeg's RGBA, by as much as 197 (Nov 8, 720p into 360p).
+fn decode_order(media: &Media, path: &Path, size: (u32, u32)) -> Order {
+    if media.kind == edit_core::MediaKind::Video
+        && size == (media.width, media.height)
+        && yuv420_source(path)
+    {
+        Order::Yuv420
+    } else {
+        Order::Bgra
+    }
+}
+
+/// A decoded picture into the renderer, by its order.
+fn upload(
+    renderer: &mut Renderer,
+    clip: &str,
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    order: Order,
+) {
+    match order {
+        Order::Yuv420 => renderer.upload_video_yuv420(clip, width, height, pixels),
+        Order::Rgba | Order::Bgra => {
+            renderer.upload_video(clip, width, height, pixels, order == Order::Bgra)
+        }
+    }
 }
 
 /// What a reader decodes: a file at a size, in an order.
@@ -138,7 +227,12 @@ impl Source {
     }
 
     fn bytes(&self) -> usize {
-        self.key.width as usize * self.key.height as usize * 4
+        let pixels = self.key.width as usize * self.key.height as usize;
+        if self.key.order == Order::Yuv420 {
+            pixels * 3 / 2
+        } else {
+            pixels * 4
+        }
     }
 }
 
@@ -311,6 +405,7 @@ impl VideoReader {
                 match self.source.key.order {
                     Order::Rgba => "rgba",
                     Order::Bgra => "bgra",
+                    Order::Yuv420 => "yuv420p",
                 },
                 "pipe:1",
             ])
@@ -381,6 +476,7 @@ impl VideoReader {
                 match self.source.key.order {
                     Order::Rgba => "rgba",
                     Order::Bgra => "bgra",
+                    Order::Yuv420 => "yuv420p",
                 },
                 "pipe:1",
             ])
@@ -2690,12 +2786,10 @@ fn planner(
                 Some(source) => source.clone(),
                 None => match project.media(media) {
                     Some(found) => {
-                        let source = Source::new(
-                            found,
-                            PathBuf::from(&found.path),
-                            decode_size(found, width, height),
-                            Order::Bgra,
-                        );
+                        let path = PathBuf::from(&found.path);
+                        let size = decode_size(found, width, height);
+                        let order = decode_order(found, &path, size);
+                        let source = Source::new(found, path, size, order);
                         sources.insert(media.clone(), source.clone());
                         source
                     }
@@ -2923,12 +3017,13 @@ fn render_frames_watched(
                                 return Err("decoding fell out of step".to_owned());
                             }
                             if let Some(pixels) = decoded.pixels {
-                                renderer.upload_video(
+                                upload(
+                                    &mut renderer,
                                     clip,
                                     decoded.width,
                                     decoded.height,
                                     &pixels,
-                                    decoded.order == Order::Bgra,
+                                    decoded.order,
                                 );
                                 if let Some(recycle) = recyclers.get(*index) {
                                     let _ = recycle.send(pixels);
@@ -2941,12 +3036,13 @@ fn render_frames_watched(
                                 .or_insert_with(|| inline_pool.take(source, *time));
                             scratch.resize(source.bytes(), 0);
                             reader.frame_into(*time, &mut scratch, false)?;
-                            renderer.upload_video(
+                            upload(
+                                &mut renderer,
                                 clip,
                                 source.key.width,
                                 source.key.height,
                                 &scratch,
-                                source.key.order == Order::Bgra,
+                                source.key.order,
                             );
                         }
                         Decode::Missing(error) => return Err(error.clone()),
@@ -3213,6 +3309,114 @@ mod tests {
                 (loudest as i64 - 4800).abs() < 96,
                 "cut {index}: click at {loudest} samples, expected 4800"
             );
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Footage already in BT.709 TV-range 4:2:0 is decoded as it is and made
+    /// RGBA on the GPU, and comes out the picture FFmpeg's RGBA was; other
+    /// footage, and footage scaled to the frame, keeps FFmpeg's RGBA.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn footage_decoded_as_420_is_ffmpegs_picture() {
+        let dir = temp_dir("decode420");
+        let make = |name: &str, size: &str, vf: &str| {
+            let path = dir.join(name);
+            let made = Command::new(crate::util::ffmpeg())
+                .args(["-v", "error", "-f", "lavfi", "-i"])
+                .arg(format!("testsrc2=size={size}:rate=30:duration=1"))
+                .args(["-vf", vf, "-c:v", "libx264", "-crf", "12"])
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            path
+        };
+        let tagged = |matrix: &str, range: &str, format: &str, space: &str| {
+            format!(
+                "scale=out_color_matrix={matrix}:out_range={range},format={format},\
+                 setparams=colorspace={space}:range={range}"
+            )
+        };
+        let bt709 = make(
+            "709.mp4",
+            "640x360",
+            &tagged("bt709", "tv", "yuv420p", "bt709"),
+        );
+        let big = make(
+            "709-big.mp4",
+            "1280x720",
+            &tagged("bt709", "tv", "yuv420p", "bt709"),
+        );
+        let bt601 = make(
+            "601.mp4",
+            "640x360",
+            &tagged("bt601", "tv", "yuv420p", "bt470bg"),
+        );
+        let full = make(
+            "full.mp4",
+            "640x360",
+            &tagged("bt709", "pc", "yuvj420p", "bt709"),
+        );
+        let bare = make("bare.mp4", "640x360", "format=yuv420p");
+        assert!(yuv420_source(&bt709) && yuv420_source(&big));
+        assert!(!yuv420_source(&bt601) && !yuv420_source(&full) && !yuv420_source(&bare));
+        let (w, h) = (640, 360);
+        let mut renderer = new_renderer(w, h).unwrap();
+        let scene = Scene {
+            width: w,
+            height: h,
+            layers: vec![Layer::Video {
+                clip: "c".into(),
+                media: "m".into(),
+                source_time: 0.0,
+                transform: Default::default(),
+                opacity: 1.0,
+                crop: Default::default(),
+                frame: None,
+                blend: Default::default(),
+            }],
+        };
+        let media = |path: &PathBuf, (width, height): (u32, u32)| -> Media {
+            serde_json::from_value(json!({
+                "id": "m", "name": "m", "path": path, "kind": "video", "duration": 1.0,
+                "width": width, "height": height, "fps": 30, "has_audio": false
+            }))
+            .unwrap()
+        };
+        // Scaled to the frame, it keeps FFmpeg's RGBA.
+        let scaled = media(&big, (1280, 720));
+        assert_eq!(
+            decode_order(&scaled, &big, decode_size(&scaled, w, h)),
+            Order::Bgra
+        );
+        {
+            let path = &bt709;
+            let media = media(path, (w, h));
+            assert_eq!(decode_order(&media, path, (w, h)), Order::Yuv420);
+            let mut picture = |order: Order| {
+                let source = Source::new(&media, path.clone(), (w, h), order);
+                let mut reader = VideoReader::open(source.clone());
+                let mut pixels = vec![0; source.bytes()];
+                reader.frame_into(0.5, &mut pixels, false).unwrap();
+                upload(&mut renderer, "c", w, h, &pixels, order);
+                renderer.render(&scene);
+                renderer.read_output().unwrap()
+            };
+            let (before, after) = (picture(Order::Bgra), picture(Order::Yuv420));
+            let mut worst = 0;
+            let mut off = 0;
+            for (a, b) in before.iter().zip(&after) {
+                let difference = a.abs_diff(*b);
+                worst = worst.max(difference);
+                off += usize::from(difference > 1);
+            }
+            let share = off as f64 / before.len() as f64;
+            eprintln!(
+                "{}: worst {worst}, {share:.4} more than 1 off",
+                path.display()
+            );
+            assert!(worst <= 3 && share < 0.01, "worst {worst}, {share} off");
         }
         std::fs::remove_dir_all(dir).ok();
     }
@@ -4099,6 +4303,11 @@ mod tests {
                     "60",
                     "-pix_fmt",
                     "yuv420p",
+                    // Tagged as most footage is (YouTube's, phones'): decoded as 4:2:0.
+                    "-colorspace",
+                    "bt709",
+                    "-color_range",
+                    "tv",
                 ])
                 .arg(&path)
                 .status()

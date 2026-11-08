@@ -1093,3 +1093,77 @@ fn the_output_reads_back_as_bt709_420() {
     assert!(planes[luma_bytes..][..chroma].iter().all(|&u| u == 102));
     assert!(planes[luma_bytes + chroma..].iter().all(|&v| v == 240));
 }
+
+/// A decoder's 4:2:0 (`upload_video_yuv420`) becomes the RGBA FFmpeg would
+/// have given: BT.709 TV range, each chroma sample over its 2x2 block, the
+/// values truncated; the standard's red (63, 102, 240) is red again.
+#[test]
+#[allow(clippy::unwrap_used)]
+fn a_420_upload_is_ffmpegs_rgba() {
+    let (w, h) = (64u32, 6u32);
+    let Some(mut r) = renderer(w, h) else {
+        return;
+    };
+    let (luma, chroma) = ((w * h) as usize, (w / 2 * h / 2) as usize);
+    let mut seed = 11u32;
+    let mut planes: Vec<u8> = (0..luma + 2 * chroma)
+        .map(|_| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (seed >> 16) as u8
+        })
+        .collect();
+    // Within TV range, as a decoder gives it.
+    for (index, value) in planes.iter_mut().enumerate() {
+        let (low, high) = if index < luma { (16, 235) } else { (16, 240) };
+        *value = (*value).clamp(low, high);
+    }
+    let scene = Scene {
+        width: w,
+        height: h,
+        layers: vec![Layer::Video {
+            clip: "planes".into(),
+            media: "planes".into(),
+            source_time: 0.0,
+            transform: Transform::default(),
+            opacity: 1.0,
+            crop: Default::default(),
+            frame: None,
+            blend: BlendMode::Normal,
+        }],
+    };
+    r.upload_video_yuv420("planes", w, h, &planes);
+    r.render(&scene);
+    let rgba = r.read_output().unwrap();
+    let (kr, kb) = (0.2126f64, 0.0722f64);
+    for y in 0..h {
+        for x in 0..w {
+            let at = (y / 2 * (w / 2) + x / 2) as usize;
+            let luma_value = (f64::from(planes[(y * w + x) as usize]) - 16.0) / 219.0;
+            let cb = (f64::from(planes[luma + at]) - 128.0) / 224.0;
+            let cr = (f64::from(planes[luma + chroma + at]) - 128.0) / 224.0;
+            let red = luma_value + 2.0 * (1.0 - kr) * cr;
+            let blue = luma_value + 2.0 * (1.0 - kb) * cb;
+            let green = (luma_value - kr * red - kb * blue) / (1.0 - kr - kb);
+            let got = &rgba[((y * w + x) * 4) as usize..][..4];
+            for (channel, want) in [red, green, blue].into_iter().enumerate() {
+                let want = (want.clamp(0.0, 1.0) * 255.0 + 0.001).floor();
+                assert!(
+                    (f64::from(got[channel]) - want).abs() <= 1.0,
+                    "{x},{y} channel {channel}: {} for {want}",
+                    got[channel]
+                );
+            }
+            assert_eq!(got[3], 255);
+        }
+    }
+    let red: Vec<u8> = [vec![63; luma], vec![102; chroma], vec![240; chroma]].concat();
+    r.upload_video_yuv420("planes", w, h, &red);
+    r.render(&scene);
+    let rgba = r.read_output().unwrap();
+    for pixel in rgba.chunks(4) {
+        assert!(
+            pixel[0] >= 253 && pixel[1] <= 2 && pixel[2] <= 2,
+            "{pixel:?}"
+        );
+    }
+}

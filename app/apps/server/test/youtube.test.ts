@@ -8,7 +8,7 @@ import { parse, REUSE } from "../src/script.ts";
 import { afterFailure, download, downloadRange, fileOf, idOf, reasonOf, startOf, timing, videoId } from "../src/youtube.ts";
 import { scratch } from "./helpers/home.ts";
 import { Database } from "bun:sqlite";
-import { status as signInStatus, where as signInWhere } from "../src/youtube_signin.ts";
+import { keyring, status as signInStatus, where as signInWhere } from "../src/youtube_signin.ts";
 import type { App } from "../src/app.ts";
 import { probe } from "../src/writer/youtube.ts";
 
@@ -328,7 +328,7 @@ test("the YouTube sign-in from Chrome is the last resort: an age-restricted vide
     expect(fs.readFileSync(calls, "utf8").trim()).toBe("2");
     const args = fs.readFileSync(`${dir}/args`, "utf8").split("\n");
     expect(args).toContain("--cookies-from-browser");
-    expect(args).toContain(`chrome:${dir}/Chrome/Profile 2`);
+    expect(args).toContain(`chrome${keyring()}:${dir}/Chrome/Profile 2`);
     expect(args).not.toContain("--proxy");
 
     // A bot check: straight twice, the proxy, and only then the sign-in (never sent through the proxy).

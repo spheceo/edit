@@ -107,11 +107,26 @@ export function status(): SignIn {
 }
 
 /** yt-dlp's arguments for the sign-in, or none when Chrome has no YouTube sign-in. */
+/**
+ * The keyring Chrome's cookie key is in, named for yt-dlp on Linux. yt-dlp
+ * guesses it from the desktop session's variables, and a server started
+ * outside one (from a shell, over ssh, by T3 or the trial server) has none, so
+ * it guessed "basictext" and decrypted none of Chrome's cookies (Nov 8 on
+ * mandalorian: "Extracted 0 cookies from chrome (54 could not be decrypted)",
+ * and an age-restricted video failed with the sign-in). GNOME's keyring is
+ * the Secret Service every desktop but KDE's speaks; KDE's is KWallet.
+ */
+export function keyring(env: NodeJS.ProcessEnv = process.env, platform: string = process.platform): string {
+  if (platform !== "linux") return "";
+  const desktop = `${env.XDG_CURRENT_DESKTOP ?? ""}:${env.DESKTOP_SESSION ?? ""}`.toUpperCase();
+  return /KDE|PLASMA/.test(desktop) ? `+${env.KDE_SESSION_VERSION === "5" ? "kwallet5" : "kwallet6"}` : "+gnomekeyring";
+}
+
 export function cookieArgs(): string[] {
   if (!supported || process.env.EDIT_YOUTUBE_SIGNIN === "0") return [];
   try {
     const profile = status().profile;
-    return profile === null ? [] : ["--cookies-from-browser", `chrome:${join(where.chrome, profile.dir)}`];
+    return profile === null ? [] : ["--cookies-from-browser", `chrome${keyring()}:${join(where.chrome, profile.dir)}`];
   } catch (error) {
     diag.warn("youtube", `looking for Chrome's YouTube sign-in: ${diag.messageOf(error)}`);
     return [];

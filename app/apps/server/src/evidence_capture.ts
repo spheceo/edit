@@ -61,7 +61,7 @@ export const UNWALL = `(() => {
  * The words a page actually draws, up to 40 characters, or "picture" when it
  * shows one of any size: text with a box on the page, outside the Wayback
  * Machine's bar (a hidden shell's text and its scripts don't count). An
- * archived YouTube page draws nothing (the archive can't replay its app).
+ * archived page the archive was too slow to serve drew only its bar (Nov 8).
  */
 export const DRAWN = `(() => {
   if ([...document.querySelectorAll('img, video, canvas, svg')].some(e => { const b = e.getBoundingClientRect(); return b.width > 200 && b.height > 150 && !e.closest('[id^="wm-"]'); })) return 'picture'.repeat(4);
@@ -262,7 +262,10 @@ export async function capture(url: string, path: string, phrase = "", selector =
       return { path, url, title: `${parsed.pathname.split("/").pop() ?? "PDF"}, page ${pdf.page}`, width: clip.width, height: clip.height };
     }
     let readyTimer: ReturnType<typeof setTimeout> | null = null;
-    const ready = new Promise<void>((resolve) => { pageLoaded = resolve; readyTimer = setTimeout(resolve, 15_000); });
+    // The Wayback Machine serves an old page slowly, its scripts and pictures one by one through the archive (the
+    // 2007 Sankei article, Nov 8: still loading after a minute, captured at 15 s with no article on it).
+    const archived = parsed.hostname === "web.archive.org";
+    const ready = new Promise<void>((resolve) => { pageLoaded = resolve; readyTimer = setTimeout(resolve, archived ? 90_000 : 15_000); });
     const navigation = await call("Page.navigate", { url });
     if (navigation.errorText) throw new Error(`the source page did not load: ${String(navigation.errorText)}`);
     await ready; if (readyTimer !== null) clearTimeout(readyTimer);
@@ -271,6 +274,9 @@ export async function capture(url: string, path: string, phrase = "", selector =
     await Bun.sleep(300);
     const result = await call("Runtime.evaluate", { awaitPromise: true, expression: `(async () => {
       const phrase = ${JSON.stringify(phrase)}; const selector = ${JSON.stringify(selector)};
+      // Chrome's own error page (the site refused or dropped the connection) is never the source.
+      if (location.protocol === 'chrome-error:') return {error: 'The page did not load (the site refused the connection): try again in a few minutes'};
+      for (let waited = 0; document.readyState === 'loading' && waited < ${archived ? 60_000 : 10_000}; waited += 500) await new Promise(resolve => setTimeout(resolve, 500));
       let element = null;
       for(let attempt=0;attempt<10;attempt++) {
         element = selector ? document.querySelector(selector) : null;
@@ -293,17 +299,17 @@ export async function capture(url: string, path: string, phrase = "", selector =
         element.scrollIntoView({block:'center',behavior:'instant'});
       }
       const body = document.body.innerText;
-      // A page that drew nothing (an archived YouTube page: the Wayback Machine can't replay YouTube's app, Nov 8):
+      // A page that drew nothing (an archived page the Wayback Machine served too slowly or refused, Nov 8):
       // no words but the archive's own bar, no picture or video of any size. Said, never captured as a white card.
       const own = ${DRAWN};
-      if (own.length < 20) return {error: 'The page drew nothing to capture' + (location.hostname === 'web.archive.org' ? ' (the Wayback Machine cannot replay this page, as with archived YouTube pages): use a screenshot of it the script gives, or another source, and say so' : '')};
+      if (own.length < 20) return {error: 'The page drew nothing to capture' + (location.hostname === 'web.archive.org' ? ' (the Wayback Machine is slow or refusing just now): try again in a few minutes, or use a screenshot of it the script gives' : '')};
       if (/^(Just a moment|Access denied|Sign in to X|Sign in to confirm)/i.test(body.trim())) return {error:'The site showed a login or bot check'};
       const r = element?.getBoundingClientRect();
       // The crop in the page's own coordinates (what captureScreenshot's clip takes): the element's place in the
       // window plus how far the page is scrolled. Without the scroll, a phrase scrolled to the middle of a long
       // article was cropped from a part of the page never drawn: a white picture (LAist, Nov 8).
       return {title:document.title,url:location.href,selection:element?.innerText?.slice(0,500),rect:r?{x:Math.max(0,r.x-12)+scrollX,y:Math.max(0,r.y-12)+scrollY,width:Math.min(innerWidth-Math.max(0,r.x-12),r.width+24),height:Math.min(innerHeight-Math.max(0,r.y-12),r.height+24)}:null};
-    })()`, returnByValue: true });
+    })()`, returnByValue: true }, 120_000);
     const data = (result.result as { value?: Record<string, unknown> } | undefined)?.value;
     if (data === undefined || data.error) throw new Error(String(data?.error ?? "the source page could not be read"));
     await Bun.sleep(500);

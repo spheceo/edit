@@ -239,6 +239,7 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
   project.clips = project.clips.filter((clip) => !((clip.name ?? "").startsWith(NAME) && (only === null || overlapsAny(project, clip, only))));
   const made: AdjustmentClip[] = [];
   const pending: string[] = [];
+  const unreadable: string[] = [];
   const skipped: string[] = [];
   const ours = new Set(watermarks.ours(project));
   const inWindows: string[] = [];
@@ -260,6 +261,11 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
     }
     const marks = watermarks.marksOf(project, media);
     if (marks === null) {
+      // One that couldn't be looked at (said in the log) isn't waited on: the rest are blurred now.
+      if (watermarks.couldNotLook(media)) {
+        if (!unreadable.includes(media.name)) unreadable.push(media.name);
+        continue;
+      }
       if (!pending.includes(media.name)) pending.push(media.name);
       watermarks.lookSoon(media);
       continue;
@@ -295,6 +301,7 @@ export function blurMarks(project: Project, args: Record<string, unknown>): Reco
     blurs: made.length,
     removed_still_blurs: removed,
     ...(pending.length > 0 ? { not_looked_at_yet: pending, note: "these files are being looked at for marks now: run blur_marks again in a minute" } : {}),
+    ...(unreadable.length > 0 ? { couldnt_look_at: unreadable, couldnt_look_at_note: "these couldn't be read (the log says why); look at them yourself and blur by hand if a mark shows" } : {}),
     ...(skipped.length > 0 ? { too_big: skipped } : {}),
     ...(inWindows.length > 0 ? { in_windows: inWindows, in_windows_note: "photos in our windows are never blurred: crop each past its mark (update the clip's crop) or choose another photo" } : {}),
   };

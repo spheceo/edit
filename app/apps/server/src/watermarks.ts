@@ -49,6 +49,14 @@ const FOOTAGE_PROMPT =
   'Answer only JSON: {"marks": [{"text": what it says or shows, "box": [ymin, xmin, ymax, xmax] from 0 to 1000 covering it in every frame it shows, "inset": true only for a picture in a box}]}, an empty list when there are none.';
 
 const reading = new Set<string>();
+/**
+ * Files that couldn't be looked at, and when: not tried again for ten minutes,
+ * and not "being looked at" meanwhile (Killer Pastor on Linux, Nov 8: photos
+ * whose cloud originals weren't here failed every time, and blur_marks said
+ * "run blur_marks again in a minute" for the whole session).
+ */
+const failed = new Map<string, number>();
+const RETRY_MS = 10 * 60_000;
 
 /** Footage whose marks are looked for: a video file's recording, not Edit's own maps and graphics. */
 function isFootage(media: Media): boolean {
@@ -148,6 +156,10 @@ function frame(media: Media, seconds: number): Promise<Uint8Array> {
 
 /** Looks at one photo (a small JPEG of it), or three frames of footage, and caches the marks. */
 async function look(media: Media, file: string): Promise<void> {
+  // A cloud photo not fetched to this computer yet: fetched first (it's what's on screen).
+  if (media.kind === "image" && !fs.existsSync(media.path) && typeof media.cloud?.original === "string") {
+    await (await import("./cloud_media.ts")).fetchKey(media.cloud.original, media.path);
+  }
   const footage = media.kind === "video";
   const at = footage ? [0.15, 0.5, 0.85].map((share) => share * (media.duration ?? 0)) : [0];
   const jpegs = await Promise.all(at.map((seconds) => frame(media, seconds)));
@@ -213,11 +225,23 @@ export function lookSoon(media: Media): void {
 /** Starts looking at a photo in the background (once at a time per file). */
 function warm(media: Media): void {
   const file = cacheFile(media);
-  if (file === null || reading.has(media.path)) return;
+  if (file === null || reading.has(media.path) || couldNot(media)) return;
   reading.add(media.path);
   void look(media, file)
-    .catch((error: unknown) => diag.warn("audit", `looking for marks on ${media.name}: ${diag.messageOf(error)}`))
+    .then(() => failed.delete(media.path))
+    .catch((error: unknown) => {
+      failed.set(media.path, Date.now());
+      diag.warn("audit", `looking for marks on ${media.name}: ${diag.messageOf(error)}; not tried again for ten minutes`);
+    })
     .finally(() => reading.delete(media.path));
+}
+
+/** Whether looking at a file failed in the last ten minutes. */
+export const couldNotLook = (media: Media): boolean => couldNot(media);
+
+function couldNot(media: Media): boolean {
+  const at = failed.get(media.path);
+  return at !== undefined && Date.now() - at < RETRY_MS;
 }
 
 /** A mark's box on the frame (centre x, y, width, height in project pixels from the frame's centre) at the clip's first frame. */
@@ -280,7 +304,7 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
     if (!footage && (media.kind !== "image" || /^(desktop|map|frame|board|paper|ink|post|icon|wallpaper)-/u.test(media.name))) continue;
     const marks = marksOf(project, media);
     if (marks === null) {
-      if (cacheFile(media) !== null) {
+      if (cacheFile(media) !== null && !couldNot(media)) {
         pending.add(media.name);
         warm(media);
       }

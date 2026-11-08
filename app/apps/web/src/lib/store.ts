@@ -8,6 +8,7 @@ import { api, ApiError, useConnection } from "./api";
 import { readOnly, type CloudStatus } from "./cloud";
 import { addContext, note } from "./diagnostics";
 import { validateProject } from "./edit";
+import { perFrame } from "./frame";
 import * as patches from "./patch";
 import { shareProject } from "./project-sharing";
 import { forgetSetting, readSetting, writeSetting } from "./storage";
@@ -109,7 +110,6 @@ interface EditorState {
   /** The chat's width, set by dragging its edge. */
   agentWidth: number;
   toasts: Toast[];
-  agentActive: number;
   /** The agent asked to reset the edit (`reset_edit`) and waits for the user's Accept / Reject in the chat. */
   resetAsked: boolean;
   /** The open project's cloud state (apps/server/src/cloud_projects.ts); null for none. */
@@ -393,7 +393,6 @@ export const useEditor = create<EditorState>((set, get) => ({
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
   agentWidth: Number(readSetting("edit.agentWidth")) || 340,
   toasts: [],
-  agentActive: 0,
   resetAsked: false,
   cloud: null,
   playback: null,
@@ -676,7 +675,29 @@ export function settled(): Promise<void> {
 // Live events: agent edits, media processing, exports.
 
 let socket: WebSocket | null = null;
-let agentTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Media statuses heard since the last frame, by file path (the last for each). */
+let mediaHeard = new Map<string, MediaStatus>();
+const mediaEvents = perFrame(() => {
+  const heard = mediaHeard;
+  mediaHeard = new Map();
+  const state = useEditor.getState();
+  if (!state.project || heard.size === 0) return;
+  let media: Record<string, MediaStatus> | null = null;
+  for (const item of state.project.media) {
+    const status = heard.get(item.path);
+    // Unchanged statuses stay the same objects, so nothing that reads them renders again.
+    if (status === undefined || sameStatus(state.media[item.id], status)) continue;
+    media ??= { ...state.media };
+    media[item.id] = status;
+  }
+  if (media !== null) useEditor.setState({ media });
+});
+
+const sameStatus = (a: MediaStatus | undefined, b: MediaStatus) => a !== undefined && JSON.stringify(a) === JSON.stringify(b);
+
+/** Applies the media statuses heard so far now (tests). */
+export const flushMediaEvents = () => mediaEvents.flush();
 
 let dropped = false;
 let downTimer: ReturnType<typeof setTimeout> | undefined;
@@ -777,18 +798,10 @@ export function connectEvents() {
       // to save (their save then meets it and keeps both).
       if (event.origin === clientId && (state.dirty || inFlight !== null)) return;
       takeFromServer(event.rev, full, { selection: state.selection.filter((id) => full.clips.some((clip) => clip.id === id)) });
-      if (event.origin === "agent") {
-        clearTimeout(agentTimer);
-        useEditor.setState({ agentActive: Date.now() });
-        agentTimer = setTimeout(() => useEditor.setState({ agentActive: 0 }), 2500);
-      }
     } else if (event.type === "media" && project) {
-      const ids = project.media.filter((media) => media.path === event.path).map((media) => media.id);
-      if (ids.length) {
-        const media = { ...state.media };
-        for (const id of ids) media[id] = event.status;
-        useEditor.setState({ media });
-      }
+      // Hundreds can come at once (a 300-media project's statuses): one update a frame (Nov 8, Marc's Mac: 503 in a quarter second).
+      mediaHeard.set(event.path, event.status);
+      mediaEvents.schedule();
     } else if (event.type === "export" && project && event.id === project.id) {
       useEditor.setState({ exportState: event });
     } else if (event.type === "playback" && project && event.id === project.id) {

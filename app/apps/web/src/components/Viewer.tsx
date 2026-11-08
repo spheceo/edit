@@ -1,5 +1,5 @@
 import { Maximize, MessageSquarePlus, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useAgent } from "../lib/agent";
 import { api, mediaHost } from "../lib/api";
@@ -9,6 +9,7 @@ import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
 import { viewerMenu } from "../lib/menus";
 import { playhead, preview } from "../lib/playback";
 import { nativePreview } from "../lib/nativePreview";
+import { mediaVersions } from "../lib/mediaVersions";
 import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
@@ -43,6 +44,9 @@ export function toggleFullscreen() {
   else void viewer?.requestFullscreen().catch(() => {});
 }
 
+/** Each media's picture version (mediaVersions.ts), the same object until one changes. */
+const selectVersions = mediaVersions(wantsLight);
+
 /** Edits settle this long before smooth playback is rendered again (the agent changes things many times a turn). */
 const SMOOTH_SETTLE_MS = 2500;
 
@@ -52,7 +56,6 @@ export function Viewer() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const project = useEditor((state) => state.project);
-  const media = useEditor((state) => state.media);
   const rev = useEditor((state) => state.rev);
   const dirty = useEditor((state) => state.dirty);
   const playback = useEditor((state) => state.playback);
@@ -72,19 +75,7 @@ export function Viewer() {
   };
   useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [fullscreen]);
 
-  const light = wantsLight;
-  // The picture each media streams: the light preview once it’s made (when
-  // wanted), else the preview, else the original. Each with its files' stamps
-  // ("light~<light>~<preview>"), so a version’s URL is only ever that version.
-  const versionKey = JSON.stringify(
-    Object.fromEntries(Object.entries(media).map(([id, status]) => {
-      const preview = status.stamps?.preview ?? "";
-      const version = light && status.light === "ready" ? `light~${status.stamps?.light ?? ""}~${preview}`
-        : status.proxy === "ready" ? `preview~${preview}` : "source";
-      return [id, version];
-    })),
-  );
-  const versions = useMemo(() => JSON.parse(versionKey) as Record<string, string>, [versionKey]);
+  const versions = useEditor(selectVersions);
 
   useEffect(() => {
     const canvas = canvasRef.current!;

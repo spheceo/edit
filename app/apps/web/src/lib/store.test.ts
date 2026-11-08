@@ -265,3 +265,54 @@ describe("save isolation", () => {
     await vi.waitFor(() => expect(useEditor.getState().project?.clips[0]?.start).toBe(5));
   });
 });
+
+describe("media statuses from the events socket", () => {
+  beforeEach(() => {
+    vi.resetModules(); vi.useFakeTimers();
+    vi.stubGlobal("window", new EventTarget());
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
+    vi.stubGlobal("location", { protocol: "http:", host: "localhost" });
+  });
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+  it("takes a burst as one store update, keeping the statuses that didn't change", async () => {
+    const { useEditor, connectEvents, flushMediaEvents } = await import("./store");
+    const sockets: { onmessage?: (message: { data: string }) => void }[] = [];
+    vi.stubGlobal("WebSocket", class { static OPEN = 1; readyState = 0; constructor() { sockets.push(this as never); } });
+    const media = Array.from({ length: 300 }, (_, index) => ({ id: `m${index}`, path: `/f/${index}.mp4`, kind: "video" }));
+    useEditor.getState().load(1, { ...project("p1"), media } as never);
+    const ready = { proxy: "ready", light: "none", stamps: { preview: "1" } };
+    useEditor.setState({ media: Object.fromEntries(media.map((one) => [one.id, { ...ready }])) as never });
+    const before = useEditor.getState().media;
+    connectEvents();
+    let updates = 0;
+    const off = useEditor.subscribe((next, prev) => { if (next.media !== prev.media) updates++; });
+    // 500 statuses in a moment: all but one say what's already known.
+    for (let index = 0; index < 500; index++) {
+      sockets[0]!.onmessage!({ data: JSON.stringify({ type: "media", path: `/f/${index % 300}.mp4`, status: index === 300 ? { proxy: "making", progress: 0.5 } : ready }) });
+    }
+    expect(updates).toBe(0);
+    flushMediaEvents();
+    off();
+    expect(updates).toBe(1);
+    const after = useEditor.getState().media;
+    expect(after.m0).toEqual({ proxy: "making", progress: 0.5 });
+    expect(after.m1).toBe(before.m1);
+    // A burst that changes nothing is no update at all.
+    for (let index = 0; index < 50; index++) sockets[0]!.onmessage!({ data: JSON.stringify({ type: "media", path: `/f/${index}.mp4`, status: index === 0 ? { proxy: "making", progress: 0.5 } : ready }) });
+    flushMediaEvents();
+    expect(useEditor.getState().media).toBe(after);
+  });
+
+  it("drops statuses heard for a project that has closed", async () => {
+    const { useEditor, connectEvents, flushMediaEvents } = await import("./store");
+    const sockets: { onmessage?: (message: { data: string }) => void }[] = [];
+    vi.stubGlobal("WebSocket", class { static OPEN = 1; readyState = 0; constructor() { sockets.push(this as never); } });
+    useEditor.getState().load(1, { ...project("p1"), media: [{ id: "m0", path: "/f/0.mp4", kind: "video" }] } as never);
+    connectEvents();
+    sockets[0]!.onmessage!({ data: JSON.stringify({ type: "media", path: "/f/0.mp4", status: { proxy: "ready" } }) });
+    useEditor.getState().close();
+    flushMediaEvents();
+    expect(useEditor.getState().media).toEqual({});
+  });
+});

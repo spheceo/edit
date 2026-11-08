@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useAgent } from "../lib/agent";
 import { addElement, addMarker, clipEnd, closeGap, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { api, ApiError } from "../lib/api";
@@ -32,7 +33,7 @@ export function Editor({ id }: { id: string }) {
   const project = useEditor((state) => state.project);
   const timelineHeight = useEditor((state) => state.timelineHeight);
   const [resizing, setResizing] = useState(false);
-  const agentWorking = useEditor((state) => state.agentActive > 0);
+  const agentWorking = useAgent((state) => state.running);
   const [importing, setImporting] = useState(false);
   const [researching, setResearching] = useState(false);
   const [sharing, setSharing] = useState(false);

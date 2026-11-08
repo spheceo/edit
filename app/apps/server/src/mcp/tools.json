@@ -2728,7 +2728,7 @@
   },
   {
     "name": "import_broll",
-    "description": "Import a batch of selected source ranges: YouTube ranges through the shared cloud registry (reuses existing originals and streams previews), and posts on other sites (an Instagram reel or carousel item, an X, TikTok or Reddit video: any https link that isn't YouTube), each downloaded whole and cut to start/end if given (leave them out for the whole post). Returns media and source_in (excerpt-relative), source_offset (original clock), duration and purpose. Does not place or add source audio. Inspect with look_at_media before placing.",
+    "description": "Import a batch of selected source ranges: YouTube ranges through the shared cloud registry (reuses existing originals and streams previews), and posts on other sites (an Instagram reel or carousel item, an X, TikTok or Reddit video: any https link that isn't YouTube), each downloaded whole and cut to start/end if given (leave them out for the whole post). A Google Drive file link (a screenshot, thumbnail or clip a script's note attaches) imports that file: a picture comes back as image media (kind \"image\", its width and height) to place as a commentary_card, never a capture of Drive's page. Returns media and source_in (excerpt-relative), source_offset (original clock), duration and purpose. Does not place or add source audio. Inspect with look_at_media before placing.",
     "inputSchema": {
       "type": "object",
       "properties": {

@@ -17,6 +17,7 @@ import * as seams from "./seams.ts";
 import * as progress from "./progress.ts";
 import * as youtube from "./youtube.ts";
 import * as posts from "./posts.ts";
+import { download as driveDownload, driveFileId } from "./script.ts";
 import { stableStringify } from "./stable.ts";
 import { capture } from "./evidence_capture.ts";
 
@@ -189,8 +190,15 @@ registerTool("read_broll_source", async ({ app, args, projectId }) => {
   return text(stableStringify({ ...source, lines: lines.slice(0, 140), omitted: Math.max(0, lines.length - 140), note: "Automatic captions guide the search; they do not prove what is visible. Narrow by phrase/start/end, then inspect an imported range." }));
 });
 
-/** A post's video, downloaded whole once into the cache (posts.ts). */
+/**
+ * A post's video, downloaded whole once into the cache (posts.ts); a Drive
+ * file's link (a screenshot, a thumbnail or a clip the script's comments
+ * attach: the horror Doc of Nov 8 linked 26) as the script import fetches
+ * Drive, with the team's sign-in, whatever it is: a picture or a video.
+ */
 async function postVideo(app: App, url: string): Promise<string> {
+  const drive = driveFileId(url);
+  if (drive !== null) return await driveDownload(join(app.store.driveDir(), drive), drive, () => {});
   return (await posts.download(app.store.home, url, join(app.store.cacheDir(), "posts"))).path;
 }
 
@@ -212,7 +220,15 @@ registerTool("import_broll", async ({ app, args, projectId }) => {
         const path = await postVideo(app, pick.url);
         const [, ids, errors] = await importPaths(app, projectId, [path], false, "agent");
         const media = ids[0]; if (media === undefined) throw new Error(errors.join("; ") || "the post's video didn't import");
-        const seconds = app.store.get(projectId)?.project.media.find((m) => m.id === media)?.duration ?? 0;
+        const item = app.store.get(projectId)?.project.media.find((m) => m.id === media);
+        if (item?.kind === "image") {
+          // A picture (a Drive screenshot): no range, placed as a card or a photo.
+          const found = { url: pick.url, purpose: pick.purpose, media, kind: "image", width: item.width, height: item.height, verified: false };
+          keep(app, projectId, `post:${pick.url}:${pick.start}`, found);
+          results.push(found);
+          return;
+        }
+        const seconds = item?.duration ?? 0;
         const end = Math.min(pick.end, seconds || pick.end);
         const found = { ...pick, end, media, source_in: pick.start, source_offset: 0, duration: Math.max(0, end - pick.start), verified: false };
         keep(app, projectId, `post:${pick.url}:${pick.start}`, found);

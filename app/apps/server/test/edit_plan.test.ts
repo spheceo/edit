@@ -971,3 +971,67 @@ test("a_box_blur_over_a_card_sliding_in_moves_with_it_and_stops_at_its_edges", (
   expect(none.bound).toEqual([]);
   expect(still.clips.find((one) => one.type === "adjustment")!.parent).toBeUndefined();
 });
+
+test("horror's desktop shows what the story's people saw: a page in Internet Explorer, an email, a chat, a forum and a dialog box", () => {
+  // The horror Doc of Nov 8, Animation 1: "retro Internet Explorer window opening his blog post… slow scroll",
+  // "retro email window (Outlook Express style), new message from 'Jonathan'", "messenger window, typewriter messages
+  // one by one", "retro forum window", "Windows XP dialog box: 'Message blocked'".
+  const p = project("plan");
+  p.style = "horror";
+  p.media.push(media({ id: "page", name: "blog.png", path: "/blog.png", kind: "image", duration: 30, width: 1920, height: 4200 }));
+  p.media.push(media({ id: "scroll", name: "Scroll · page.mp4", path: "/scroll.mp4", kind: "video", duration: 15, width: 1280, height: 800, has_audio: false }));
+  p.media.push(media({ id: "wall", name: "wall", path: "/wall.png", kind: "image", duration: 30, width: 1344, height: 752 }));
+  const op = {
+    op: "desktop",
+    start: 0,
+    end: 900,
+    open: false,
+    windows: [
+      { app: "browser", media: "page", url: "https://note.com/crisp_ibis3548/n/n6157a5766807", at: 0 },
+      { app: "email", at: 120, lines: ["From: Jonathan", "Subject: Modeling gig", "It's actually an adult video."] },
+      { app: "messenger", at: 300, lines: ["Reference: It's true.", "Reference: The videos go overseas."] },
+      { app: "forum", at: 480, lines: ["anon123: found her name"] },
+      { app: "dialog", at: 660, lines: ["Message blocked"] },
+    ],
+  };
+  const sizes = needs([op], p).screens!;
+  expect(sizes.map(([app]) => app).sort()).toEqual(["browser", "dialog", "email", "forum", "messenger"]);
+  const frames: Record<string, string> = {};
+  sizes.forEach(([app, w, h], index) => {
+    p.media.push(media({ id: `f${index}`, name: app, path: `/${app}${index}.png`, kind: "image", duration: 30, width: w, height: h }));
+    frames[frameKey(app, w, h)] = `f${index}`;
+  });
+  const result = applyWith(p, [structuredClone(op)], { shutter: null, screen: { wallpaper: "wall", frames } }).results[0] as Record<string, unknown>;
+  const named = (prefix: string) => p.clips.filter((own) => own.name?.startsWith(`Desktop · ${prefix}`) === true);
+  // The page from its top, cut at the window's bottom; its address in the bar.
+  const page = named("Internet Explorer · blog.png")[0] as VideoClip;
+  expect(page.crop.top).toBe(0);
+  expect(page.crop.bottom).toBeGreaterThan(0.5);
+  expect((named("Internet Explorer address")[0] as TextClip).text).toBe("https://note.com/crisp_ibis3548/n/n6157a5766807");
+  // The email's header in bold, its words flush (no Notepad dashes), typed on.
+  const email = named("Email line") as TextClip[];
+  expect(email.map((own) => own.text)).toEqual(["From: Jonathan", "Subject: Modeling gig", "It's actually an adult video."]);
+  expect(email.map((own) => own.style.weight)).toEqual([700, 700, 400]);
+  expect(email[0]!.animation.preset).toBe("typewriter");
+  expect((named("Messenger line") as TextClip[]).map((own) => own.text)).toEqual(["Reference: It's true.", "Reference: The videos go overseas."]);
+  expect((named("Forum line")[0] as TextClip).text).toBe("anon123: found her name");
+  expect((named("Dialog line")[0] as TextClip).text).toBe("Message blocked");
+  expect((result.windows as unknown[]).length).toBe(5);
+
+  // A scrolling page (its video made by horror_look.scrollingPages) is paced to the window: 15 s over its 30 s.
+  const q = project("plan");
+  q.style = "horror";
+  q.media.push(...p.media);
+  const scrolling = { op: "desktop", start: 0, end: 900, open: false, windows: [{ app: "browser", media: "scroll", scroll: true, at: 0 }] };
+  const qFrames: Record<string, string> = {};
+  needs([scrolling], q).screens!.forEach(([app, w, h], index) => {
+    q.media.push(media({ id: `g${index}`, name: app, path: `/${app}g${index}.png`, kind: "image", duration: 30, width: w, height: h }));
+    qFrames[frameKey(app, w, h)] = `g${index}`;
+  });
+  applyWith(q, [scrolling], { shutter: null, screen: { wallpaper: "wall", frames: qFrames } });
+  const scrolled = q.clips.find((own) => own.name === "Desktop · Internet Explorer · Scroll · page.mp4") as VideoClip;
+  expect(scrolled.speed).toBeCloseTo(0.5, 2);
+  // A dialog takes one or two lines; an email at most eight.
+  expect(() => needs([{ ...op, windows: [{ app: "dialog", lines: [] }] }], p)).not.toThrow();
+  expect(() => applyWith(project("plan"), [{ op: "desktop", start: 0, end: 300, windows: [{ app: "dialog", lines: ["a", "b", "c"] }] }], { shutter: null, screen: { wallpaper: "wall", frames } })).toThrow(/1 or 2 lines/);
+});

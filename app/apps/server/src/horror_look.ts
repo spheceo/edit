@@ -108,6 +108,73 @@ export async function retroScreenshots(app: App, project: Project, operations: J
   return [swaps, made];
 }
 
+/** A scrolling page's video: this wide and high (the browser window's 16:10), this many seconds a screenful. */
+const SCROLL_SIZE: [number, number] = [1280, 800];
+const SECONDS_A_SCREEN = 6;
+
+/** The browser windows in a plan's desktops (the desktop op's, a cover_cut_in desktop shot's) that ask for their page to scroll. */
+function scrollingWindows(operations: Json[]): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const take = (desktop: unknown) => {
+    const windows = (desktop as { windows?: unknown } | null)?.windows;
+    if (!Array.isArray(windows)) return;
+    for (const one of windows) if (typeof one === "object" && one !== null && (one as Json).app === "browser" && (one as Json).scroll === true) out.push(one as Record<string, unknown>);
+  };
+  for (const op of operations) {
+    if (op.op === "desktop") take(op);
+    if (op.op === "cover_cut_in" && Array.isArray(op.shots)) for (const shot of op.shots) take((shot as Json | null)?.desktop);
+  }
+  return out;
+}
+
+/**
+ * Internet Explorer's page scrolling slowly down (the horror Doc of Nov 8:
+ * "retro Internet Explorer window opening his blog post… slow scroll", "old
+ * Internet Explorer opens the archived Craigslist San Diego homepage, slow
+ * scroll"): the page picture made a video of it scrolling, a screenful every
+ * six seconds, top to bottom, and the window's media set to it (the desktop
+ * paces it to the window's time). A page no taller than the window stays a
+ * picture.
+ */
+export async function scrollingPages(app: App, project: Project, operations: Json[]): Promise<seams.Made[]> {
+  const made: seams.Made[] = [];
+  const fps = Math.round(project.settings.fps) || 30;
+  for (const window of scrollingWindows(operations)) {
+    const page = project.media.find((m) => m.id === window.media);
+    if (page === undefined || page.kind !== "image") continue;
+    const [w, h] = SCROLL_SIZE;
+    const tall = Math.round((page.height * w) / Math.max(page.width, 1));
+    if (tall <= h + 8) continue;
+    const seconds = Math.min(Math.max(((tall - h) / h) * SECONDS_A_SCREEN, 4), 90);
+    const name = `Scroll · ${page.id}-${page.width}x${page.height}-${fps}.mp4`;
+    const had = project.media.find((m) => m.name === name);
+    if (had !== undefined) {
+      window.media = had.id;
+      continue;
+    }
+    const dir = join(app.store.home, "graphics", "horror");
+    fs.mkdirSync(dir, { recursive: true });
+    const out = join(dir, `${project.id}-${name}`);
+    if (!fs.existsSync(out)) {
+      const remote = tools.isUrl(page.path) ? ["-protocol_whitelist", tools.protocols(page.path), ...tools.urlArgs(page.path)] : [];
+      const partial = `${out}.partial.mp4`;
+      // Eased in and out (a hand on the scroll wheel, never a jolt at either end).
+      const t = `(0.5-0.5*cos(PI*min(t/${seconds.toFixed(3)},1)))`;
+      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...remote, "-loop", "1", "-framerate", String(fps), "-i", page.path,
+        "-vf", `scale=${w}:-2:flags=lanczos,crop=${w}:${h}:0:'(ih-${h})*${t}',format=yuv420p`, "-t", seconds.toFixed(3), "-c:v", "libx264", "-preset", "veryfast", "-crf", "16", "-r", String(fps), partial]);
+      fs.renameSync(partial, out);
+    }
+    const [ids, fresh] = await houseMedia(app, project, [out]);
+    const id = ids[0];
+    if (id === undefined) throw new Error(`the scrolling copy of ${page.name} didn't import`);
+    const copy = project.media.find((m) => m.id === id);
+    if (copy !== undefined) copy.name = name;
+    window.media = id;
+    made.push(...fresh);
+  }
+  return made;
+}
+
 /**
  * Animation 11's icons a plan asks for by name (commentary_icon's `icon`),
  * drawn and brought into the project: each op's `media` set to its icon.

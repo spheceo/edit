@@ -2492,6 +2492,7 @@ export async function planAssets(app: App, project: Project, operations: Json[])
   }
   const [retro, aged] = await horrorLook.retroScreenshots(app, project, operations as Record<string, unknown>[]);
   made.push(...(await horrorLook.drawnIcons(app, project, operations as Record<string, unknown>[])));
+  made.push(...(await horrorLook.scrollingPages(app, project, operations as Record<string, unknown>[])));
   if (aged.length > 0 || Object.keys(retro).length > 0) {
     assets.retro = retro;
     made.push(...aged);

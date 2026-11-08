@@ -40,7 +40,26 @@ pub enum Window {
     /// The references' floating window over a map or a scene: a thin dark
     /// frame with "File Viewer" small in its top strip, no menus.
     FileViewer,
+    /// Horror's XP windows for what the story's people saw (the horror Doc of
+    /// Nov 8, Animation 1: "retro Internet Explorer window opening his blog
+    /// post… slow scroll", "retro Windows XP dialog box popping up: 'This
+    /// account has been terminated'", "retro email window (Outlook Express
+    /// style), new message from 'Jonathan'", "retro instant-messenger chat
+    /// window", "retro forum window"). The page in Internet Explorer is a
+    /// picture; the words in the others are typed on by the server.
+    Browser,
+    Dialog,
+    Email,
+    Messenger,
+    Forum,
 }
+
+/// Internet Explorer's address bar (and the forum's), and the email's toolbar, under the menus (1080p pixels).
+pub const ADDRESS_BAR: f64 = 34.0;
+/// A dialog box's OK button band under its message.
+pub const DIALOG_BOTTOM: f64 = 64.0;
+/// The messenger's typing box and Send button under the chat.
+pub const MESSENGER_BOTTOM: f64 = 70.0;
 
 /// The File Viewer's top strip (1080p pixels).
 pub const FILE_STRIP: f64 = 22.0;
@@ -53,8 +72,8 @@ pub const CONTROLS: f64 = 46.0;
 impl Window {
     fn rect(self) -> [f64; 4] {
         match self {
-            Window::PhotoViewer | Window::VideoPlayer | Window::FileViewer => PHOTO_VIEWER,
             Window::Notepad => NOTEPAD,
+            _ => PHOTO_VIEWER,
         }
     }
 
@@ -65,7 +84,20 @@ impl Window {
             Window::Notepad => "Notepad",
             Window::VideoPlayer => "Video Player",
             Window::FileViewer => "File Viewer",
+            Window::Browser => "Windows Internet Explorer",
+            Window::Dialog => "Windows",
+            Window::Email => "Outlook Express",
+            Window::Messenger => "Messenger",
+            Window::Forum => "Message Board - Windows Internet Explorer",
         }
+    }
+
+    /// Drawn only in the XP look (horror's), whichever look is asked.
+    fn xp_only(self) -> bool {
+        matches!(
+            self,
+            Window::Browser | Window::Dialog | Window::Email | Window::Messenger | Window::Forum
+        )
     }
 
     pub fn parse(kind: &str) -> Option<Self> {
@@ -74,6 +106,11 @@ impl Window {
             "notepad" => Some(Window::Notepad),
             "video_player" => Some(Window::VideoPlayer),
             "file_viewer" => Some(Window::FileViewer),
+            "browser" => Some(Window::Browser),
+            "dialog" => Some(Window::Dialog),
+            "email" => Some(Window::Email),
+            "messenger" => Some(Window::Messenger),
+            "forum" => Some(Window::Forum),
             _ => None,
         }
     }
@@ -83,7 +120,12 @@ impl Window {
             Window::PhotoViewer => &["File", "Edit", "Image", "View", "Help"],
             Window::Notepad => &["File", "Edit", "Search", "View", "Help"],
             Window::VideoPlayer => &["File", "Edit", "Playback", "Audio", "Video", "View", "Help"],
-            Window::FileViewer => &[],
+            Window::FileViewer | Window::Dialog => &[],
+            Window::Browser | Window::Forum => {
+                &["File", "Edit", "View", "Favorites", "Tools", "Help"]
+            }
+            Window::Email => &["File", "Edit", "View", "Tools", "Message", "Help"],
+            Window::Messenger => &["File", "Actions", "Tools", "Help"],
         }
     }
 
@@ -93,6 +135,11 @@ impl Window {
             Window::Notepad => "notepad",
             Window::VideoPlayer => "video-player",
             Window::FileViewer => "file-viewer",
+            Window::Browser => "browser",
+            Window::Dialog => "dialog",
+            Window::Email => "email",
+            Window::Messenger => "messenger",
+            Window::Forum => "forum",
         }
     }
 }
@@ -465,9 +512,17 @@ pub fn content_in(window: Window, w: f64, h: f64, k: f64) -> [f64; 4] {
         let (border, strip) = (FILE_BORDER * k, FILE_STRIP * k);
         return [border, strip, w - 2.0 * border, h - strip - border];
     }
-    let top = (TITLE_BAR + MENU_BAR + 2.0) * k;
+    let top = match window {
+        Window::Dialog => (TITLE_BAR + 2.0) * k,
+        Window::Browser | Window::Forum | Window::Email => {
+            (TITLE_BAR + MENU_BAR + ADDRESS_BAR + 2.0) * k
+        }
+        _ => (TITLE_BAR + MENU_BAR + 2.0) * k,
+    };
     let bottom = match window {
         Window::VideoPlayer => (CONTROLS + INSET) * k,
+        Window::Dialog => DIALOG_BOTTOM * k,
+        Window::Messenger => MESSENGER_BOTTOM * k,
         _ => INSET * k,
     };
     [INSET * k, top, w - 2.0 * INSET * k, h - top - bottom]
@@ -475,6 +530,9 @@ pub fn content_in(window: Window, w: f64, h: f64, k: f64) -> [f64; 4] {
 
 /// A window's frame of any size `w` × `h` (pixels) at scale `k`.
 pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<u8>, String> {
+    if window.xp_only() {
+        return xp_frame(window, w, h, k);
+    }
     let mut canvas = Canvas::new(w as usize, h as usize);
     if window == Window::FileViewer {
         // A thin near-black frame, the title small and grey in its top strip.
@@ -501,8 +559,13 @@ pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x000000));
             controls(&mut canvas, cx, cy + ch, cw, k);
         }
-        // Drawn above, whole.
-        Window::FileViewer => {}
+        // Drawn above, whole; the XP-only kinds never get here.
+        Window::FileViewer
+        | Window::Browser
+        | Window::Dialog
+        | Window::Email
+        | Window::Messenger
+        | Window::Forum => {}
         Window::Notepad => {
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x3b3937));
             // A little darker towards the bottom, as on a real screen.
@@ -559,7 +622,12 @@ pub fn frame(window: Window, title: &str, w: f64, h: f64, k: f64) -> Result<Vec<
                 light,
             );
         }
-        Window::FileViewer => {}
+        Window::FileViewer
+        | Window::Browser
+        | Window::Dialog
+        | Window::Email
+        | Window::Messenger
+        | Window::Forum => {}
         Window::VideoPlayer => {
             // A play button in a frame.
             canvas.frame(
@@ -718,6 +786,7 @@ pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, Strin
             &["File", "Edit", "Format", "View", "Help"],
         ),
         Window::FileViewer => ("File Viewer", &[]),
+        other => (other.title(), other.menus()),
     };
     // The window's icon: a little page, a picture or a globe.
     let (ix, icon) = (12.0 * k, 20.0 * k);
@@ -813,20 +882,82 @@ pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, Strin
             }
         }
     }
-    // The menus, black on beige.
-    let menu_middle = (TITLE_BAR + MENU_BAR / 2.0) * k;
-    let mut x = 14.0 * k;
-    for item in menus {
-        let drawn = canvas.text(item, x, menu_middle, 16.0 * k, hex(0x111111));
-        x += drawn + 18.0 * k;
+    // The menus, black on beige (a dialog box has none).
+    if window != Window::Dialog {
+        let menu_middle = (TITLE_BAR + MENU_BAR / 2.0) * k;
+        let mut x = 14.0 * k;
+        for item in menus {
+            let drawn = canvas.text(item, x, menu_middle, 16.0 * k, hex(0x111111));
+            x += drawn + 18.0 * k;
+        }
+        canvas.rect(
+            border,
+            (TITLE_BAR + MENU_BAR) * k,
+            w - border,
+            (TITLE_BAR + MENU_BAR) * k + 1.0 * k,
+            hex(0xaca899),
+        );
     }
-    canvas.rect(
-        border,
-        (TITLE_BAR + MENU_BAR) * k,
-        w - border,
-        (TITLE_BAR + MENU_BAR) * k + 1.0 * k,
-        hex(0xaca899),
-    );
+    // Under the menus: Internet Explorer's address bar (the address itself is
+    // the server's text over it), or the email's toolbar.
+    let strip = (TITLE_BAR + MENU_BAR + 1.0) * k;
+    match window {
+        Window::Browser | Window::Forum => {
+            let middle = strip + ADDRESS_BAR * k / 2.0;
+            let label = canvas.text("Address", 14.0 * k, middle, 15.0 * k, hex(0x555555));
+            let (left, right) = (24.0 * k + label, w - 70.0 * k);
+            canvas.rect(
+                left,
+                middle - 11.0 * k,
+                right,
+                middle + 11.0 * k,
+                hex(0xffffff),
+            );
+            canvas.frame(
+                left,
+                middle - 11.0 * k,
+                right,
+                middle + 11.0 * k,
+                k.max(1.0),
+                hex(0x7f9db9),
+            );
+            // The little page icon at the field's start, and Go.
+            canvas.rect(
+                left + 5.0 * k,
+                middle - 7.0 * k,
+                left + 17.0 * k,
+                middle + 7.0 * k,
+                hex(0x2f8fe8),
+            );
+            let go = right + 10.0 * k;
+            disc(&mut canvas, go + 11.0 * k, middle, 10.0 * k, hex(0x2fa84f));
+            canvas.text_weight("Go", go + 26.0 * k, middle, 14.0 * k, 700, hex(0x222222));
+        }
+        Window::Email => {
+            let middle = strip + ADDRESS_BAR * k / 2.0;
+            let mut x = 16.0 * k;
+            for (index, item) in ["Reply", "Reply All", "Forward", "Print", "Delete"]
+                .iter()
+                .enumerate()
+            {
+                let colour = [0x2f8fe8, 0x2f8fe8, 0x2fa84f, 0x6b7fa8, 0xd2402a][index];
+                canvas.rect(
+                    x,
+                    middle - 8.0 * k,
+                    x + 16.0 * k,
+                    middle + 8.0 * k,
+                    hex(colour),
+                );
+                let drawn = canvas.text(item, x + 22.0 * k, middle, 15.0 * k, hex(0x111111));
+                x += drawn + 44.0 * k;
+            }
+        }
+        _ => {}
+    }
+    if matches!(window, Window::Browser | Window::Forum | Window::Email) {
+        let line = strip + ADDRESS_BAR * k;
+        canvas.rect(border, line, w - border, line + 1.0 * k, hex(0xaca899));
+    }
     // The content area: a white page, Paint's canvas, the player's black.
     let [cx, cy, cw, ch] = xp_content_in(window, w, h, k);
     match window {
@@ -835,9 +966,75 @@ pub fn xp_frame(window: Window, w: f64, h: f64, k: f64) -> Result<Vec<u8>, Strin
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0x000000));
             youtube_controls(&mut canvas, cx, cy + ch, cw, k);
         }
-        Window::Notepad => {
+        Window::Notepad | Window::Browser | Window::Email => {
             canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xffffff));
             canvas.frame(cx, cy, cx + cw, cy + ch, k.max(1.0), hex(0x7f9db9));
+        }
+        Window::Forum => {
+            // A plain old message board: a pale page under a dark blue banner.
+            canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xeef1f6));
+            let banner = 44.0 * k;
+            canvas.rect(cx, cy, cx + cw, cy + banner, hex(0x2b4a7e));
+            canvas.text_weight(
+                "Message Board",
+                cx + 16.0 * k,
+                cy + banner / 2.0,
+                20.0 * k,
+                700,
+                hex(0xffffff),
+            );
+            canvas.frame(cx, cy, cx + cw, cy + ch, k.max(1.0), hex(0x7f9db9));
+        }
+        Window::Messenger => {
+            canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xffffff));
+            canvas.frame(cx, cy, cx + cw, cy + ch, k.max(1.0), hex(0x7f9db9));
+            // The typing box and Send under the chat.
+            let (top, bottom) = (cy + ch + 10.0 * k, h - INSET * k - 4.0 * k);
+            let send = 84.0 * k;
+            canvas.rect(cx, top, cx + cw - send - 10.0 * k, bottom, hex(0xffffff));
+            canvas.frame(
+                cx,
+                top,
+                cx + cw - send - 10.0 * k,
+                bottom,
+                k.max(1.0),
+                hex(0x7f9db9),
+            );
+            let (sx, sy) = (cx + cw - send, top + (bottom - top) / 2.0);
+            canvas.rect(sx, top + 6.0 * k, cx + cw, bottom - 6.0 * k, hex(0xf4f3ee));
+            canvas.frame(
+                sx,
+                top + 6.0 * k,
+                cx + cw,
+                bottom - 6.0 * k,
+                k.max(1.0),
+                hex(0x003c74),
+            );
+            canvas.text_weight("Send", sx + 20.0 * k, sy, 16.0 * k, 700, hex(0x111111));
+        }
+        Window::Dialog => {
+            // XP's error: a red disc with a white cross by the message, OK under it.
+            let r = 22.0 * k;
+            let (ix, iy) = (cx + 18.0 * k + r, cy + 20.0 * k + r);
+            disc(&mut canvas, ix, iy, r, hex(0xd2402a));
+            let g = r * 0.42;
+            canvas.line((ix - g, iy - g), (ix + g, iy + g), 4.0 * k, hex(0xffffff));
+            canvas.line((ix - g, iy + g), (ix + g, iy - g), 4.0 * k, hex(0xffffff));
+            let (bw, bh) = (110.0 * k, 34.0 * k);
+            let (bx, by) = (
+                w / 2.0 - bw / 2.0,
+                h - DIALOG_BOTTOM * k / 2.0 - bh / 2.0 - 4.0 * k,
+            );
+            canvas.rect(bx, by, bx + bw, by + bh, hex(0xf4f3ee));
+            canvas.frame(bx, by, bx + bw, by + bh, 1.6 * k, hex(0x003c74));
+            canvas.text_weight(
+                "OK",
+                bx + bw / 2.0 - 11.0 * k,
+                by + bh / 2.0,
+                16.0 * k,
+                700,
+                hex(0x111111),
+            );
         }
         _ => canvas.rect(cx, cy, cx + cw, cy + ch, hex(0xf3f5f9)),
     }
@@ -1182,7 +1379,7 @@ pub fn window_file(home: &Path, kind: &str, w: u32, h: u32, k: f64) -> Result<Pa
         None => (false, kind),
     };
     let window = Window::parse(name).ok_or_else(|| {
-        format!("no window {kind}: photo_viewer, notepad, video_player or file_viewer (xp_ before one for the XP look)")
+        format!("no window {kind}: photo_viewer, notepad, video_player, file_viewer, browser, dialog, email, messenger or forum (xp_ before one for the XP look)")
     })?;
     if w < 40 || h < 40 || w > 8000 || h > 8000 {
         return Err(format!("a window {w} × {h} is out of range"));
@@ -1282,9 +1479,45 @@ mod tests {
             (Window::VideoPlayer, 1600.0, 1040.0),
             (Window::FileViewer, 800.0, 600.0),
             (Window::Notepad, 1000.0, 600.0),
+            (Window::Browser, 1400.0, 1000.0),
+            (Window::Dialog, 760.0, 340.0),
+            (Window::Email, 1200.0, 800.0),
+            (Window::Messenger, 900.0, 900.0),
+            (Window::Forum, 1300.0, 900.0),
         ] {
             let png = frame(kind, kind.title(), w, h, 2.0).unwrap();
             std::fs::write(format!("{dir}/{}.png", kind.slug()), png).unwrap();
+        }
+    }
+
+    /// Horror's windows for what the story's people saw (the Doc of Nov 8):
+    /// each drawn at any size in the XP look, its content area where the
+    /// server puts the page or the words.
+    #[test]
+    fn the_story_windows_draw_with_their_content_where_the_server_puts_it() {
+        for (name, kind) in [
+            ("browser", Window::Browser),
+            ("dialog", Window::Dialog),
+            ("email", Window::Email),
+            ("messenger", Window::Messenger),
+            ("forum", Window::Forum),
+        ] {
+            assert_eq!(Window::parse(name), Some(kind));
+            let png = frame(kind, kind.title(), 700.0, 420.0, 1.0).unwrap();
+            let decoder = png::Decoder::new(std::io::Cursor::new(png));
+            let reader = decoder.read_info().unwrap();
+            assert_eq!((reader.info().width, reader.info().height), (700, 420));
+            let [_, y, _, h] = content_in(kind, 700.0, 420.0, 1.0);
+            let (top, bottom) = match kind {
+                Window::Dialog => (TITLE_BAR + 2.0, DIALOG_BOTTOM),
+                Window::Messenger => (TITLE_BAR + MENU_BAR + 2.0, MESSENGER_BOTTOM),
+                _ => (TITLE_BAR + MENU_BAR + ADDRESS_BAR + 2.0, INSET),
+            };
+            assert!((y - top).abs() < 1e-9, "{name}: content top {y}");
+            assert!(
+                (420.0 - (y + h) - bottom).abs() < 1e-9,
+                "{name}: content bottom"
+            );
         }
     }
 

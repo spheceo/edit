@@ -34,8 +34,37 @@ import { SerdeError } from "./serde.ts";
 
 type Args = Record<string, unknown>;
 
-export type AppKind = "video_player" | "photo_viewer" | "notepad" | "file_viewer";
-const APPS: AppKind[] = ["video_player", "photo_viewer", "notepad"];
+export type AppKind = "video_player" | "photo_viewer" | "notepad" | "file_viewer" | "browser" | "dialog" | "email" | "messenger" | "forum";
+const APPS: AppKind[] = ["video_player", "photo_viewer", "notepad", "browser", "dialog", "email", "messenger", "forum"];
+/**
+ * The windows whose words are typed on (Notepad's notes; horror's email,
+ * messenger chat, forum posts and dialog message: the horror Doc of Nov 8's
+ * "retro email window… new message from 'Jonathan'", "messenger window,
+ * typewriter messages one by one", "Windows XP dialog box: 'Message
+ * blocked'"). Internet Explorer shows a page (a picture, scrolling or not).
+ */
+const TEXT_APPS: AppKind[] = ["notepad", "dialog", "email", "messenger", "forum"];
+const isText = (app: AppKind) => TEXT_APPS.includes(app);
+const NAMES: Record<AppKind, string> = {
+  video_player: "Video Player",
+  photo_viewer: "Photo Viewer",
+  notepad: "Notepad",
+  file_viewer: "File Viewer",
+  browser: "Internet Explorer",
+  dialog: "Dialog",
+  email: "Email",
+  messenger: "Messenger",
+  forum: "Forum",
+};
+/** desktop.rs's ADDRESS_BAR (Internet Explorer's and the forum's address bar, the email's toolbar), DIALOG_BOTTOM and MESSENGER_BOTTOM. */
+const ADDRESS_BAR = 34;
+const DIALOG_BOTTOM = 64;
+const MESSENGER_BOTTOM = 70;
+/** A dialog's message starts right of its icon; the forum's posts start under its banner. */
+const DIALOG_TEXT_LEFT = 80;
+const FORUM_BANNER = 44;
+/** The UI windows' words (email, chat, posts, a dialog's message): smaller than Notepad's notes. */
+const UI_TEXT_SIZE = 30;
 
 /** The engine's window chrome at 1080p (desktop.rs): title + menu bar, inset, the Video Player's controls. */
 const TOP = 43 + 31 + 2;
@@ -81,6 +110,10 @@ export interface WindowSpec {
   width: number | null;
   z: number;
   label: string | null;
+  /** Internet Explorer: the address shown in its bar. */
+  url?: string | null;
+  /** Internet Explorer: the page scrolls slowly down while the window is open (its media made a scrolling video first). */
+  scroll?: boolean;
 }
 
 /** A whole desktop as asked for (timeline frames). */
@@ -140,11 +173,11 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
   const given = raw as Args;
   const app = str(given.app);
   if (app === null || !APPS.includes(app as AppKind)) {
-    throw new Error(`${where}window ${index + 1}: app is video_player, photo_viewer or notepad`);
+    throw new Error(`${where}window ${index + 1}: app is video_player, photo_viewer, notepad, browser, dialog, email, messenger or forum`);
   }
   const kind = app as AppKind;
   const media = str(given.media);
-  if (kind !== "notepad") {
+  if (!isText(kind)) {
     if (media === null) throw new Error(`${where}window ${index + 1}: ${kind} needs media`);
     const found = mediaOf(project, media);
     if (found === undefined) throw new Error(`${where}window ${index + 1}: no media ${media}`);
@@ -157,6 +190,12 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
     .filter((line) => line !== "");
   if (kind === "notepad" && (lines.length === 0 || lines.length > 6)) {
     throw new Error(`${where}window ${index + 1}: a notepad needs lines: 1 to 6 short notes, as the narration says them`);
+  }
+  if (kind === "dialog" && (lines.length === 0 || lines.length > 2)) {
+    throw new Error(`${where}window ${index + 1}: a dialog needs lines: its message, 1 or 2 lines ("This account has been terminated")`);
+  }
+  if ((kind === "email" || kind === "messenger" || kind === "forum") && (lines.length === 0 || lines.length > 8)) {
+    throw new Error(`${where}window ${index + 1}: ${kind === "email" ? "an email" : `a ${kind}`} needs lines: 1 to 8 (${kind === "email" ? '"From: Jonathan", "Subject: …", then the message' : kind === "messenger" ? '"Name: message", one a line' : '"Name: post", one a line'})`);
   }
   const lineAt = Array.isArray(given.line_at) ? given.line_at.map((frame) => int(frame)) : null;
   if (lineAt !== null && (lineAt.length !== lines.length || lineAt.some((frame) => frame === null))) {
@@ -190,6 +229,7 @@ function readWindow(project: Project, raw: unknown, index: number, start: number
     // window (the team: "remove actual image text on all these photo / video
     // viewers on the windows screen"); other labels ("illustrative image") stay.
     label: label === null || trim(label) === "" || /\bactual\b/iu.test(label) ? null : trim(label),
+    ...(kind === "browser" ? { url: str(given.url) === null ? null : trim(str(given.url)!), scroll: given.scroll === true } : {}),
   };
 }
 
@@ -198,7 +238,7 @@ export function readSpec(project: Project, given: Args, start: number, end: numb
   const fps = fpsOf(project);
   if (end - start < Math.round(3 * fps)) throw new Error(`${where}a desktop needs at least 3 s (its camera moves slowly)`);
   const raw = Array.isArray(given.windows) ? given.windows : [];
-  if (raw.length === 0 || raw.length > 6) throw new Error(`${where}windows: 1 to 6 (video_player, photo_viewer, notepad)`);
+  if (raw.length === 0 || raw.length > 6) throw new Error(`${where}windows: 1 to 6 (video_player, photo_viewer, notepad, browser, dialog, email, messenger, forum)`);
   const windows: WindowSpec[] = [];
   raw.forEach((window, index) => {
     const read = readWindow(project, window, index, start, where, windows[index - 1]?.at ?? start);
@@ -225,18 +265,20 @@ function measure(text: string, px: number, mono = false): [number, number] {
   return [Math.max(...lines.map((line) => widthOf(line, "Geist Mono", 500, px))), lines.length * px * NOTE_LINE];
 }
 
-/** A note wrapped to `width`: words onto lines, the lines after the first indented under its text. */
-function wrap(note: string, px: number, width: number, mono = false): string {
+/** A note wrapped to `width`: words onto lines, the lines after the first indented under its text (a Notepad's "- " notes; `plain`: an email's, a chat's, a dialog's words, flush). */
+function wrap(note: string, px: number, width: number, mono = false, plain = false): string {
   const words = note.split(/\s+/u).filter((word) => word !== "");
   const lines: string[] = [];
-  let line = "-";
+  const first = plain ? "" : "-";
+  const indent = plain ? "" : "  ";
+  let line = first;
   for (const word of words) {
-    const tried = `${line} ${word}`;
-    if (line !== "-" && line !== "  " && measure(tried, px, mono)[0] > width) {
+    const tried = line === "" ? word : `${line} ${word}`;
+    if (line !== first && line !== indent && measure(tried, px, mono)[0] > width) {
       lines.push(line);
-      line = `  ${word}`;
+      line = `${indent}${word}`;
     } else {
-      line = line === "  " ? `  ${word}` : tried;
+      line = line === indent && indent !== "" ? `${indent}${word}` : tried;
     }
   }
   lines.push(line);
@@ -261,7 +303,7 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
   const gap = GAP * W;
   const sized = spec.windows.map((window, index) => {
     const media = window.media === null ? undefined : mediaOf(project, window.media);
-    const fallback = window.app === "notepad" ? 0.36 : window.app === "video_player" ? 0.4 : 0.24;
+    const fallback = { notepad: 0.36, video_player: 0.4, browser: 0.42, dialog: 0.28, email: 0.4, messenger: 0.32, forum: 0.42 }[window.app as string] ?? 0.24;
     const w = Math.round((window.width ?? fallback) * W);
     // Horror's picture window is XP's Paint: its canvas between the toolbox and the colour box (desktop.rs xp_content_in).
     const paint = project.style === "horror" && window.app === "photo_viewer";
@@ -269,25 +311,31 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
     const contentW = w - left - INSET * k;
     let contentH: number;
     const notes: Laid["notes"] = [];
-    if (window.app === "notepad") {
-      const px = NOTE_SIZE * k;
+    if (isText(window.app)) {
+      const notepad = window.app === "notepad";
+      const px = (notepad ? NOTE_SIZE : UI_TEXT_SIZE) * k;
+      const mono = notepad && project.style === "horror";
+      const [padLeft, padTop] = textPads(window.app, k);
       let total = 0;
       for (const line of window.lines) {
-        const mono = project.style === "horror";
-        const text = wrap(line, px, contentW - 2 * NOTE_PAD * k, mono);
+        const text = wrap(line, px, contentW - padLeft - NOTE_PAD * k, mono, !notepad);
         const [bw, bh] = measure(text, px, mono);
         notes.push({ text, w: bw, h: bh });
         total += bh + NOTE_GAP * k;
       }
-      contentH = Math.max(total + 2 * NOTE_PAD * k, 0.14 * H);
+      const least = window.app === "dialog" ? 64 * k : 0.14 * H;
+      contentH = Math.max(total + padTop + NOTE_PAD * k, least);
+    } else if (window.app === "browser") {
+      // A page in Internet Explorer: a screen's shape, the page fitted to its width (scrolling down it, or its top).
+      contentH = (contentW * 10) / 16;
     } else if (window.app === "video_player") {
       contentH = (contentW * 9) / 16;
     } else {
       const aspect = media === undefined ? 4 / 3 : Math.min(Math.max(media.width / Math.max(media.height, 1), 0.62), 1.9);
       contentH = contentW / aspect;
     }
-    const bottom = (window.app === "video_player" ? CONTROLS + INSET : paint ? PAINT_BOTTOM : INSET) * k;
-    const h = Math.round(contentH + TOP * k + bottom);
+    const bottom = (window.app === "video_player" ? CONTROLS + INSET : paint ? PAINT_BOTTOM : window.app === "dialog" ? DIALOG_BOTTOM : window.app === "messenger" ? MESSENGER_BOTTOM : INSET) * k;
+    const h = Math.round(contentH + topOf(window.app) * k + bottom);
     // The same place for the same window on every screen (the user, Oct 31: "roughly the same position").
     const slot = SLOTS[index % SLOTS.length]!;
     return { window, w, h, left, contentW, contentH, notes, cx: (window.x ?? slot[0]) * DW, cy: (window.y ?? slot[1]) * DH };
@@ -332,11 +380,25 @@ export function layout(project: Project, spec: Spec): { laid: Laid[]; desktop: [
       h: one.h,
       cx: one.cx,
       cy: one.cy,
-      content: [one.cx - one.w / 2 + one.left, one.cy - one.h / 2 + TOP * k, one.contentW, one.contentH],
+      content: [one.cx - one.w / 2 + one.left, one.cy - one.h / 2 + topOf(one.window.app) * k, one.contentW, one.contentH],
       notes: one.notes,
     }),
   );
   return { laid, desktop: [DW, DH] };
+}
+
+/** Where a window's content starts under its title bar (desktop.rs content_in, 1080p pixels). */
+function topOf(app: AppKind): number {
+  if (app === "dialog") return 43 + 2;
+  if (app === "browser" || app === "forum" || app === "email") return TOP + ADDRESS_BAR;
+  return TOP;
+}
+
+/** A text window's words: [left, top] from its content area's corner (a dialog's right of its icon, the forum's under its banner). */
+function textPads(app: AppKind, k: number): [number, number] {
+  if (app === "dialog") return [DIALOG_TEXT_LEFT * k, 24 * k];
+  if (app === "forum") return [NOTE_PAD * k, (FORUM_BANNER + NOTE_PAD) * k];
+  return [NOTE_PAD * k, NOTE_PAD * k];
 }
 
 /** The window frames (app, width, height as drawn) a desktop needs. */
@@ -393,7 +455,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
     const room = (windows: WindowSpec[]) => Math.min(...windows.map((window) => Math.min(window.at, ...(window.line_at ?? [])))) - spec.start - Math.round(HOLD * s);
     const quickest = Math.round(QUICKEST_ZOOM_OUT * s);
     // Notes are read: they never wait. A picture waits for the quickest zoom out.
-    if (room(timed.filter((window) => window.app === "notepad")) < Math.round(quickest * 0.75)) spec = withoutOpen(spec);
+    if (room(timed.filter((window) => isText(window.app))) < Math.round(quickest * 0.75)) spec = withoutOpen(spec);
     else zoomOut = Math.min(zoomOut, Math.max(Math.round(room(timed) / 0.75), quickest));
   }
   const openIndex = spec.open?.index ?? null;
@@ -659,7 +721,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
   const windowsAt: number[] = [];
   for (const index of zOrder) {
     const window = laid[index]!;
-    const name = window.spec.app === "video_player" ? "Video Player" : window.spec.app === "photo_viewer" ? "Photo Viewer" : "Notepad";
+    const name = NAMES[window.spec.app];
     const from = index === openIndex ? 0 : rel(window.spec.at);
     const [fw, fh] = drawnSize(window.w, window.h);
     const frameMedia = art.frames[frameKey(window.spec.app, fw, fh)];
@@ -676,10 +738,30 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       ...keysFor(window.cx, window.cy, scaleFor(chrome, window.w), index, from),
     });
     if (index !== openIndex) windowsAt.push(spec.start + from);
-    if (window.spec.app === "notepad") {
+    if (window.spec.app === "browser" && window.spec.url) {
+      // The page's address in Internet Explorer's bar (desktop.rs: "Address", then the field and its page icon).
+      const size = 15 * k;
+      const text = window.spec.url.length > 90 ? `${window.spec.url.slice(0, 87)}…` : window.spec.url;
+      const [lw] = measure("Address", size);
+      const [tw] = measure(text, size);
+      const left = window.cx - window.w / 2 + 24 * k + lw + 24 * k;
+      const middle = window.cy - window.h / 2 + (TOP - 1 + ADDRESS_BAR / 2) * k;
+      add({
+        type: "text",
+        name: `${spec.prefix}${name} address`,
+        text,
+        start: spec.start + from,
+        duration: total - from,
+        style: { font: "Geist", weight: 400, size, color: [0.07, 0.07, 0.07, 1], align: "left", glow: { enabled: false } },
+        ...keysFor(left + tw / 2, middle, 1, index, from),
+      });
+    }
+    if (isText(window.spec.app)) {
       const [cx, cy] = window.content;
-      let y = cy + NOTE_PAD * k;
-      const px = NOTE_SIZE * k;
+      const notepad = window.spec.app === "notepad";
+      const [padLeft, padTop] = textPads(window.spec.app, k);
+      let y = cy + padTop;
+      const px = (notepad ? NOTE_SIZE : UI_TEXT_SIZE) * k;
       // Never two lines at once ("this text doesn't appear at the same time in
       // the Notepad"), and never late for their words: a line named right
       // after another moves the one before it earlier (as far as the window's
@@ -693,15 +775,19 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       window.notes.forEach((note, line) => {
         const at = starts[line]!;
         const textFrom = Math.min(rel(at), total - 2);
-        const centre: [number, number] = [cx + NOTE_PAD * k + note.w / 2, y + note.h / 2];
+        const centre: [number, number] = [cx + padLeft + note.w / 2, y + note.h / 2];
+        // An email's header lines ("From: Jonathan", "Subject: …") in bold, as Outlook Express shows them.
+        const header = window.spec.app === "email" && /^(from|to|subject|date|sent|cc):/iu.test(window.spec.lines[line] ?? "");
         add({
           type: "text",
-          name: `${spec.prefix}Notepad note ${line + 1}`,
+          name: `${spec.prefix}${name} ${notepad ? "note" : "line"} ${line + 1}`,
           text: note.text,
           start: spec.start + textFrom,
           duration: total - textFrom,
-          // Horror's XP Notepad is a white page: its words black, in a typewriter's face.
-          style: project.style === "horror"
+          // Horror's XP Notepad is a white page: its words black, in a typewriter's face; the other windows' words in the UI's.
+          style: !notepad
+            ? { font: "Geist", weight: header ? 700 : 400, size: px, color: [0.06, 0.06, 0.06, 1], line_height: NOTE_LINE, align: "left", glow: { enabled: false } }
+            : project.style === "horror"
             ? { font: "Geist Mono", weight: 500, size: px, color: [0.06, 0.06, 0.06, 1], line_height: NOTE_LINE, align: "left", glow: { enabled: false } }
             : { font: "Geist", weight: 400, size: px, color: [0.94, 0.94, 0.94, 1], line_height: NOTE_LINE, align: "left", glow: { enabled: true, radius: 8 * k, strength: 0.25 } },
           animation: { preset: "typewriter", duration: 1, stagger: Math.max(Math.round(s), 1) },
@@ -738,6 +824,21 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
       const [x, y, w, h] = shownIn(window, piece.media);
       let crop: Args = {};
       let width = w;
+      let centreY = y + h / 2;
+      // Internet Explorer: a page picture fitted to the window's width from its top (a long page cut at the bottom);
+      // a scrolling page (made a video of it scrolling) paced to scroll only as far as the window is open for, slowly.
+      if (window.spec.app === "browser") {
+        const aspect = piece.media.width / Math.max(piece.media.height, 1);
+        if (piece.media.kind === "video" && window.spec.scroll === true) piece.speed = Math.max(Math.min(1, piece.media.duration / Math.max((piece.until - piece.from) / fps, 0.1)), 0.05);
+        if (aspect < w / h) {
+          crop = { bottom: Math.max(0, 1 - (h * aspect) / w) };
+          centreY = y + w / aspect / 2;
+        } else if (aspect > w / h) {
+          const side = (1 - w / h / aspect) / 2;
+          crop = { left: side, right: side };
+          width = h * aspect;
+        }
+      }
       // Filling the content area: a photo's (its shape is the picture's, kept within limits) a little
       // cropped at most, a player's footage cropped to the player (no black bars inside it either).
       if (window.spec.app === "photo_viewer" || window.spec.app === "video_player") {
@@ -762,7 +863,7 @@ export function build(project: Project, spec: Spec, art: Art): Record<string, un
         fade_in: piece.fade,
         crop,
         ...(piece.media.kind === "image" ? { frame: { width: 0, shadow: 0 } } : {}),
-        ...keysFor(x + w / 2, y + h / 2, scaleFor(piece.media, width), index, piece.from, piece.until),
+        ...keysFor(x + w / 2, centreY, scaleFor(piece.media, width), index, piece.from, piece.until),
       });
       // The uploader's logo on the footage, blurred where it plays in the
       // window and moving with the camera (Mom Leaves 5 Kids' Code Blue Cam

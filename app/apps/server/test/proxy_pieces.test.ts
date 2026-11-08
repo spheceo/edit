@@ -273,7 +273,23 @@ function adts(frames: Uint8Array[]): Uint8Array {
   return Uint8Array.from(out);
 }
 
-test("each stretch's sound, made on its own, joins the next without a seam, on the file's clock", async () => {
+/**
+ * The FFmpeg on PATH's major version (0 when there is none). The seam test below
+ * asks for the sound within a few samples of the file's clock, which holds with
+ * the FFmpeg Edit ships (9.x, what CI and releases run) and not with Ubuntu's
+ * 8.0.1, whose AAC decoder places the joined stream differently (Nov 8:
+ * the one test that failed `just check` on the Linux dev machine, every run).
+ */
+const ffmpegMajor = (() => {
+  try {
+    const out = Bun.spawnSync(["ffmpeg", "-version"]).stdout.toString();
+    return Number(/ffmpeg version n?(\d+)/.exec(out)?.[1] ?? 0);
+  } catch {
+    return 0;
+  }
+})();
+
+test.skipIf(ffmpegMajor < 9)("each stretch's sound, made on its own, joins the next without a seam, on the file's clock", async () => {
   // 150 s of a 440 Hz tone at 44.1 kHz that starts 0.3 s into the file (after the picture), so three one-minute pieces.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pieces-sound-"));
   const file = path.join(root, "tone.mp4");

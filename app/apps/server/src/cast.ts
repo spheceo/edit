@@ -22,7 +22,8 @@
 // case's (JJ, Nov 7: "the subject detection must be per case"; Nov 8: "it
 // makes no sense that we call this detective 'Detective 4.' We've not seen
 // so many detectives in this specific case"). Each file's case comes from
-// its script blocks' "Case N:" notes (`casesOf`); the items say it, a person
+// its script blocks' "Case N:" notes, else the recording it plays from
+// (`casesOf`); the items say it, a person
 // is never grouped across two cases (`byCase`), and the numbering ("Detective
 // 2") starts again in each case.
 
@@ -80,12 +81,16 @@ export interface Seen {
  */
 export function casesOf(project: Pick<Project, "script">): Map<string, string> {
   const out = new Map<string, string>();
+  const recordings = new Map<string, string>();
   for (const block of project.script?.blocks ?? []) {
     if (block.kind !== "footage" || typeof block.media !== "string") continue;
     const kase = (block.notes ?? []).map((note) => /^(Case [^:]+):/u.exec(note)?.[1]).find((found) => found !== undefined);
     if (kase !== undefined && !out.has(block.media)) out.set(block.media, kase);
+    if (!recordings.has(block.media) && block.file !== "") recordings.set(block.media, `Case ${block.file}`);
   }
-  return new Set(out.values()).size > 1 ? out : new Map();
+  if (new Set(out.values()).size > 1) return out;
+  // No case notes (Police Hunt's script, Nov 8: three interrogations, "Detective 5"): each recording is its case.
+  return new Set(recordings.values()).size > 1 ? recordings : new Map();
 }
 
 /** One person across the windows: the items (indexes into the seen list) that are them. */
@@ -274,7 +279,11 @@ export function checked(value: unknown, seen: Seen[]): CastPerson[] | null {
 
 /**
  * Where the voices are pyannote's, one voice of one recording is one person:
- * every item of it joins the person most of them are in. A window that
+ * every item of it joins the person most of them are in, and two voices of one
+ * window are two people (Police Hunt, Nov 8: one window had the detective on
+ * the voice every other window gave Ken, and his and the detective's lines
+ * both became "Ken:"): the stronger voice keeps the person, the other takes
+ * whoever that window gave the person's voice. A window that
  * swapped two people's looks no longer moves a voice to the other person
  * (Female Police Captain, Nov 8: one window gave Kimberly's voice the
  * investigator's blue shirt, and her lines in that excerpt were subtitled
@@ -282,27 +291,51 @@ export function checked(value: unknown, seen: Seen[]): CastPerson[] | null {
  * swapped their roles"; eight of her nine windows had it right).
  */
 export function byVoice(people: CastPerson[], seen: Seen[]): CastPerson[] {
-  const personOf = new Map<number, number>();
+  let personOf = new Map<number, number>();
   people.forEach((person, index) => person.members.forEach((n) => personOf.set(n, index)));
-  const groups = new Map<string, number[]>();
-  seen.forEach((item, n) => {
-    if (item.recording === undefined || item.voice === "" || !personOf.has(n)) return;
-    const key = `${item.recording}\u0000${item.voice}`;
-    groups.set(key, [...(groups.get(key) ?? []), n]);
-  });
-  const moved = new Map<number, number>();
-  for (const members of groups.values()) {
-    const votes = new Map<number, number>();
-    for (const n of members) votes.set(personOf.get(n)!, (votes.get(personOf.get(n)!) ?? 0) + 1);
-    const [winner] = [...votes].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]!;
-    for (const n of members) if (personOf.get(n) !== winner) moved.set(n, winner);
+  const groupOf = (n: number) => (seen[n]?.recording === undefined || seen[n]!.voice === "" ? null : `${seen[n]!.recording}\u0000${seen[n]!.voice}`);
+  const windowOf = (n: number) => `${seen[n]!.media}\u0000${seen[n]!.from}`;
+  // Twice: a window's swap, once settled, can change who a voice's other windows are.
+  for (let pass = 0; pass < 2; pass++) {
+    const votes = new Map<string, Map<number, number>>();
+    for (const [n, person] of personOf) {
+      const group = groupOf(n);
+      if (group === null) continue;
+      const counts = votes.get(group) ?? new Map<number, number>();
+      counts.set(person, (counts.get(person) ?? 0) + 1);
+      votes.set(group, counts);
+    }
+    const winner = new Map<string, [number, number]>();
+    for (const [group, counts] of votes) winner.set(group, [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]!);
+    const next = new Map(personOf);
+    const windows = new Map<string, number[]>();
+    for (const n of personOf.keys()) windows.set(windowOf(n), [...(windows.get(windowOf(n)) ?? []), n]);
+    for (const members of windows.values()) {
+      // Each voice of the window to its recording's person; two voices of one window are two people (they talk
+      // to each other): the stronger voice keeps the person, the other takes whoever the window gave that person's voice.
+      const wanted = members
+        .map((n) => ({ n, group: groupOf(n), to: groupOf(n) === null ? personOf.get(n)! : winner.get(groupOf(n)!)![0], strength: groupOf(n) === null ? 0 : winner.get(groupOf(n)!)![1] }))
+        .sort((a, b) => b.strength - a.strength || a.n - b.n);
+      const taken = new Set<number>();
+      const displaced = members.map((n) => personOf.get(n)!).filter((person) => !wanted.some((one) => one.group !== null && one.to === person));
+      for (const one of wanted) {
+        if (one.group === null) continue;
+        if (!taken.has(one.to)) {
+          taken.add(one.to);
+          next.set(one.n, one.to);
+          continue;
+        }
+        const instead = displaced.find((person) => !taken.has(person));
+        if (instead !== undefined) {
+          taken.add(instead);
+          next.set(one.n, instead);
+        }
+      }
+    }
+    personOf = next;
   }
-  if (moved.size === 0) return people;
   return people
-    .map((person, index) => ({
-      ...person,
-      members: [...person.members.filter((n) => !moved.has(n)), ...[...moved].filter(([, to]) => to === index).map(([n]) => n)].sort((a, b) => a - b),
-    }))
+    .map((person, index) => ({ ...person, members: [...personOf].filter(([, to]) => to === index).map(([n]) => n).sort((a, b) => a - b) }))
     .filter((person) => person.members.length > 0);
 }
 

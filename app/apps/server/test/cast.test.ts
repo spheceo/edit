@@ -153,6 +153,10 @@ test("a file's case is its script blocks' Case note, only for a script of more t
   const block = (media: string, kase: string) => ({ kind: "footage" as const, url: "", file: "", start: 0, end: 1, label: "", media, notes: [`Case ${kase}: https://youtu.be/x`, "Source: a"] });
   expect([...casesOf({ script: { blocks: [block("m1", "1"), block("m2", "2"), block("m1", "1")] } } as never)]).toEqual([["m1", "Case 1"], ["m2", "Case 2"]]);
   expect(casesOf({ script: { blocks: [block("m1", "1"), block("m2", "1")] } } as never).size).toBe(0);
+  // No case notes: each recording is its case.
+  const plain = (media: string, file: string) => ({ kind: "footage" as const, url: "", file, start: 0, end: 1, label: "", media });
+  expect([...casesOf({ script: { blocks: [plain("m1", "youtube:a"), plain("m2", "youtube:b"), plain("m3", "youtube:a")] } } as never)]).toEqual([["m1", "Case youtube:a"], ["m2", "Case youtube:b"], ["m3", "Case youtube:a"]]);
+  expect(casesOf({ script: { blocks: [plain("m1", "youtube:a"), plain("m3", "youtube:a")] } } as never).size).toBe(0);
   expect(casesOf({ script: null } as never).size).toBe(0);
 });
 
@@ -178,4 +182,18 @@ test("with pyannote's voices, a recording's voice is one person: a window that s
   expect(byVoice(people, seen).map((person) => person.members)).toEqual([[0, 2, 4], [1, 3, 5]]);
   // Scribe's voices (no recording): the looks stand.
   expect(byVoice(people, seen.map(({ recording: _r, ...rest }) => rest)).map((person) => person.members)).toEqual([[0, 2, 5], [1, 3, 4]]);
+});
+
+// Police Hunt (Nov 8): most windows put Ken on speaker_2; one had the detective there and Ken on speaker_0. Both
+// voices became Ken: the window's swap is undone, so speaker_0 is the detective that window saw.
+test("two voices of one window are two people: a window that swapped them gives the other voice the displaced person", () => {
+  const item = (from: number, letter: string, voice: string, role: string): Seen =>
+    ({ media: "m18", from, to: from + 240, letter, voice, name: "", role, look: "", place: "", recording: "youtube:u8l7-8bcu-w" });
+  const seen = [item(0, "A", "speaker_2", "suspect"), item(0, "B", "speaker_1", "leader"), item(240, "A", "speaker_2", "suspect"), item(480, "A", "speaker_2", "leader"), item(480, "B", "speaker_0", "suspect")];
+  const people: CastPerson[] = [
+    { name: "Ken", title: "Suspect", role: "suspect", members: [0, 2, 4] },
+    { name: null, title: "Detective", role: "leader", members: [1, 3] },
+  ];
+  // speaker_2 is Ken (two windows of three); the third window's speaker_0 takes the detective it displaced.
+  expect(byVoice(people, seen).map((person) => person.members)).toEqual([[0, 2, 3], [1, 4]]);
 });

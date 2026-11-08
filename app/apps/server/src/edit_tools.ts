@@ -187,15 +187,18 @@ async function waitTool({ app, args, projectId }: ToolCall): Promise<Content[]> 
   live(app, projectId);
   const given = Array.isArray(args.for) ? args.for.filter((kind): kind is progress.Work => typeof kind === "string" && WORK.includes(kind as progress.Work)) : [];
   const kinds = given.length === 0 ? WORK : given;
-  const before = progress.summary(projectId, kinds);
+  // An export the registry holds that progress never heard of (one carried on after a restart, Nov 8: the agent was told
+  // nothing was running, then "this project already has an export running" every time it asked for one): waited on too.
+  const exporting = () => kinds.includes("export") && app.exports.runningFor?.(projectId) != null;
+  const before = progress.summary(projectId, kinds) ?? (exporting() ? `the export into ${app.exports.runningFor?.(projectId)?.output.split("/").pop() ?? "its file"}` : null);
   if (before === null) return text("nothing of that is running: go on");
   const estimate = progress.remainingMs(projectId, kinds) ?? 0;
   const most = clamp(uint(args.at_most) ?? Math.ceil(estimate / 1000) + 5, 1, 300);
   const started = progress.timing.now();
-  const done = await progress.waitFor(projectId, kinds, most * 1000);
+  const done = await progress.waitFor(projectId, kinds, most * 1000, exporting);
   const waited = `${Math.round((progress.timing.now() - started) / 1000)} s`;
   if (done) return text(`done (waited ${waited}; it was ${before})`);
-  const still = progress.summary(projectId, kinds);
+  const still = progress.summary(projectId, kinds) ?? (exporting() ? before : null);
   return text(`still running after ${waited}: ${still ?? before}. Go on with other work, or wait once more for that long.`);
 }
 

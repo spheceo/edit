@@ -827,7 +827,8 @@ export class ExportRegistry implements seams.Exports {
     if (short !== null) throw new Error(short);
     const whole = ["h264", "hevc", "prores"].includes(options.format) && plan.start === 0 && plan.end >= duration(project) && plan.end > 0;
     if (extra.drive === true && !whole) throw new Error("only a whole video export (MP4 or MOV) uploads to Drive");
-    if (this.jobs.has(project.id)) throw new Error("this project already has an export running");
+    const already = this.jobs.get(project.id);
+    if (already !== undefined) throw new Error(`this project already has an export running (into ${already.output.split("/").pop()}): wait for it (wait {for: ["export"]}) or cancel it`);
     if ([...this.jobs.values()].some(job => job.output === path)) throw new Error("another export is writing this output path");
     let snapshot: string | null = null;
     if (this.home !== null) {

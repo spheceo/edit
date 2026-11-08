@@ -1,3 +1,5 @@
+// First: React looks for its commit hook once, as it loads (reactCommits.ts).
+import "./lib/reactCommits";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 

@@ -29,3 +29,7 @@ Sphe's Doc (https://docs.google.com/document/d/1GIw2TVCO3MwvciNrNq1LJ7gxHfdFG7vA
 
 ## Blocked
 - **The voice-over (Nov 8, 21:13).** The import's last step speaks the 26 cut-ins (21,105 characters) with the house ElevenLabs voice through the dev relay, and the dev key's quota is spent: "This request exceeds your quota of 1334160. You have 15 credits remaining, while 1048 credits are required". Waiting on Sphe: credit on that account, or the narrator's recording (a "Voice-over: <Drive link>" line in the Doc, which the import places instead).
+
+### 6. A horror edit could start over silent cut-ins
+**Why.** The import stopped after three tries at the voice-over (21:19), with the script laid out, so the project counts as imported (`script.unfinished` is false once laid out). The house and commentary workflows say to `generate_voiceover` when the import couldn't; horror's didn't.
+**Fix.** The horror workflow's first step: cut-ins with no voice-over get `generate_voiceover` first, unless the user gave the narrator's recording; never edit over silent cards.

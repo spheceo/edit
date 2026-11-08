@@ -120,7 +120,75 @@ async function waybackCapture(page: string): Promise<string> {
   return chosen;
 }
 
-export async function capture(url: string, path: string, phrase = "", selector = "", fullPage = false): Promise<Capture> {
+/** pdf.js, pinned, for a PDF's pages in the capture Chrome (it shows a PDF to no one headless). */
+const PDFJS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build";
+
+/** Whether a link is a PDF by its name (court papers, agreements, verdicts). */
+export function isPdfLink(url: string): boolean {
+  try {
+    return /\.pdf$/iu.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * In-page script: a PDF (base64) drawn with pdf.js on a canvas at 1600 px wide, on its page `page` (else the first
+ * page holding the phrase), with the crop around the phrase's lines (three lines of room each side, the text's
+ * margins across), or the whole page without one. Returns {page, width, height, rect} or {error}.
+ */
+export function pdfScript(base64: string, phrase: string, page: number | null): string {
+  return `(async () => {
+  const lib = await import(${JSON.stringify(`${PDFJS}/pdf.min.mjs`)});
+  globalThis.pdfjsWorker = await import(${JSON.stringify(`${PDFJS}/pdf.worker.min.mjs`)});
+  const raw = atob(${JSON.stringify(base64)}); const bytes = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  const doc = await lib.getDocument({ data: bytes, isEvalSupported: false }).promise;
+  const norm = (s) => s.toLowerCase().replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, ' ').trim();
+  const needle = norm(${JSON.stringify(phrase)});
+  const asked = ${page === null ? "null" : String(page)};
+  if (asked !== null && (asked < 1 || asked > doc.numPages)) return { error: 'The PDF has ' + doc.numPages + ' pages, not ' + asked };
+  const pages = asked !== null ? [asked] : Array.from({ length: doc.numPages }, (_, i) => i + 1);
+  for (const n of pages) {
+    const one = await doc.getPage(n);
+    const scale = 1600 / one.getViewport({ scale: 1 }).width;
+    const vp = one.getViewport({ scale });
+    const content = await one.getTextContent();
+    let text = ''; const spans = [];
+    for (const item of content.items) {
+      if (!('str' in item)) continue;
+      const said = norm(item.str); if (!said) continue;
+      if (text) text += ' ';
+      spans.push([text.length, text.length + said.length, item]); text += said;
+    }
+    const at = needle ? text.indexOf(needle) : 0;
+    if (needle && at < 0) continue;
+    const canvas = document.createElement('canvas'); canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+    document.body.style.margin = '0'; document.body.innerHTML = ''; document.body.appendChild(canvas);
+    await one.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    const box = (item) => { const t = lib.Util.transform(vp.transform, item.transform); const h = Math.hypot(t[2], t[3]); return { x: t[4], y: t[5] - h, w: item.width * scale, h }; };
+    let rect = null;
+    if (needle) {
+      const hit = spans.filter(([from, to]) => to > at && from < at + needle.length).map(([, , item]) => box(item));
+      const all = spans.map(([, , item]) => box(item));
+      const left = Math.max(0, Math.min(...all.map((b) => b.x)) - 24), right = Math.min(canvas.width, Math.max(...all.map((b) => b.x + b.w)) + 24);
+      // One whole line above and below the phrase's lines (court papers are double-spaced: room counted in font
+      // heights cut through the next line), with a little air.
+      const hitTop = Math.min(...hit.map((b) => b.y)), hitBottom = Math.max(...hit.map((b) => b.y + b.h));
+      const above = all.filter((b) => b.y + b.h < hitTop - 2), below = all.filter((b) => b.y > hitBottom + 2);
+      const lineAbove = above.length ? Math.max(...above.map((b) => b.y + b.h)) : null, lineBelow = below.length ? Math.min(...below.map((b) => b.y)) : null;
+      const topOf = lineAbove === null ? hitTop : Math.min(...above.filter((b) => b.y + b.h >= lineAbove - 2).map((b) => b.y));
+      const bottomOf = lineBelow === null ? hitBottom : Math.max(...below.filter((b) => b.y <= lineBelow + 2).map((b) => b.y + b.h));
+      const air = Math.max(...hit.map((b) => b.h)) * 0.6;
+      const top = Math.max(0, topOf - air), bottom = Math.min(canvas.height, bottomOf + air);
+      rect = { x: Math.round(left), y: Math.round(top), width: Math.round(right - left), height: Math.round(bottom - top) };
+    }
+    return { page: n, width: canvas.width, height: canvas.height, rect };
+  }
+  return { error: needle ? 'The phrase is not in the PDF' + (asked !== null ? ' on page ' + asked : '') + '; do not fabricate it (a phrase split by a line break or a hyphen: give a shorter part of it)' : 'The PDF has no pages' };
+})()`;
+}
+
+export async function capture(url: string, path: string, phrase = "", selector = "", fullPage = false, page: number | null = null): Promise<Capture> {
   const open = waybackOpen(url);
   if (open !== null) url = await waybackCapture(open);
   const parsed = new URL(url);
@@ -160,9 +228,9 @@ export async function capture(url: string, path: string, phrase = "", selector =
       pending.delete(message.id); clearTimeout(own.timer);
       if (message.error) own.reject(new Error(message.error.message ?? "Chrome capture failed")); else own.resolve(message.result ?? {});
     };
-    const call = (method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> => new Promise((resolve, reject) => {
+    const call = (method: string, params: Record<string, unknown> = {}, wait?: number): Promise<Record<string, unknown>> => new Promise((resolve, reject) => {
       // A whole page (4200 px of an old archived site) takes Chrome longer than 20 s to draw.
-      const id = ++next; const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Chrome ${method} timed out`)); }, method === "Page.captureScreenshot" ? 90_000 : 20_000);
+      const id = ++next; const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Chrome ${method} timed out`)); }, wait ?? (method === "Page.captureScreenshot" ? 90_000 : 20_000));
       pending.set(id, { resolve, reject, timer }); socket!.send(JSON.stringify({ id, method, params }));
     });
     await call("Page.enable");
@@ -171,6 +239,28 @@ export async function capture(url: string, path: string, phrase = "", selector =
     const version = await call("Browser.getVersion");
     if (typeof version.userAgent === "string") await call("Network.setUserAgentOverride", { userAgent: version.userAgent.replace("HeadlessChrome", "Chrome") });
     await call("Emulation.setDeviceMetricsOverride", { width: 1920, height: 1400, deviceScaleFactor: 1, mobile: false });
+    // A PDF: its page drawn by pdf.js in this Chrome (a headless Chrome shows a PDF to no one, so the phrase was
+    // never found: the horror Doc of Nov 8 asks for eight highlights on pages of a court's Statement of Decision).
+    if (isPdfLink(url)) {
+      let bytes: Uint8Array;
+      try {
+        const answer = await fetch(url, { signal: AbortSignal.timeout(120_000), headers: { "user-agent": String(version.userAgent ?? "").replace("HeadlessChrome", "Chrome") } });
+        if (!answer.ok) throw new Error(`the PDF answered ${answer.status}`);
+        bytes = new Uint8Array(await answer.arrayBuffer());
+      } catch (error) {
+        throw new Error(`the PDF did not download: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (bytes.length > 80_000_000) throw new Error("the PDF is over 80 MB: give the page as a screenshot instead");
+      const drawn = await call("Runtime.evaluate", { expression: pdfScript(Buffer.from(bytes).toString("base64"), phrase, page), awaitPromise: true, returnByValue: true }, 180_000);
+      const pdf = (drawn.result as { value?: { error?: string; page?: number; width?: number; height?: number; rect?: { x: number; y: number; width: number; height: number } | null } } | undefined)?.value;
+      if (pdf === undefined) throw new Error(`the PDF could not be drawn${drawn.exceptionDetails ? `: ${JSON.stringify(drawn.exceptionDetails).slice(0, 200)}` : ""}`);
+      if (pdf.error !== undefined) throw new Error(pdf.error);
+      const clip = pdf.rect ?? { x: 0, y: 0, width: pdf.width!, height: pdf.height! };
+      const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { ...clip, scale: 1 } });
+      if (typeof shot.data !== "string") throw new Error("Chrome returned no screenshot");
+      fs.writeFileSync(path, Buffer.from(shot.data, "base64"));
+      return { path, url, title: `${parsed.pathname.split("/").pop() ?? "PDF"}, page ${pdf.page}`, width: clip.width, height: clip.height };
+    }
     let readyTimer: ReturnType<typeof setTimeout> | null = null;
     const ready = new Promise<void>((resolve) => { pageLoaded = resolve; readyTimer = setTimeout(resolve, 15_000); });
     const navigation = await call("Page.navigate", { url });

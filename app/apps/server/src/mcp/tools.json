@@ -2808,7 +2808,7 @@
   },
   {
     "name": "capture_evidence",
-    "description": "Capture real source-page pixels. A private Chrome loads the public https URL, optionally finds phrase text or a CSS selector, scrolls it into view and crops it. Imports a real screenshot with source metadata, never reconstructed evidence. Inspect with look_at_media before placing as commentary_card; then highlight_evidence can animate a marker over actual words. A missing phrase fails rather than inventing content. A sign-in or cookie wall over the page (Instagram's) is taken off first, so a profile or post comes through whole. full_page: true captures the whole page (to scroll through with commentary_card scroll:true).",
+    "description": "Capture real source-page pixels. A private Chrome loads the public https URL, optionally finds phrase text or a CSS selector, scrolls it into view and crops it. Imports a real screenshot with source metadata, never reconstructed evidence. Inspect with look_at_media before placing as commentary_card; then highlight_evidence can animate a marker over actual words. A missing phrase fails rather than inventing content. A sign-in or cookie wall over the page (Instagram's) is taken off first, so a profile or post comes through whole. full_page: true captures the whole page (to scroll through with commentary_card scroll:true). A PDF link (court papers, an agreement) is drawn page by page: the phrase's lines on the page it's on (page narrows the search to one page, 1 = the first), or the whole page given without a phrase. A Wayback link with an open date (web/*/…) captures the newest real capture of that page.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -2828,6 +2828,10 @@
         "full_page": {
           "description": "The whole page down to 4200 px (a profile to scroll through with commentary_card scroll:true), not just what fits the window.",
           "type": "boolean"
+        },
+        "page": {
+          "description": "A PDF's page (1 = the first) to capture or to find the phrase on.",
+          "type": "integer"
         }
       },
       "required": [

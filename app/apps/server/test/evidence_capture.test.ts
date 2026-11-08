@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { DRAWN, pickCapture, UNWALL, waybackOpen } from "../src/evidence_capture.ts";
+import { DRAWN, isPdfLink, pdfScript, pickCapture, UNWALL, waybackOpen } from "../src/evidence_capture.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("a Wayback link that leaves the date open stands for a real capture of the page, never a parked one", () => {
@@ -64,3 +64,49 @@ test.skipIf(chrome === null)("a page that draws nothing is told from one that dr
     cleanup();
   }
 }, 30_000);
+
+/** A one-page PDF with `lines` of text, double-spaced as court papers are. */
+function tinyPdf(lines: string[]): Uint8Array {
+  const stream = `BT /F1 12 Tf 72 720 Td 24 TL ${lines.map((line) => `(${line}) Tj T*`).join(" ")} ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objects.forEach((body, index) => { offsets.push(out.length); out += `${index + 1} 0 obj\n${body}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((at) => `${String(at).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return new TextEncoder().encode(out);
+}
+
+test("a PDF is known by its link", () => {
+  expect(isPdfLink("https://www.courthousenews.com/wp-content/uploads/2020/01/GirlsDoPorn-VERDICT.pdf")).toBe(true);
+  expect(isPdfLink("https://laist.com/news/x")).toBe(false);
+});
+
+test.skipIf(chrome === null || process.env.EDIT_OFFLINE === "1")("a PDF's phrase is found on its page and cropped to its lines with one whole line either side", () => {
+  // The Statement of Decision (Nov 8): headless Chrome shows a PDF to no one, so its phrases were never found.
+  const { dir, cleanup } = scratch("pdf");
+  try {
+    const lines = ["The Court finds Plaintiffs have proven the claims.", "Defendants take considerable, calculated steps", "to falsely assure prospective models.", "Their videos will never be posted online.", "A last line."];
+    const b64 = Buffer.from(tinyPdf(lines)).toString("base64");
+    // The page answers through a promise: run it and put its answer in the title.
+    fs.writeFileSync(`${dir}/check.js`, `(${pdfScript(b64, "considerable, calculated steps", null)}).then(v=>{document.title=JSON.stringify(v)},e=>{document.title=JSON.stringify({error:String(e)})});`);
+    fs.writeFileSync(`${dir}/page.html`, `<html><body><script src="check.js"></script></body></html>`);
+    const run = Bun.spawnSync([chrome!, "--headless=new", "--no-first-run", `--user-data-dir=${dir}/profile2`, "--virtual-time-budget=15000", "--dump-dom", `file://${dir}/page.html`], { timeout: 60_000 });
+    const answer = JSON.parse((/<title>(.*?)<\/title>/s.exec(run.stdout.toString())?.[1] ?? "{}").replaceAll("&quot;", '"')) as { page?: number; width?: number; height?: number; rect?: { y: number; height: number }; error?: string };
+    expect(answer.error).toBeUndefined();
+    expect(answer.page).toBe(1);
+    expect(answer.width).toBe(1600);
+    // Three lines (the one above, the phrase's, the one below) at 24 pt spacing, scaled to 1600 px: well under the page.
+    const spacing = (24 * 1600) / 612;
+    expect(answer.rect!.height).toBeGreaterThan(spacing * 2);
+    expect(answer.rect!.height).toBeLessThan(spacing * 3.5);
+  } finally {
+    cleanup();
+  }
+}, 90_000);

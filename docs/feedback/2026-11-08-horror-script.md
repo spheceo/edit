@@ -50,3 +50,7 @@ Tests: `evidence_capture.test.ts`.
 
 ## Blocked on the team (found on the scratch project)
 - **11 of the 13 Drive files the comments link are private** to marck8131@gmail.com: neither the public link nor Sphe's sign-in can see them (Drive API: 404 to that account). Only `ryu_x_post_3am_EN.png` and the channel screenshot are shared. The rest (the English blog post, the archived thumbnails, the silhouette, the Rokusaisha and Sankei screenshots, the first X post in English…) need "anyone with the link can view", or sharing with the team. The agent will list each as note_link_unused, "can't be had".
+
+### 9. capture_evidence couldn't capture a PDF page
+**Broke.** Eight comments ask for a highlight on a page of a court paper ("Statement of Decision page 3, lines 11-12, highlight 'considerable, calculated steps…'", the Aylo agreement's page 39). capture_evidence answered "The requested text/element is not on the loaded page": headless Chrome shows a PDF to no one.
+**Fix.** A PDF link is drawn in the capture's Chrome with pdf.js (pinned, from jsdelivr; Chrome is already what captures need, on a Mac and Linux alike, where poppler isn't on the team's Macs): the phrase found on the page given (`page`, new) or the first page holding it, cropped to its lines with one whole line either side; the whole page with no phrase. On the real PDFs: page 3 lines 11–12, page 20 lines 6–7 and page 36 lines 2–4 of the Statement of Decision came out as the comments name them, and the Aylo agreement's page 39 whole. Tests: `evidence_capture.test.ts`.

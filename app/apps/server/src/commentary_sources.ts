@@ -27,11 +27,12 @@ registerTool("capture_evidence", async ({ app, args, projectId }) => {
   if (typeof args.url !== "string") throw new Error("url is required");
   const dir = join(app.store.home, "research", projectId, "captures"); fs.mkdirSync(dir, { recursive: true });
   const path = join(dir, `source-${Date.now()}.png`);
-  const result = await capture(args.url, path, typeof args.phrase === "string" ? args.phrase : "", typeof args.selector === "string" ? args.selector : "", args.full_page === true);
+  const page = typeof args.page === "number" && Number.isInteger(args.page) ? args.page : null;
+  const result = await capture(args.url, path, typeof args.phrase === "string" ? args.phrase : "", typeof args.selector === "string" ? args.selector : "", args.full_page === true, page);
   const [, ids, errors] = await importPaths(app, projectId, [path], false, "agent");
   const media = ids[0]; if (media === undefined) throw new Error(errors.join("; "));
   keep(app, projectId, `capture:${media}`, { ...result, asked: args.url, media, captured: Date.now() });
-  return text(stableStringify({ media, url: result.url, title: result.title, note: "Real page capture, not reconstructed content. Inspect it before use: a site may show a consent/login page or irrelevant UI. Add a commentary_card, then highlight_evidence on its returned photo clip." }));
+  return text(stableStringify({ media, url: result.url, title: result.title, width: result.width, height: result.height, note: "Real page capture, not reconstructed content. Inspect it before use: a site may show a consent/login page or irrelevant UI. Add a commentary_card, then highlight_evidence on its returned photo clip." }));
 });
 export interface BrollRange { url: string; start: number; end: number; purpose: string; }
 /**

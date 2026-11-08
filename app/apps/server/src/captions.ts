@@ -570,7 +570,7 @@ async function still(media: string, time: number, out: string): Promise<void> {
   let code: number;
   try {
     const child = Bun.spawn(
-      [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", fixed(Math.max(time, 0.0), 3), "-i", media, "-frames:v", "1", "-vf", "scale=768:-2", "-q:v", "4", out],
+      [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...(time > 0 ? ["-ss", fixed(time, 3)] : []), "-i", media, "-frames:v", "1", "-vf", "scale=768:-2", "-q:v", "4", out],
       { stdin: "ignore", stdout: "ignore", stderr: "inherit" },
     );
     code = await child.exited;

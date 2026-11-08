@@ -497,7 +497,7 @@ async function look(
   let grabbed: number;
   try {
     const child = Bun.spawn(
-      [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", fixed(middle, 3), "-i", source, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", still],
+      [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...(middle > 0 ? ["-ss", fixed(middle, 3)] : []), "-i", source, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", still],
       { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
     );
     [, grabbed] = await Promise.all([new Response(child.stderr).text(), child.exited]);

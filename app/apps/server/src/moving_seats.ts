@@ -217,7 +217,7 @@ async function look(source: string, work: string, transcript: Transcript, people
   for (const [n, at] of times.entries()) {
     const still = join(work, `still-${index}-${n}.jpg`);
     const child = Bun.spawn(
-      [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", fixed(at, 3), "-i", source, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", still],
+      [tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...(at > 0 ? ["-ss", fixed(at, 3)] : []), "-i", source, "-frames:v", "1", "-vf", "scale=960:-2", "-q:v", "4", still],
       { stdin: "ignore", stdout: "ignore", stderr: "pipe" },
     );
     const [, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);

@@ -193,15 +193,47 @@ function onTop(incoming: Project, local: patches.Patch): Project | null {
 /**
  * `incoming` (the server's newer version) with the unsaved edits on screen
  * put on top: `kept` when there were any and they fit, `lost` when they
- * didn't (the caller keeps the version on screen in the undo history).
+ * didn't (the caller keeps them on this browser). Edits to the same things
+ * the incoming version changed (an agent's, another client's) give way to it:
+ * they're `clashing`, kept on this browser for "Use mine" (Nov 8 audit, 2b:
+ * the edit on screen won item by item, last writer wins).
  */
-function rebase(incoming: Project): { project: Project; kept: boolean; lost: boolean } {
+function rebase(incoming: Project): { project: Project; kept: boolean; lost: boolean; clashing: patches.Patch | null } {
   const { project, dirty } = useEditor.getState();
-  if (!project || !dirty || synced === null || synced.id !== incoming.id) return { project: incoming, kept: false, lost: false };
+  if (!project || !dirty || synced === null || synced.id !== incoming.id) return { project: incoming, kept: false, lost: false, clashing: null };
   const local = patches.diff(synced, project);
-  if (patches.empty(local)) return { project: incoming, kept: false, lost: false };
-  const merged = onTop(incoming, local);
-  return merged === null ? { project: incoming, kept: false, lost: true } : { project: merged, kept: true, lost: false };
+  if (patches.empty(local)) return { project: incoming, kept: false, lost: false, clashing: null };
+  const clash = patches.overlap(patches.diff(synced, incoming), local);
+  const { rest, clashing } = clash.length > 0 ? patches.split(local, clash) : { rest: local, clashing: null };
+  if (patches.empty(rest)) return { project: incoming, kept: false, lost: false, clashing };
+  const merged = onTop(incoming, rest);
+  return merged === null ? { project: incoming, kept: false, lost: true, clashing } : { project: merged, kept: true, lost: false, clashing };
+}
+
+/**
+ * The undo history moved onto `incoming`: each step keeps only its own edits
+ * (what it changed since `base`, the server's version it was made on) that
+ * the incoming version didn't change, so Undo after a change from elsewhere
+ * steps back through this page's edits only and never saves the old project
+ * over the other party's change. A step that no longer fits is dropped, with
+ * every step before it.
+ */
+function rebaseHistory(past: Project[], base: Project, incoming: Project, top: Project): Project[] {
+  const theirs = patches.touched(patches.diff(base, incoming));
+  const out: Project[] = [];
+  let after = top;
+  for (let at = past.length - 1; at >= 0; at--) {
+    const step = past[at]!;
+    if (step.id !== incoming.id) break;
+    const own = patches.split(patches.diff(base, step), theirs).rest;
+    const moved = patches.empty(own) ? incoming : onTop(incoming, own);
+    if (moved === null) break;
+    // A step whose own edits all gave way is no step any more: Undo goes past it.
+    if (patches.empty(patches.diff(moved, after))) continue;
+    after = shareProject(incoming, moved);
+    out.unshift(after);
+  }
+  return out;
 }
 
 /** Projects with unsaved edits kept on this browser (unsaved.ts), forgotten once a save lands. */
@@ -239,6 +271,11 @@ async function restoreUnsaved(id: string) {
   const current = state.project;
   // Read-only here (another Mac has it): kept until it can be saved here.
   if (!current || current.id !== id || state.gestureBase || readOnly(state.cloud)) return;
+  // Kept because it met someone else's change to the same thing: offered, never put back by itself.
+  if (entry.collided === true) {
+    state.toast("A change of yours that met an edit from elsewhere is still kept on this computer.", "info", { label: "Use mine", run: () => void putBack(id) });
+    return;
+  }
   keptHere.add(id);
   const merged = onTop(current, entry.patch);
   if (merged === null) {
@@ -257,26 +294,67 @@ async function restoreUnsaved(id: string) {
   state.toast("Your unsaved changes from last time are back.");
 }
 
-/** Takes the server's newer `incoming` at `rev` with the edits on screen kept on top (one undo step). */
-function takeFromServer(rev: number, incoming: Project, extra: Partial<EditorState> = {}) {
+/**
+ * Takes the server's newer `incoming` at `rev` with the edits on screen kept
+ * on top. `asked`: a change made at this page's request (an import's answer),
+ * one undo step of its own; any other (an agent's, another client's, a save's
+ * conflict) moves the undo history onto it instead (`rebaseHistory`).
+ */
+function takeFromServer(rev: number, incoming: Project, extra: Partial<EditorState> = {}, asked = false) {
   const state = useEditor.getState();
   const current = state.project;
   if (!current) return;
-  const { project: merged, kept, lost } = rebase(incoming);
+  const base = synced;
+  const { project: merged, kept, lost, clashing } = rebase(incoming);
+  // Edits on screen that didn't fit at all: kept whole, as edits that met a change from elsewhere.
+  const unfit = lost && base !== null && base.id === incoming.id ? patches.diff(base, current) : null;
   synced = incoming;
   const next = shareProject(current, merged);
+  const past = asked || base === null || base.id !== incoming.id
+    ? (next === current ? state.past : [...state.past.slice(-HISTORY_LIMIT), current])
+    : rebaseHistory(state.past, base, incoming, next);
   useEditor.setState({
     project: next,
     rev,
     dirty: kept,
     gestureBase: null,
-    past: next === current ? state.past : [...state.past.slice(-HISTORY_LIMIT), current],
+    past,
     future: [],
     ...extra,
   });
   if (kept) scheduleSave(0);
-  if (lost) useEditor.getState().toast("The project changed while you were editing and your latest change didn't fit; undo brings it back.", "error");
+  const aside = unfit ?? clashing;
+  if (aside !== null && !patches.empty(aside)) keepCollided(rev, incoming.id, aside);
 }
+
+/**
+ * Edits that met a change from elsewhere to the same things: the other change
+ * is kept, these go on this browser (unsaved.ts, marked `collided`), and one
+ * toast offers them back.
+ */
+function keepCollided(rev: number, id: string, patch: patches.Patch) {
+  // Not forgotten by the next save (keptHere): it isn't in it.
+  void keepUnsaved({ id, base_rev: rev, patch, at: Date.now(), collided: true });
+  useEditor.getState().toast("Your last change met an edit from elsewhere to the same thing, so theirs is kept. Yours is saved on this computer.", "info", { label: "Use mine", run: () => putBack(id) });
+}
+
+/** Puts kept edits back on top of the project open now, as one undo step, and saves them. */
+async function putBack(id: string) {
+  const entry = await readUnsaved(id);
+  const state = useEditor.getState();
+  const current = state.project;
+  if (entry === null || !current || current.id !== id || readOnly(state.cloud)) return;
+  const merged = onTop(current, entry.patch);
+  if (merged === null) {
+    state.toast("Your change doesn't fit the latest version any more; it's still kept on this computer.", "error");
+    return;
+  }
+  // Forgotten once the save with it lands.
+  keptHere.add(id);
+  useEditor.setState({ project: shareProject(current, merged), past: [...state.past.slice(-HISTORY_LIMIT), current], future: [], dirty: true });
+  scheduleSave(0);
+}
+
 let readOnlySaid = 0;
 
 /** A cloud project someone else is editing can't be changed here: says so (now and then) and refuses. */
@@ -402,8 +480,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     remember(rev, next);
     // The live event for the change can land first and have brought it already.
     if (rev === get().rev && JSON.stringify(project) === JSON.stringify(next)) return;
-    // Edits made while the server worked on it (a rename during an import) stay.
-    takeFromServer(rev, next);
+    // Edits made while the server worked on it (a rename during an import) stay; the change asked for is one undo step.
+    takeFromServer(rev, next, {}, true);
   },
 
   select: (ids, mode = "replace") => {

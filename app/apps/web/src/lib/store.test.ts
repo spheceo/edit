@@ -229,4 +229,39 @@ describe("save isolation", () => {
     useEditor.getState().undo();
     expect(useEditor.getState().project?.name).toBe("mine");
   });
+
+  // Nov 8 audit (2b): the edit on screen won item by item over an agent's change
+  // to the same clip, and Undo after a change from elsewhere saved the whole old
+  // project over it.
+  it("a hand edit meeting the agent's change to the same clip gives way, is kept on this browser, and Undo leaves the agent's change", async () => {
+    const { useEditor, connectEvents } = await import("./store");
+    const sockets: { onmessage?: (message: { data: string }) => void }[] = [];
+    vi.stubGlobal("location", { protocol: "http:", host: "localhost" });
+    vi.stubGlobal("WebSocket", class { static OPEN = 1; readyState = 0; constructor() { sockets.push(this as never); } });
+    api.saveProject.mockResolvedValue({ rev: 2 });
+    const clip = (id: string, start: number) => ({ id, track: "t", type: "text", text: id, start, duration: 10, source_in: 0, fade_in: 0, fade_out: 0 });
+    const base = { ...project("p1"), tracks: [{ id: "t", kind: "video" }], clips: [clip("a", 0), clip("b", 20)] } as unknown as Project;
+    useEditor.getState().load(1, base);
+    connectEvents();
+    // Two hand edits, not saved yet: the name, then clip a moved.
+    useEditor.getState().edit(draft => { draft.name = "renamed"; });
+    useEditor.getState().edit(draft => { draft.clips[0]!.start = 5; });
+    // The agent moves clip a too, and adds clip c.
+    const theirs = { ...base, clips: [clip("a", 50), clip("b", 20), clip("c", 70)] } as unknown as Project;
+    sockets[0]!.onmessage!({ data: JSON.stringify({ type: "project", id: "p1", rev: 2, origin: "agent", project: theirs }) });
+    const now = useEditor.getState().project!;
+    // The agent's clip a is kept; the hand edit to something else stays on top.
+    expect(now.clips.map((one) => [one.id, one.start])).toEqual([["a", 50], ["b", 20], ["c", 70]]);
+    expect(now.name).toBe("renamed");
+    // The clashing edit is kept on this browser, offered back, never put back by itself.
+    await vi.waitFor(() => expect(unsaved.kept.get("p1")).toMatchObject({ collided: true, patch: { lists: { clips: { put: [{ id: "a", start: 5 }] } } } }));
+    expect(useEditor.getState().toasts.at(-1)?.action?.label).toBe("Use mine");
+    // Undo steps back through this page's edits only: the rename goes, the agent's changes stay.
+    useEditor.getState().undo();
+    expect(useEditor.getState().project?.name).toBe("p1");
+    expect(useEditor.getState().project?.clips.map((one) => [one.id, one.start])).toEqual([["a", 50], ["b", 20], ["c", 70]]);
+    // Use mine puts the hand edit back on top, as one undo step.
+    useEditor.getState().toasts.at(-1)!.action!.run();
+    await vi.waitFor(() => expect(useEditor.getState().project?.clips[0]?.start).toBe(5));
+  });
 });

@@ -96,10 +96,15 @@ bundle: web ffmpeg quickjs (native "release")
     bun build apps/server/src/embedded.gen.ts --compile --outfile target/bundle-edit/edit
     codesign -s - -f target/bundle-edit/edit
     edit="$PWD/target/bundle-edit/edit"
+    app="${CARGO_TARGET_DIR:-$PWD/target}/release/bundle/macos/Edit.app"
     # FFmpeg and qjs (yt-dlp's JavaScript runtime) go into
     # Edit.app/Contents/Resources beside edit (apps/server/src/tools.ts).
-    cd crates/edit-window && bunx @tauri-apps/cli@2 build --bundles app \
-        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\",\"$qjs\":\"qjs-$host\",\"$edit\":\"edit\"}}}"
+    (cd crates/edit-window && bunx @tauri-apps/cli@2 build --bundles app \
+        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\",\"$qjs\":\"qjs-$host\",\"$edit\":\"edit\"}}}")
+    # Signed as a whole, as package-app.sh does: unsigned, the window keeps the
+    # linker's signature (edit_window-<hash>), and macOS refuses notifications
+    # from a program whose signature isn't the bundle's com.spheceo.edit.
+    codesign -s - -f "$app"
 
 # The FFmpeg Edit ships with, for this Mac (target/ffmpeg/<target>)
 ffmpeg:

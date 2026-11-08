@@ -155,7 +155,10 @@ pub fn post(notice: &Notice) {
     let posted = RcBlock::new(|error: *mut NSError| {
         // SAFETY: the error macOS hands the handler is null or a live NSError for its duration.
         if let Some(error) = unsafe { error.as_ref() } {
-            eprintln!("edit: macOS didn't post a notification: {}", error.localizedDescription());
+            eprintln!(
+                "edit: macOS didn't post a notification: {}",
+                error.localizedDescription()
+            );
         }
     });
     UNUserNotificationCenter::currentNotificationCenter()

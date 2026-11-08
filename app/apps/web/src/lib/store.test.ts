@@ -4,6 +4,18 @@ import type { Project } from "./types";
 const api = vi.hoisted(() => ({ saveProject: vi.fn(), saveChanges: vi.fn(), project: vi.fn(), mediaStatus: vi.fn(), scriptJob: vi.fn() }));
 vi.mock("./api", () => ({ api, ApiError: class extends Error { status = 409; body: unknown; }, useConnection: { setState: vi.fn() } }));
 vi.mock("./agent", () => ({ applyAgentEvent: vi.fn(), openAgent: vi.fn() }));
+// This browser's copy of unsaved edits (unsaved.ts), as a map; `failing` is storage that's full or blocked.
+const unsaved = vi.hoisted(() => {
+  const kept = new Map<string, unknown>();
+  const state = { failing: false };
+  return {
+    kept, state,
+    keepUnsaved: vi.fn(async (entry: { id: string }) => { if (state.failing) throw new Error("quota"); kept.set(entry.id, structuredClone(entry)); return true; }),
+    readUnsaved: vi.fn(async (id: string) => kept.get(id) ?? null),
+    forgetUnsaved: vi.fn(async (id: string) => { kept.delete(id); }),
+  };
+});
+vi.mock("./unsaved", () => ({ keepUnsaved: unsaved.keepUnsaved, readUnsaved: unsaved.readUnsaved, forgetUnsaved: unsaved.forgetUnsaved }));
 const project = (id: string): Project => ({ version: 1, id, name: id, style: "bodycam", next_id: 1, settings: { width: 320, height: 180, fps: 30 }, clips: [], media: [], tracks: [] });
 
 describe("save isolation", () => {
@@ -13,6 +25,7 @@ describe("save isolation", () => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
     // A save sends what changed; these tests answer it as they would a whole one.
     api.saveChanges.mockImplementation((...args: unknown[]) => api.saveProject(...args));
+    unsaved.kept.clear(); unsaved.state.failing = false;
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
   it("does not apply an old project's response after navigation", async () => {
@@ -142,5 +155,78 @@ describe("save isolation", () => {
     api.scriptJob.mockResolvedValue({ job: null });
     sockets[0]!.onmessage!({ data: JSON.stringify({ type: "project", id: "p1", rev: 9, base_rev: 8, origin: "other", patch: { set: { name: "x" }, unset: [], lists: {} } }) });
     await vi.waitFor(() => expect(useEditor.getState().project?.name).toBe("fetched"));
+  });
+
+  it("leaving offline keeps the edits on this browser and puts them back when the project opens", async () => {
+    const { useEditor, leave } = await import("./store");
+    api.saveProject.mockRejectedValue(new Error("Failed to fetch"));
+    useEditor.getState().load(4, project("p1"));
+    useEditor.getState().edit(draft => { draft.name = "offline edit"; });
+    await leave();
+    expect(useEditor.getState().project).toBeNull();
+    expect(unsaved.kept.get("p1")).toMatchObject({ id: "p1", base_rev: 4, patch: { set: { name: "offline edit" } } });
+    expect(useEditor.getState().toasts.at(-1)?.text).toMatch(/kept on this computer/);
+    // Back online: the same version opens, the edit comes back, saves and is forgotten here.
+    api.saveProject.mockReset(); api.saveProject.mockResolvedValue({ rev: 5 });
+    useEditor.getState().load(4, project("p1"));
+    await vi.waitFor(() => expect(useEditor.getState().project?.name).toBe("offline edit"));
+    await vi.advanceTimersByTimeAsync(10);
+    expect(api.saveProject).toHaveBeenCalledWith("p1", 4, expect.objectContaining({ set: { name: "offline edit" } }), expect.any(String));
+    expect(useEditor.getState().dirty).toBe(false);
+    await vi.waitFor(() => expect(unsaved.kept.has("p1")).toBe(false));
+    // One undo step takes it back off.
+    useEditor.getState().undo();
+    expect(useEditor.getState().project?.name).toBe("p1");
+  });
+
+  it("kept edits go on top of a version that moved on since", async () => {
+    const { useEditor } = await import("./store");
+    api.saveProject.mockResolvedValue({ rev: 8 });
+    unsaved.kept.set("p1", { id: "p1", base_rev: 4, patch: { set: { name: "offline edit" }, unset: [], lists: {} }, at: 0 });
+    const theirs = { ...project("p1"), tracks: [{ id: "v9", kind: "video" }] } as Project;
+    useEditor.getState().load(7, theirs);
+    await vi.waitFor(() => expect(useEditor.getState().project?.name).toBe("offline edit"));
+    expect(useEditor.getState().project?.tracks.map(track => track.id)).toEqual(["v9"]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(api.saveProject).toHaveBeenCalledWith("p1", 7, expect.objectContaining({ set: { name: "offline edit" } }), expect.any(String));
+    await vi.waitFor(() => expect(unsaved.kept.has("p1")).toBe(false));
+  });
+
+  it("kept edits that no longer fit stay kept and are said", async () => {
+    const { useEditor } = await import("./store");
+    // A clip on a track that's gone from the latest version.
+    const clip = { id: "c1", track: "gone", type: "text", text: "hi", start: 0, duration: 10, source_in: 0 };
+    unsaved.kept.set("p1", { id: "p1", base_rev: 4, patch: { set: {}, unset: [], lists: { clips: { put: [clip], remove: [] } } }, at: 0 });
+    useEditor.getState().load(7, project("p1"));
+    await vi.waitFor(() => expect(useEditor.getState().toasts.at(-1)?.text).toMatch(/don't fit/));
+    expect(useEditor.getState().project?.clips).toEqual([]);
+    expect(useEditor.getState().dirty).toBe(false);
+    expect(unsaved.kept.has("p1")).toBe(true);
+  });
+
+  it("storage that fails still says the changes weren't saved, and leaving doesn't throw", async () => {
+    const { useEditor, leave } = await import("./store");
+    unsaved.state.failing = true;
+    api.saveProject.mockRejectedValue(new Error("Failed to fetch"));
+    useEditor.getState().load(4, project("p1"));
+    useEditor.getState().edit(draft => { draft.name = "offline edit"; });
+    await expect(leave()).resolves.toBeUndefined();
+    expect(useEditor.getState().project).toBeNull();
+    expect(useEditor.getState().toasts.at(-1)?.text).toBe("Your last changes couldn't be saved.");
+  });
+
+  it("an edit refused because another Mac holds the lock is kept and one undo away", async () => {
+    const { useEditor, flushSave } = await import("./store");
+    const { ApiError } = await import("./api");
+    api.saveProject.mockRejectedValue(Object.assign(new ApiError("JJ is editing this project.", 423, null), { status: 423 }));
+    api.project.mockResolvedValue({ rev: 6, project: { ...project("p1"), name: "theirs" } });
+    useEditor.getState().load(4, project("p1"));
+    useEditor.getState().edit(draft => { draft.name = "mine"; });
+    await flushSave();
+    expect(useEditor.getState().project?.name).toBe("theirs");
+    expect(useEditor.getState().dirty).toBe(false);
+    await vi.waitFor(() => expect(unsaved.kept.get("p1")).toMatchObject({ base_rev: 4, patch: { set: { name: "mine" } } }));
+    useEditor.getState().undo();
+    expect(useEditor.getState().project?.name).toBe("mine");
   });
 });

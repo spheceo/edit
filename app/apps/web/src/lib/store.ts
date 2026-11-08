@@ -11,6 +11,7 @@ import { validateProject } from "./edit";
 import * as patches from "./patch";
 import { shareProject } from "./project-sharing";
 import { forgetSetting, readSetting, writeSetting } from "./storage";
+import { forgetUnsaved, keepUnsaved, readUnsaved } from "./unsaved";
 import type { MediaStatus, Project, ScriptJob } from "./types";
 
 /** Until resized, the viewer and the timeline split their space half and half (below the top bar, its divider and padding). */
@@ -176,6 +177,19 @@ function withoutOrders(patch: patches.Patch): patches.Patch {
   return { ...patch, lists };
 }
 
+/** `incoming` with the edits `local` put on top, or null when they don't fit. */
+function onTop(incoming: Project, local: patches.Patch): Project | null {
+  for (const attempt of [local, withoutOrders(local)]) {
+    try {
+      const merged = patches.apply(incoming, attempt);
+      if (validateProject(merged) === null) return merged;
+    } catch {
+      // Doesn't fit as it is: try without the reordering, then give up.
+    }
+  }
+  return null;
+}
+
 /**
  * `incoming` (the server's newer version) with the unsaved edits on screen
  * put on top: `kept` when there were any and they fit, `lost` when they
@@ -186,15 +200,61 @@ function rebase(incoming: Project): { project: Project; kept: boolean; lost: boo
   if (!project || !dirty || synced === null || synced.id !== incoming.id) return { project: incoming, kept: false, lost: false };
   const local = patches.diff(synced, project);
   if (patches.empty(local)) return { project: incoming, kept: false, lost: false };
-  for (const attempt of [local, withoutOrders(local)]) {
-    try {
-      const merged = patches.apply(incoming, attempt);
-      if (validateProject(merged) === null) return { project: merged, kept: true, lost: false };
-    } catch {
-      // Doesn't fit as it is: try without the reordering, then give up.
-    }
+  const merged = onTop(incoming, local);
+  return merged === null ? { project: incoming, kept: false, lost: true } : { project: merged, kept: true, lost: false };
+}
+
+/** Projects with unsaved edits kept on this browser (unsaved.ts), forgotten once a save lands. */
+const keptHere = new Set<string>();
+
+/**
+ * Keeps the edits on screen that the server hasn't got (what changed since
+ * its last version) on this browser, so leaving or reloading can't drop them.
+ * The patch is taken now, before the caller moves on; false when there was
+ * nothing to keep against or storage failed.
+ */
+function keepLocally(): Promise<boolean> {
+  try {
+    const project = useEditor.getState().project;
+    if (!project || server === null || server.project.id !== project.id) return Promise.resolve(false);
+    const patch = patches.diff(server.project, project);
+    if (patches.empty(patch)) return Promise.resolve(false);
+    keptHere.add(project.id);
+    return keepUnsaved({ id: project.id, base_rev: server.rev, patch, at: Date.now() }).catch(() => false);
+  } catch {
+    return Promise.resolve(false);
   }
-  return { project: incoming, kept: false, lost: true };
+}
+
+/**
+ * Puts back the edits a last visit couldn't save (unsaved.ts): on top of the
+ * version just opened, whether or not it moved on since, as one undo step,
+ * and saves them. Ones that don't fit any more stay kept and are said.
+ */
+async function restoreUnsaved(id: string) {
+  const session = editorSession;
+  const entry = await readUnsaved(id);
+  if (entry === null || session !== editorSession) return;
+  const state = useEditor.getState();
+  const current = state.project;
+  // Read-only here (another Mac has it): kept until it can be saved here.
+  if (!current || current.id !== id || state.gestureBase || readOnly(state.cloud)) return;
+  keptHere.add(id);
+  const merged = onTop(current, entry.patch);
+  if (merged === null) {
+    state.toast("Your unsaved changes from last time don't fit the latest version; they're still kept on this computer.", "error");
+    return;
+  }
+  if (patches.empty(patches.diff(current, merged))) {
+    // The server had them after all (a save whose answer never came).
+    keptHere.delete(id);
+    void forgetUnsaved(id);
+    return;
+  }
+  const next = shareProject(current, merged);
+  useEditor.setState({ project: next, past: [...state.past.slice(-HISTORY_LIMIT), current], future: [], dirty: true });
+  scheduleSave(0);
+  state.toast("Your unsaved changes from last time are back.");
 }
 
 /** Takes the server's newer `incoming` at `rev` with the edits on screen kept on top (one undo step). */
@@ -266,6 +326,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     server = { rev, project };
     synced = project;
     set({ project, rev, past: [], future: [], gestureBase: null, selection: [], dirty: false, saving: false, exportState: null, driveState: null, media: {}, scriptJob: null, resetAsked: false, playback: null });
+    void restoreUnsaved(project.id);
   },
   close: () => {
     editorSession++;
@@ -442,7 +503,9 @@ async function saveProject(state: EditorState) {
     remember(rev, project);
     const current = useEditor.getState();
     if (rev >= current.rev) synced = project;
-    useEditor.setState({ rev: Math.max(rev, current.rev), dirty: current.project !== project });
+    const dirty = current.project !== project;
+    useEditor.setState({ rev: Math.max(rev, current.rev), dirty });
+    if (!dirty && keptHere.delete(project.id)) void forgetUnsaved(project.id);
   } catch (error) {
     if (session !== editorSession) return;
     if (error instanceof ApiError && error.status === 409) {
@@ -452,14 +515,19 @@ async function saveProject(state: EditorState) {
       takeFromServer(body.rev, body.project);
       useEditor.getState().toast("The project changed elsewhere; your edits are kept on the latest version.", "info");
     } else if (error instanceof ApiError && error.status === 423) {
-      // A cloud project someone else is editing now (they took over): show theirs.
+      // A cloud project someone else is editing now (they took over): show
+      // theirs. The edits refused are kept on this browser (they come back
+      // when it opens for editing here) and one undo away.
       useEditor.getState().toast(error.message, "error");
+      void keepLocally();
       try {
         const live = await api.project(project.id);
         if (session === editorSession) {
           remember(live.rev, live.project);
           synced = live.project;
-          useEditor.setState({ project: live.project, rev: live.rev, dirty: false, gestureBase: null });
+          const current = useEditor.getState();
+          const past = current.project ? [...current.past.slice(-HISTORY_LIMIT), current.project] : current.past;
+          useEditor.setState({ project: live.project, rev: live.rev, dirty: false, gestureBase: null, past, future: [] });
         }
       } catch {
         // Offline: keep what's on screen.
@@ -481,6 +549,8 @@ async function saveProject(state: EditorState) {
         // Offline: keep what's on screen; the next save retries.
       }
     } else {
+      // Offline or the server down: kept on this browser until a save lands.
+      void keepLocally();
       useEditor.getState().toastError(error, "save");
     }
   } finally {
@@ -509,7 +579,12 @@ export function leave(): Promise<void> {
       if (session !== editorSession || !useEditor.getState().dirty) break;
     }
     if (session !== editorSession) return;
-    if (useEditor.getState().dirty) useEditor.getState().toast("Your last changes couldn't be saved.", "error");
+    if (useEditor.getState().dirty) {
+      // Never dropped: kept on this browser, put back when the project opens again.
+      const kept = await keepLocally();
+      if (session !== editorSession) return;
+      useEditor.getState().toast(kept ? "Your last changes couldn't be saved yet; they're kept on this computer and come back when you open the project." : "Your last changes couldn't be saved.", "error");
+    }
     useEditor.getState().close();
   })();
   return leaving;
@@ -700,6 +775,7 @@ export function connectEvents() {
 // The last drag and debounced edit get a chance to save before navigation.
 window.addEventListener("pagehide", () => {
   useEditor.getState().endGesture();
+  if (useEditor.getState().dirty) void keepLocally();
   void flush();
 });
 window.addEventListener("beforeunload", (event) => {

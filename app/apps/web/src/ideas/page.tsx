@@ -11,7 +11,8 @@ import { ideaBuilt } from "@edit/types/models";
 import { ArrowDown, ArrowLeft, ArrowUp, Check, Copy, ExternalLink, FileText, FolderOpen, Image as ImageIcon, MoreHorizontal, Plus, RotateCw, Send, Trash2, SquarePlay, TriangleAlert, X } from "lucide-react";
 import { type DragEvent, type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ChatShell, ChatTurns, Empty, useChatTurns, useSentNow } from "../components/AgentPanel";
+import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
+import { useSentNow } from "../lib/sentNow";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatDock } from "../components/ChatDock";
 import { QuoteSelection } from "../components/QuoteSelection";
@@ -877,7 +878,7 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
   const running = working(idea);
   const entries = conversationEntries(idea.chat, idea.createdAt, running ? idea.run : null, (turn) => (turn.images ?? []).map((image) => ({ name: image.name, kind: "image" as const, url: chatImageUrl(idea.id, image.id) })));
   // A message shows the moment it's sent; what was there when the page opened doesn't animate in.
-  const sent = useSentNow(entries);
+  const sent = useSentNow(`idea:${id}`, entries);
   const { turns, known } = useChatTurns(id, sent.entries, running || sent.sending);
   // Its own steps say what it's at ("Reading the captions"); a plain "Claude is working" is left to the chat's thinking words.
   const step = idea.run?.step !== undefined && !/^(Claude is working|Waiting for a turn)$/.test(idea.run.step) ? idea.run.step : undefined;

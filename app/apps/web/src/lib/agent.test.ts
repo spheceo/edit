@@ -63,3 +63,57 @@ describe("Claude recovery in the open conversation", () => {
     expect(resumed).toBe(false);
   });
 });
+
+describe("the chat's live events", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+  });
+
+  it("applies a burst of streamed words as one store update", async () => {
+    const { applyAgentEvent, flushAgentEvents, useAgent } = await import("./agent");
+    useAgent.setState({ project: "p1", loaded: true, running: true, entries: [{ id: "a", kind: "assistant", text: "" }, { id: "b", kind: "tool", text: "Read", status: "done" }] });
+    const tool = useAgent.getState().entries[1];
+    let updates = 0;
+    const off = useAgent.subscribe(() => updates++);
+    for (let index = 0; index < 200; index++) applyAgentEvent({ project: "p1", event: "delta", id: "a", text: `${index} ` });
+    applyAgentEvent({ project: "other", event: "delta", id: "a", text: "not this chat" });
+    applyAgentEvent({ project: "p1", event: "status", running: false });
+    expect(updates).toBe(0);
+    flushAgentEvents();
+    off();
+    expect(updates).toBe(1);
+    const state = useAgent.getState();
+    expect(state.entries[0]!.text.endsWith("198 199 ")).toBe(true);
+    expect(state.entries[1]).toBe(tool);
+    expect(state.running).toBe(false);
+  });
+
+  it("goes on its own within a frame, or a tenth of a second where frames stop (a hidden tab)", async () => {
+    const { applyAgentEvent, useAgent } = await import("./agent");
+    useAgent.setState({ project: "p1", loaded: true, running: true, entries: [] });
+    applyAgentEvent({ project: "p1", event: "status", running: false });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(useAgent.getState().running).toBe(false);
+  });
+
+  it("shows a message as it's sent until the chat has it, and keeps it with why when it's refused", async () => {
+    const { sendToAgent, applyAgentEvent, flushAgentEvents, useAgent } = await import("./agent");
+    const { sending } = await import("./sentNow");
+    fetchRetrying.mockReset();
+    let refuse = false;
+    fetchRetrying.mockImplementation(async () => (refuse ? new Response(JSON.stringify({ error: "the agent is still working" }), { status: 409 }) : new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } })));
+    useAgent.setState({ project: "p1", loaded: true, running: false, entries: [] });
+    await sendToAgent("make it shorter");
+    expect(sending("p1", useAgent.getState().entries)).toBe(true);
+    expect(useAgent.getState().running).toBe(true);
+    applyAgentEvent({ project: "p1", event: "entry", entry: { id: "user-1", kind: "user", text: "make it shorter", at: Date.now() } });
+    flushAgentEvents();
+    expect(sending("p1", useAgent.getState().entries)).toBe(false);
+    refuse = true;
+    await sendToAgent("and louder");
+    expect(sending("p1", useAgent.getState().entries)).toBe(false);
+    expect(useAgent.getState().entries.map((entry) => [entry.kind, entry.text])).toEqual([["user", "make it shorter"], ["user", "and louder"], ["error", "the agent is still working"]]);
+    expect(useAgent.getState().running).toBe(false);
+  });
+});

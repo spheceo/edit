@@ -31,7 +31,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -47,7 +47,8 @@ import {
   watchClaudeSupport,
   type AgentEntry,
 } from "../lib/agent";
-import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, sentLanded, shortSpan, thinkingWord, type Turn, userMessages } from "../lib/agentTurns";
+import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, keepUnchanged, shortSpan, thinkingWord, type Turn, type TurnPart } from "../lib/agentTurns";
+import { useSentNow } from "../lib/sentNow";
 import { useNow } from "../lib/now";
 import { api, mediaUrl } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
@@ -135,30 +136,10 @@ export function ChatShell({
 }
 
 /** A chat's entries as turns, plus the ids already there (they don't animate in). */
-/**
- * A message shown the moment it's sent, before the server's chat has it (Sphe,
- * Nov 4: "when you send a prompt it should show up instantly"): `hold` it as
- * it's sent, `drop` it if the send was refused. It goes once the chat has one
- * more message of the person's than when it was sent.
- */
-export function useSentNow(entries: AgentEntry[]): { entries: AgentEntry[]; sending: boolean; hold: (text: string, attachments?: AgentEntry["attachments"]) => void; drop: () => void } {
-  const { asked, newest } = userMessages(entries);
-  const [pending, setPending] = useState<{ text: string; at: number; asked: number; newest: number; attachments?: AgentEntry["attachments"] } | null>(null);
-  const landed = pending !== null && sentLanded(entries, pending);
-  useEffect(() => {
-    if (landed) setPending(null);
-  }, [landed]);
-  const shown = pending !== null && !landed;
-  return {
-    entries: shown ? [...entries, { id: `pending-${pending.at}`, kind: "user", text: pending.text, at: pending.at, updated: pending.at, ...(pending.attachments !== undefined && pending.attachments.length > 0 ? { attachments: pending.attachments } : {}) }] : entries,
-    sending: shown,
-    hold: (text, attachments) => setPending({ text, at: Date.now(), asked, newest, ...(attachments !== undefined ? { attachments } : {}) }),
-    drop: () => setPending(null),
-  };
-}
-
 export function useChatTurns(key: unknown, entries: AgentEntry[], running: boolean): { turns: Turn[]; known: Set<string> } {
-  const turns = buildTurns(entries, running);
+  // Built again only when the chat changes, each unchanged turn the same object as before (TurnView skips it).
+  const last = useRef<Turn[]>([]);
+  const turns = useMemo(() => (last.current = keepUnchanged(last.current, buildTurns(entries, running))), [entries, running]);
   const known = useRef<{ key: unknown; ids: Set<string> } | null>(null);
   if (known.current?.key !== key) known.current = { key, ids: new Set(entries.map((entry) => entry.id)) };
   return { turns, known: known.current!.ids };
@@ -215,7 +196,12 @@ function SubAgentCard({ entry }: { entry: AgentEntry }) {
 
 function MainAgentPanel() {
   const projectId = useEditor((state) => state.project?.id);
-  const { status, entries, running, loaded } = useAgent();
+  const status = useAgent((state) => state.status);
+  const chat = useAgent((state) => state.entries);
+  const running = useAgent((state) => state.running);
+  const loaded = useAgent((state) => state.loaded);
+  // The message just sent shows at once (sendToAgent holds it).
+  const { entries } = useSentNow(projectId ?? "", chat);
   // Entries already there when the chat loaded don’t animate in.
   const { turns, known } = useChatTurns(loaded ? projectId : "loading", entries, running);
   // Not ready, with the conversation already on screen: the setup card used
@@ -266,13 +252,13 @@ function NotReadyNote() {
 
 /** True once nothing has streamed or changed for `quiet` ms (so "Thinking" doesn’t blink between steps). */
 function useQuiet(activityAt: number, quiet: number) {
-  const [settled, setSettled] = useState(false);
+  // The moment it last went quiet for: a new activity is unsettled by itself, with no update of its own.
+  const [settledFor, setSettledFor] = useState(-1);
   useEffect(() => {
-    setSettled(false);
-    const timer = setTimeout(() => setSettled(true), Math.max(0, quiet - (Date.now() - activityAt)));
+    const timer = setTimeout(() => setSettledFor(activityAt), Math.max(0, quiet - (Date.now() - activityAt)));
     return () => clearTimeout(timer);
   }, [activityAt, quiet]);
-  return settled;
+  return settledFor === activityAt;
 }
 
 /**
@@ -293,6 +279,7 @@ const appear = (fresh: boolean) =>
  * place of "Thinking" after a quiet moment (the idea page's run says its step).
  */
 export function ChatTurns({ turns, known, thinking }: { turns: Turn[]; known: Set<string>; thinking?: string }) {
+  // A turn that didn't change isn't drawn again (useChatTurns keeps it the same object).
   return (
     <div className="flex flex-col gap-4">
       {turns.map((turn, index) => (
@@ -303,19 +290,8 @@ export function ChatTurns({ turns, known, thinking }: { turns: Turn[]; known: Se
 }
 
 /** One exchange: your message, the work (folds away when done), the answer. */
-function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<string>; thinking?: string }) {
+const TurnView = memo(function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<string>; thinking?: string }) {
   const [open, setOpen] = useState(false);
-  const activityAt = useAgent((state) => state.activityAt);
-  const quiet = useQuiet(activityAt, 450);
-  const lastGroup = [...turn.parts].reverse().find((part) => part.kind === "group");
-  const toolRunning = turn.parts.some((part) => part.kind === "group" && part.calls.some((call) => call.status === "running"));
-  const thinkingNow = turn.parts.some((part) => part.kind === "thinking" && part.active);
-  // Into real work (a tool called, or a few seconds in): "Working for 1m 12s", ticking, shown while tools run too.
-  const now = useNow(turn.live);
-  const elapsed = turn.live && turn.startedAt > 0 ? now - turn.startedAt : 0;
-  const working = turn.live && said === undefined && isWorking(elapsed, lastGroup !== undefined);
-  // A live reasoning row already says Thinking. A running tool says so on its own row.
-  const thinking = turn.live && !thinkingNow && (working || ((said !== undefined || quiet) && !toolRunning));
   const fresh = (id: string) => !known.has(id);
   const project = useEditor((state) => state.project?.id);
   return (
@@ -384,7 +360,30 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
           ))}
         </>
       )}
-      <AnimatePresence>
+      {turn.live && <LiveStatus parts={turn.parts} startedAt={turn.startedAt} said={said} />}
+    </div>
+  );
+});
+
+/**
+ * Under the live turn: "Thinking" after a quiet moment, then "Working for
+ * 1m 12s", ticking. The one part of the chat that changes with time and with
+ * every streamed word, so only it re-renders for them (Nov 8 audit, item G).
+ */
+function LiveStatus({ parts, startedAt, said }: { parts: TurnPart[]; startedAt: number; said?: string }) {
+  const activityAt = useAgent((state) => state.activityAt);
+  const quiet = useQuiet(activityAt, 450);
+  const usedTools = parts.some((part) => part.kind === "group");
+  const toolRunning = parts.some((part) => part.kind === "group" && part.calls.some((call) => call.status === "running"));
+  const thinkingNow = parts.some((part) => part.kind === "thinking" && part.active);
+  // Into real work (a tool called, or a few seconds in): "Working for 1m 12s", ticking, shown while tools run too.
+  const now = useNow(true);
+  const elapsed = startedAt > 0 ? now - startedAt : 0;
+  const working = said === undefined && isWorking(elapsed, usedTools);
+  // A live reasoning row already says Thinking. A running tool says so on its own row.
+  const thinking = !thinkingNow && (working || ((said !== undefined || quiet) && !toolRunning));
+  return (
+    <AnimatePresence>
         {thinking && (
           <motion.div
             key="thinking"
@@ -398,8 +397,8 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
             ) : (
               <>
                 <AnimatePresence mode="popLayout" initial={false}>
-                  <motion.span key={thinkingWord(turn.startedAt, elapsed)} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }} className="shimmer inline-block">
-                    {thinkingWord(turn.startedAt, elapsed)}
+                  <motion.span key={thinkingWord(startedAt, elapsed)} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.22, ease: [0.2, 0, 0, 1] }} className="shimmer inline-block">
+                    {thinkingWord(startedAt, elapsed)}
                   </motion.span>
                 </AnimatePresence>
                 {working && <span className="ml-1.5 text-faint tabular">{shortSpan(elapsed)}</span>}
@@ -407,8 +406,7 @@ function TurnView({ turn, known, thinking: said }: { turn: Turn; known: Set<stri
             )}
           </motion.div>
         )}
-      </AnimatePresence>
-    </div>
+    </AnimatePresence>
   );
 }
 

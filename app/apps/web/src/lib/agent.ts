@@ -4,6 +4,8 @@ import { create } from "zustand";
 
 import { fetchRetrying } from "./api";
 import type { ChatFile, FileKind } from "./chatFiles";
+import { perFrame } from "./frame";
+import { dropSent, holdSent, sending } from "./sentNow";
 import type { ProjectFile } from "./upload";
 import { readSetting, writeSetting } from "./storage";
 
@@ -196,6 +198,7 @@ const json = async <T>(response: Response): Promise<T> => {
 /** Shows this project's chat (instantly if seen before), then refreshes it quietly. */
 export async function openAgent(project: string) {
   const serial = ++openedSerial;
+  events.flush();
   const state = useAgent.getState();
   if (state.project !== project) {
     const cached = chats.get(project);
@@ -212,13 +215,13 @@ export async function openAgent(project: string) {
     useAgent.setState({ loaded: true });
     return;
   }
-  // Keep a message we're still sending that the server hasn't echoed yet.
-  const pending = useAgent.getState().entries.filter((entry) => entry.id.startsWith("pending-"));
+  events.flush();
   useAgent.setState({
     status,
     loaded: true,
-    entries: [...chat.entries, ...pending],
-    running: chat.running || pending.length > 0,
+    entries: chat.entries,
+    // A message still on its way (sentNow.ts) is a turn about to start.
+    running: chat.running || sending(project, chat.entries),
     chatModel: chat.model_name ?? null,
     revising: chat.revising === true,
   });
@@ -254,14 +257,11 @@ export async function sendToAgent(text: string, playhead?: number, files: ChatFi
     const landed = (one.landed ?? {}) as ProjectFile;
     return { name: one.name, kind: one.kind, ...(landed.media === undefined ? {} : { media: landed.media }), ...(landed.file === undefined ? {} : { file: landed.file }) };
   });
-  // Show the message now; the server's copy replaces it when it arrives.
-  const now = Date.now();
+  // Show the message now (sentNow.ts); the server's copy takes its place when it arrives.
+  events.flush();
   const shown = files.map((one, index) => ({ ...attachments[index]!, url: one.kind === "image" ? one.preview : null }));
-  useAgent.setState({
-    running: true,
-    activityAt: now,
-    entries: [...state.entries, { id: `pending-${now}`, kind: "user", text, at: now, updated: now, ...(shown.length > 0 ? { attachments: shown } : {}) }],
-  });
+  holdSent(state.project, useAgent.getState().entries, text, shown);
+  useAgent.setState({ running: true, activityAt: Date.now() });
   try {
     await fetchRetrying(`/api/projects/${state.project}/agent`, {
       method: "POST",
@@ -273,9 +273,12 @@ export async function sendToAgent(text: string, playhead?: number, files: ChatFi
       }),
     }).then(json);
   } catch (error) {
+    // Refused: the message stays in the chat with why, as it was sent.
+    const now = Date.now();
+    dropSent(state.project);
     useAgent.setState((current) => ({
       running: false,
-      entries: [...current.entries, { id: `local-${Date.now()}`, kind: "error", text: (error as Error).message }],
+      entries: [...current.entries, { id: `local-user-${now}`, kind: "user", text, at: now, updated: now, ...(shown.length > 0 ? { attachments: shown } : {}) }, { id: `local-${now}`, kind: "error", text: (error as Error).message }],
     }));
   }
 }
@@ -285,71 +288,76 @@ export const stopAgent = () => {
   if (project) void fetchRetrying(`/api/projects/${project}/agent/stop`, { method: "POST" });
 };
 
-/** Live events from the server (see store.ts connectEvents). */
-export function applyAgentEvent(event: { project: string; event: string; [key: string]: unknown }) {
-  if (event.event === "claude") {
-    useClaudeSupport.setState({ status: event.support as ClaudeSupport, error: null });
-    void refreshClaudeSupport();
-    return;
-  }
-  const state = useAgent.getState();
+type AgentEvent = { project: string; event: string; [key: string]: unknown };
+
+/** The chat with one event from the server applied (nothing when it isn't this chat's). */
+function reduce(state: AgentState, event: AgentEvent, now: number): AgentState {
   // The sub-agent being viewed has its own chat (the main one's card follows its own events).
   if (state.sub !== null && event.project === state.sub.key) {
     const sub = state.sub;
     if (event.event === "entry") {
       const entry = event.entry as AgentEntry;
       const entries = sub.entries.some((existing) => existing.id === entry.id) ? sub.entries.map((existing) => (existing.id === entry.id ? { ...entry, text: entry.text || existing.text } : existing)) : [...sub.entries, entry];
-      useAgent.setState({ sub: { ...sub, entries }, activityAt: Date.now() });
-    } else if (event.event === "delta") {
-      useAgent.setState({ sub: { ...sub, entries: sub.entries.map((entry) => (entry.id === event.id ? { ...entry, text: entry.text + String(event.text) } : entry)) }, activityAt: Date.now() });
-    } else if (event.event === "status") {
-      useAgent.setState({ sub: { ...sub, running: Boolean(event.running) }, activityAt: Date.now() });
-    } else if (event.event === "reset") {
-      useAgent.setState({ sub: { ...sub, entries: [], running: false } });
+      return { ...state, sub: { ...sub, entries }, activityAt: now };
     }
-    return;
+    if (event.event === "delta") return { ...state, sub: { ...sub, entries: sub.entries.map((entry) => (entry.id === event.id ? { ...entry, text: entry.text + String(event.text) } : entry)) }, activityAt: now };
+    if (event.event === "status") return { ...state, sub: { ...sub, running: Boolean(event.running) }, activityAt: now };
+    if (event.event === "reset") return { ...state, sub: { ...sub, entries: [], running: false } };
+    return state;
   }
-  if (event.project !== state.project) return;
-  const now = Date.now();
+  if (event.project !== state.project) return state;
   switch (event.event) {
     case "entry": {
       const entry = event.entry as AgentEntry;
-      let entries: AgentEntry[];
-      if (state.entries.some((existing) => existing.id === entry.id)) {
-        entries = state.entries.map((existing) => (existing.id === entry.id ? { ...entry, text: entry.text || existing.text } : existing));
-      } else if (entry.kind === "user" && state.entries.some((existing) => existing.id.startsWith("pending-") && existing.text === entry.text)) {
-        // The server's copy of the message we already show: swap in place.
-        let swapped = false;
-        entries = state.entries.map((existing) => {
-          if (swapped || !existing.id.startsWith("pending-") || existing.text !== entry.text) return existing;
-          swapped = true;
-          return entry;
-        });
-      } else {
-        entries = [...state.entries, entry];
-      }
-      useAgent.setState({ entries, activityAt: now });
-      break;
+      const entries = state.entries.some((existing) => existing.id === entry.id)
+        ? state.entries.map((existing) => (existing.id === entry.id ? { ...entry, text: entry.text || existing.text } : existing))
+        : [...state.entries, entry];
+      return { ...state, entries, activityAt: now };
     }
     case "delta":
-      useAgent.setState({
-        activityAt: now,
-        entries: state.entries.map((entry) => (entry.id === event.id ? { ...entry, text: entry.text + String(event.text) } : entry)),
-      });
-      break;
+      return { ...state, activityAt: now, entries: state.entries.map((entry) => (entry.id === event.id ? { ...entry, text: entry.text + String(event.text) } : entry)) };
     case "status":
-      useAgent.setState({ running: Boolean(event.running), activityAt: now });
-      break;
+      return { ...state, running: Boolean(event.running), activityAt: now };
     case "reset":
-      useAgent.setState({ entries: [], running: false });
-      break;
+      return { ...state, entries: [], running: false };
     case "model":
-      useAgent.setState({ chatModel: typeof event.model_name === "string" ? event.model_name : null, revising: event.revising === true });
-      break;
+      return { ...state, chatModel: typeof event.model_name === "string" ? event.model_name : null, revising: event.revising === true };
   }
-  const after = useAgent.getState();
-  chats.set(after.project!, { entries: after.entries, running: after.running, chatModel: after.chatModel, revising: after.revising });
+  return state;
 }
+
+/** Events heard since the last frame, applied together. */
+let heard: AgentEvent[] = [];
+const events = perFrame(() => {
+  const batch = heard;
+  heard = [];
+  if (batch.length === 0) return;
+  const before = useAgent.getState();
+  const now = Date.now();
+  const after = batch.reduce((state, event) => reduce(state, event, now), before);
+  if (after === before) return;
+  useAgent.setState(after, true);
+  if (after.project !== null) chats.set(after.project, { entries: after.entries, running: after.running, chatModel: after.chatModel, revising: after.revising });
+});
+
+/**
+ * Live events from the server (see store.ts connectEvents), applied once a
+ * frame: a turn's words stream in as hundreds of messages, and a store update
+ * for each re-rendered the chat for each, back to back, until React took it
+ * for a loop and gave up (#185 as turns ended: 71 on Marc's Mac, Nov 6-8).
+ */
+export function applyAgentEvent(event: AgentEvent) {
+  if (event.event === "claude") {
+    useClaudeSupport.setState({ status: event.support as ClaudeSupport, error: null });
+    void refreshClaudeSupport();
+    return;
+  }
+  heard.push(event);
+  events.schedule();
+}
+
+/** Applies the events heard so far now (tests, and anything about to read the chat). */
+export const flushAgentEvents = () => events.flush();
 
 // Remember every loaded chat (including optimistic sends) for instant reopening.
 useAgent.subscribe((state) => {

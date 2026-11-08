@@ -19,6 +19,8 @@ import { inArea, runPromise, runtime } from "../effect/runtime.ts";
 import * as notices from "../notices.ts";
 import * as service from "../effect/service.ts";
 import { BUILD } from "../version.ts";
+import * as durableJobs from "../jobs.ts";
+import * as steps from "../import_steps.ts";
 import { isFile, join } from "../paths.ts";
 import { isUrl } from "../tools.ts";
 import * as brief from "./brief.ts";
@@ -541,6 +543,8 @@ const importScript = Effect.fn("writer.import")(function* (app: App, dir: string
     ran = yield* pipeline(app, dir, script).pipe(Effect.scoped, Effect.result);
   }
   if (ran._tag === "Success") {
+    // Waited on the plan's credit before: over.
+    durableJobs.end(app.store.home, durableJobs.keyOf("script", script.id));
     const step = ran.success;
     const seconds = `${Math.round((Date.now() - began) / 1000)} s`;
     // Its recordings and words, shared with Edit mode in the background.
@@ -554,7 +558,15 @@ const importScript = Effect.fn("writer.import")(function* (app: App, dir: string
     return script;
   }
   const error = ran.failure;
-  const message = diag.messageOf(error);
+  // The transcription plan out of credit isn't the person's to retry: it waits in the job table, woken every half hour (import_steps.ts).
+  const credit = steps.whyOf(error) === "quota";
+  const retryAt = credit ? steps.retryAt("quota", Date.now()) : null;
+  const message = credit && retryAt !== null ? `The transcription plan is out of credit; Edit tries again by itself at ${new Date(retryAt).toTimeString().slice(0, 5)} (${diag.messageOf(error)})` : diag.messageOf(error);
+  const key = durableJobs.keyOf("script", script.id);
+  if (retryAt !== null) {
+    durableJobs.begin(app.store.home, "script", script.id, { waiting_on: "quota" }, "", "waiting for credit");
+    durableJobs.settle(app.store.home, key, "waiting", { step: "waiting for credit", retry_at: retryAt, args: { waiting_on: "quota" } });
+  } else durableJobs.end(app.store.home, key);
   const spent = stageTimes(script.id);
   yield* Effect.logError(`${jobs.named(script.id, script.title)}: stopped after ${Math.round((Date.now() - began) / 1000)} s${spent ? ` (${spent})` : ""}: ${message}`);
   script.status = "error";

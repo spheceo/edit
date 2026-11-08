@@ -44,6 +44,8 @@ import { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as update from "./update.ts";
 import * as writer from "./writer/index.ts";
+import * as writerImports from "./writer/imports.ts";
+import * as writerStore from "./writer/store.ts";
 import * as ideas from "./ideas/index.ts";
 import * as thumbnails from "./thumbnails/index.ts";
 import { BUILD, NIGHTLY, RELEASE } from "./version.ts";
@@ -434,6 +436,14 @@ function resumeJobs(app: App): void {
     turn: (job) => {
       if (app.agents.resumeTurn === undefined) throw new jobs.Gone("no agent panel here");
       app.agents.resumeTurn(job);
+    },
+    // A Writer script's import that waited on the transcription plan's credit: tried again (it waits again if there's still none).
+    script: async (job) => {
+      const data = writerStore.dataDir(app.store.home);
+      if (!writerStore.ids(data).includes(job.project)) throw new jobs.Gone("the script is gone");
+      if (writerImports.importing(job.project)) return;
+      jobs.end(app.store.home, job.key);
+      void writerImports.resume(app, data, job.project, { kind: "retry" }).catch((error: unknown) => diag.warn("writer", `trying ${job.project}'s import again: ${diag.messageOf(error)}`));
     },
     idea: (job) => ideas.resumeRun(app, job),
     thumbnail: (job) => thumbnails.resumeRun(app, job),

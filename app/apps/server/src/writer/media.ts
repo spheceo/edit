@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 
 import * as diag from "../diag.ts";
 import { isFile } from "../paths.ts";
+import * as encoder from "../encoder.ts";
 import { ffmpeg, ffprobe, hardwareDecode, isUrl, protocols, urlArgs, videoHardware } from "../tools.ts";
 import { ProgramTimedOut, run } from "./proc.ts";
 
@@ -152,8 +153,17 @@ async function encode(args: string[], dest: string, totalMs: number, onPercent: 
   let doneMs = 0;
   const slow = new AbortController();
   let why = "";
+  // On the hardware encoder while it runs (encoder.ts). Time it shares the encoder with an export or another
+  // encode isn't its pace: JJ's Mac, Nov 8, two imports stopped as "too slow" while a 51-minute export held it.
+  const hold = encoder.hold("a script's preview piece");
+  let sharedMs = 0;
+  let lastLook = began;
   const judge = setInterval(() => {
-    const ran = Date.now() - began;
+    const now = Date.now();
+    if (encoder.shared(hold.token)) sharedMs += now - lastLook;
+    lastLook = now;
+    if (encoder.shared(hold.token)) return;
+    const ran = now - began - sharedMs;
     if (totalMs <= 0 || ran < PACE.afterMs) return;
     const projected = doneMs <= 0 ? Number.POSITIVE_INFINITY : (ran * totalMs) / doneMs;
     // Half again its time to spare: a start slowed by a busy Mac or a slow first read isn't judged as its pace.
@@ -181,6 +191,7 @@ async function encode(args: string[], dest: string, totalMs: number, onPercent: 
     throw error;
   } finally {
     clearInterval(judge);
+    hold.release();
   }
   if (!fs.existsSync(dest)) throw new Error("The footage was not written.");
 }

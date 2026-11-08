@@ -1,5 +1,8 @@
 # Edit — local, agent-driven video editor
 
+# Recipes get their arguments as $1, $2… too (just nightly's --force reason, kept whole).
+set positional-arguments
+
 _default:
     @just --list
 
@@ -217,14 +220,14 @@ publish: check
 # pre-release's body. release.yml waits for Check on the tagged commit, Mac
 # and Linux, and ships nothing past a red one, so a commit whose Check has
 # already failed is refused here.
-[positional-arguments]
 nightly *args:
     #!/usr/bin/env bash
     set -euo pipefail
     forced=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --force) forced="${2:-}"; [ -n "$forced" ] || { echo 'just nightly --force "why it can'"'"'t wait"'; exit 1; }; shift 2 ;;
+            # Everything after it is the reason (the top Justfile's forwarding splits a quoted one into words).
+            --force) shift; forced="$*"; [ -n "$forced" ] || { echo 'just nightly --force "why it can'"'"'t wait"'; exit 1; }; break ;;
             *) echo 'just nightly [--force "why it can'"'"'t wait"]'; exit 1 ;;
         esac
     done

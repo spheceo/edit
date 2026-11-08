@@ -221,6 +221,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]> | Content[]][] = [
   ["cover_cut_in", coverCutIn],
   ["set_in_out", setInOut],
   ["delete_clips", deleteClips],
+  ["close_gaps", closeGapsTool],
   ["set_keyframes", setKeyframes],
   ["import_media", importMedia],
   ["still_frame", stillFrame],
@@ -2648,6 +2649,47 @@ export async function placeSound(
 
 // ---------------------------------------------------------------------------
 // Closing gaps
+
+/**
+ * The empty stretches of the timeline: where nothing on any track plays,
+ * between its first frame and its last clip's end (frames, in order). A
+ * gap left after a clip was removed shows as black and silence.
+ */
+export function gapsOf(project: Project): [number, number][] {
+  const spans = project.clips.map((clip): [number, number] => [clip.start, clipEnd(clip)]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const out: [number, number][] = [];
+  let reached = 0;
+  for (const [start, end] of spans) {
+    if (start > reached) out.push([reached, start]);
+    reached = Math.max(reached, end);
+  }
+  return out;
+}
+
+/**
+ * close_gaps: the empty stretch at `at` (seconds), or every one in the edit,
+ * closed: everything after slides back (Sphe, Nov 8: "when there is a gap in
+ * the edit say after something was removed we should be able to tell the
+ * agent to remove that gap").
+ */
+async function closeGapsTool({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const at = num(args.at);
+  const [, closed] = await app.store.update(projectId, ORIGIN, (project) => {
+    const fps = fpsOf(project);
+    let gaps = gapsOf(project);
+    if (at !== null) {
+      const frame = Math.round(at * fps);
+      // The gap there, else the nearest within a second.
+      const near = gaps.filter(([start, end]) => frame >= start - fps && frame <= end + fps).sort((a, b) => Math.abs((a[0] + a[1]) / 2 - frame) - Math.abs((b[0] + b[1]) / 2 - frame));
+      gaps = near.slice(0, 1);
+    }
+    const spans = gaps.map(([start, end]) => ({ start, duration: end - start }) as Clip);
+    return [gaps.map(([start, end]) => `${fixed(start / fps, 2)}–${fixed(end / fps, 2)} s`), closeGaps(project, spans), fps] as const;
+  });
+  const [where, frames, fps] = closed;
+  if (where.length === 0) return text(at === null ? "no gaps: something plays at every moment of the edit" : `no gap at ${fixed(at, 2)} s`);
+  return text(`closed ${where.length} gap${where.length === 1 ? "" : "s"} (${where.join(", ")}): ${fixed(frames / fps, 2)} s, everything after slid back`);
+}
 
 /** Closes the spans `gone` left where nothing else plays: everything after each slides back by its length, all tracks together. Returns frames closed. */
 export function closeGaps(project: Project, gone: Clip[]): number {

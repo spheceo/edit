@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-import { addElement, addMarker, clipEnd, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
+import { addElement, addMarker, clipEnd, closeGap, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { api, ApiError } from "../lib/api";
 import { cloudApi } from "../lib/cloud";
@@ -273,6 +273,12 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
       } else if (key === "end") {
         handled();
         goToEnd();
+      } else if ((key === "backspace" || key === "delete") && !state.selection.length && state.gap !== null) {
+        // A gap clicked on: closed, everything after it sliding back (Sphe, Nov 8: "click on that gap between two clips and backspace").
+        handled();
+        const gap = state.gap;
+        state.edit((draft) => closeGap(draft, gap));
+        state.selectGap(null);
       } else if (key === "backspace" || key === "delete") {
         if (!state.selection.length) return;
         handled();

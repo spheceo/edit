@@ -267,7 +267,7 @@ async function recordingOf(source: string): Promise<{ key: string; start: number
  * Its old names go (speakers.ts names the new voices), bodycams split again.
  * True when it changed. Never throws: without them, its voices stay.
  */
-export async function revoice(cacheDir: string, source: string, target: string, cloudSource: string | null): Promise<boolean> {
+export async function revoice(cacheDir: string, source: string, target: string, cloudSource: string | null, force = false): Promise<boolean> {
   if (!(await on())) return false;
   let transcript: Transcript;
   try {
@@ -275,7 +275,8 @@ export async function revoice(cacheDir: string, source: string, target: string, 
   } catch {
     return false;
   }
-  if (transcript.voices === MODEL || !Array.isArray(transcript.words) || transcript.words.length === 0) return false;
+  // Forced (redo_speakers): given pyannote's voices again (from what was heard, kept), whatever moved them since.
+  if ((transcript.voices === MODEL && !force) || !Array.isArray(transcript.words) || transcript.words.length === 0) return false;
   try {
     const began = Date.now();
     const recording = cloudSource === null ? null : await recordingOf(cloudSource);

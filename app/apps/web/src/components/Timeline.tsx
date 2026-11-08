@@ -10,6 +10,7 @@ import {
   addTrack,
   clearRange,
   clipEnd,
+  gapAt,
   maxDuration,
   mediaOf,
   peekFreeTrack,
@@ -411,6 +412,9 @@ export function Timeline() {
       // Empty space: drag out a box to select clips (⇧/⌘ adds to the selection).
       const additive = event.shiftKey || event.metaKey || event.ctrlKey;
       if (!additive) state.select([]);
+      // A gap in the whole edit (nothing on any track there): selected, for Backspace to close.
+      const gap = additive ? null : gapAt(state.project!, Math.floor(xToFrame(x)));
+      if (gap !== null) state.selectGap(gap);
       drag.current = { kind: "marquee", x0: x, y0: y, x, y, base: additive ? state.selection : [] };
       return;
     }
@@ -485,7 +489,8 @@ export function Timeline() {
         const row = rows.find((candidate) => candidate.track.id === clip.track);
         return row && !row.track.locked && row.y + row.h > top && row.y < bottom && clipEnd(clip) > from && clip.start < to;
       });
-      state.select([...withLinked(project, [...current.base, ...hits.map((clip) => clip.id)])]);
+      // A box that catches nothing leaves a clicked gap selected (a hand never clicks without moving a pixel).
+      if (hits.length > 0 || current.base.length > 0 || useEditor.getState().gap === null) state.select([...withLinked(project, [...current.base, ...hits.map((clip) => clip.id)])]);
       requestDraw();
     } else if (current.kind === "move") {
       if (!current.moved) {
@@ -694,7 +699,7 @@ export function Timeline() {
 
     // The lanes and the ruler change only with these, not with the playhead:
     // they’re drawn once into a layer, and each tick copies it.
-    const key = [project, state.selection, state.media, ppf, scrollX, scrollY, canvas.width, canvas.height, dpr, preview.sections, drop.current, assets.current];
+    const key = [project, state.selection, state.gap, state.media, ppf, scrollX, scrollY, canvas.width, canvas.height, dpr, preview.sections, drop.current, assets.current];
     const cached = layer.current;
     if (!cached || key.some((value, index) => value !== cached.key[index])) {
       const lanes = cached?.canvas ?? document.createElement("canvas");
@@ -739,6 +744,17 @@ export function Timeline() {
     }
 
     if (drag.current?.kind === "marquee") drawMarquee(ctx, drag.current);
+
+    // The gap clicked on, across every track: Backspace closes it.
+    if (state.gap !== null) {
+      const x0 = frameToX(state.gap[0]);
+      const x1 = frameToX(state.gap[1]);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+      ctx.fillRect(x0, RULER, x1 - x0, height - RULER);
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(Math.round(x0) + 0.5, RULER + 0.5, Math.max(Math.round(x1 - x0) - 1, 1), height - RULER - 1);
+    }
 
     // Snap guide.
     if (snapLine.current !== null) {

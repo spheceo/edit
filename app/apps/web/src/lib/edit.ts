@@ -735,6 +735,37 @@ export function duplicateClips(project: Project, ids: Iterable<string>): string[
   return created.map((clip) => clip.id);
 }
 
+/**
+ * The empty stretch of the timeline at `frame`: where nothing on any track
+ * plays, before the last clip's end (frames, end exclusive); null on a clip.
+ * The server's close_gaps finds the same (edit_tools.ts gapsOf).
+ */
+export function gapAt(project: Project, frame: number): [number, number] | null {
+  let start = 0;
+  let end = Number.POSITIVE_INFINITY;
+  let last = 0;
+  for (const clip of project.clips) {
+    last = Math.max(last, clipEnd(clip));
+    if (clip.start <= frame && clipEnd(clip) > frame) return null;
+    if (clipEnd(clip) <= frame) start = Math.max(start, clipEnd(clip));
+    if (clip.start > frame) end = Math.min(end, clip.start);
+  }
+  return frame < last && end > start ? [start, end] : null;
+}
+
+/** Closes a gap: every clip after it slides back by its length, all tracks together; in/out points move too. */
+export function closeGap(project: Project, [start, end]: [number, number]) {
+  if (project.clips.some((clip) => clip.start < end && clipEnd(clip) > start)) return;
+  const length = end - start;
+  for (const clip of project.clips) if (clip.start >= end) clip.start -= length;
+  for (const key of ["mark_in", "mark_out"] as const) {
+    const mark = project[key];
+    if (mark === undefined || mark === null) continue;
+    if (mark >= end) project[key] = mark - length;
+    else if (mark > start) project[key] = start;
+  }
+}
+
 /** Deletes clips and closes the gap on their tracks (later clips slide left). */
 export function rippleDelete(project: Project, ids: Iterable<string>) {
   const set = withLinked(project, ids);

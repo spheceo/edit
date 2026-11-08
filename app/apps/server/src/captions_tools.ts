@@ -5,6 +5,8 @@
 // /api/projects/{id}/media/{media}/transcribe`). Importing this module
 // registers the tools; the server calls `routes` on its router.
 
+import * as fs from "node:fs";
+
 import type { App } from "./app.ts";
 import * as captions from "./captions.ts";
 import * as diag from "./diag.ts";
@@ -19,6 +21,7 @@ import { display, round, toI64 } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { Under } from "./seams.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
+import * as voicesOf from "./voices.ts";
 import * as watch from "./watch.ts";
 
 /** serde_json's `as_f64`. */
@@ -135,6 +138,36 @@ registerTool("place_captions", async ({ app, args, projectId }) => {
   }
   const report = await captions.placeCaptions(app, projectId, from, to, under);
   return text(stableStringify(report));
+});
+
+// redo_speakers (Sphe, Nov 8: "ask the agent to for example redo speaker separation and it will use our new
+// system"): every footage file's voices separated again by pyannote (voices.ts) and named again; the watch and
+// the subtitles then follow from them.
+registerTool("redo_speakers", async ({ app, projectId }) => {
+  if (!(await voicesOf.on())) return text("pyannote's voices aren't on for this relay (DIARIZE): the speakers stay as they are; watch_footage {force: true} then add_subtitles redo them from the current voices");
+  const project = app.store.get(projectId)?.project;
+  if (project === undefined || project === null) throw new Error("no such project");
+  const footage = project.media.filter((media) => media.kind === "video" && media.has_audio && project.clips.some((clip) => "media" in clip && clip.media === media.id));
+  const done: string[] = [];
+  const kept: string[] = [];
+  for (const media of footage) {
+    const target = app.media.paths(media.path).transcript;
+    if (!fs.existsSync(target)) {
+      kept.push(`${media.name} (no transcript yet: transcribe first)`);
+      continue;
+    }
+    const changed = await voicesOf.revoice(app.store.cacheDir(), await app.media.analysisInput(media.path), target, app.media.cloudSource(media.path), true);
+    if (!changed) {
+      kept.push(media.name);
+      continue;
+    }
+    await (await import("./speakers.ts")).nameNow(app, media.path).catch((error: unknown) => diag.warn("speakers", `${media.name}: naming its voices: ${diag.messageOf(error)}`));
+    app.store.emit({ type: "transcript", path: media.path });
+    done.push(media.name);
+  }
+  return text(
+    `speakers separated again by pyannote for ${done.length} of ${footage.length} footage files${kept.length > 0 ? `; kept as they were: ${kept.join("; ")}` : ""}. Now watch_footage {force: true} (who is who, per case), then add_subtitles over the whole timeline (start 0), then check the speakers.`,
+  );
 });
 
 registerTool("watch_footage", async ({ app, args, projectId }) => {

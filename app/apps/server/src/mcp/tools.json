@@ -590,6 +590,24 @@
     "name": "delete_clips"
   },
   {
+    "description": "Close the timeline's gaps (black and silence: nothing on any track plays). The one at `at`, or every one in the edit: everything after a gap slides back by its length, all tracks together (picture and sound stay in sync; in/out points move too). For a gap left where something was removed, or when the user asks to remove a gap.",
+    "inputSchema": {
+      "properties": {
+        "at": {
+          "description": "Seconds on the timeline inside (or within a second of) the gap to close; leave out to close every gap.",
+          "type": "number"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "close_gaps"
+  },
+  {
     "description": "Replace one parameter's keyframes on a clip. Frames are relative to the clip start. Empty list removes the animation.",
     "inputSchema": {
       "properties": {
@@ -2400,6 +2418,20 @@
       "type": "object"
     },
     "name": "repack_subtitles"
+  },
+  {
+    "description": "Separate the speakers again (pyannote). Every footage file's voices are heard again (from the whole recording where it can) and named again, undoing earlier merges and splits: for \"redo the speaker separation\" or \"the speakers are wrong everywhere\". Then watch_footage {force: true} and add_subtitles over the whole timeline.",
+    "inputSchema": {
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "name": "redo_speakers"
   },
   {
     "description": "The watcher: Claude Opus looks at the footage (a few minutes at a time, as frames every 2 seconds, with the transcript and the voices transcription heard) and says who speaks each subtitle line, correcting the speakers in the transcript (a voice the transcriber merged with another becomes its own, named when the footage says the name; a second conversation going on behind the one followed goes to a hidden \"Background talk\" voice), and, for a subtitled video, marks its segments (footage to subtitle, already subtitled e.g. a cold open with burned-in subtitles, narration, other). Answers are cached per window, so a re-run costs nothing unless force. Then the people of every window are joined into one cast by how they look (one name, role and colour per person, whatever voices the transcriber gave them; cast_failed when that couldn't be had: run it again), and a turn two windows give to two people is watched again across their edge to decide (second_looks). Returns the windows watched, the cost (USD), the lines re-assigned (count and examples), the people seen per window and the segments. Run repack_subtitles (a subtitled video) or add_subtitles (an edit) after it.",

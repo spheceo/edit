@@ -263,3 +263,23 @@ it("adds subtitles with glow and no name only in subtitle projects", () => {
   expect(subtitle.style.glow.enabled).toBe(true);
   expect(subtitle.style.label).toBeUndefined();
 });
+
+// Sphe, Nov 8: "we can click on that gap between two clips and backspace".
+it("a gap is where nothing on any track plays, and closing it slides everything after it back", async () => {
+  const { gapAt, closeGap } = await import("./edit");
+  const project = {
+    clips: [
+      { id: "a", track: "v1", start: 0, duration: 100 },
+      { id: "s", track: "a1", start: 80, duration: 40 },
+      { id: "b", track: "v1", start: 150, duration: 50 },
+    ],
+    mark_out: 190,
+  } as unknown as Parameters<typeof gapAt>[0];
+  expect(gapAt(project, 50)).toBeNull();
+  expect(gapAt(project, 130)).toEqual([120, 150]);
+  expect(gapAt(project, 250)).toBeNull();
+  closeGap(project, [120, 150]);
+  expect(project.clips.find((clip) => clip.id === "b")!.start).toBe(120);
+  expect(project.mark_out).toBe(160);
+  expect(gapAt(project, 130)).toBeNull();
+});

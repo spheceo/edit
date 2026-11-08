@@ -88,6 +88,9 @@ interface EditorState {
   /** Project before the current drag, so a gesture is one undo step. */
   gestureBase: Project | null;
   selection: string[];
+  /** An empty stretch of the timeline clicked on (frames), which Backspace closes. */
+  gap: [number, number] | null;
+  selectGap(gap: [number, number] | null): void;
   media: Record<string, MediaStatus>;
   exportState: ExportState | null;
   driveState: DriveState | null;
@@ -236,6 +239,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   future: [],
   gestureBase: null,
   selection: [],
+  gap: null,
+  selectGap: (gap) => set({ gap, selection: [] }),
   media: {},
   exportState: null,
   driveState: null,
@@ -342,7 +347,7 @@ export const useEditor = create<EditorState>((set, get) => ({
 
   select: (ids, mode = "replace") => {
     const current = new Set(get().selection);
-    if (mode === "replace") return set({ selection: ids });
+    if (mode === "replace") return set({ selection: ids, gap: null });
     for (const id of ids) {
       if (mode === "toggle" && current.has(id)) current.delete(id);
       else current.add(id);

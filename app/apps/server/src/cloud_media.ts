@@ -738,9 +738,10 @@ async function runUpload(upload: Upload, progressed: () => void): Promise<void> 
   if (upload.proxy !== null && upload.local !== null) {
     await cloud.uploadFile(upload.local, upload.proxy);
     await putRecord({ source: upload.source, proxyKey: upload.proxy, proxyReady: true });
-    // Only an acknowledged cloud proxy is disposable. A failed upload keeps
-    // this scratch file for the persisted upload job to retry.
-    fs.rmSync(upload.local, { force: true });
+    // The proxy stays here once it's up: it's this Mac's whole copy, what the
+    // native player and the agent's renders read (local_previews.ts), and the
+    // cache's budget lets it go like any other (cache_cleanup.ts). Removed,
+    // it was fetched back down the moment the project played.
   }
 }
 
@@ -802,7 +803,7 @@ async function publish(
     if (proxied !== null) throw proxied;
     await cloud.uploadFile(local, proxy);
     await putRecord({ source, proxyKey: proxy, proxyReady: true });
-    fs.rmSync(local, { force: true });
+    // Kept, as `runUpload` keeps it.
   } catch (error) {
     if (makeHere) fs.rmSync(local, { force: true });
     throw error;
@@ -1333,7 +1334,7 @@ async function wholeMedia(cache: string, original: Original, url: string): Promi
       }
       await cloud.uploadFile(local, proxy);
       await putRecord({ source: original.source, proxyKey: proxy, proxyReady: true });
-      fs.rmSync(local, { force: true });
+      // Kept, as `runUpload` keeps it.
     } catch (error) {
       if (madeHere) fs.rmSync(local, { force: true });
       throw error;
@@ -1545,8 +1546,8 @@ function forgetStreams(key: string) {
 
 /**
  * A proxy's bytes from this Mac's own copy, while it's here: the copy an
- * import made, kept until its upload lands (`uploadLater`, then
- * `removeWhenUploaded`). The import answers once the proxy is made, so the
+ * import made (kept after its upload lands, until the cache's budget lets it
+ * go) or the whole preview fetched for the native player (local_previews.ts). The import answers once the proxy is made, so the
  * media's analysis started at once and read it through R2 before it was
  * there: the thumbnails, waveform and censor check of every such import
  * failed with a 404 (Nov 3, Robyn in custody on the old path). Null when

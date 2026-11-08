@@ -28,6 +28,8 @@
 // open now or in the last twelve hours keeps all of its, so nothing an edit
 // in progress plays or exports from goes from under it; only with the disk
 // nearly full do those go too, never one open in the last ten minutes.
+// Whole proxy copies (`cloud/proxies/`, what the native player and the
+// agent's renders read) go only this way, never because R2 has them too.
 
 import * as fs from "node:fs";
 
@@ -91,9 +93,17 @@ export interface CleanReport {
 }
 
 /**
- * Remove acknowledged cloud previews, including their legacy cache aliases.
- * Originals, paid analysis, directly referenced local media, and unfinished
- * uploads are never candidates. HEAD is required, not just project metadata.
+ * Remove the legacy previews (`preview*.mp4/m4a` in media-key folders) of
+ * footage whose proxy R2 acknowledges. Originals, paid analysis, directly
+ * referenced local media, and unfinished uploads are never candidates. HEAD
+ * is required, not just project metadata.
+ *
+ * A whole proxy copy here (`cloud/proxies/…`) is never one: it's the footage
+ * this Mac plays and renders from (the native player, the agent's renders:
+ * local_previews.ts), kept until the cache is past its budget (`cleanCache`).
+ * Until Nov 8 this removed every copy R2 also had (the Oct 29 "everything on
+ * the cloud" policy): on Sphe's Mac `cache/cloud/proxies` was empty, the same
+ * whole preview was fetched up to 8 times, and every frame streamed.
  */
 export async function cleanCloudPreviews(
   app: App,
@@ -147,17 +157,11 @@ export async function cleanCloudPreviews(
       } catch { /* no older analysis */ }
     }
   }
-  const pending = new Set<string>();
-  try {
-    const jobs = JSON.parse(fs.readFileSync(join(app.store.home, "jobs.json"), "utf8")) as { kind: string; args?: { local?: string } }[];
-    for (const job of jobs) if (job.kind === "upload" && typeof job.args?.local === "string") pending.add(job.args.local);
-  } catch {
-    if (fs.existsSync(join(app.store.home, "jobs.json"))) return report;
-  }
+  const pending = pendingUploads(app.store.home);
+  if (pending === null) return report;
   const removed = new Set<string>();
   const slots = new Semaphore(3);
-  const candidatesWithFiles = [...sources].filter(([key, aliases]) =>
-    (key.startsWith("edit/proxies/") && fs.existsSync(localPath(cache, key))) ||
+  const candidatesWithFiles = [...sources].filter(([, aliases]) =>
     [...aliases].some((alias) => safeList(join(cache, alias)).some((name) => /^preview(?:-light)?\.(?:mp4|m4a)$/.test(name))),
   );
   const confirmedKeys = new Map(await Promise.all(candidatesWithFiles.map(([key]) => slots.with(async () => {
@@ -167,10 +171,6 @@ export async function cleanCloudPreviews(
     const confirmed = confirmedKeys.get(key) ?? null;
     if (confirmed === null || confirmed.size <= 0) continue;
     const candidates = new Set<string>();
-    if (key.startsWith("edit/proxies/")) {
-      const path = localPath(cache, key);
-      try { if (fs.statSync(path).size === confirmed.size) candidates.add(path); } catch { /* already cloud-only */ }
-    }
     for (const alias of aliases) {
       const dir = join(cache, alias);
       for (const name of safeList(dir)) if (/^preview(?:-light)?\.(?:mp4|m4a|done)$/.test(name)) candidates.add(join(dir, name));
@@ -217,6 +217,22 @@ export async function cleanCloudPreviews(
     report.folders = new Set([...removed].map((path) => path.slice(0, path.lastIndexOf("/")))).size;
   }
   return report;
+}
+
+/**
+ * The proxies made here whose uploads are noted in `<home>/jobs.json` and not
+ * done yet (each the only copy until it lands); null when the file won't read
+ * (then any might be one).
+ */
+function pendingUploads(home: string): Set<string> | null {
+  const pending = new Set<string>();
+  try {
+    const jobs = JSON.parse(fs.readFileSync(join(home, "jobs.json"), "utf8")) as { kind: string; args?: { local?: string } }[];
+    for (const job of jobs) if (job.kind === "upload" && typeof job.args?.local === "string") pending.add(job.args.local);
+  } catch {
+    if (fs.existsSync(join(home, "jobs.json"))) return null;
+  }
+  return pending;
 }
 
 /** Bytes under `path`, each file once however many hard links it has (a proxy and its preview are one file). */
@@ -635,13 +651,17 @@ export function cleanCache(
     let over = Math.max(size(cache) - (dryRun ? report.bytes : 0) - limits.cacheBytes, limits.freeBytes - free);
     if (over > 0) {
       const candidates: { path: string; at: number; bytes: number; worked: number }[] = [];
+      // A proxy made here whose upload hasn't landed is the only copy (a failed one is tried again at the next start).
+      const pending = pendingUploads(app.store.home);
+      const proxies = join(cache, "cloud", "proxies");
+      const uploading = (path: string) => path.startsWith(`${proxies}/`) && (pending === null || pending.has(path) || uploadingNow(path));
       const collect = (dir: string) => {
         for (const name of safeList(dir)) {
           const path = join(dir, name);
           try {
             const stat = fs.statSync(path);
             if (stat.isDirectory()) collect(path);
-            else if (now - stat.mtimeMs >= fresh && name !== "meta.json" && !pinned(path)) {
+            else if (now - stat.mtimeMs >= fresh && name !== "meta.json" && !pinned(path) && !uploading(path)) {
               const worked = inUse === null ? Number.POSITIVE_INFINITY : copyUsed(path, cache, inUse, times);
               // An edit in progress keeps its own (with the disk nearly full, only one open now).
               if (now - worked < (full ? OPEN_NOW : SESSION)) continue;

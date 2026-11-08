@@ -325,7 +325,8 @@ test("files from a disk: a sound goes up as itself, footage with a proxy made on
     const noted = () => (JSON.parse(fs.readFileSync(`${fixture.home}/jobs.json`, "utf8")) as { kind: string }[]).filter((job) => job.kind === "upload");
     expect(noted().length).toBe(1);
     await cloudMedia.uploaded(video);
-    expect(fs.existsSync(cloudMedia.localPath(cache, made.cloud!.proxy!))).toBe(false);
+    // The proxy stays here once it's up: the footage this Mac plays from, until the cache's budget lets it go.
+    expect(fs.existsSync(cloudMedia.localPath(cache, made.cloud!.proxy!))).toBe(true);
     expect(noted()).toEqual([]);
     expect(mock.cloud.objects.has(made.cloud!.original) && mock.cloud.objects.has(made.cloud!.proxy!)).toBe(true);
     expect(await cloudMedia.getRecord(made.cloud!.source)).toMatchObject({ originalReady: true, proxyReady: true });

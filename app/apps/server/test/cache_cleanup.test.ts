@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 
 import { createHash } from "node:crypto";
@@ -6,7 +6,9 @@ import { createHash } from "node:crypto";
 import { cleanCache, cleanCloudPreviews, ownerToken } from "../src/cache_cleanup.ts";
 import { pin } from "../src/export_excerpts.ts";
 import { forget, markOpened } from "../src/opened.ts";
-import { playbackPath } from "../src/cloud_playback.ts";
+import { PLAYBACK_ROUTE, playbackPath } from "../src/cloud_playback.ts";
+import * as localPreviews from "../src/local_previews.ts";
+import { nativeSources } from "../src/native_preview.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -206,7 +208,7 @@ test("cloud-cache proxies past the budget go oldest first, recent ones stay", ()
   } finally { cleanup(); }
 });
 
-test("cloud-only cleanup verifies R2, removes fresh previews and legacy aliases, and keeps paid analysis and pending uploads", async () => {
+test("cloud-only cleanup verifies R2 and removes legacy previews and their aliases; the whole proxy copy, paid analysis and pending uploads stay", async () => {
   const { app, store, cleanup } = fixtureHome("cache-streamed");
   try {
     const cache = store.cacheDir();
@@ -231,23 +233,92 @@ test("cloud-only cleanup verifies R2, removes fresh previews and legacy aliases,
         cloud: { source: "sha256:abc", original: "edit/originals/sha256/abc/a.mov", proxy: key, size: 10 } });
     });
     const head = async () => ({ size: 5 });
-    expect((await cleanCloudPreviews(app, true, head)).files).toBe(3);
-    expect(fs.existsSync(local)).toBe(true);
+    // The two legacy previews; never the whole copy, though R2 has it at its size.
+    expect((await cleanCloudPreviews(app, true, head)).files).toBe(2);
     // A missing cloud copy, or an unreachable cloud, is not permission to delete.
     expect((await cleanCloudPreviews(app, false, async () => null)).files).toBe(0);
     expect((await cleanCloudPreviews(app, false, async () => { throw new Error("offline"); })).files).toBe(0);
-    // The persisted upload still needs its scratch file, even if R2 has an older object.
+    // An unreadable jobs file: any copy might be an upload's, so nothing goes.
+    fs.writeFileSync(`${store.home}/jobs.json`, "{");
+    expect((await cleanCloudPreviews(app, false, head)).files).toBe(0);
     fs.writeFileSync(`${store.home}/jobs.json`, JSON.stringify([{ kind: "upload", args: { local } }]));
     expect((await cleanCloudPreviews(app, false, head)).files).toBe(2);
-    expect(fs.existsSync(local)).toBe(true);
+    expect(fs.existsSync(`${cache}/${alias}/preview.mp4`) || fs.existsSync(`${cache}/${legacy}/preview-light.mp4`)).toBe(false);
     expect(fs.existsSync(`${cache}/${legacy}/watch/answer.json`)).toBe(true);
     expect(fs.existsSync(`${cache}/${alias}/transcript.json`)).toBe(true);
     const target = app.media.paths(playbackPath(key, app.port)).transcript;
     expect(fs.readFileSync(target, "utf8")).toBe('{"words":[]}');
     fs.writeFileSync(`${store.home}/jobs.json`, "[]");
-    // A size mismatch never removes the proxy itself.
-    expect((await cleanCloudPreviews(app, false, async () => ({ size: 6 }))).files).toBe(0);
-    expect((await cleanCloudPreviews(app, false, head)).files).toBe(1);
+    expect((await cleanCloudPreviews(app, false, head)).files).toBe(0);
+    expect(fs.existsSync(local)).toBe(true);
+  } finally { cleanup(); }
+});
+
+test("a whole preview the native player reads stays through every clean under the budget; past it, the project opened longest ago gives its up first, and the player streams it and fetches it again", async () => {
+  const { app, store, cleanup } = fixtureHome("cache-native-copies");
+  const fetched: string[] = [];
+  const fetch = spyOn(cloudMedia, "fetchKey").mockImplementation(async (key) => { fetched.push(key); });
+  try {
+    const cache = store.cacheDir();
+    const hour = 3600 * 1000;
+    const old = (Date.now() - 5 * 24 * hour) / 1000;
+    const ids: Record<string, string> = {};
+    const copies: Record<string, string> = {};
+    const proxies: Record<string, string> = {};
+    for (const name of ["open", "stale"]) {
+      const id = store.create(name, { width: 1920, height: 1080, fps: 30 }).project.id;
+      const proxy = `edit/proxies/drive/${name}File01.mp4`;
+      await store.update(id, "test", (project) => {
+        project.media.push({ id: "m1", name: `${name}.mp4`, path: playbackPath(proxy, app.port), kind: "video", duration: 1, fps: 30, width: 2, height: 2, has_audio: false,
+          cloud: { source: `drive:${name}File01`, original: `edit/originals/drive/${name}File01/${name}.mp4`, proxy, size: 1000 } });
+      });
+      const local = cloudMedia.localPath(cache, proxy);
+      fs.mkdirSync(local.slice(0, local.lastIndexOf("/")), { recursive: true });
+      fs.writeFileSync(local, Buffer.alloc(1000));
+      fs.utimesSync(local, old, old);
+      ids[name] = id;
+      copies[name] = local;
+      proxies[name] = proxy;
+    }
+    const sources = async (name: string) =>
+      ((await nativeSources(app, store.get(ids[name]!)!.project).json()) as { sources: Record<string, string> }).sources.m1;
+    // The native player reads both from here.
+    expect(await sources("open")).toBe(copies.open!);
+    expect(await sources("stale")).toBe(copies.stale!);
+    markOpened(store.home, ids.open!, Date.now() - hour);
+    markOpened(store.home, ids.stale!, Date.now() - 72 * hour);
+    // R2 has both at their size, and the cache is under its budget: both stay.
+    expect((await cleanCloudPreviews(app, false, async () => ({ size: 1000 }))).files).toBe(0);
+    expect(cleanCache(app, false, Date.now(), { cacheBytes: 1e12, freeBytes: 0, free: 1e12 }).files).toBe(0);
+    expect(fs.existsSync(copies.open!) && fs.existsSync(copies.stale!)).toBe(true);
+    // Past it: the one opened three days ago goes; the one open an hour ago stays, however far past.
+    const report = cleanCache(app, false, Date.now(), { cacheBytes: 0, freeBytes: 0, free: 1e12 });
+    expect(report.removed).toContain(copies.stale!);
+    expect(fs.existsSync(copies.stale!)).toBe(false);
+    expect(fs.existsSync(copies.open!)).toBe(true);
+    // Gone from under it: the player is handed the stream, not the dead path, and the whole file comes down again.
+    expect(fetched).toEqual([]);
+    expect(await sources("stale")).toBe(`http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent(proxies.stale!)}`);
+    expect(fetched).toEqual([proxies.stale!]);
+    expect(await sources("open")).toBe(copies.open!);
+  } finally { fetch.mockRestore(); localPreviews.reset(); forget(store.home); cleanup(); }
+});
+
+test("past the budget, a proxy made here whose upload hasn't landed stays", () => {
+  const { app, store, cleanup } = fixtureHome("cache-pending-proxy");
+  try {
+    const cache = store.cacheDir();
+    const old = (Date.now() - 5 * 24 * 3600 * 1000) / 1000;
+    const local = cloudMedia.localPath(cache, "edit/proxies/sha256/up.mp4");
+    fs.mkdirSync(local.slice(0, local.lastIndexOf("/")), { recursive: true });
+    fs.writeFileSync(local, Buffer.alloc(1000));
+    fs.utimesSync(local, old, old);
+    const limits = { cacheBytes: 0, freeBytes: 0, free: 1e12 };
+    fs.writeFileSync(`${store.home}/jobs.json`, JSON.stringify([{ kind: "upload", args: { local } }]));
+    cleanCache(app, false, Date.now(), limits);
+    expect(fs.existsSync(local)).toBe(true);
+    fs.writeFileSync(`${store.home}/jobs.json`, "[]");
+    cleanCache(app, false, Date.now(), limits);
     expect(fs.existsSync(local)).toBe(false);
   } finally { cleanup(); }
 });

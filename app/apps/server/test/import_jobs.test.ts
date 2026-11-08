@@ -10,6 +10,7 @@ import { createApp } from "../src/app.ts";
 import * as encoder from "../src/encoder.ts";
 import * as steps from "../src/import_steps.ts";
 import * as jobs from "../src/jobs.ts";
+import { Processor } from "../src/media.ts";
 import type { MediaStatus, Probe, ScriptJob } from "../src/model.ts";
 import * as relay from "../src/relay.ts";
 import { waitingByItself } from "../src/remote_actions.ts";
@@ -31,7 +32,12 @@ beforeEach(() => {
   const cloud = spyOn(relay, "cloudEnabled").mockReturnValue(true);
   const articles = spyOn(seams.research, "articles").mockReturnValue([{ id: "a", title: "A", url: "https://example.test", outlet: "A", text: "", summary: "" }]);
   const names = spyOn(seams.research, "caseNames").mockResolvedValue([]);
-  restores = [() => cloud.mockRestore(), () => articles.mockRestore(), () => names.mockRestore()];
+  // These are the job table's tests, not media's: no thumbnails or waveforms
+  // made for the footage. Its addresses are a server that isn't there, and
+  // each of them held media's one background slot for 11 s after these tests
+  // had ended, so the next file's media test (CI's order, Nov 8) timed out.
+  const analysis = spyOn(Processor.prototype, "ensure").mockImplementation(() => {});
+  restores = [() => cloud.mockRestore(), () => articles.mockRestore(), () => names.mockRestore(), () => analysis.mockRestore()];
 });
 
 afterEach(() => {

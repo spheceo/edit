@@ -1193,7 +1193,18 @@ mod tests {
             .unwrap();
         assert!(made.success());
         let out = dir.join("smoothed.mp4");
-        smooth(&source, 0.5, 1.5, 0.8, 30.0, (608, 1080), 4_000_000, &out).unwrap();
+        if let Err(error) = smooth(&source, 0.5, 1.5, 0.8, 30.0, (608, 1080), 4_000_000, &out) {
+            // GitHub's virtual Macs say they have frame rate conversion and
+            // then refuse to run it (-19730); a real Mac runs it, and Edit
+            // smooths with FFmpeg's optical flow where it's refused (broll.ts).
+            assert!(
+                error.contains("VTFrameProcessorErrorDomain error -19730"),
+                "{error}"
+            );
+            eprintln!("skipped: VideoToolbox refused frame rate conversion here ({error})");
+            std::fs::remove_dir_all(dir).ok();
+            return;
+        }
         let raw = std::process::Command::new(crate::util::ffmpeg())
             .args(["-v", "error", "-i"])
             .arg(&out)

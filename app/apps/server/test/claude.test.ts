@@ -83,6 +83,13 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 10; i++) await Bun.sleep(0);
 }
 
+/** Waits until `asked` holds `count` sends (a follow-up lands a second after a turn ends), within 10 s: on a loaded CI runner the second can run long. */
+async function askedCount(asked: unknown[], count: number): Promise<void> {
+  const until = Date.now() + 10_000;
+  while (asked.length < count && Date.now() < until) await Bun.sleep(25);
+  await settle();
+}
+
 function agentsWith(home: ReturnType<typeof fixtureHome>, hangs = false) {
   const agents = new Agents(home.store, home.home, 7700);
   const asked: { prompt: string | AsyncIterable<claude.UserMessage>; options: claude.Options }[] = [];
@@ -798,17 +805,15 @@ test("a turn that ends listing what it didn't get to is sent back to it, only wh
     // In the second before the follow-up starts, the turn still counts as running: no restart lands in the gap.
     expect(agents.withChat(project).running).toBe(false);
     expect(agents.hasRunningTurns()).toBe(true);
-    await Bun.sleep(1100);
-    await settle();
+    await askedCount(asked, 2);
     expect(asked[1]!.prompt).toStartWith("(Edit, automatically) Your turn ended with 2 of what was asked still open:\n- 1:58 words: not done\n- 2:58 white text");
     // One fewer: asked again.
     ends(1, "**Still open:**\n- 2:58 white text: not done");
-    await Bun.sleep(1100);
-    await settle();
+    await askedCount(asked, 3);
     expect(asked[2]!.prompt).toStartWith("(Edit, automatically) Your turn ended with 1 of");
-    // No fewer: left to the user.
+    // No fewer: left to the user (nothing arrives: waited well past the follow-up's second).
     ends(2, "**Still open:**\n- 2:58 white text: not done");
-    await Bun.sleep(1100);
+    await Bun.sleep(2000);
     await settle();
     expect(asked.length).toBe(3);
   } finally {

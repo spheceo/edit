@@ -130,6 +130,25 @@ in the present tense also works, as Reference 1 does throughout its body
 ("Deputy Raymond takes the stand with full confidence…"); keep one tense
 within a cut-in.
 
+## The law, in plain words
+
+Sometimes a case turns on a point of US law the viewer won't know: what a
+statute allows (a cyclist leaving a blocked bike lane in Reference 3), what a
+right means (Miranda, the Fifth), how a procedure works (a plea deal, the
+burden of proof, a bench trial, how a garnishment works), or how the law
+differs by state. Then one cut-in, or the backstory where the whole hearing
+hangs on it, carries a short paragraph stating it plainly (Sphe, Nov 8:
+"sometimes we need a paragraph just stating some of the legal stuff in the
+U.S."). Keep it to 40 to 80 words. Say what the law is, where it applies (the
+state, the code section when the hearing names it), and why it matters for
+this case. Put it just before the stretch where it decides things.
+
+Take it from the statute, the court's own words in the hearing, or a reliable
+legal source in the research, never from memory. Say it as a fact of the law,
+not as advice ("Under Michigan law, a cyclist may leave the bike lane to
+avoid…"). Use it only when the case needs it: a hearing the viewer can follow
+without it gets none.
+
 ## The outro
 
 State the ruling plainly with its specifics: the verdict, the fine or

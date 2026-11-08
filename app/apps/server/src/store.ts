@@ -13,7 +13,6 @@
 // here that changed what `get` returned would change every reader's copy.
 // `checkout` gives a copy to edit; `update` does read-modify-write in one go.
 
-import { randomInt } from "node:crypto";
 import * as fs from "node:fs";
 
 import { creator } from "./accounts.ts";
@@ -116,12 +115,16 @@ export class Store {
   }
 
   /**
-   * The revision a project starts at when this server loads it: a different
-   * one each start, so a save from a page still on the last server's revisions
-   * is a conflict (it reloads), never a match overwriting what's changed since
-   * (the audit, Oct 23: revisions restarted at 1). Tests count from 1.
+   * The revision a project new to this machine starts at. Revisions then go on
+   * from the last one across restarts (kept beside each project file,
+   * `projects/revs/<id>.json`, with the hash of the file it was), so a page
+   * or an agent plan from before a restart still matches what it read; a file
+   * that changed without its revision (a crash between the two writes, a copy
+   * put in by hand) gets the next one, which nobody holds. Until Nov 8 each
+   * start began from a random base, and every plan made before a restart was
+   * refused (13 on Marc's Mac in a day).
    */
-  readonly firstRev = process.env.NODE_ENV === "test" ? 1 : 1 + 1000 * randomInt(1, 2_000_000);
+  readonly firstRev = 1;
 
   /**
    * Whether new projects are marked dev projects (`Project::origin` "dev"):
@@ -301,14 +304,14 @@ export class Store {
     if (read === null || "problem" in read) return read;
     const project = read.project;
     this.resolveMedia?.(project);
-    const live: Live = { rev: this.firstRev, project: deepFreeze(project) };
+    const live: Live = { rev: this.revOnDisk(id, read.text), project: deepFreeze(project) };
     this.projects.set(id, live);
     this.summaries.delete(id);
     return live;
   }
 
   /** Project `id`'s file, parsed and validated (not kept), or why not. */
-  private read(id: string): { project: Project } | { problem: string } | null {
+  private read(id: string): { project: Project; text: string } | { problem: string } | null {
     let text: string;
     try {
       text = fs.readFileSync(this.path(id), "utf8");
@@ -328,7 +331,52 @@ export class Store {
     }
     const project = JSON.parse(loaded.json) as Project;
     if (project.id !== id) return { problem: `its file holds project ${project.id}` };
-    return { project };
+    return { project, text };
+  }
+
+  private revPath(id: string): string {
+    return join(this.home, "projects", "revs", `${id}.json`);
+  }
+
+  /**
+   * The revision project `id`'s file `text` is: the one kept beside it when it
+   * was written, else (none kept, or the file changed since) the next one,
+   * kept now so the next start agrees.
+   */
+  private revOnDisk(id: string, text: string): number {
+    const hash = fileHash(text);
+    let kept: { rev?: unknown; hash?: unknown } | null = null;
+    try {
+      kept = JSON.parse(fs.readFileSync(this.revPath(id), "utf8")) as { rev?: unknown; hash?: unknown };
+    } catch {
+      kept = null;
+    }
+    const rev = typeof kept?.rev === "number" && Number.isSafeInteger(kept.rev) && kept.rev > 0 ? kept.rev : null;
+    if (rev !== null && kept?.hash === hash) return rev;
+    const next = rev === null ? this.firstRev : rev + 1;
+    this.keepRev(id, next, hash);
+    return next;
+  }
+
+  /** The revision kept for project `id` (0: none). */
+  private keptRev(id: string): number {
+    try {
+      const rev = (JSON.parse(fs.readFileSync(this.revPath(id), "utf8")) as { rev?: unknown }).rev;
+      return typeof rev === "number" && Number.isSafeInteger(rev) && rev > 0 ? rev : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Keeps `rev` as the revision of project `id`'s file (its hash `hash`). */
+  private keepRev(id: string, rev: number, hash: string): void {
+    try {
+      fs.mkdirSync(join(this.home, "projects", "revs"), { recursive: true });
+      writeAtomic(this.revPath(id), JSON.stringify({ rev, hash }));
+    } catch (error) {
+      // The next start then gives the file a revision nobody holds: a reload, never a wrong match.
+      diag.warn("store", `keeping ${id}'s revision: ${ioMessage(error)}`);
+    }
   }
 
   /** A new project (the default style). */
@@ -379,7 +427,8 @@ export class Store {
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = this.load(id);
       if (current === null) {
-        const live = this.save(id, this.firstRev, prepared);
+        // Past any revision a project of this id had here before (deleted, then brought back from the cloud).
+        const live = this.save(id, this.keptRev(id) + 1, prepared);
         this.projects.set(id, live);
         return live;
       }
@@ -542,7 +591,7 @@ export class Store {
     if (current === undefined) throw new UpdateError("not_found", `no project ${id}`);
     if (current.rev !== rev) throw new UpdateError("conflict", `revision conflict: current ${current.rev}`, current);
     try {
-      this.writeFile(id, prepared.json);
+      this.writeFile(id, prepared.json, rev + 1);
     } catch (error) {
       throw new UpdateError("invalid", ioMessage(error));
     }
@@ -564,7 +613,7 @@ export class Store {
 
   private save(id: string, rev: number, prepared: Prepared): Live {
     try {
-      this.writeFile(id, prepared.json);
+      this.writeFile(id, prepared.json, rev);
     } catch (error) {
       throw new Error(ioMessage(error));
     }
@@ -576,7 +625,7 @@ export class Store {
    * Writes a project file: compact JSON (speed-plan 6.1: 40% smaller than the
    * pretty-printed files were, on disk and in every history copy).
    */
-  private writeFile(id: string, text: string): void {
+  private writeFile(id: string, text: string, rev: number): void {
     const path = this.path(id);
     // A bad save (a bug, an agent gone wrong) can always be walked back.
     try {
@@ -585,6 +634,8 @@ export class Store {
       diag.warn("store", `keeping history for ${id}: ${ioMessage(error)}`);
     }
     writeAtomic(path, text);
+    // After the file: a crash between the two leaves a hash that doesn't match, so the next start counts on past it.
+    this.keepRev(id, rev, fileHash(text));
   }
 
   /**
@@ -644,6 +695,11 @@ export class Store {
     if (first === undefined) throw new Error("no projects yet; create one in the UI first");
     return first.id;
   }
+}
+
+/** A project file's hash, for the revision kept beside it (fast, not a secret). */
+function fileHash(text: string): string {
+  return Bun.hash(text).toString(36);
 }
 
 /** A dev build, as `Store.marksDev` says. */

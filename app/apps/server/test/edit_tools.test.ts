@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import type { App } from "../src/app.ts";
+import { createApp, type App } from "../src/app.ts";
+import { Store } from "../src/store.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
 import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, desktopsSparse, graphicsShort, registerEditingTools, resolveRefs, unfinishedNote } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
@@ -358,6 +359,22 @@ test("a plan on a revision the agent was shown still saves over background media
   expect(await refused(app, "apply_edit_plan", { base_rev: again.rev, operations })).toBe(
     `revision conflict: expected ${again.rev}, current ${again.rev + 1}; nothing saved; refresh get_edit_context`,
   );
+});
+
+// Nov 8 audit (2b): revisions began from a random base at every start, so a
+// plan the agent made before a restart was refused (13 on Marc's Mac in a day).
+test("a plan made before a restart still applies after it", async () => {
+  const { app, id, fixture: made } = setUp("tools-plan-restart");
+  await app.store.update(id, "ui", (project) => {
+    project.name = "renamed";
+  });
+  const shown = JSON.parse(await said(app, "get_edit_context")) as { rev: number };
+  // The server starts again on the same folder.
+  const restarted = createApp({ store: Store.open(made.home) });
+  restarted.store.setActive(id);
+  const operations = [{ op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 30, fill: [0, 0, 0, 1] } }];
+  const done = JSON.parse(await said(restarted, "apply_edit_plan", { base_rev: shown.rev, operations })) as Record<string, unknown>;
+  expect(done).toMatchObject({ rev: shown.rev + 1, saved: true });
 });
 
 test("a plan saves once, dry runs save nothing, and a stale one is refused", async () => {

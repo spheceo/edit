@@ -13,6 +13,8 @@ import { SignInGate } from "./components/SignInScreen";
 import { Toasts } from "./components/Toasts";
 import { useConnection } from "./lib/api";
 import { watchPresence } from "./lib/presence";
+import { watchNotices } from "./lib/notices";
+import { connectEvents } from "./lib/store";
 import { useAccount, writesScripts } from "./lib/account";
 import { makesIdeas } from "./lib/ideas";
 import { navigate, usePath } from "./lib/route";
@@ -22,6 +24,11 @@ export function App() {
   const account = useAccount((state) => state.account);
   // How long the window has been idle, for diagnostics (lib/presence.ts).
   useEffect(() => watchPresence(), []);
+  // Told when work left running is done, on every screen (lib/notices.ts).
+  useEffect(() => {
+    connectEvents();
+    return watchNotices();
+  }, []);
   const projectId = path.match(/^\/p\/([\w-]+)/)?.[1];
   // Script mode: /scripts (the library) and /scripts/<id> (a script), one screen that keeps its state across them.
   const scripts = path === "/scripts" || path.startsWith("/scripts/");

@@ -13,7 +13,7 @@ import { fail, start } from "./serve.ts";
 import { runCli as updateCli } from "./update.ts";
 import { BUILD } from "./version.ts";
 import { runSupport } from "./support_cli.ts";
-import { keepLauncher, windowCommand } from "./linux_desktop.ts";
+import { allowNotifications, keepLauncher, windowCommand } from "./linux_desktop.ts";
 import { adoptShellEnv, portTaken, runWindow, windowHelper } from "./window.ts";
 
 export const DEFAULT_PORT = 7700;
@@ -222,6 +222,7 @@ function app(home: string, port: number): void {
   if (window === null) fail(process.platform === "linux" ? `Edit's window is Google Chrome's: install it (https://www.google.com/chrome/), or open ${url} in a browser` : `this build has no window; open ${url} in a browser`);
   adoptShellEnv();
   keepLauncher();
+  if (helper === null) allowNotifications(home, port);
   // Something already on the port is most likely another Edit (`edit serve`,
   // `just dev`, the app opened twice): open onto it rather than run a second
   // server over the same projects.

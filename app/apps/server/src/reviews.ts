@@ -30,6 +30,7 @@ import * as editNotes from "./edit_notes.ts";
 import * as jobs from "./jobs.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
 import * as machine from "./machine.ts";
+import * as notices from "./notices.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
@@ -503,6 +504,27 @@ export async function share(app: App, projectId: string, path: string | null, re
  * now on v1".
  */
 export async function exportAndShare(app: App, projectId: string, options: Partial<ExportOptions>, replace = false, note?: string, watermark?: string | null): Promise<{ url: string; version: number }> {
+  return toldOf(app, projectId, exportAndShareWhole(app, projectId, options, replace, note, watermark));
+}
+
+/** The person hears a share went up, or why it didn't (notices.ts); a cancel they pressed says nothing. */
+async function toldOf<T extends { version: number } | void>(app: App, projectId: string, sharing: Promise<T>): Promise<T> {
+  const name = () => app.store.get(projectId)?.project.name || "Untitled";
+  try {
+    const done = await sharing;
+    const version = typeof done === "object" && done !== null ? ` v${done.version}` : "";
+    notices.notify({ key: `share:${projectId}:${Date.now()}`, title: "Shared for review", body: `${name()}${version}`, path: `/p/${projectId}` });
+    return done;
+  } catch (error) {
+    const message = diag.messageOf(error);
+    if (message !== "the share was cancelled" && message !== "the export was cancelled") {
+      notices.notify({ key: `share:${projectId}:${Date.now()}`, title: "Sharing stopped", body: `${name()}: ${notices.line(message)}`, path: `/p/${projectId}` });
+    }
+    throw error;
+  }
+}
+
+async function exportAndShareWhole(app: App, projectId: string, options: Partial<ExportOptions>, replace: boolean, note?: string, watermark?: string | null): Promise<{ url: string; version: number }> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
   if (removing.has(projectId)) throw new Error("this project's review link is being deleted: share it again once that's done");
@@ -564,6 +586,10 @@ export async function exportAndShare(app: App, projectId: string, options: Parti
  * one, its share forgotten, and the next Share exported the edit again.
  */
 export async function resumeShare(app: App, projectId: string, project: Project, options: ExportOptions, output: { replace?: boolean; note?: string; watermark?: string }): Promise<void> {
+  return toldOf(app, projectId, resumeShareWhole(app, projectId, project, options, output));
+}
+
+async function resumeShareWhole(app: App, projectId: string, project: Project, options: ExportOptions, output: { replace?: boolean; note?: string; watermark?: string }): Promise<void> {
   if (!cloud.enabled()) throw new Error("sharing needs Edit's cloud (sign in)");
   if (sharing.has(projectId)) throw new Error("this project is already being shared");
   sharing.set(projectId, "exporting");

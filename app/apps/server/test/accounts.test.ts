@@ -280,7 +280,7 @@ test("the browser lands on a calm page: the code out of the address bar, Edit's 
   // Edit's window is open (it's polling): it's told to come forward, and the tab tries to close.
   const polled = windowFocus.next(5_000);
   const page = await (await visit("code-5")).text();
-  expect(await polled).toBe(true);
+  expect((await polled).focus).toBe(true);
   expect(page).toContain(`history.replaceState(null, "", "/callback")`);
   expect(page).toContain("Signed in as someone@gmail.com. Back to Edit…");
   expect(page).toContain(`<a href="/">Open Edit</a>`);

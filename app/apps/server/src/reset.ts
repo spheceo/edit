@@ -15,6 +15,7 @@ import { readJson, type Router } from "./http/router.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
 import type { Project } from "./model.ts";
 import { join } from "./paths.ts";
+import * as notices from "./notices.ts";
 import { newProject } from "./project.ts";
 import { jsonForSerde } from "./rust.ts";
 import { layOut } from "./script.ts";
@@ -121,6 +122,7 @@ registerTool("reset_edit", async ({ app, projectId }: ToolCall) => {
     throw new Error("this project wasn't started from a script, so there's no first layout to go back to");
   }
   app.store.emit({ type: "reset", id: projectId, state: "asking" });
+  notices.notify({ key: `reset:${projectId}:${Date.now()}`, title: "The agent needs you", body: `${live.project.name || "Untitled"}: it asks to reset the edit`, path: `/p/${projectId}` });
   const accepted = await ask(projectId);
   app.store.emit({ type: "reset", id: projectId, state: accepted ? "accepted" : "declined" });
   if (!accepted) return text("The user didn't accept the reset (rejected, or no answer in 10 minutes): the edit is as it was. Stop here.");

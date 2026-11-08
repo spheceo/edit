@@ -12,6 +12,9 @@ path = "src/main.rs"
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# The window's long poll's answer (focus, and notices to post).
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Catches an Objective-C exception in event handling (src/events.rs); already
 # in the build through tao, with this feature on.
@@ -19,7 +22,10 @@ tauri = { version = "2", features = [] }
 objc2 = { version = "0.6", features = ["exception"] }
 # The native preview (src/preview.rs): the engine draws the edit into a layer under the page.
 edit-engine = { path = "../edit-engine" }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSValue", "NSGeometry", "objc2-core-foundation"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSValue", "NSGeometry", "NSBundle", "NSError", "objc2-core-foundation"] }
+# Notifications in Notification Center (src/notices.rs).
+objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "bitflags", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter"] }
+block2 = "0.6"
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "CFString"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGColor", "CGColorSpace"] }
 objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "CATransaction", "objc2-core-foundation", "objc2-core-graphics"] }

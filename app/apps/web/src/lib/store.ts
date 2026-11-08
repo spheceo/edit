@@ -578,6 +578,11 @@ function catchUp() {
   void syncScriptJob(project.id);
 }
 
+/** Sends a message on the events socket when it's open (lib/notices.ts: where this page is). */
+export function sendEvent(text: string): void {
+  if (socket?.readyState === WebSocket.OPEN) socket.send(text);
+}
+
 export function connectEvents() {
   if (socket && socket.readyState <= WebSocket.OPEN) return;
   const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws?patches=1`;
@@ -587,6 +592,8 @@ export function connectEvents() {
     useConnection.setState({ down: false });
     if (dropped) catchUp();
     dropped = false;
+    // A new connection hasn't heard where this page is (lib/notices.ts).
+    window.dispatchEvent(new Event("edit:connected"));
   };
   socket.onmessage = (message) => {
     // One malformed frame must not throw out of the handler and drop the rest.
@@ -667,6 +674,9 @@ export function connectEvents() {
       useAccount.setState({ account: event.account as Account });
     } else if (event.type === "reset" && project && event.id === project.id) {
       useEditor.setState({ resetAsked: event.state === "asking" });
+    } else if (event.type === "notice") {
+      // Something the person left running is done (lib/notices.ts shows it).
+      window.dispatchEvent(new CustomEvent("edit:notice", { detail: event }));
     } else if (event.type === "resync" && project) {
       catchUp();
     }

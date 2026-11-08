@@ -43,6 +43,47 @@ export function windowCommand(home: string, port: number): string[] | null {
   ];
 }
 
+/**
+ * Lets Edit's page in the window show the desktop's notifications without
+ * asking (notices.ts: a draft is ready while Edit is behind other windows):
+ * the window's own Chrome profile allows them for its origin. Written before
+ * Chrome starts; a Chrome already running on the profile keeps its own copy
+ * (and writes it back on quit), so it's left alone then.
+ */
+export function allowNotifications(home: string, port: number): void {
+  const profile = join(home, "window");
+  try {
+    fs.lstatSync(join(profile, "SingletonLock"));
+    return;
+  } catch {
+    // Chrome isn't running on it.
+  }
+  const path = join(profile, "Default", "Preferences");
+  let prefs: Record<string, unknown> = {};
+  try {
+    const read = JSON.parse(fs.readFileSync(path, "utf8")) as unknown;
+    if (read !== null && typeof read === "object" && !Array.isArray(read)) prefs = read as Record<string, unknown>;
+  } catch {
+    // A new profile.
+  }
+  const within = (parent: Record<string, unknown>, key: string): Record<string, unknown> => {
+    const found = parent[key];
+    if (found !== null && typeof found === "object" && !Array.isArray(found)) return found as Record<string, unknown>;
+    const made: Record<string, unknown> = {};
+    parent[key] = made;
+    return made;
+  };
+  const allowed = within(within(within(within(prefs, "profile"), "content_settings"), "exceptions"), "notifications");
+  const origin = `http://${WINDOW_HOST}:${port},*`;
+  if ((allowed[origin] as { setting?: unknown } | undefined)?.setting === 1) return;
+  allowed[origin] = { setting: 1 };
+  try {
+    keep(path, JSON.stringify(prefs));
+  } catch (error) {
+    diag.warn("app", `letting Edit's window show notifications: ${diag.messageOf(error)}`);
+  }
+}
+
 /** Where the desktop looks for the user's apps and their icons. */
 function dataHome(): string {
   const given = process.env.XDG_DATA_HOME;

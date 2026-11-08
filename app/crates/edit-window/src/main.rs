@@ -23,6 +23,8 @@
 #[cfg(target_os = "macos")]
 mod events;
 #[cfg(target_os = "macos")]
+mod notices;
+#[cfg(target_os = "macos")]
 mod preview;
 
 use std::io::{Read, Write};
@@ -108,7 +110,9 @@ fn run(url: &str, server: Option<(Server, u16)>, watch_stdin: bool) -> ! {
                     handle.exit(0);
                 });
             }
-            // Brought to the front when the server asks (the browser's sign-in came back).
+            #[cfg(target_os = "macos")]
+            notices::init(app.handle());
+            // Brought to the front when the server asks (the browser's sign-in came back), and its notices posted.
             if let (Some(host), Some(port)) = (local.host_str(), local.port_or_known_default()) {
                 let handle = app.handle().clone();
                 let host = host.to_owned();
@@ -212,28 +216,53 @@ fn keep_serving(server: &Mutex<Option<Server>>, closing: &AtomicBool, port: u16)
     }
 }
 
+/// A notification to post (the server's notices.ts): a click opens `path`.
+#[derive(serde::Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct Notice {
+    key: String,
+    title: String,
+    body: String,
+    path: String,
+}
+
+/// One poll's answer: whether to come to the front, and notices to post.
+#[derive(serde::Deserialize, Debug, Default, PartialEq)]
+struct Answer {
+    #[serde(default)]
+    focus: bool,
+    #[serde(default)]
+    notices: Vec<Notice>,
+}
+
 /// Asks the server, again and again, whether the window should come to the
 /// front (`GET /api/window/next`, a long poll: `{"focus":true}` when it should,
-/// `{"focus":false}` after ~25 s to ask again), and brings it forward when told.
+/// `{"focus":false}` after ~25 s to ask again), and brings it forward when
+/// told; notices that came with the answer are posted (src/notices.rs).
 /// A server without the route (older) or not answering is asked again later.
 fn follow_focus(handle: &AppHandle, host: &str, port: u16) {
     loop {
         match ask_focus(host, port) {
-            Ok(true) => {
-                if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
+            Ok(answer) => {
+                if answer.focus {
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                for notice in &answer.notices {
+                    notices::post(notice);
                 }
             }
-            Ok(false) => {}
             Err(()) => std::thread::sleep(Duration::from_secs(5)),
         }
     }
 }
 
-/// One long poll: whether the server wants the window in front.
-fn ask_focus(host: &str, port: u16) -> Result<bool, ()> {
+/// One long poll: whether the server wants the window in front, and what to post.
+fn ask_focus(host: &str, port: u16) -> Result<Answer, ()> {
     let mut stream = TcpStream::connect((host, port)).map_err(|_| ())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(40)))
@@ -248,7 +277,14 @@ fn ask_focus(host: &str, port: u16) -> Result<bool, ()> {
     if !answer.starts_with("HTTP/1.1 200") {
         return Err(());
     }
-    Ok(answer.contains("\"focus\":true"))
+    let body = answer.split_once("\r\n\r\n").map_or("", |(_, body)| body);
+    // An answer that isn't the JSON expected still says whether to come forward.
+    Ok(
+        serde_json::from_str(body.trim()).unwrap_or_else(|_| Answer {
+            focus: answer.contains("\"focus\":true"),
+            notices: Vec::new(),
+        }),
+    )
 }
 
 fn open_in_browser(url: &Url) {
@@ -430,7 +466,7 @@ fn leads_group(_pid: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{alive, ask_focus, stop, Server};
+    use super::{alive, ask_focus, stop, Answer, Notice, Server};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::process::{Command, Stdio};
@@ -489,13 +525,27 @@ mod tests {
     fn the_window_comes_forward_only_when_the_server_says_so() {
         let (port, asked) =
             serve_once("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"focus\":true}");
-        assert_eq!(ask_focus("127.0.0.1", port), Ok(true));
+        assert_eq!(
+            ask_focus("127.0.0.1", port).map(|answer| answer.focus),
+            Ok(true)
+        );
         assert!(asked
             .join()
             .unwrap()
             .starts_with("GET /api/window/next HTTP/1.1\r\n"));
         let (port, _) = serve_once("HTTP/1.1 200 OK\r\n\r\n{\"focus\":false}");
-        assert_eq!(ask_focus("127.0.0.1", port), Ok(false));
+        assert_eq!(ask_focus("127.0.0.1", port), Ok(Answer::default()));
+        // Notices to post come with the answer.
+        let (port, _) = serve_once("HTTP/1.1 200 OK\r\n\r\n{\"focus\":false,\"notices\":[{\"key\":\"k\",\"title\":\"First draft is ready\",\"body\":\"Mom\",\"path\":\"/scripts/a\"}]}");
+        assert_eq!(
+            ask_focus("127.0.0.1", port).map(|answer| answer.notices),
+            Ok(vec![Notice {
+                key: "k".into(),
+                title: "First draft is ready".into(),
+                body: "Mom".into(),
+                path: "/scripts/a".into()
+            }])
+        );
         // An older server without the route: asked again later.
         let (port, _) = serve_once("HTTP/1.1 404 Not Found\r\n\r\nnot found");
         assert_eq!(ask_focus("127.0.0.1", port), Err(()));

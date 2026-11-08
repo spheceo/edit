@@ -30,6 +30,7 @@ import { nameOf } from "@edit/types/models";
 
 import * as claudeUsage from "./claude_usage.ts";
 import * as modelChoice from "./model_choice.ts";
+import * as notices from "./notices.ts";
 import * as planLimit from "./plan_limit.ts";
 import * as seams from "./seams.ts";
 import { stableStringify } from "./stable.ts";
@@ -217,6 +218,8 @@ const RUNNING = "running-turns.json";
 
 /** Edit back this soon after it last noted its turns was a restart: they carry on. */
 export const RESUME_WITHIN_MS = 10 * 60_000;
+/** How long after a turn ends the person is told, so Edit's own next turn (a follow-up, the fresh-eyes pass) has started by then. */
+const SETTLE_MS = 3_000;
 
 /**
  * What a whole edit left that the team would catch (the audit's fixable
@@ -327,6 +330,10 @@ export class Agents implements seams.AgentPanel {
   private followedUp = new Map<string, { generation: number; sent: number; count: number }>();
   /** Chats Edit's own next turn is about to start in (a follow-up, the fresh-eyes pass): running, as far as a restart goes. */
   private queued = new Set<string>();
+  /** Chats waiting to try a turn again after a busy model (`turnEnded`). */
+  private retrying = new Set<string>();
+  /** Each project's message the person was last told about, and how it went (`settled`), so one outcome is one notice. */
+  private noticed = new Map<string, string>();
   /** Projects whose chat goes when their turn ends (`new_chat`). */
   private resetAfter = new Set<string>();
   private dir: string;
@@ -1261,6 +1268,56 @@ export class Agents implements seams.AgentPanel {
     this.emit(project, { event: "status", running: false });
     // A sub-agent's turn over: its card in the main chat says how it ended.
     if (project.includes(SUB)) this.subFinished(project, error);
+    this.settleLater(project);
+  }
+
+  /** Whether the project's agent has more coming: a turn of its chat or a sub-agent's running, or Edit's own next one about to start. */
+  private busy(root: string): boolean {
+    const mine = (key: string) => key === root || key.startsWith(`${root}${SUB}`);
+    return [...this.chats].some(([key, chat]) => mine(key) && chat.running) || [...this.queued].some(mine) || [...this.retrying].some(mine);
+  }
+
+  /** A turn ended: once its project's agent has nothing more coming (follow-ups, the fresh-eyes pass), the person is told how it went. */
+  private settleLater(key: string): void {
+    if (this.quitting) return;
+    timing.later(SETTLE_MS, () => this.settled(projectOf(key)));
+  }
+
+  /**
+   * The project's agent is done with the person's last message: they hear
+   * the edit is ready (its first build), the changes are done, or why it
+   * stopped (notices.ts). Not for a stop they pressed, nor a review's fixes
+   * (the share that follows says so), and once per message.
+   */
+  private settled(root: string): void {
+    if (this.quitting || this.busy(root)) return;
+    const chat = this.chats.get(root);
+    const live = this.store.get(root);
+    if (chat === undefined || live === null || chat.halted || reviewGuard.inReviewTurn(root)) return;
+    let asked = -1;
+    chat.entries.forEach((item, index) => {
+      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
+    });
+    const message = chat.entries[Math.max(asked, 0)];
+    if (message === undefined) return;
+    const since = chat.entries.slice(asked + 1);
+    const last = since[since.length - 1];
+    const failed = last?.kind === "error" && last.status !== "done";
+    // One notice per message and outcome: a message that stopped (Claude signed out) and later carried on to the end is told both.
+    const outcome = `${message.id}:${failed ? "stopped" : "done"}`;
+    if (this.noticed.get(root) === outcome) return;
+    this.noticed.set(root, outcome);
+    const name = live.project.name || "Untitled";
+    const path = `/p/${root}`;
+    if (failed) {
+      notices.notify({ key: `agent:${root}:${outcome}`, title: "The agent stopped", body: `${name}: ${notices.line(last.text)}`, path });
+      return;
+    }
+    const said = [...since].reverse().find((item) => item.kind === "assistant" && item.text.trim() !== "");
+    // Built by this message (markBuilt): its first draft, not a revision.
+    const built = chat.built !== null && chat.built >= message.at;
+    const title = built ? "The edit is ready" : "Changes are done";
+    notices.notify({ key: `agent:${root}:${outcome}`, title, body: said === undefined || built ? name : `${name}: ${notices.line(said.text)}`, path });
   }
 
   /** A turn ended (`error` null when it finished): a busy model's turn is picked up again a few times, else the chat is done. */
@@ -1273,18 +1330,22 @@ export class Agents implements seams.AgentPanel {
       if (tries <= MAX_RETRIES) {
         // Wait a little longer each time, then pick the work back up.
         const wait = 20 * tries;
+        this.retrying.add(project);
         this.finish(project, `${error} Trying again in ${wait} s (${tries} of ${MAX_RETRIES}).`);
         const failure = error;
         void (async () => {
-          await timing.sleep(wait * 1000);
-          // The user may have sent something else, or stopped, meanwhile.
-          const later = this.withChat(project);
-          if (later.running || later.halted || later.generation !== generation) return;
-          const text = `(Edit, automatically) Your last turn was cut off by an error ("${failure}") before you finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.`;
           try {
+            await timing.sleep(wait * 1000);
+            // The user may have sent something else, or stopped, meanwhile.
+            const later = this.withChat(project);
+            if (later.running || later.halted || later.generation !== generation) return;
+            const text = `(Edit, automatically) Your last turn was cut off by an error ("${failure}") before you finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.`;
             await this.sendTurn(project, text, null, null, generation);
           } catch (thrown) {
             diag.warn("agent", `retrying the turn in ${project}: ${diag.messageOf(thrown)}`);
+          } finally {
+            this.retrying.delete(project);
+            this.settleLater(project);
           }
         })();
         return;

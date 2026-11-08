@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import { agentHooks, Agents, editToolsFailed, readChat, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
 import * as modelChoice from "../src/model_choice.ts";
+import * as notices from "../src/notices.ts";
 import * as toolChanges from "../src/tool_changes.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { media } from "./helpers/model.ts";
@@ -677,7 +678,13 @@ test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in 
   // The user, Nov 1: "launch it as a sub agent, that just has this message… click into the sub agent to view it and go back".
   const home = fixtureHome("claude-fresh-eyes");
   const sleep = timing.sleep;
+  const later = timing.later;
   timing.sleep = async () => {};
+  timing.later = (_ms, work) => void Promise.resolve().then(work);
+  // The person is on Home, Edit in front: told by a toast once the whole edit, fresh eyes and all, is done.
+  const heard: { how: string; notice: notices.Notice }[] = [];
+  const viewer = notices.connect((text) => heard.push(JSON.parse(text) as (typeof heard)[number]));
+  notices.heard(viewer, JSON.stringify({ type: "attention", focused: true, path: "/" }));
   try {
     const project = home.store.create("Fresh eyes", { width: 1920, height: 1080, fps: 30 }).project.id;
     const { agents, asked, queries } = agentsWith(home);
@@ -698,6 +705,8 @@ test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in 
     const sub = agents.chat(`${project}~review`) as { entries: { kind: string }[]; running: boolean };
     expect(sub.entries.map((item) => item.kind)).toEqual(["user"]);
     expect(sub.running).toBe(true);
+    // The main turn's end isn't the edit's: nothing said while the pass runs.
+    expect(heard).toEqual([]);
     const review = queries[1]!;
     review.push({ type: "result", subtype: "success", is_error: false, usage: {} });
     review.end();
@@ -705,8 +714,11 @@ test("a whole edit done, a fresh-eyes final pass runs as a sub-agent: a card in 
     const after = agents.chat(project) as { entries: { kind: string; status?: string }[] };
     expect(after.entries.find((item) => item.kind === "subagent")!.status).toBe("done");
     expect(agents.runningProjects()).toEqual([]);
+    expect(heard).toEqual([{ type: "notice", how: "toast", notice: { key: expect.any(String), title: "The edit is ready", body: "Fresh eyes", path: `/p/${project}` } }] as never);
   } finally {
     timing.sleep = sleep;
+    timing.later = later;
+    notices.resetForTests();
     home.cleanup();
   }
 });

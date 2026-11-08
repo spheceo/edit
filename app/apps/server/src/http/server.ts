@@ -11,6 +11,7 @@ import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { isBug, panicResponse } from "../guard.ts";
 import * as mcp from "../mcp/index.ts";
+import * as notices from "../notices.ts";
 import * as patches from "../patch.ts";
 import * as relay from "../relay.ts";
 import { staticAsset } from "./assets.ts";
@@ -25,6 +26,8 @@ interface Socket {
   patches: boolean;
   /** Events were dropped while it couldn't keep up: it's told to resync once it drains. */
   lagged: boolean;
+  /** Where the page is and whether it has focus, for notices (notices.ts). */
+  viewer: notices.Viewer | null;
 }
 
 /** The routes every server has; packages add theirs to the same router. */
@@ -37,7 +40,7 @@ export function baseRouter(): Router<App> {
 }
 
 function websocket(context: RouteContext<App>): Response | undefined {
-  const socket: Socket = { unsubscribe: null, lagged: false, patches: context.query.get("patches") === "1" };
+  const socket: Socket = { unsubscribe: null, lagged: false, patches: context.query.get("patches") === "1", viewer: null };
   if (context.upgrade(socket)) return undefined;
   return text("Connection header did not include 'upgrade'", 400);
 }
@@ -236,16 +239,20 @@ export function listen(app: App, router: Router<App>, hostname: string, port: nu
           const sent = (ws.data.patches && patchText(event)) || text();
           if (ws.send(sent) === 0) ws.data.lagged = true;
         });
+        ws.data.viewer = notices.connect((text) => void ws.send(text));
       },
       drain(ws: ServerWebSocket<Socket>) {
         if (ws.data.lagged && ws.send(JSON.stringify({ type: "resync" })) > 0) ws.data.lagged = false;
       },
-      message() {
-        // Clients only listen.
+      // A page says only where it is and whether it has focus (notices.ts).
+      message(ws: ServerWebSocket<Socket>, message: string | Buffer) {
+        if (ws.data.viewer !== null) notices.heard(ws.data.viewer, typeof message === "string" ? message : message.toString());
       },
       close(ws: ServerWebSocket<Socket>) {
         ws.data.unsubscribe?.();
         ws.data.unsubscribe = null;
+        if (ws.data.viewer !== null) notices.disconnect(ws.data.viewer);
+        ws.data.viewer = null;
       },
     },
   });

@@ -15,6 +15,7 @@ import { assetRef, FONTS, HEIGHT, WIDTH, type Design, type Layer, type Thumbnail
 import { thumbnailsGuide } from "../agent_text.ts";
 import { inlinePictures, pictureFile } from "../chat_pictures.ts";
 import * as diag from "../diag.ts";
+import * as notices from "../notices.ts";
 import { native } from "../native/index.ts";
 import { join } from "../paths.ts";
 import * as claude from "../writer/claude.ts";
@@ -821,7 +822,7 @@ async function placePicture(session: Session, source: string): Promise<string | 
 
 // ---------------------------------------------------------------- turns
 
-type Ending = { state: ThumbRun["state"]; error?: string; text: string };
+type Ending = { state: ThumbRun["state"]; error?: string; text: string; changed?: boolean };
 
 /**
  * A turn of the conversation: answers once it's queued. `version`: the one the
@@ -874,7 +875,7 @@ async function work(context: Context, id: string, asked: string, given: string[]
           hooks.ask({ model: claude.OPUS, system: thumbnailsGuide("guide"), prompt: ask, tools: `http://127.0.0.1:${context.port}/mcp/thumbnails/${token}`, read: folder, maxTurns: 60, effort: "medium", timeoutMs: 25 * 60_000, label: `Thumbnail ${id}`, signal }),
         );
         const said = await inlinePictures((answer.text ?? running.turn.text).trim(), (source) => placePicture(session, source));
-        return { state: "done" as const, text: said || (session.changed ? "Done." : "Nothing changed.") };
+        return { state: "done" as const, text: said || (session.changed ? "Done." : "Nothing changed."), changed: session.changed };
       } finally {
         sessions.delete(token);
       }
@@ -887,9 +888,11 @@ async function work(context: Context, id: string, asked: string, given: string[]
   const tools = toolsOf(running.turn);
   const workedMs = Date.now() - running.turn.startedAt;
   fs.rmSync(folder, { recursive: true, force: true });
+  let name = "Thumbnail";
   try {
     await cloud.change(id, context.by, (thumb) => {
       if (thumb.run !== null && thumb.run.holder !== context.holder) return false;
+      name = thumb.title || name;
       thumb.run = { state: ending.state, holder: context.holder, by: context.by, startedAt: thumb.run?.startedAt ?? Date.now(), endedAt: Date.now(), ...(ending.error ? { error: ending.error } : {}), ...(tools.length > 0 ? { tools } : {}) };
       const turn: ThumbTurn = { role: "claude", text: ending.text, at: Date.now(), workedMs, ...(tools.length > 0 ? { tools } : {}), ...(ending.state === "failed" || ending.state === "stopped" ? { failed: true } : {}) };
       thumb.chat = [...thumb.chat, turn].slice(-KEPT_TURNS);
@@ -898,6 +901,11 @@ async function work(context: Context, id: string, asked: string, given: string[]
     diag.warn("thumbnails", `${id}: saving how the turn ended: ${diag.messageOf(error)}`);
   } finally {
     runs.delete(id);
+  }
+  // The person hears how it went (notices.ts), unless they stopped it.
+  if (ending.state !== "stopped") {
+    const title = ending.state !== "done" ? "Claude stopped on the thumbnail" : ending.changed === true ? "Thumbnail is ready" : "Claude answered";
+    notices.notify({ key: `thumbnail:${id}:${Date.now()}`, title, body: `${name}: ${notices.line(ending.text)}`, path: `/thumbnails/${id}` });
   }
 }
 

@@ -16,6 +16,7 @@ import { inlinePictures, pictureFile } from "../chat_pictures.ts";
 import * as cloudStorage from "../cloud.ts";
 import * as diag from "../diag.ts";
 import * as modelChoice from "../model_choice.ts";
+import * as notices from "../notices.ts";
 import { join } from "../paths.ts";
 import * as claude from "../writer/claude.ts";
 import { ideaBuilt, modelFor } from "@edit/types/models";
@@ -723,9 +724,11 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
   const workedMs = Date.now() - running.turn.startedAt;
   if (folder !== null) fs.rmSync(folder, { recursive: true, force: true });
   // Still running until its ending is saved: dropped first, a look in between saw it not running with its run still "running".
+  let named: { title: string; titled: boolean } | null = null;
   try {
     await cloud.change(id, context.by, (idea) => {
       if (idea.run !== null && idea.run.holder !== context.holder) return false;
+      named = { title: cloud.summarize(idea).title, titled: idea.titles.length > 0 };
       idea.run = { what, state: ending.state, holder: context.holder, by: context.by, startedAt: idea.run?.startedAt ?? Date.now(), endedAt: Date.now(), ...(ending.error ? { error: ending.error } : {}), ...(tools.length > 0 ? { tools } : {}) };
       const turn: IdeaTurn = { role: "claude", text: ending.text, at: Date.now(), workedMs, ...(tools.length > 0 ? { tools } : {}), ...(ending.state === "failed" || ending.state === "stopped" ? { failed: true } : {}) };
       idea.chat = [...idea.chat, turn].slice(-KEPT_TURNS);
@@ -735,6 +738,16 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
   } finally {
     runs.delete(id);
   }
+  tell(id, what, ending, named);
+}
+
+/** The person hears how a run ended (notices.ts), unless they stopped it. */
+function tell(id: string, what: IdeaRun["what"], ending: Ending, named: { title: string; titled: boolean } | null): void {
+  if (ending.state === "stopped") return;
+  const name = named?.title ?? "Idea";
+  const titles = what === "repackage" && ending.state === "done" && named?.titled === true;
+  const title = ending.state !== "done" ? "Claude stopped on the idea" : titles ? "Titles are ready" : "Claude answered";
+  notices.notify({ key: `idea:${id}:${Date.now()}`, title, body: titles ? name : `${name}: ${notices.line(ending.text)}`, path: `/ideas/${id}` });
 }
 
 /** Runs this Mac had going when Edit stopped: stopped, to be started again by hand. */

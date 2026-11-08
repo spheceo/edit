@@ -11,6 +11,12 @@ export function navigate(path: string, replace = false) {
   listeners.forEach((listener) => listener());
 }
 
+/** Calls `listener` whenever the page changes; returns how to stop. */
+export function onPath(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 export function usePath() {
   return useSyncExternalStore(
     (listener) => {

@@ -16,6 +16,7 @@ import type { App } from "../app.ts";
 import { creator } from "../accounts.ts";
 import * as diag from "../diag.ts";
 import { inArea, runPromise, runtime } from "../effect/runtime.ts";
+import * as notices from "../notices.ts";
 import * as service from "../effect/service.ts";
 import { BUILD } from "../version.ts";
 import { isFile, join } from "../paths.ts";
@@ -547,6 +548,9 @@ const importScript = Effect.fn("writer.import")(function* (app: App, dir: string
     const spent = stageTimes(script.id);
     if (step === "done") yield* Effect.logInfo(`${jobs.named(script.id, script.title)}: imported in ${seconds}: ${clock(script.durationMs)} of footage, ${script.words.length} words, ${new Set(script.words.map((word) => word.speaker).filter(Boolean)).size} voices${spent ? ` (${spent})` : ""}`);
     else yield* Effect.logWarning(`${jobs.named(script.id, script.title)}: paused after ${seconds}${spent ? ` (${spent})` : ""} for a choice: ${script.decision?.summary ?? ""}`);
+    // Its first build, when it was made with one, says so itself once written.
+    if (step !== "done") notices.notify({ key: `import:${script.id}:${began}`, title: "The import needs you", body: `${script.title || "Untitled script"}: ${notices.line(script.decision?.summary ?? "a choice to make")}`, path: `/scripts/${script.id}` });
+    else if (script.firstBuild === undefined) notices.notify({ key: `import:${script.id}:${began}`, title: "Ready to script", body: script.title || "Untitled script", path: `/scripts/${script.id}` });
     return script;
   }
   const error = ran.failure;
@@ -565,6 +569,7 @@ const importScript = Effect.fn("writer.import")(function* (app: App, dir: string
     // The failure is said either way.
   }
   say(script, message);
+  notices.notify({ key: `import:${script.id}:${began}`, title: "The import stopped", body: `${script.title || "Untitled script"}: ${notices.line(message)}`, path: `/scripts/${script.id}` });
   return yield* new ImportStopped({ message, kind: service.kindOf(error) });
 });
 

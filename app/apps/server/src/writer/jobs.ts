@@ -12,6 +12,7 @@ import type { BuildStatus } from "@edit/types/writer";
 
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
+import * as notices from "../notices.ts";
 import { join } from "../paths.ts";
 import * as live from "./live.ts";
 import { scriptDir } from "./store.ts";
@@ -225,9 +226,31 @@ export function start(data: string, id: string, title: string, work: Work, run: 
       delete job.turn;
       keep(data, id, job);
       stops.delete(id);
+      tell(id, title, work, job);
     }
   });
   return job;
+}
+
+/** What the person hears when a job they started ends (notices.ts); the background ones (speakers, exact hearing, transcription) say nothing. */
+const DONE: Partial<Record<Work["kind"], string>> = {
+  build: "First draft is ready",
+  revise: "Revision is done",
+  review: "Review notes are fixed",
+  reuse: "Reused cases are in",
+  find: "Clips are found",
+  learn: "Feedback is learnt",
+  restore: "Footage is back",
+};
+
+function tell(id: string, title: string, work: Work, job: BuildStatus): void {
+  const done = DONE[work.kind];
+  // A stop they pressed needs no telling.
+  if (done === undefined || job.error === STOPPED) return;
+  const name = title || "Untitled script";
+  const detail = job.error ?? (work.kind === "revise" || work.kind === "review" ? (job.report ?? "") : "");
+  const body = detail.trim() === "" ? name : `${name}: ${notices.line(detail)}`;
+  notices.notify({ key: `script:${id}:${job.startedAt}`, title: job.error === null ? done : "Claude stopped on the script", body, path: `/scripts/${id}` });
 }
 
 const seconds = (since: number): string => `${Math.round((Date.now() - since) / 1000)} s`;

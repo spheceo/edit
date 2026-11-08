@@ -22,6 +22,7 @@ import { extension, join, startsWith, withExtension, canonical } from "./paths.t
 import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as transcribe from "./transcribe.ts";
+import * as voices from "./voices.ts";
 import { writeCaptionTranscript } from "./youtube_captions.ts";
 
 export type { Probe } from "./model.ts";
@@ -443,13 +444,20 @@ export class Processor {
     const target = this.paths(source).transcript;
     // A cloud excerpt whose whole recording was heard already (Writer shares its words) takes its words from there.
     const shared = again ? null : sharedSourceOf(this.store.cacheDir(), source);
-    const hear = async () => {
+    const words = async (pyannote: boolean) => {
       if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
       // Heard again: properly (Scribe), not from YouTube's captions, which
       // are what a second hearing is usually for.
       const captions = again ? null : this.captionSource(source);
       if (captions !== null && await writeCaptionTranscript(this.store.home, captions, target)) return;
-      await transcribe.run(source, target, keyterms, again);
+      await transcribe.run(source, target, keyterms, again, !pyannote);
+    };
+    // The words, then pyannote's voices while the relay's flag is on (voices.ts), before
+    // the transcript is ready, so speakers.ts names pyannote's voices, not Scribe's or the captions' lines.
+    const hear = async () => {
+      const pyannote = await voices.on();
+      await words(pyannote);
+      if (pyannote) await voices.revoice(this.store.cacheDir(), source, target, this.cloudSource(source));
     };
     void diag
       .timeOnAsync("media", "media: transcription", source, hear)
@@ -476,6 +484,17 @@ export class Processor {
         },
       );
     return this.status(source);
+  }
+
+  /** The cloud recording (and excerpt) a file is (`youtube:<id>#<ms>-<ms>`, `drive:<id>`…), from its project or the cache's layout, else null. */
+  cloudSource(path: string): string | null {
+    const shared = sharedSourceOf(this.store.cacheDir(), path);
+    if (shared !== null) return shared;
+    for (const id of this.store.usingMedia(path)) {
+      const source = this.store.get(id)?.project?.media.find((item) => item.path === path)?.cloud?.source;
+      if (typeof source === "string" && source !== "") return source;
+    }
+    return this.captionSource(path);
   }
 
   /** Resolve the original source and excerpt clock from saved provenance,

@@ -7,6 +7,7 @@ import { media, type EdgeCache } from "./media";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
 import { fromOtherRelay, openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
 import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
+import { diarizeJobs, diarizeOn, type DiarizeEnv } from "./diarize_jobs";
 import { google, mayUseDrive } from "./google";
 
 export { DriveToR2 } from "./jobs";
@@ -19,6 +20,7 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  *   POST /v1/transcribe   body: audio (e.g. audio/ogg Opus), Content-Length required
  *                          → ElevenLabs Scribe v2 JSON (words with timings + speaker ids)
  *   POST /v1/transcribe/jobs, GET /v1/transcribe/jobs/<id>, POST /v1/transcribe/webhook
+ *   POST /v1/diarize/jobs, GET /v1/diarize/jobs/<id>  who speaks when, from pyannote (diarize_jobs.ts; the DIARIZE flag)
  *                          a long recording heard from R2 without holding a connection open
  *                          (transcribe_jobs.ts)
  *   GET  /v1/3dtiles/…     Google Photorealistic 3D Tiles (map stills)
@@ -44,7 +46,7 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  * Worker never buffers or parses either (keeps CPU tiny on any plan).
  */
 
-export interface Env extends CloudEnv, AuthEnv, JobsEnv, OpenArtEnv {
+export interface Env extends CloudEnv, AuthEnv, JobsEnv, OpenArtEnv, DiarizeEnv {
   /** Transcription and the existing house voice. */
   ELEVENLABS_MAIN_KEY?: string;
   /** Only the voices named in ELEVENLABS_VOICES_IDS use this account. */
@@ -91,7 +93,7 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY), openart: openartReady(env) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), diarize: diarizeOn(env), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY), openart: openartReady(env) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     // The team's Google Drive, with its sign-in kept here (google.ts): only the calls Edit makes.
     if (url.pathname.startsWith("/v1/google/")) return google(request, url, env);
@@ -157,6 +159,7 @@ export default {
       return json(200, { day, ...used, limits: { connection: Number(env.DAILY_BYTES_PER_IP), total: Number(env.DAILY_BYTES_TOTAL), again: Number(env.DAILY_REHEAR_BYTES ?? env.DAILY_BYTES_TOTAL) } });
     }
     if (url.pathname.startsWith("/v1/transcribe/jobs") || url.pathname === "/v1/transcribe/webhook") return transcribeJobs(request, url, env);
+    if (url.pathname.startsWith("/v1/diarize/jobs")) return diarizeJobs(request, url, env);
     if (url.pathname !== "/v1/transcribe") return json(404, { error: "not found" });
     if (request.method !== "POST") return json(405, { error: "POST audio to /v1/transcribe" });
 

@@ -14,6 +14,7 @@ import { covers, joined } from "./names.ts";
 import * as seams from "./seams.ts";
 import { charCount, f32, F32_MAX, parseHex, serdeParse, splitWhitespace, trim } from "./rust.ts";
 import type { Transcript } from "./transcribe.ts";
+import * as voices from "./voices.ts";
 
 /** How long a transcript wait pauses between looks (tests make it instant). */
 export const timing = {
@@ -52,6 +53,12 @@ export async function transcriptOf(app: App, media: Media, project?: Project): P
           throw new Error(ioMessage(error));
         }
         const transcript = parseTranscript(text);
+        // Heard before pyannote's voices were on (voices.ts): given them now, once, and named again.
+        if (transcript.voices !== voices.MODEL && (await voices.revoice(app.store.cacheDir(), path, app.media.paths(path).transcript, app.media.cloudSource(path)))) {
+          await (await import("./speakers.ts")).nameNow(app, path).catch((error: unknown) => diag.warn("speakers", `${media.name}: naming pyannote's voices: ${diag.messageOf(error)}`));
+          app.store.emit({ type: "transcript", path });
+          continue;
+        }
         const asked = `${path}\n${names.map((name) => name.toLowerCase()).sort().join("\n")}`;
         if (transcript.model !== "youtube-captions" && !covers(transcript.keyterms, names) && !reheard.has(asked)) {
           reheard.add(asked);

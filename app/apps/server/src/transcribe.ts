@@ -10,7 +10,9 @@
 // voices in it, so who speaks comes from the whole file heard in one go,
 // whose voice numbers hold from start to end (`voicesFrom`). Then
 // cameras.ts splits a voice heard on two bodycams (two officers Scribe heard
-// as one), and speakers.ts names the voices.
+// as one), and speakers.ts names the voices. While the relay's flag is on
+// (Nov 8), the voices are pyannote's instead (voices.ts, from media.ts after
+// the words are in): the whole hearing isn't asked for (`wholeVoices`).
 //
 // What's heard is kept as it comes in (`saved`): each piece beside the
 // transcript until the file is done, so a run cut short (the day's allowance,
@@ -87,6 +89,11 @@ export interface Transcript {
    * with names it wasn't given hears the file again.
    */
   keyterms?: string[];
+  /**
+   * Whose voices these are when they aren't Scribe's: "pyannote-precision-3"
+   * (voices.ts), so a transcript is given pyannote's voices once.
+   */
+  voices?: string;
 }
 
 /**
@@ -116,6 +123,7 @@ export function serialize(transcript: Transcript): string {
     if (map !== undefined) text += `,${JSON.stringify(field)}:${writeMap(map)}`;
   }
   if (transcript.keyterms !== undefined && transcript.keyterms.length > 0) text += `,"keyterms":${JSON.stringify(transcript.keyterms)}`;
+  if (typeof transcript.voices === "string" && transcript.voices !== "") text += `,"voices":${JSON.stringify(transcript.voices)}`;
   return `${text}}`;
 }
 
@@ -562,7 +570,7 @@ const withoutVoices = (source: string, why: string) =>
  * A long file heard in pieces for its words and whole for its voices, both
  * at once: the pieces four at a time, any failure interrupting the rest.
  */
-const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, audio: string, seconds: number, target: string, keyterms: readonly string[], again: boolean) {
+const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, audio: string, seconds: number, target: string, keyterms: readonly string[], again: boolean, wholeVoices: boolean) {
   const pieces = plan(seconds);
   const piecesDir = withExtension(target, "pieces");
   const names = createHash("sha256").update(keyterms.join("\n")).digest("hex").slice(0, 12);
@@ -605,7 +613,8 @@ const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, aud
     return yield* ask(smaller, [], again);
   }).pipe(Effect.scoped);
 
-  const whole = saved(withExtension(target, "whole.json"), fixed3(seconds), wholeHearing).pipe(
+  // Its voices from pyannote instead (voices.ts, after this): Scribe's whole hearing isn't paid for.
+  const whole = !wholeVoices ? Effect.succeed(Option.none<Transcript>()) : saved(withExtension(target, "whole.json"), fixed3(seconds), wholeHearing).pipe(
     Effect.map(Option.some),
     // Too long even at the least rate: its words still come from the pieces.
     Effect.catchTag("TooLongForOneRequest", (refused) =>
@@ -671,7 +680,7 @@ const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, aud
       ? "all saved from before"
       : `pieces typically ${secs(sorted[Math.floor(sorted.length / 2)]!)}, the slowest ${secs(sorted.at(-1)!)}${sorted.length < pieces.length ? `, ${pieces.length - sorted.length} saved from before` : ""}; the whole ${secs(wholeMs)}`;
   yield* Effect.logInfo(
-    `${source}: heard in ${pieces.length} pieces for its words and ${Option.isSome(voices) ? "whole for its voices" : "not whole (no voices)"} (${words.length} words) in ${secs(now - began)}: ${timing}`,
+    `${source}: heard in ${pieces.length} pieces for its words and ${Option.isSome(voices) ? "whole for its voices" : wholeVoices ? "not whole (no voices)" : "its voices from pyannote"} (${words.length} words) in ${secs(now - began)}: ${timing}`,
   );
   const first = Option.getOrElse(voices, () => parts[0]!);
   return { model: first.model, language: first.language ?? null, words } satisfies Transcript;
@@ -685,14 +694,14 @@ const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, aud
  * file heard again for the case's names, which the relay gives only a share
  * of each day's allowance (first hearings come first).
  */
-export const transcribeFile = Effect.fn("transcribe.file")(function* (source: string, target: string, keyterms: readonly string[] = [], again: boolean = false) {
+export const transcribeFile = Effect.fn("transcribe.file")(function* (source: string, target: string, keyterms: readonly string[] = [], again: boolean = false, wholeVoices: boolean = true) {
   // Asked before the media's other work has made its cache folder.
   yield* Effect.sync(() => fs.mkdirSync(target.slice(0, target.lastIndexOf("/")) || ".", { recursive: true }));
   const transcript: Transcript = yield* Effect.gen(function* () {
     const audio = yield* temporary(withExtension(target, "ogg"));
     yield* encode(["-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source), "-i", source, "-map", "0:a:0"], audio, "could not extract audio");
     const seconds = yield* lengthOf(audio);
-    return seconds <= WHOLE_UP_TO ? yield* ask(audio, keyterms, again) : yield* hearLong(source, audio, seconds, target, keyterms, again);
+    return seconds <= WHOLE_UP_TO ? yield* ask(audio, keyterms, again) : yield* hearLong(source, audio, seconds, target, keyterms, again, wholeVoices);
   }).pipe(Effect.scoped);
   // The names asked with, even when refused: asked again they'd be refused again.
   if (keyterms.length > 0) transcript.keyterms = [...keyterms];
@@ -710,8 +719,8 @@ export const transcribeFile = Effect.fn("transcribe.file")(function* (source: st
 export const asConfigured = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => (timing.instant ? effect.pipe(Effect.provideService(Retries, Retries.instant)) : effect);
 
 /** `transcribeFile` for code that isn't Effect yet: rejects with the same words it always has. */
-export function run(source: string, target: string, keyterms: readonly string[] = [], again = false): Promise<void> {
-  return runPromise(asConfigured(transcribeFile(source, target, keyterms, again).pipe(inArea("media"))));
+export function run(source: string, target: string, keyterms: readonly string[] = [], again = false, wholeVoices = true): Promise<void> {
+  return runPromise(asConfigured(transcribeFile(source, target, keyterms, again, wholeVoices).pipe(inArea("media"))));
 }
 
 const round3 = (value: number) => Math.round(value * 1000) / 1000;

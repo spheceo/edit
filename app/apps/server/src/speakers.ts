@@ -342,6 +342,17 @@ export function parseNamed(answer: string): Named {
   };
 }
 
+/** Names a file's voices now (its voices just given again, voices.ts), waiting for it. */
+export async function nameNow(app: App, source: string): Promise<void> {
+  if (naming.has(source)) return;
+  naming.add(source);
+  try {
+    await name(app, source, app.media.paths(source).transcript);
+  } finally {
+    naming.delete(source);
+  }
+}
+
 async function name(app: App, source: string, target: string): Promise<void> {
   const transcript = read(target);
   if (transcript === null) throw new Error("no transcript");

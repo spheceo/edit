@@ -12,7 +12,8 @@ routes = [{ pattern = "media.spheceo.com", custom_domain = true }]
 # Secrets: in Infisical (the platform's project "Platform", dev, folder /edit-relay; CONVEX_* reference /mamagi),
 # pushed with `bun scripts/push-secrets.ts --yes` (dry run without --yes; values on wrangler's
 # stdin, never printed). For `wrangler dev`, apps/relay/.dev.vars, gitignored. Never in this file:
-#   ELEVENLABS_MAIN_KEY, ELEVENLABS_VOICES_KEY, GOOGLE_MAPS_KEY, PROXY_URL (the YouTube proxy, /v1/proxy)
+#   ELEVENLABS_MAIN_KEY, ELEVENLABS_VOICES_KEY, GOOGLE_MAPS_KEY, PROXY_URL (the YouTube proxy, /v1/proxy),
+#   PYANNOTE_API_KEY (who speaks when, /v1/diarize/jobs, while DIARIZE is "pyannote")
 # Edit's cloud (/v1/cloud/*, src/cloud.ts; signed-in people only, src/auth.ts):
 #   R2_ACCOUNT_ID          Cloudflare account id (<id>.r2.cloudflarestorage.com)
 #   R2_ACCESS_KEY_ID       an R2 API token's S3 access key id
@@ -28,6 +29,9 @@ routes = [{ pattern = "media.spheceo.com", custom_domain = true }]
 
 [vars]
 MEDIA_HOST = "media.spheceo.com"  # media.ts hands out signed proxy URLs on it (MEDIA_SECRET, a secret)
+# Who speaks when (Nov 8, diarize_jobs.ts): "pyannote" gives Edit pyannote's voices (with PYANNOTE_API_KEY), anything else Scribe's.
+# Off here until it has proven itself on dev; turning it on or off is a relay deploy, no Edit release.
+DIARIZE = "off"
 # Comma-separated voice IDs belonging to ELEVENLABS_VOICES_KEY; all others
 # (including the existing house voice) use ELEVENLABS_MAIN_KEY.
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
@@ -154,6 +158,7 @@ routes = [{ pattern = "media-dev.spheceo.com", custom_domain = true }]
 
 [env.dev.vars]
 MEDIA_HOST = "media-dev.spheceo.com"
+DIARIZE = "pyannote"
 CONVEX_CALLER = "1"  # dev Convex (determined-heron-867) has accounts 6d2c2a2's convex/access.ts
 # Thumbnails' OpenArt: the live relay holds the team's one sign-in (openart.ts); dev asks it.
 OPENART_UPSTREAM = "https://edit-relay.sphe-g-personal.workers.dev"

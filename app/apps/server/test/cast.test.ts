@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { checked, planCast, type CastPerson, type Seen } from "../src/cast.ts";
+import { casesOf, checked, itemsText, planCast, type CastPerson, type Seen } from "../src/cast.ts";
 import { join } from "../src/paths.ts";
 import type { Word } from "../src/transcribe.ts";
 
@@ -122,4 +122,36 @@ test("a real interrogation's cast holds: the bald detective's four voices and tw
   const label = plan.names.get("speaker_7")?.[0];
   expect(label?.startsWith("Mark")).toBe(true);
   for (const voice of ["speaker_8", "speaker_11", "speaker_15"]) expect(plan.names.get(voice)?.[0]).toBe(label);
+});
+
+// Police Hunt Down Their Own Colleague (JJ, Nov 8): "it makes no sense that we call this detective 'Detective 4.'
+// We've not seen so many detectives in this specific case": a compilation's people are their own case's.
+test("a compilation's people are their case's: never grouped across cases, numbered again in each", () => {
+  const cases: Seen[] = [
+    { media: "m1", from: 0, to: 240, letter: "A", voice: "speaker_0", name: "", role: "leader", look: "grey suit", place: "left", case: "Case 1" },
+    { media: "m1", from: 0, to: 240, letter: "B", voice: "speaker_1", name: "", role: "leader", look: "blue shirt", place: "right", case: "Case 1" },
+    { media: "m2", from: 0, to: 240, letter: "A", voice: "speaker_0", name: "", role: "leader", look: "grey suit", place: "left", case: "Case 2" },
+    { media: "m2", from: 0, to: 240, letter: "B", voice: "speaker_2", name: "", role: "narrator", look: "voice-over", place: "off-screen", case: "Case 2" },
+    { media: "m1", from: 0, to: 240, letter: "C", voice: "speaker_2", name: "", role: "narrator", look: "voice-over", place: "off-screen", case: "Case 1" },
+  ];
+  // The model put the two grey suits together, and the narrators: the detectives are split by case, the narrator stays one.
+  const given = checked({ people: [
+    { name: null, title: "Detective", role: "leader", members: [0, 2] },
+    { name: null, title: "Detective", role: "leader", members: [1] },
+    { name: null, title: "Narrator", role: "narrator", members: [3, 4] },
+  ] }, cases)!;
+  expect(given.map((person) => person.members)).toEqual([[0], [2], [1], [3, 4]]);
+  const plans = planCast(cases, given, new Map([["m1", [...said("speaker_0", 0, 30), ...said("speaker_1", 40, 20)]], ["m2", said("speaker_0", 0, 30)]]));
+  // Case 1 has two detectives; case 2's one is "Detective", not "Detective 3".
+  expect(plans.get("m1")!.names.get("speaker_0")).toEqual(["Detective", "leader"]);
+  expect(plans.get("m1")!.names.get("speaker_1")).toEqual(["Detective 2", "leader"]);
+  expect(plans.get("m2")!.names.get("speaker_0")).toEqual(["Detective", "leader"]);
+  expect(itemsText(cases.slice(0, 1))).toStartWith("0. case 1; window 0:00");
+});
+
+test("a file's case is its script blocks' Case note, only for a script of more than one case", () => {
+  const block = (media: string, kase: string) => ({ kind: "footage" as const, url: "", file: "", start: 0, end: 1, label: "", media, notes: [`Case ${kase}: https://youtu.be/x`, "Source: a"] });
+  expect([...casesOf({ script: { blocks: [block("m1", "1"), block("m2", "2"), block("m1", "1")] } } as never)]).toEqual([["m1", "Case 1"], ["m2", "Case 2"]]);
+  expect(casesOf({ script: { blocks: [block("m1", "1"), block("m2", "1")] } } as never).size).toBe(0);
+  expect(casesOf({ script: null } as never).size).toBe(0);
 });

@@ -955,6 +955,91 @@ describe("relay transcription by link (Nov 1)", () => {
   });
 });
 
+describe("relay voices from pyannote (Nov 8)", () => {
+  const env = {
+    PYANNOTE_API_KEY: "py-key", DIARIZE: "pyannote",
+    R2_ACCOUNT_ID: "account", R2_ACCESS_KEY_ID: "key", R2_SECRET_ACCESS_KEY: "secret", R2_BUCKET: "bucket",
+    BURST: { limit: async () => ({ success: true }) },
+    TRANSCRIBE_BURST: { limit: async () => ({ success: true }) },
+  } as unknown as Env;
+  const ask = (path: string, init: RequestInit = {}, given: Env = env) =>
+    relay.fetch(new Request(`https://relay.test${path}`, { ...init, headers: { authorization: `Bearer ${PERSON}`, "content-type": "application/json" } }), given);
+  const key = "edit/transcribe/0f1e2d3c-4b5a.ogg";
+  const original = "edit/originals/youtube/JTr4372yI1g/Interrogation.mp4";
+  const world = (pyannote: (url: string, init: RequestInit) => Response | Promise<Response>) => {
+    const stored = new Map<string, string>([[key, "x".repeat(1000)], [original, "y".repeat(1000)]]);
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init: RequestInit = {}) => {
+      const url = String(input);
+      const method = init.method ?? "GET";
+      if (url.includes("r2.cloudflarestorage.com")) {
+        const object = decodeURIComponent(new URL(url).pathname.replace(/^\/bucket\//, ""));
+        if (method === "DELETE") { stored.delete(object); return new Response(null, { status: 204 }); }
+        const found = stored.get(object);
+        return found === undefined ? new Response(null, { status: 404 }) : new Response(null, { status: 200, headers: { "content-length": String(found.length) } });
+      }
+      return pyannote(url, init);
+    });
+    return stored;
+  };
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("is on only with the flag and the key, which /health says", async () => {
+    world(() => Response.json({}));
+    const health = async (given: Env) => ((await (await relay.fetch(new Request("https://relay.test/health"), given)).json()) as { diarize: boolean }).diarize;
+    expect(await health(env)).toBe(true);
+    expect(await health({ ...env, DIARIZE: "off" } as Env)).toBe(false);
+    expect(await health({ ...env, PYANNOTE_API_KEY: undefined } as Env)).toBe(false);
+    const off = await ask("/v1/diarize/jobs", { method: "POST", body: JSON.stringify({ key }) }, { ...env, DIARIZE: "off" } as Env);
+    expect([off.status, ((await off.json()) as { diarize: boolean }).diarize]).toEqual([503, false]);
+    expect((await relay.fetch(new Request("https://relay.test/v1/diarize/jobs", { method: "POST", body: "{}" }), env)).status).toBe(401);
+  });
+
+  it("starts a job with pyannote fetching Edit's upload or a whole recording by a presigned link", async () => {
+    let sent: { url?: string; model?: string } = {};
+    world(async (url, init) => {
+      expect(url).toBe("https://api.pyannote.ai/v1/diarize");
+      expect((init.headers as Record<string, string>).authorization).toBe("Bearer py-key");
+      sent = JSON.parse(String(init.body)) as typeof sent;
+      return Response.json({ jobId: "job-1234", status: "created" });
+    });
+    for (const one of [key, original]) {
+      const started = await ask("/v1/diarize/jobs", { method: "POST", body: JSON.stringify({ key: one }) });
+      expect([started.status, await started.json()]).toEqual([202, { id: "job-1234" }]);
+      expect(sent.model).toBe("precision-3");
+      expect(sent.url).toMatch(/^https:\/\/account\.r2\.cloudflarestorage\.com\/bucket\/edit\/.*X-Amz-Signature=/);
+    }
+    // Only Edit's own uploads and recordings in the cloud, and only ones that are there.
+    expect((await ask("/v1/diarize/jobs", { method: "POST", body: JSON.stringify({ key: "edit/reports/a.json" }) })).status).toBe(400);
+    expect((await ask("/v1/diarize/jobs", { method: "POST", body: JSON.stringify({ key: "edit/transcribe/missing-1234.ogg" }) })).status).toBe(400);
+    // A refused start deletes Edit's upload, never a recording.
+    const stored = world(() => new Response("bad audio", { status: 400 }));
+    expect((await ask("/v1/diarize/jobs", { method: "POST", body: JSON.stringify({ key }) })).status).toBe(502);
+    expect((await ask("/v1/diarize/jobs", { method: "POST", body: JSON.stringify({ key: original }) })).status).toBe(502);
+    expect([stored.has(key), stored.has(original)]).toEqual([false, true]);
+  });
+
+  it("answers pending, then the voices (deleting an upload), or pyannote's failure", async () => {
+    let status = "running";
+    const stored = world((url) => {
+      expect(url).toBe("https://api.pyannote.ai/v1/jobs/job-1234");
+      return Response.json(status === "succeeded" ? { status, output: { diarization: [{ start: 0.5, end: 2, speaker: "SPEAKER_01" }] } } : { status, output: status === "failed" ? { error: "audio too short" } : {} });
+    });
+    const look = (one = key) => ask(`/v1/diarize/jobs/job-1234?key=${encodeURIComponent(one)}`);
+    const pending = await look();
+    expect([pending.status, await pending.json()]).toEqual([202, { pending: true }]);
+    status = "succeeded";
+    const kept = await look(original);
+    expect(stored.has(original)).toBe(true);
+    expect(await kept.json()).toEqual({ model: "pyannote-precision-3", segments: [{ start: 0.5, end: 2, speaker: "SPEAKER_01" }] });
+    expect(stored.has(key)).toBe(true);
+    expect((await look()).status).toBe(200);
+    expect(stored.has(key)).toBe(false);
+    status = "failed";
+    const failed = await look();
+    expect([failed.status, ((await failed.json()) as { error: string }).error]).toEqual([502, "pyannote couldn't hear it: audio too short"]);
+  });
+});
+
 describe("relay ElevenLabs accounts", () => {
   const house = "gUABw7pXQjhjt0kNFBTF";
   const extra = "NewVoice1234";

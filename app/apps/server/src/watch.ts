@@ -1270,6 +1270,8 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   // item each window's letter is ("p/w/letter").
   const sightings: castOf.Seen[] = [];
   const sightingOf = new Map<string, number>();
+  // A compilation's cases, so its people are their own case's (cast.ts).
+  const caseOf = castOf.casesOf(project);
   // Lines the model only guessed at: the few worth a look.
   const doubtful: unknown[] = [];
   const ordered = [...answers.values()].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -1329,6 +1331,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
         role: person.role,
         look: person.look,
         place: person.place,
+        ...(caseOf.has(part.media) ? { case: caseOf.get(part.media)! } : {}),
       });
     }
     for (const line of answer.lines) {

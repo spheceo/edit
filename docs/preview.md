@@ -11,17 +11,25 @@ page (`crates/edit-window/src/preview.rs`). The page turns see-through over the
 viewer (`native-preview` on `<html>`), so everything it draws over the picture
 stays on top, and asks for each frame (`lib/nativePreview.ts`); it keeps the
 playhead, the sound and its engine (sections, checks), but decodes no video and
-asks for no smooth-playback render. Each picture comes from its preview file, a
-cloud one's whole copy, else its footage on the Mac, else the server's loopback
-stream while the whole file comes down (`apps/server/src/native_preview.ts`).
-Full screen, a browser, or five failed frames in a row: the page draws as below.
-Measured Nov 6 on the 16-Year-Old (local footage, M1): scrubbing drew every
-position, 6.7 ms each (p50), and playing drew every frame at 1.9 ms (p50).
+asks for no smooth-playback render, in full screen either. The edit goes to the
+window whole once, then as patches (`lib/patch.ts`), each answered with the
+revision the window draws or why it refused (a refused edit: the page draws).
+Each frame's answer says its time and where it went (`diagnostics.nativeFrames`,
+the `ui: preview: native …` timings). Each picture comes from its preview file,
+a cloud one's whole copy (a made proxy, or footage that's its own proxy), else
+its footage on the Mac, else the server's loopback stream while the whole file
+comes down; a pieced proxy's pieces on the Mac are read as files of their own
+(`apps/server/src/native_preview.ts`). Full screen, a browser, or five failed
+frames in a row: the page draws as below. Measured Nov 8 on Cops Realize (M1,
+cloud footage): 160 s with 30 cuts drew 4,816 of 4,823 frames, 2.1 ms p50 and
+3.8 ms p90, the cuts' seeks the slow ones (docs/plans/2026-11-08-audit.md).
 
 To see it without screen access: `EDIT_PREVIEW_TRACE=1` says each placement and
 draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,
 play and pause by itself, and `EDIT_PREVIEW_SHOT=<file.png>` then saves the
-window's own picture (an app may capture its own windows without permission).
+window's own picture (an app may capture its own windows without permission);
+`EDIT_PREVIEW_JS=<file>` runs a file's steps in the page instead (a line
+`--- wait <seconds>` between them), for scripted measurements.
 
 ## Smooth playback
 

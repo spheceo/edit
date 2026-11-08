@@ -749,10 +749,10 @@ async function runUpload(upload: Upload, progressed: () => void): Promise<void> 
 export function resumeUpload(home: string, args: Record<string, unknown>): void {
   const upload = args as unknown as Upload;
   if (typeof upload.file !== "string" || typeof upload.source !== "string" || typeof upload.originalKey !== "string") {
-    throw new Error("not an upload");
+    throw new jobs.Gone("not an upload");
   }
-  if (upload.uploadOriginal && !isFile(upload.file)) throw new Error(`${upload.file} is gone`);
-  if (upload.local !== null && !isFile(upload.local)) throw new Error(`${upload.local} is gone`);
+  if (upload.uploadOriginal && !isFile(upload.file)) throw new jobs.Gone(`${upload.file} is gone`);
+  if (upload.local !== null && !isFile(upload.local)) throw new jobs.Gone(`${upload.local} is gone`);
   uploadLater(home, upload);
 }
 

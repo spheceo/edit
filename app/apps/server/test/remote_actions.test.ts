@@ -7,7 +7,8 @@ import type { Script } from "@edit/types/writer";
 
 import type { App } from "../src/app.ts";
 import * as presence from "../src/presence.ts";
-import { busyWith, disk, IDLE_MS, idleNow, lastUsed, problems, probe, RESTART, resume, UNSTICK, updateWhenIdle } from "../src/remote_actions.ts";
+import * as jobs from "../src/jobs.ts";
+import { attention, busyWith, disk, IDLE_MS, idleNow, lastUsed, problems, probe, RESTART, resume, UNSTICK, updateWhenIdle } from "../src/remote_actions.ts";
 import * as problemReports from "../src/problem_reports.ts";
 import * as store from "../src/writer/store.ts";
 import { THIS_MACHINE } from "../src/machine.ts";
@@ -60,6 +61,22 @@ describe("remote support's other actions", () => {
       disk.free = free;
     }
     await expect(resume(quiet(true), RESTART)).rejects.toThrow("Not restarted: an export would be cut off");
+  });
+
+  test("a job given up after restarts needs attention, and unstick starts it again", async () => {
+    const app = quiet();
+    const home = app.store.home;
+    fs.writeFileSync(`${home}/jobs.json`, JSON.stringify([{ key: "export:p1", kind: "export", project: "p1", args: {}, started_ms: 0, resumes: 2, given_up: "cut short by 3 restarts in a row" }]));
+    expect(await attention(app, [], true)).toContain("Job export:p1: not started again (cut short by 3 restarts in a row) (unstick starts it again).");
+    const free = disk.free;
+    disk.free = () => 100e9;
+    try {
+      expect(await resume(app, UNSTICK)).toBe("job export:p1: started again");
+    } finally {
+      disk.free = free;
+    }
+    expect(jobs.givenUp(home)).toEqual([]);
+    expect(await attention(app, [], true)).not.toContain("Job export:p1");
   });
 
   test("one list of what a restart would cut off, for a remote restart and an update alike; an agent turn only when asked from afar", async () => {

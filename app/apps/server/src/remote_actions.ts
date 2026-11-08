@@ -11,7 +11,7 @@
 //   - resume <project|script>: one stopped import picked up;
 //   - unstick: everything that's stuck, unstuck at once (syncs waiting out a
 //     failure tried again, stopped imports started again, agent turns quiet
-//     for 15 minutes stopped, the cache cleaned when the disk is nearly full);
+//     for 15 minutes stopped, jobs given up after restarts started again, the cache cleaned when the disk is nearly full);
 //   - restart: Edit started again in place, only when nothing's running;
 //   - update-when-idle: the update installs itself once nobody has used the
 //     window for 20 minutes and nothing's running (Sphe, Nov 1: "dont
@@ -35,6 +35,7 @@ import * as diag from "./diag.ts";
 import { memorySummary } from "./export_capacity.ts";
 import { useNow as memoryUse } from "./memory.ts";
 import * as ideaRuns from "./ideas/run.ts";
+import * as jobs from "./jobs.ts";
 import * as thumbnailRuns from "./thumbnails/run.ts";
 import * as planUse from "./plan_use.ts";
 import * as editTime from "./edit_time.ts";
@@ -105,7 +106,7 @@ function turns(app: App): [project: string, quietMs: number][] {
 }
 
 /** What needs someone's attention on this Mac, most likely to block work first. */
-async function attention(app: App, setup: { id: string; ok: boolean; title: string; fix: string }[], relayOk: boolean): Promise<string[]> {
+export async function attention(app: App, setup: { id: string; ok: boolean; title: string; fix: string }[], relayOk: boolean): Promise<string[]> {
   const out: string[] = [];
   const free = diskFree(app);
   if (free !== null && free < LOW_DISK) out.push(`The disk has ${gb(free)} free: imports and exports fail under a few GB (unstick cleans the cache).`);
@@ -128,6 +129,7 @@ async function attention(app: App, setup: { id: string; ok: boolean; title: stri
     if (row.status === "needs_choice") out.push(`Script ${row.id} "${row.title}": its import waits on their choice: ${row.decision?.summary ?? ""}`);
   }
   for (const [project, quiet] of turns(app)) if (quiet > QUIET_MS) out.push(`Project ${project}: its agent turn has said nothing for ${Math.round(quiet / 60_000)} min (unstick stops it).`);
+  for (const job of jobs.givenUp(app.store.home)) out.push(`Job ${job.key}: not started again (${job.given_up}) (unstick starts it again).`);
   return out;
 }
 
@@ -181,8 +183,8 @@ export function work(app: App): string[] {
   for (const [id, title, job] of writerJobs.runningList()) out.push(`Claude on script ${id} "${title}": ${(job as { stage?: string }).stage ?? "working"}`);
   out.push(`scripts' cloud: ${JSON.stringify(writerCloud.statusNow())}`);
   try {
-    const jobs = JSON.parse(fs.readFileSync(join(app.store.home, "jobs.json"), "utf8")) as { kind?: string; project?: string }[];
-    for (const job of jobs) out.push(`background job: ${job.kind ?? "?"}${job.project ? ` on ${job.project}` : ""}`);
+    const listed = JSON.parse(fs.readFileSync(join(app.store.home, "jobs.json"), "utf8")) as { kind?: string; project?: string; given_up?: string }[];
+    for (const job of listed) out.push(`background job: ${job.kind ?? "?"}${job.project ? ` on ${job.project}` : ""}${job.given_up ? ` (given up: ${job.given_up})` : ""}`);
   } catch {
     // None noted.
   }
@@ -418,6 +420,9 @@ export async function unstick(app: App): Promise<string> {
     await (app.agents as { stop?: (project: string) => Promise<void> }).stop?.(project);
     done.push(`project ${project}: its agent turn, quiet ${Math.round(quiet / 60_000)} min, stopped`);
   }
+  const revived = jobs.startGivenUp(app.store.home);
+  void revived.started.catch((error: unknown) => diag.warn("remote", `unstick: jobs: ${diag.messageOf(error)}`));
+  for (const key of revived.keys) done.push(`job ${key}: started again`);
   const free = disk.free(app);
   if (free !== null && free < LOW_DISK) {
     const cleaned = (await cleanCloudPreviews(app, false)).bytes + cleanCache(app, false).bytes;

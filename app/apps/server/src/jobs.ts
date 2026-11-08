@@ -8,9 +8,12 @@
 // shot, a Drive upload sends the finished file again, an import's cloud
 // upload sends its files again, a moving map shot carries on from its
 // frames, a review's full-quality file carries on from its parts already up.
-// A job that was resumed
-// twice and still didn't end (it may be what brings the server down) isn't
-// started a third time, unless it got further each time (`progressed`).
+// A job stays listed while it's started again (a second crash during
+// recovery, or a resumer that fails, never loses it); only `end` crosses it
+// off. One cut short twice that still didn't end (it may be what brings the
+// server down) isn't started a third time, unless it got further each time
+// (`progressed`): it stays listed as given up, the diagnostics say so, and
+// unstick starts it again.
 
 
 import { Effect } from "effect";
@@ -29,9 +32,14 @@ export interface Job {
   project: string;
   args: Record<string, unknown>;
   started_ms: number;
-  /** How many times it was started again after a restart. */
+  /** How many times it was started again after a restart (counted as it's handed back, before it starts). */
   resumes: number;
+  /** Why it isn't started again any more (cut short too often); unstick clears it. Absent on a job that's resumed. */
+  given_up?: string;
 }
+
+/** Thrown by a resumer when there's nothing left to start again (the project, clip or file is gone): the job is crossed off. */
+export class Gone extends Error {}
 
 /** Resumed this many times without ending: left alone. */
 const MOST_RESUMES = 2;
@@ -54,21 +62,24 @@ function write(home: string, jobs: Job[]): void {
   }
 }
 
-/** Jobs cut short by the last run, by key: their resume counts carry over. */
-const carried = new Map<string, Map<string, number>>();
-
 export function keyOf(kind: Kind, project: string, part = ""): string {
   return part === "" ? `${kind}:${project}` : `${kind}:${project}:${part}`;
 }
 
-/** Notes a job as running (replacing one with its key); returns its key. */
+/**
+ * Notes a job as running; returns its key. One already listed under its key
+ * (a resumer starting it again, or a repeat) is updated in place and keeps
+ * its resume count; one given up and started anew starts its count over.
+ */
 export function begin(home: string | null, kind: Kind, project: string, args: Record<string, unknown>, part = ""): string {
   const key = keyOf(kind, project, part);
   if (home === null) return key;
-  const resumes = carried.get(home)?.get(key) ?? 0;
-  carried.get(home)?.delete(key);
-  const jobs = read(home).filter((job) => job.key !== key);
-  jobs.push({ key, kind, project, args, started_ms: nowMs(), resumes });
+  const jobs = read(home);
+  const listed = jobs.find((job) => job.key === key);
+  const resumes = listed === undefined || listed.given_up !== undefined ? 0 : (listed.resumes ?? 0);
+  const job: Job = { key, kind, project, args, started_ms: nowMs(), resumes };
+  if (listed === undefined) jobs.push(job);
+  else jobs[jobs.indexOf(listed)] = job;
   write(home, jobs);
   return key;
 }
@@ -102,56 +113,96 @@ export function patch(home: string | null, key: string, args: Record<string, unk
 }
 
 /**
- * The jobs the last run left unfinished, to start again (each counted as a
- * resume), and the list emptied; those resumed too often are dropped, said.
+ * The jobs the last run left unfinished, to start again: each stays listed,
+ * its resume count raised and saved before it's handed back, so a crash while
+ * they start counts too. One cut short too often is marked given up instead
+ * (kept, said, not handed back); given-up ones stay as they are.
  */
 export function takeOver(home: string): Job[] {
   const jobs = read(home);
   if (jobs.length === 0) return [];
-  write(home, []);
-  const counts = new Map<string, number>();
-  carried.set(home, counts);
   const out: Job[] = [];
+  let changed = false;
   for (const job of jobs) {
-    if ((job.resumes ?? 0) >= MOST_RESUMES) {
-      diag.warn("jobs", `${job.key} was cut short ${job.resumes + 1} times; not starting it again`);
-      continue;
+    if (job.given_up !== undefined) continue;
+    const resumes = job.resumes ?? 0;
+    if (resumes >= MOST_RESUMES) {
+      job.given_up = `cut short by ${resumes + 1} restarts in a row`;
+      diag.warn("jobs", `${job.key} was cut short ${resumes + 1} times; not starting it again (kept; unstick starts it again)`);
+    } else {
+      job.resumes = resumes + 1;
+      out.push(job);
     }
-    counts.set(job.key, (job.resumes ?? 0) + 1);
-    out.push(job);
+    changed = true;
   }
+  if (changed) write(home, jobs);
   return out;
 }
 
-/** What starts each kind again; a handler that throws is logged and skipped. */
+/** The jobs not started again any more (cut short too often), for the diagnostics. */
+export function givenUp(home: string | null): Job[] {
+  if (home === null) return [];
+  return read(home).filter((job) => job.given_up !== undefined);
+}
+
+/** What starts each kind again; a handler that throws is logged and skipped (the job stays listed), one that throws `Gone` crosses it off. */
 export type Resumers = Partial<Record<Kind, (job: Job) => Promise<void> | void>>;
 
 /** A resumer that hasn't come back in this long is left to it, and the next is started (one hanging used to hold up every other). */
 export const RESUME_MS = { value: 60_000 };
 
-/**
- * Starts again what the last run left unfinished, one after another: a
- * handler that fails is logged and skipped, one still starting after
- * `RESUME_MS` is left running and the next goes on.
- */
-export function resume(home: string, resumers: Resumers): Promise<void> {
+/** The resumers this run was started with, by data folder, so unstick can start given-up jobs without a restart. */
+const registered = new Map<string, Resumers>();
+
+function startAll(home: string, list: Job[], resumers: Resumers): Promise<void> {
   return runPromise(
     Effect.forEach(
-      takeOver(home),
+      list,
       (job) => {
         const run = resumers[job.kind];
         if (run === undefined) return Effect.void;
         return Effect.logInfo(`starting ${job.key} again (cut short by a restart)`).pipe(
           Effect.andThen(Effect.tryPromise(async () => run(job))),
           Effect.timeoutOrElse({ duration: RESUME_MS.value, orElse: () => Effect.logWarning(`${job.key} is still starting after ${Math.round(RESUME_MS.value / 1000)} s; the others go on`) }),
-          Effect.catch((error) =>
-            Effect.sync(() => carried.get(home)?.delete(job.key)).pipe(
-              Effect.andThen(Effect.logWarning(`couldn't start ${job.key} again: ${diag.messageOf(error instanceof Error ? error : ((error as { cause?: unknown })?.cause ?? error))}`)),
-            ),
-          ),
+          Effect.catch((error) => {
+            const cause = error instanceof Error && !(error instanceof Gone) && (error as { cause?: unknown }).cause !== undefined ? (error as { cause?: unknown }).cause : error;
+            if (cause instanceof Gone) {
+              return Effect.sync(() => end(home, job.key)).pipe(Effect.andThen(Effect.logInfo(`not starting ${job.key} again: ${cause.message}`)));
+            }
+            return Effect.logWarning(`couldn't start ${job.key} again (kept for the next start, ${job.resumes} of ${MOST_RESUMES}): ${diag.messageOf(cause)}`);
+          }),
         );
       },
       { discard: true },
     ).pipe(inArea("jobs")),
   );
+}
+
+/**
+ * Starts again what the last run left unfinished, one after another: a
+ * handler that fails is logged and skipped (its job kept), one still
+ * starting after `RESUME_MS` is left running and the next goes on.
+ */
+export function resume(home: string, resumers: Resumers): Promise<void> {
+  registered.set(home, resumers);
+  return startAll(home, takeOver(home), resumers);
+}
+
+/**
+ * Unstick: the given-up jobs, their counts cleared and started again (now if
+ * this run's resumers are in; otherwise the start-up resume picks them up).
+ * Returns their keys.
+ */
+export function startGivenUp(home: string | null): { keys: string[]; started: Promise<void> } {
+  if (home === null) return { keys: [], started: Promise.resolve() };
+  const jobs = read(home);
+  const revived = jobs.filter((job) => job.given_up !== undefined);
+  if (revived.length === 0) return { keys: [], started: Promise.resolve() };
+  for (const job of revived) {
+    delete job.given_up;
+    job.resumes = 0;
+  }
+  write(home, jobs);
+  const resumers = registered.get(home);
+  return { keys: revived.map((job) => job.key), started: resumers === undefined ? Promise.resolve() : startAll(home, revived, resumers) };
 }

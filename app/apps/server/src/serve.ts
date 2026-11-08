@@ -369,13 +369,17 @@ function optional(area: string, work: () => void): void {
 function resumeJobs(app: App): void {
   const project = (id: string) => {
     const live = app.store.get(id);
-    if (live === null) throw new Error("the project is gone");
+    if (live === null) throw new jobs.Gone("the project is gone");
     return live.project;
   };
   void jobs.resume(app.store.home, {
     case: (job) => {
       project(job.project);
-      void seams.script.start(app, job.project, false);
+      // Nothing left to import (laid out since), and no import of it running to own the job: crossed off.
+      const running = app.scripts.get(job.project)?.state;
+      if (seams.script.start(app, job.project, false) === null && !["downloading", "transcribing", "placing", "voicing"].includes(running ?? "")) {
+        throw new jobs.Gone("its import has nothing left to do");
+      }
     },
     export: async (job) => {
       // Jobs from before Nov 3 may name a Modal or Relay-worker backend: every export renders here now.
@@ -399,12 +403,12 @@ function resumeJobs(app: App): void {
     },
     drive: (job) => {
       const { path } = job.args as { path: string };
-      if (!fs.existsSync(path)) throw new Error(`${path} is gone`);
+      if (!fs.existsSync(path)) throw new jobs.Gone(`${path} is gone`);
       seams.drive.start(app.store, app.library, project(job.project), path);
     },
     smooth: (job) => {
       const { clip } = job.args as { clip: string };
-      if (!project(job.project).clips.some((one) => one.id === clip)) throw new Error("the clip is gone");
+      if (!project(job.project).clips.some((one) => one.id === clip)) throw new jobs.Gone("the clip is gone");
       seams.broll.smoothInBackground(app, job.project, [clip]);
     },
     watch: (job) => {
@@ -417,12 +421,12 @@ function resumeJobs(app: App): void {
     full: (job) => {
       // A review version's full-quality file for its Download button: the rest of its parts.
       const { name, path, key, version } = job.args as { name: string; path: string; key: string; version?: number };
-      if (!fs.existsSync(path)) throw new Error(`${path} is gone`);
+      if (!fs.existsSync(path)) throw new jobs.Gone(`${path} is gone`);
       void reviews.fullBehind(app.store.home, job.project, name, path, key, version);
     },
     map: (job) => {
       const { first } = job.args as { first: string };
-      if (!seams.broll.resumeMap?.(app, job.project, first)) throw new Error("its stand-in or job file is gone");
+      if (!seams.broll.resumeMap?.(app, job.project, first)) throw new jobs.Gone("its stand-in or job file is gone");
     },
   });
 }

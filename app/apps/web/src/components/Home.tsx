@@ -18,6 +18,7 @@ import { makesIdeas } from "../lib/ideas";
 import { creeping, elapsed, STEPS, stepOf } from "../writer/import-steps";
 import { prefetchScript } from "../writer/opened";
 import { CAN, useGrants } from "../writer/can";
+import { SHAPES, type Shape, shapeOf } from "../writer/several";
 import type { Kind } from "../writer/types";
 import { useKept } from "../lib/kept";
 import { creditCopies } from "../lib/copies";
@@ -1986,6 +1987,8 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
   const [picked, setPicked] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [sources, setSources] = useState<Source[] | null>(null);
+  /** Several videos: one case or a compilation, as the person said (null: not yet). */
+  const [shape, setShape] = useState<Shape | null>(null);
   const [reading, setReading] = useState(false);
   /** What each footage line was found to be, while the dialog is open: a line checked once isn't checked again. */
   const checkedLines = useRef(new Map<string, Source[]>());
@@ -2016,6 +2019,7 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
     setText(start?.text ?? "");
     setPrompt("");
     setSources(null);
+    setShape(null);
     checkedLines.current.clear();
     ticked.current.clear();
     setPreview(null);
@@ -2113,6 +2117,16 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
 
   const footage = (sources ?? []).filter((one) => !one.reuse);
   const blocked = (sources ?? []).some((one) => one.problem !== null && !one.reuse);
+  // Several videos make one case or a compilation (several.ts); one video alone is its case.
+  const several = writing && !commentary && sources !== null && sources.length >= 2;
+  const writerKind = WRITER_KIND[kind];
+  const videos = shapeOf({
+    kind: writerKind,
+    reused: (sources ?? []).some((one) => one.reuse),
+    title,
+    picked: shape,
+    may: { single: writerKind !== undefined && grants.singleKinds.includes(writerKind), compilation: writerKind !== undefined && grants.compilationKinds.includes(writerKind) },
+  });
   const editDoc = !writing && links.some((link) => DOC.test(link));
   const ready =
     title.trim() !== "" &&
@@ -2137,7 +2151,7 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
             ? DRIVE.test(footage[0]!.url)
               ? writer.importDrive(footage[0]!.url, undefined, title.trim(), WRITER_KIND[kind], extra)
               : writer.importYoutube(footage[0]!.url, undefined, title.trim(), WRITER_KIND[kind], extra)
-            : writer.importCompilation(title.trim(), sources!.map((one) => (one.reuse ? ["REUSE", one.url, one.earlier].filter(Boolean).join(" ") : one.url)), false, WRITER_KIND[kind], extra);
+            : writer.importCompilation(title.trim(), sources!.map((one) => (one.reuse ? ["REUSE", one.url, one.earlier].filter(Boolean).join(" ") : one.url)), videos.shape === "case", WRITER_KIND[kind], extra);
         // The server answers once the script exists, or refuses (a bad link, no access, three imports running);
         // the import then runs on Home. It used to answer only when the whole import ended, so this guessed with a
         // 1.5 s timer and a busy Mac's refusal after it was lost (JJ, Nov 1: a compilation started twice, no row and
@@ -2265,6 +2279,26 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
                   </div>
                 ))
               )}
+            </div>
+          )}
+          {several && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {SHAPES.map(([value, name, makes]) => (
+                <button
+                  type="button"
+                  key={value}
+                  disabled={videos.fixed !== null && videos.shape !== value}
+                  title={videos.fixed !== null && videos.shape !== value ? videos.fixed : makes}
+                  onClick={() => setShape(value)}
+                  className={cx(
+                    "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors",
+                    videos.shape === value ? "border-line-strong bg-raised text-fg" : "border-line text-muted hover:text-fg",
+                    "disabled:cursor-default disabled:opacity-40 disabled:hover:text-muted",
+                  )}
+                >
+                  {name}
+                </button>
+              ))}
             </div>
           )}
           {!writing && preview && (

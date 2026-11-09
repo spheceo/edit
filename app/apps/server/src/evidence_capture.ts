@@ -103,6 +103,9 @@ export const DRAWN = `(() => {
   return own.trim();
 })()`;
 
+/** A parked domain's page: "Related Searches" over stock pictures, "this domain may be for sale" (never the site). */
+export const PARKED = /related searches|(domain|this site) (is|may be) for sale|buy this domain|domain (is )?parked|parked free/i;
+
 /** The page a Wayback link leaves open (web/ then a star for the date, or 2015 and a star, then the page), else null. */
 export function waybackOpen(url: string): string | null {
   let parsed: URL;
@@ -112,8 +115,19 @@ export function waybackOpen(url: string): string | null {
     return null;
   }
   if (parsed.hostname !== "web.archive.org") return null;
-  const found = /^\/web\/(\d*\*)\/(.+)$/u.exec(parsed.pathname + parsed.search);
+  // An open date (web/*/, web/2015*/) or a partial one (web/2016/: the agent's own, Nov 9): the archive sends a
+  // partial date to whatever it holds nearest, and ModelingWorks.com's 2016 captures are the site refusing it (403).
+  const found = /^\/web\/(\d*\*|\d{1,13})\/(.+)$/u.exec(parsed.pathname + parsed.search);
   return found === null ? null : found[2]!;
+}
+
+/** The date a partial-date Wayback link asks for, as a full timestamp's prefix ("2016"), else null. */
+export function waybackNear(url: string): string | null {
+  try {
+    return /^\/web\/(\d{1,13})\//u.exec(new URL(url).pathname)?.[1] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -124,15 +138,20 @@ export function waybackOpen(url: string): string | null {
  * through the channel page here slowly: web.archive.org/web/*\/youtube.com/@Ryu-Kuriyama"),
  * and Chrome opened the archive's calendar of them.
  */
-export function pickCapture(rows: string[][]): string | null {
+export function pickCapture(rows: string[][], near: string | null = null): string | null {
   const captures = rows.filter((row) => row.length >= 3 && /^\d{14}$/u.test(row[0]!)).map(([timestamp, original, length]) => ({ timestamp: timestamp!, original: original!, length: Number(length) || 0 }));
   if (captures.length === 0) return null;
   const largest = Math.max(...captures.map((one) => one.length));
-  const chosen = [...captures].reverse().find((one) => one.length >= largest / 2) ?? captures.at(-1)!;
+  const good = captures.filter((one) => one.length >= largest / 2);
+  // A partial date: the good capture nearest it (the middle of the year or month asked for).
+  const target = near === null ? null : Number(near.padEnd(14, near.length <= 4 ? "0701000000" : "15000000").slice(0, 14));
+  const chosen = target !== null && good.length > 0
+    ? good.reduce((best, one) => (Math.abs(Number(one.timestamp) - target) < Math.abs(Number(best.timestamp) - target) ? one : best))
+    : ([...captures].reverse().find((one) => one.length >= largest / 2) ?? captures.at(-1)!);
   return `https://web.archive.org/web/${chosen.timestamp}/${chosen.original}`;
 }
 
-async function waybackCapture(page: string): Promise<string> {
+async function waybackCapture(page: string, near: string | null = null): Promise<string> {
   const index = `https://web.archive.org/cdx/search/cdx?url=${encodeURIComponent(page.replace(/^https?:\/\//u, ""))}&filter=statuscode:200&collapse=digest&fl=timestamp,original,length&output=json`;
   let rows: string[][];
   try {
@@ -141,7 +160,7 @@ async function waybackCapture(page: string): Promise<string> {
   } catch {
     rows = [];
   }
-  const chosen = pickCapture(rows);
+  const chosen = pickCapture(rows, near);
   if (chosen === null) throw new Error(`the Wayback Machine has no capture of ${page}: give a dated archive link or the live page`);
   return chosen;
 }
@@ -228,7 +247,7 @@ export function pdfScript(base64: string, phrase: string, page: number | null): 
 
 export async function capture(url: string, path: string, phrase = "", selector = "", fullPage = false, page: number | null = null, around = false): Promise<Capture> {
   const open = waybackOpen(url);
-  if (open !== null) url = await waybackCapture(open);
+  if (open !== null) url = await waybackCapture(open, waybackNear(url));
   const parsed = new URL(url);
   if (parsed.protocol !== "https:" || parsed.username || parsed.password) throw new Error("capture needs a public https source URL");
   const browser = seams.broll.chrome(); if (browser === null) throw new Error("evidence capture needs Chrome installed");
@@ -345,6 +364,8 @@ export async function capture(url: string, path: string, phrase = "", selector =
       const own = ${DRAWN};
       if (own.length < 20) return {error: 'The page drew nothing to capture' + (location.hostname === 'web.archive.org' ? ' (the Wayback Machine is slow or refusing just now): try again in a few minutes, or use a screenshot of it the script gives' : '')};
       if (/^(Just a moment|Access denied|Sign in to X|Sign in to confirm)/i.test(body.trim())) return {error:'The site showed a login or bot check'};
+      // A parked domain's page ("Related Searches" and stock pictures: ModelingWorks.com's 2013 capture, Nov 9) is never the site.
+      if (${PARKED}.test(body)) return {error: 'The page is a parked domain' + (location.hostname === 'web.archive.org' ? ' (captured ' + (location.pathname.split('/')[2] || '') + '), not the site: the archive holds no capture of the site itself then; give a date the site was up (web/<year>/…), or say it can\'t be had' : ', not the site')};
       const r = element?.getBoundingClientRect();
       // The phrase's own lines, in the page's pixels: its words' range in the element, one box per line.
       const lines = [];

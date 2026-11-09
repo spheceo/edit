@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { aroundCrop, DRAWN, isPdfLink, linesIn, pdfScript, pickCapture, UNWALL, waybackOpen } from "../src/evidence_capture.ts";
+import { aroundCrop, DRAWN, isPdfLink, linesIn, PARKED, pdfScript, pickCapture, UNWALL, waybackNear, waybackOpen } from "../src/evidence_capture.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("a Wayback link that leaves the date open stands for a real capture of the page, never a parked one", () => {
@@ -136,4 +136,28 @@ test("a horror highlight's capture is the page round the phrase, its lines given
   expect(top).toEqual({ x: 20, y: 0, width: 1560, height: 700 });
   // A line outside the crop isn't given.
   expect(linesIn([{ x: 10, y: 5000, width: 40, height: 20 }], crop)).toEqual([]);
+});
+
+test("a Wayback link with a partial date stands for the good capture nearest it, an exact one as given", () => {
+  // ModelingWorks.com (Nov 9): web/2016/ landed on the site refusing the archive (403); its real page is from 2013.
+  const url = "https://web.archive.org/web/2016/http://www.modelingworks.com/";
+  expect(waybackOpen(url)).toBe("http://www.modelingworks.com/");
+  expect(waybackNear(url)).toBe("2016");
+  const rows = [
+    ["timestamp", "original", "length"],
+    ["20031221125130", "http://modelingworks.com:80/", "4769"],
+    ["20120227142823", "http://modelingworks.com:80/", "8387"],
+    ["20130714063535", "http://modelingworks.com/", "7567"],
+    ["20131231200921", "http://modelingworks.com/", "575"],
+  ];
+  expect(pickCapture(rows, "2016")).toBe("https://web.archive.org/web/20130714063535/http://modelingworks.com/");
+  expect(pickCapture(rows, "2004")).toBe("https://web.archive.org/web/20031221125130/http://modelingworks.com:80/");
+  expect(waybackNear("https://web.archive.org/web/20150704004423/http://sandiego.craigslist.org/")).toBeNull();
+});
+
+test("a parked domain's page is told from the site", () => {
+  // ModelingWorks.com's 2013 capture: "modelingworks.com / Related Searches:" over stock pictures.
+  expect(PARKED.test("modelingworks.com\nRelated Searches:\nAbout Us | Privacy Policy")).toBe(true);
+  expect(PARKED.test("This domain may be for sale!")).toBe(true);
+  expect(PARKED.test("Become a model today: submit your photos and our scouts will call you")).toBe(false);
 });

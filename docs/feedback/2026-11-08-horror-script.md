@@ -110,3 +110,7 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 ### 21. look_at_media past a file's end said only "failed to fill whole buffer"
 **Broke.** The agent looked at 55–160 s of the FBI most-wanted clip, a 53 s range imported from 0:27–1:20 of its video, timed by the video's own clock: twice "could not decode … failed to fill whole buffer".
 **Fix.** look_at_media refuses a start past the file's end saying how long it is and that an imported range starts at 0, and ends a look at the file's end. Test: `edit_tools.test.ts`.
+
+### 22. An archive link with a year landed on the site refusing the archive, then on a parked page
+**Broke.** Block 17's "IE window opening the archived modeling sites": the agent's `web/2016/http://www.modelingworks.com/` drew nothing ("the Wayback Machine is slow or refusing just now"). It wasn't slow: every capture of ModelingWorks.com from 2014 on is the site's 403 to the archive, and the archive sends a partial date to whatever it holds nearest. Its nearest good-sized capture (July 2013) is a parked domain's "Related Searches" page.
+**Fix.** A Wayback link with a partial date (web/2016/…) stands for the good capture nearest that date, as an open one (web/*/) already did; an exact timestamp is kept. A parked domain's page ("Related Searches", "this domain may be for sale"…) is refused as not the site, saying the archive has no capture of the site then. The archive was refusing this machine's connections by then, so the live check waits. Tests: `evidence_capture.test.ts`.

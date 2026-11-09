@@ -276,6 +276,40 @@ function sameWord(a: string, b: string): boolean {
   return charCount(short) >= 4 && long.startsWith(short);
 }
 
+/** A number written as the voice says it ("8 ARRESTED" over "eight people … arrested"). */
+const NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+
+/**
+ * The frame each of a title's words is said at, in order, between `from` and
+ * `to` (Animation 9's words on the voice: the agent wrote them by hand from
+ * get_edit_context and three plans of the horror run of Nov 9 were refused for
+ * a count or a frame off). A word the voice doesn't say goes between its
+ * neighbours; null when it says none of them there.
+ */
+export function wordFrames(words: string[], heard: [number, string][], from: number, to: number): number[] | null {
+  const found: (number | null)[] = [];
+  let after = from;
+  for (const word of words) {
+    const own = stem(word);
+    const spoken = /^\d+$/u.test(own) && Number(own) < NUMBER_WORDS.length ? NUMBER_WORDS[Number(own)]! : own;
+    const hit = own === "" ? undefined : heard.find(([frame, one]) => frame >= after && frame < to && (one === spoken || one === own || sameWord(spoken, one)));
+    found.push(hit === undefined ? null : hit[0]);
+    if (hit !== undefined) after = hit[0] + 1;
+  }
+  if (found.every((frame) => frame === null)) return null;
+  const out: number[] = [];
+  found.forEach((frame, index) => {
+    if (frame !== null) {
+      out.push(Math.max(frame, out[index - 1] ?? from));
+      return;
+    }
+    const before = out[index - 1] ?? from;
+    const next = found.slice(index + 1).find((one) => one !== null) ?? null;
+    out.push(next !== null ? Math.round((before + next) / 2) : Math.min(before + 12, to - 1));
+  });
+  return out.map((frame) => Math.min(Math.max(frame, from), to - 1));
+}
+
 /**
  * The frames a desktop profile's `lines` type on, each where the narration
  * between `from` and `to` (frames) says it, in order: the first of its

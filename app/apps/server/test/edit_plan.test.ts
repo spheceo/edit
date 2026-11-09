@@ -1005,8 +1005,8 @@ test("horror's desktop shows what the story's people saw: a page in Internet Exp
   const named = (prefix: string) => p.clips.filter((own) => own.name?.startsWith(`Desktop · ${prefix}`) === true);
   // The page from its top, cut at the window's bottom; its address in the bar.
   const page = named("Internet Explorer · blog.png")[0] as VideoClip;
-  expect(page.crop.top).toBe(0);
-  expect(page.crop.bottom).toBeGreaterThan(0.5);
+  expect(page.crop?.top).toBe(0);
+  expect(page.crop?.bottom ?? 0).toBeGreaterThan(0.5);
   expect((named("Internet Explorer address")[0] as TextClip).text).toBe("https://note.com/crisp_ibis3548/n/n6157a5766807");
   // The email's header in bold, its words flush (no Notepad dashes), typed on.
   const email = named("Email line") as TextClip[];

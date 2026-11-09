@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { calloutTiming, cutMidWord, footageAhead, lineFrames, narrationInFootage, offScript, scriptOrder, spokenWords, subtitleCoverage, textLate, textNotSaid, unsubtitledSpeech } from "../src/edit_review.ts";
+import { calloutTiming, cutMidWord, footageAhead, lineFrames, narrationInFootage, offScript, scriptOrder, spokenWords, subtitleCoverage, textLate, textNotSaid, unsubtitledSpeech, wordFrames } from "../src/edit_review.ts";
 import type { AudioClip, Clip, Project, TextClip } from "../src/model.ts";
 import { addTrack, newProject } from "../src/project.ts";
 import type { Transcript } from "../src/transcribe.ts";
@@ -391,4 +391,15 @@ test("a label up with a cut-in's picture, its narration in the room after it, is
   p.clips.push({ id: "vo", track: a5, start: 48, duration: 90, color: "purple", fade_in: 0, fade_out: 0, type: "audio", name: "Voice-over", media: "m7", source_in: 0, speed: 1, volume_db: -60, muted: true } as never);
   p.clips.push({ id: "t1", track: v2, start: 40, duration: 45, color: "red", fade_in: 0, fade_out: 0, keyframes: {}, type: "text", name: "Label", text: "MEDIC CALLED", style: {}, transform: { x: 0, y: 0, scale: 1, rotation: 0 }, animation: { preset: "none", duration: 0, stagger: 0 }, opacity: 1 } as never);
   expect(textLate(p, new Map([["m7", TEASER]]))).toEqual([]);
+});
+
+test("a horror title's words on the voice land where the voice says them, in order, and a number as it's said", () => {
+  // "PRISON FAITH BAPTIZED" over "…in prison, he found faith and was baptized", from frame 1175.
+  const heard: [number, string][] = [[1100, "prison"], [1182, "in"], [1190, "prison"], [1230, "found"], [1240, "faith"], [1300, "was"], [1310, "baptiz"]];
+  expect(wordFrames(["PRISON", "FAITH", "BAPTIZED"], heard, 1175, 1355)).toEqual([1190, 1240, 1310]);
+  // "8 ARRESTED" over "arrested eight people … arrested": the eight, then the arrested after it.
+  expect(wordFrames(["8", "ARRESTED"], [[4350, "arrest"], [4360, "eight"], [4370, "people"], [4400, "arrest"]], 4345, 4515)).toEqual([4360, 4400]);
+  // A word the voice doesn't say goes between its neighbours; none said: null (the plan's own words_at stays asked for).
+  expect(wordFrames(["ONE", "WORD", "SAID"], [[10, "one"], [40, "said"]], 0, 100)).toEqual([10, 25, 40]);
+  expect(wordFrames(["NOT", "HERE"], [[10, "else"]], 0, 100)).toBeNull();
 });

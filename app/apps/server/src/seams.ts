@@ -720,6 +720,7 @@ export interface EditReviewSeam {
   deadAir(project: Project, transcripts: Map<string, Transcript>, spans: [number, number][]): Json[];
   spokenWords(project: Project, transcripts: Map<string, Transcript>): [number, string][];
   lineFrames(lines: string[], heard: [number, string][], from: number, to: number): (number | null)[];
+  wordFrames(words: string[], heard: [number, string][], from: number, to: number): number[] | null;
   offScript(project: Project, transcripts: Map<string, Transcript>): Json[];
   scriptOrder(project: Project): Json[];
   narrationInFootage(project: Project, transcripts?: Map<string, Transcript>): Json[];

@@ -2402,10 +2402,42 @@ function desktopsIn(project: Project, operations: Json[]): [Record<string, unkno
  * unless the plan gives them (`heard`).
  */
 export function hearWords(app: App, project: Project, operations: Json[]): void {
-  const wanting = operations.map(objectOf).filter((operation) => (operation.op === "intro_captions" || operation.op === "text_slam") && operation.heard === undefined);
-  if (wanting.length === 0) return;
-  const frames = seams.editReview.spokenWords(project, cachedTranscripts(app, project, false)).map(([frame]) => frame);
-  for (const operation of wanting) operation.heard = frames;
+  const all = operations.map(objectOf);
+  const wanting = all.filter((operation) => (operation.op === "intro_captions" || operation.op === "text_slam") && operation.heard === undefined);
+  const titles = project.style === "horror" ? all.filter((operation) => operation.op === "commentary_text" && operation.motion === "words" && !wordsAtFits(operation)) : [];
+  if (wanting.length === 0 && titles.length === 0) return;
+  const heard = seams.editReview.spokenWords(project, cachedTranscripts(app, project, false));
+  for (const operation of wanting) operation.heard = heard.map(([frame]) => frame);
+  // Horror's words on the voice (Animation 9): each word at the frame it's said, unless the plan gives them right.
+  for (const title of titles) {
+    if (typeof title.start !== "number" || typeof title.end !== "number" || typeof title.text !== "string") continue;
+    const words = title.text.trim().split(/\s+/u).filter(Boolean);
+    const found = seams.editReview.wordFrames(words, heard, titleFrom(title), title.end);
+    if (found !== null) title.words_at = found;
+  }
+}
+
+/** Where a horror title's words can start: after the blur behind a centred bold one (horror_graphics.title). */
+function titleFrom(title: Args): number {
+  const start = title.start as number;
+  const end = title.end as number;
+  const blurred =
+    typeof title.background_blur === "boolean"
+      ? title.background_blur
+      : (title.look === undefined || title.look === "bold") && (title.at === undefined || title.at === "center");
+  return blurred ? Math.min(start + 6, end - 12) : start;
+}
+
+/** A plan's words_at that the title takes as given: one frame per word, in order, inside its frames. */
+function wordsAtFits(title: Args): boolean {
+  if (!Array.isArray(title.words_at) || typeof title.text !== "string" || typeof title.start !== "number" || typeof title.end !== "number") return false;
+  const at = title.words_at;
+  const from = titleFrom(title);
+  const end = title.end;
+  return (
+    at.length === title.text.trim().split(/\s+/u).filter(Boolean).length &&
+    at.every((frame, index) => typeof frame === "number" && frame >= from && frame < end && (index === 0 || frame >= (at[index - 1] as number)))
+  );
 }
 
 /**

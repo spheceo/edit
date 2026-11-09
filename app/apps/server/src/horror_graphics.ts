@@ -151,7 +151,7 @@ export function title(p: Project, a: Args, fallback: Look = "bold"): Args {
   if (motion === "words") {
     const at = Array.isArray(a.words_at) ? a.words_at.filter((f): f is number => typeof f === "number") : [];
     const count = words.split(/\s+/u).filter(Boolean).length;
-    if (at.length !== count || at.some((f, i) => f < from || f >= end || (i > 0 && f < at[i - 1]!))) throw new Error(`motion "words" needs words_at: one timeline frame per word (${count}), in order, inside the title's frames (the voice's word times from get_edit_context)`);
+    if (at.length !== count || at.some((f, i) => f < from || f >= end || (i > 0 && f < at[i - 1]!))) throw new Error(`motion "words": the voice says none of "${words}" inside the title's frames, so it needs words_at: one timeline frame per word (${count}), in order, inside them (the voice's word times from get_edit_context), or the title moved to where they're said`);
     return phrases(p, words, at, end, kind, typeof a.size === "number" ? a.size : null, x, y, made);
   }
   const rise = motion === "rise";

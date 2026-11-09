@@ -66,3 +66,8 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 ### 11. The horror workflow asked for check_shots over a whole case
 **Broke.** check_shots over case 1 was refused: "check at most 120 s at a time". The cut-ins and final-pass skills say two minutes at a time; the workflow's cut-ins step said "check_shots over the case".
 **Fix.** `edit-workflow.md`: "check_shots over the case, two minutes at a time".
+
+### 12. Words on the voice were timed by hand, and plans kept being refused for it
+**Broke.** Four of the agent's plans in cases 1 and 2 were refused with `motion "words" needs words_at`: "8 ARRESTED" with no words_at, others a frame outside the title or a count off. Each time it read the word times out of get_edit_context and wrote them in again.
+**Why.** Edit has the voice's word times (they time the desktop's notes and profile lines already) but asked the agent to copy them for Animation 9.
+**Fix.** `hearWords` (`edit_tools.ts`) puts each word of a horror `commentary_text {motion: "words"}` at the frame the voice says it (`edit_review.wordFrames`: in order inside the title's frames, a number as it's said, a word it doesn't say between its neighbours), unless the plan's own words_at fit. Only a title over none of its words is refused, saying so. The cut-ins skill and the tool's description no longer ask for words_at. Also two type errors in the desktop test of fix 10. Test: `edit_review.test.ts`.

@@ -15,6 +15,8 @@ const rows = new Map<string, Record<string, unknown>>();
 const objects = new Map<string, Uint8Array>();
 /** Keys whose next GETs fail with a 500, so many times each. */
 const failing = new Map<string, number>();
+/** What the next listing answers, when a script was saved again between the listing and the pull: the rows as they were. */
+let listedBefore: Record<string, unknown>[] | null = null;
 let server: ReturnType<typeof Bun.serve>;
 let env: Record<string, string | undefined>;
 
@@ -44,7 +46,11 @@ beforeAll(() => {
         for (const key of body.keys) objects.delete(key);
         return Response.json({});
       }
-      if (body.path === "writer:listScripts") return Response.json({ status: "success", value: [...rows.values()] });
+      if (body.path === "writer:listScripts") {
+        const value = listedBefore ?? [...rows.values()];
+        listedBefore = null;
+        return Response.json({ status: "success", value });
+      }
       if (body.path === "writer:getScript") return Response.json({ status: "success", value: rows.get(body.args.scriptId) ?? null });
       if (body.path === "writer:commitScript") {
         const args = body.args;
@@ -73,6 +79,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  listedBefore = null;
   rows.clear();
   objects.clear();
   failing.clear();
@@ -230,4 +237,55 @@ test("a script deleted elsewhere whose folder here has no body is removed, never
 
     expect(fs.readdirSync(store.scriptsRoot(data))).toEqual([]);
   }
+});
+
+// Nov 9: Marc wrote a script a save a minute, and the Macs following it (one
+// of them untouched for two days) kept ten "(conflicted copy)" scripts of his.
+// A pull held the row of a revision his next save had already replaced, found
+// its body gone, and took that for a lost body: its own older copy went up
+// "as the next revision", was refused, and was then kept as a copy.
+test("a script saved again while it comes down is taken at the newer revision: nothing here goes up, and no copy is kept", async () => {
+  inCloud(4, script({ title: "Cop Kicks", revision: 4 }), [{ name: "chat.json", bytes: "four" }]);
+  const data = fs.mkdtempSync(join(os.tmpdir(), "edit-cloud-sync-"));
+  await cloud.syncOnceForTests(data);
+  expect(store.read(store.scriptDir(data, ID)).revision).toBe(4);
+
+  // Rev 5 is listed; before its body is fetched, rev 6 is saved and rev 5's body and files are removed.
+  inCloud(5, script({ title: "Cop Kicks", revision: 5 }), [{ name: "chat.json", bytes: "five" }]);
+  const stale = [{ ...rows.get(ID)! }];
+  objects.delete(`writer/scripts/${ID}/body/5.json`);
+  objects.delete(`writer/scripts/${ID}/files/r5/chat.json`);
+  inCloud(6, script({ title: "Cop Kicks", revision: 6 }), [{ name: "chat.json", bytes: "six!" }]);
+  listedBefore = stale;
+  await cloud.syncOnceForTests(data);
+
+  expect(store.read(store.scriptDir(data, ID)).revision).toBe(6);
+  expect(fs.readFileSync(join(store.scriptDir(data, ID), "chat.json"), "utf8")).toBe("six!");
+  expect(copies(data)).toEqual([]);
+  expect(rows.get(ID)!.rev).toBe(6);
+  // And the next round has nothing to send.
+  await cloud.syncOnceForTests(data);
+  expect(rows.get(ID)!.rev).toBe(6);
+  expect(copies(data)).toEqual([]);
+});
+
+test("a file gone because the script was saved again is fetched from the newer revision, not left out and sent up from here", async () => {
+  inCloud(4, script({ title: "Cop Kicks", revision: 4 }), [{ name: "chat.json", bytes: "four" }]);
+  const data = fs.mkdtempSync(join(os.tmpdir(), "edit-cloud-sync-"));
+  await cloud.syncOnceForTests(data);
+
+  // Rev 5's body is still there when the pull reads it; its chat was replaced by rev 6's.
+  inCloud(5, script({ title: "Cop Kicks", revision: 5 }), [{ name: "chat.json", bytes: "five" }]);
+  const stale = [{ ...rows.get(ID)! }];
+  objects.delete(`writer/scripts/${ID}/files/r5/chat.json`);
+  inCloud(6, script({ title: "Cop Kicks", revision: 6 }), [{ name: "chat.json", bytes: "six!" }]);
+  listedBefore = stale;
+  await cloud.syncOnceForTests(data);
+
+  expect(store.read(store.scriptDir(data, ID)).revision).toBe(6);
+  expect(fs.readFileSync(join(store.scriptDir(data, ID), "chat.json"), "utf8")).toBe("six!");
+  expect(copies(data)).toEqual([]);
+  await cloud.syncOnceForTests(data);
+  expect(rows.get(ID)!.rev).toBe(6);
+  expect(cloudFiles().find((file) => file.name === "chat.json")?.key).toBe(`writer/scripts/${ID}/files/r6/chat.json`);
 });

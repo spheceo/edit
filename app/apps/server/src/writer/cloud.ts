@@ -954,8 +954,28 @@ export function decidePull(seen: PullSeen): PullDecision {
   return { do: "take", keepCopy: true, why: "conflict" };
 }
 
+/** How many times one round follows a script to a newer revision saved while it was coming down; after that the next round takes it. */
+const CHASES = 2;
+
+/**
+ * The cloud's row of `id` as it is now, when the script was saved again since
+ * `row` was listed (or deleted): null when `row` is still the newest. A save
+ * removes the files only the revision before it named, so to a pull still
+ * holding that revision's row its body or a file "isn't in the cloud".
+ */
+async function savedSince(id: string, row: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const listed = await convex("query", "writer:getScript", { scriptId: id }).catch((error: unknown) => {
+    if (error instanceof Problem && error.offline) throw error;
+    return null;
+  });
+  if (listed?.ok !== true || listed.value === null || typeof listed.value !== "object") return null;
+  const now = listed.value as Record<string, unknown>;
+  if (Number(now.rev ?? 0) <= Number(row.rev ?? 0) && now.deletedAt == null) return null;
+  return { ...now, scriptId: id };
+}
+
 /** Brings one script from the cloud when it's newer than this Mac's, as `decidePull` says. */
-async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown>): Promise<void> {
+async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown>, chased = 0): Promise<void> {
   const id = String(row.scriptId ?? "");
   if (!store.idOk(id) || busy(id) || deleting(data).includes(id)) return;
   const rev = Number(row.rev ?? 0);
@@ -991,6 +1011,17 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
   // This Mac's own commit, whose answer was lost: taken as pushed, never kept as a copy.
   if (ownCommit(ledger, id, row)) return;
   const body = await fetchBytes(String(row.bodyKey ?? ""));
+  // Saved again while this was at it: that revision is the one to take. Taking the missing body for a lost one saved
+  // this Mac's older copy "as the next revision", refused, and then kept it as a "(conflicted copy)" of a script
+  // nobody here had touched (Nov 9: Marc writing a script a save a minute, and ten such copies of his scripts from
+  // the idle Macs following him).
+  if (body === null) {
+    const newer = await savedSince(id, row);
+    if (newer !== null) {
+      if (chased < CHASES) await pullOne(data, ledger, newer, chased + 1);
+      return;
+    }
+  }
   decision = decidePull(seen(body));
   if (decision.do === "fail") throw new Problem("Its body isn't in the cloud.");
   if (decision.do === "keep-ours") {
@@ -1051,6 +1082,15 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
         await download(id, name, key, size, path);
       } catch (error) {
         if (!(error instanceof Gone)) throw error;
+        // Saved again while its files came down (the newer save removed this one): the newer revision is taken
+        // instead, nothing of this one written down. A copy kept above was of this Mac's version as it still is,
+        // so the newer revision doesn't keep another.
+        const newer = await savedSince(id, row);
+        if (newer !== null) {
+          if (ledger.copied?.[id] === rev) ledger.copied[id] = Number(newer.rev ?? 0);
+          if (chased < CHASES) await pullOne(data, ledger, newer, chased + 1);
+          return;
+        }
         // Left out rather than asked for for ever: a copy here goes up again with the next push, healing the cloud's.
         diag.warn("writer", `${jobs.named(id, title)}: rev ${rev}'s ${name} isn't in the cloud, so it's left out${isFile(path) ? ` and ${THIS_MACHINE}'s goes up again` : ""}`);
         continue;

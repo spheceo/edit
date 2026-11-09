@@ -122,6 +122,11 @@ const splitWords = (text: string): string[] => text.split(/\s+/).filter((word) =
 
 type Person = [id: string, name: string | null, role: string];
 
+/** Said of lines whose words carry no voice and no turn marks (Apple's on-device recogniser): only on those, so answers kept for captions and Scribe stay valid. */
+const UNVOICED = "These words come from an on-device recogniser: nothing marks where a speaker changes (no >> after a recording's first line), short replies and fillers are often missing, and rare names may be misheard. Decide every change of speaker from the conversation; split a line wherever a second person starts.";
+const unvoiced = (script: Script, given: Line[]): { words?: string } =>
+  given.length > 0 && given.every((line) => script.words.slice(line.first, line.last + 1).every((word) => word.speaker == null)) ? { words: UNVOICED } : {};
+
 export async function runWith(script: Script, dir: string, names: string[], notes: string, onWindow: (done: number, total: number) => void, ask: Ask): Promise<Report> {
   const kept = join(dir, "turns");
   fs.mkdirSync(kept, { recursive: true });
@@ -146,6 +151,7 @@ export async function runWith(script: Script, dir: string, names: string[], note
     notes: [...notes].slice(0, 4_000).join(""),
     caseNames: names,
     recordings: recordingList,
+    ...unvoiced(script, all),
     task: 'List everyone who speaks in these lines, a person each, with ids p1, p2, …: their name when the conversation, title or notes give it, else null, and their role (Judge, Prosecutor, Defense Attorney, Defendant, Witness, Officer, Suspect, Victim, Dispatch, Clerk, Bailiff, Narrator, Reporter…). In how, say in a few words how to tell their lines ("asks the witness questions for the state"). In suspects, the person or people this case is about (suspect, defendant, or officer when the case concerns the officer\'s conduct); never infer guilt.',
     lines: sample(script, all),
   });
@@ -178,6 +184,7 @@ export async function runWith(script: Script, dir: string, names: string[], note
         caseNames: names,
         recording: recordingList[all[from]!.group] ?? null,
         cast: castPeople,
+        ...unvoiced(script, all.slice(from, to)),
         task: 'Give every line below (by its n) to the person in the cast who says it. Someone not in the cast goes in newPeople with an id starting "new" and is used by that id. Where a second person starts speaking inside a line, add a split: the line\'s n, the exact words where the other person starts (copied from the line, at least three words, or all of it if shorter), and who that is; a line\'s own person is who says its first words. In spellings, only a person\'s or place\'s name YouTube misheard, one word each, as the case\'s names or conversation spell it (heard "Jaden", written "Jadon"); never other words.',
         lines: shownLines,
       });

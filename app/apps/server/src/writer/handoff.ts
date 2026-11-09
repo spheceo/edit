@@ -24,7 +24,7 @@ import { named } from "./jobs.ts";
 import * as media from "./media.ts";
 import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
-import { recordings } from "./transcription.ts";
+import { recordings, roughOnly } from "./transcription.ts";
 import { THIS_MACHINE } from "../machine.ts";
 
 /** A source's place in Edit's keys: `drive/<id>`, `youtube/<id>`, `sha256/<hex>`. */
@@ -211,10 +211,10 @@ export async function share(data: string, id: string): Promise<string> {
   return list.length === 0 ? `no footage on ${THIS_MACHINE} to share` : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
 }
 
-/** A recording's words to Edit's analysis: only where the script has them, and never words only YouTube's captions gave (Edit reads the captions itself). */
+/** A recording's words to Edit's analysis: only where the script has them, and never rough words alone (YouTube's captions, which Edit reads itself, or Apple's): Edit's subtitles want heard words. */
 async function shareWords(dir: string, script: Script, recording: Shared, done: string[]): Promise<void> {
   const at = transcriptKey(recording.source);
-  const captioned = isFile(join(dir, "transcript", recording.key, "captions.json")) && hearing.cached(join(dir, "transcript", recording.key)) === null;
+  const captioned = roughOnly(join(dir, "transcript", recording.key));
   if (script.words.length > 0 && !captioned && !(await editCloud.has(at))) {
     const text = serialize(transcriptOf(dir, script, recording));
     await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);

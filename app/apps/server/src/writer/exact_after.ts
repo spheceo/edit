@@ -1,4 +1,4 @@
-// A captioned script's new footage, heard exactly after the revision that
+// A rough script's new footage, heard exactly after the revision that
 // brought it in, not before it's done (Nov 5, JJ's Mac: Claude's revisions
 // answered in 8 to 25 s, then waited a minute or two on the footage coming
 // back and being heard; Repack's took about 30 s in all). The revision's
@@ -19,6 +19,7 @@ import type { Clip, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import { QUOTA_RETRY_MS, whyOf } from "../import_steps.ts";
 import { isFile } from "../paths.ts";
 import * as chat from "./chat.ts";
 import * as cloud from "./cloud.ts";
@@ -26,7 +27,6 @@ import { checkClips } from "./edits.ts";
 import * as exact from "./exact.ts";
 import { importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
-import { clock } from "./paragraphs.ts";
 import * as storage from "./storage.ts";
 import * as store from "./store.ts";
 import { readPeaks } from "./tidy.ts";
@@ -37,6 +37,26 @@ const WAIT_MS = 2 * 3_600_000;
 
 const going = new Map<string, Promise<void>>();
 const again = new Set<string>();
+const waiting = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * A hearing the transcription plan's credit refused, tried again by itself
+ * every 30 minutes (import_steps.ts `QUOTA_RETRY_MS`, as an import's files
+ * wait) until it's heard or nothing is left to hear. Kept only while Edit
+ * runs: after a restart, the next revision, Start the edit or Hear exactly asks.
+ */
+export function afterCredit(data: string, id: string): void {
+  if (waiting.has(id)) return;
+  const timer = setTimeout(() => {
+    waiting.delete(id);
+    soon(data, id);
+  }, QUOTA_RETRY_MS.value);
+  timer.unref?.();
+  waiting.set(id, timer);
+}
+
+/** Whether a script's hearing waits for credit (tests). */
+export const waitsForCredit = (id: string): boolean => waiting.has(id);
 
 /** The footage a script plays: its original where it's still on this Mac, else its preview. */
 export const footagePath = (dir: string, script: Script): string => (script.originalPath !== "" && isFile(script.originalPath) ? script.originalPath : store.proxyPath(dir));
@@ -117,14 +137,20 @@ async function once(data: string, id: string): Promise<void> {
   const name = jobs.named(id, script.title);
   const source = await footageFor(null, data, dir, id, null);
   if ("away" in source) {
-    diag.warn("writer", `${name}: its new footage wasn't heard exactly (${source.away}); its cuts follow YouTube's captions`);
+    diag.warn("writer", `${name}: its new footage wasn't heard exactly (${source.away}); its cuts follow the rough words`);
     return;
   }
   const from = isFile(source.footage) ? "here" : "the cloud's preview";
   const heardFrom = stamp(script.words);
   const wordsBefore = structuredClone(script.words);
   const work = structuredClone(script);
-  const report = await exact.run(work, dir, source.footage, work.clips, () => {});
+  let report: exact.Report;
+  try {
+    report = await exact.run(work, dir, source.footage, work.clips, () => {});
+  } catch (error) {
+    if (whyOf(error) === "quota") afterCredit(data, id);
+    throw error;
+  }
   // A job or an import on the script writes it when it ends: the pass lands after it.
   const until = Date.now() + WAIT_MS;
   while (jobs.running(id) || importing(id)) {
@@ -155,5 +181,5 @@ async function once(data: string, id: string): Promise<void> {
   store.write(dir, latest);
   versions.keep(dir, "claude", before, latest);
   if (silent.size > 0) chat.add(dir, "editor", `Heard the new footage exactly and dropped ${silent.size} ${silent.size === 1 ? "piece" : "pieces"} with no sound in ${silent.size === 1 ? "it" : "them"}.`);
-  diag.info("writer", `${name}: new footage heard exactly from ${from} in ${Math.round((Date.now() - began) / 1000)} s: ${clock(report.heardMs)} in ${report.stretches} ${report.stretches === 1 ? "stretch" : "stretches"}, ${report.retimed} words retimed, ${report.respelled} respelled, ${report.relabelled} relabelled${silent.size > 0 ? `, ${silent.size} silent pieces dropped` : ""}`);
+  diag.info("writer", `${name}: new footage heard exactly from ${from} in ${Math.round((Date.now() - began) / 1000)} s: ${exact.share(report.heardMs, report.footageMs)} in ${report.stretches} ${report.stretches === 1 ? "stretch" : "stretches"}, ${report.retimed} words retimed, ${report.respelled} respelled, ${report.relabelled} relabelled${silent.size > 0 ? `, ${silent.size} silent pieces dropped` : ""}`);
 }

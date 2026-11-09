@@ -1,10 +1,18 @@
-// A script's words: each recording's YouTube captions where it has them,
-// else heard as Edit hears it (hearing.ts), listening for the case's names
-// (names.ts), then put on the script's clock. A joined case is heard
-// recording by recording, from each one's own file where it's kept (else
-// its stretch of the joined footage), so no piece spans two. Each
-// recording's hearing is kept under `transcript/<recording>/`, so a retry
-// never pays twice.
+// A script's words, rough first (Sphe, Nov 9: one Mac sent Scribe 120 hours
+// in five days, and the plan ran out). Each recording takes, in order: a
+// hearing kept from before; YouTube's captions when it's a YouTube video;
+// Apple's on-device recogniser on a Mac that has it (mac_speech.ts: free, ~45x
+// real time, no voices, rare names its weak point); and only where neither
+// exists (Linux, an older macOS) Scribe, as Edit hears it (hearing.ts),
+// listening for the case's names (names.ts). Rough words mark the script
+// `rough`, and once a build has chosen its clips Scribe hears only those
+// stretches (exact.ts): a 5.6-hour FOIA case pays for about an hour. Every
+// source goes onto the script's clock the same way (`onClock`). A joined
+// case is heard recording by recording, from each one's own file where it's
+// kept (else its stretch of the joined footage), so no piece spans two. Each
+// recording's words are kept under `transcript/<recording>/` (Scribe's as
+// transcript.json, captions as captions.json, Apple's as apple.json, so rough
+// words are never handed to Edit as heard), so a retry never pays twice.
 
 import * as fs from "node:fs";
 
@@ -14,6 +22,8 @@ import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
+import * as macSpeech from "../mac_speech.ts";
+import { ffmpeg } from "../tools.ts";
 import type { Transcript } from "../transcribe.ts";
 import * as captions from "./captions.ts";
 import * as hearing from "./hearing.ts";
@@ -65,6 +75,52 @@ function recordingKey(dir: string, script: Script, index: number, reuse: string 
   return has(reuseKey) || !has(legacy) ? reuseKey : legacy;
 }
 
+/** Where Apple's words of a recording are kept, apart from a paid hearing. */
+const APPLE = "apple.json";
+
+/** Apple's words heard before. */
+export function appleCached(work: string): Transcript | null {
+  try {
+    const found = JSON.parse(fs.readFileSync(join(work, APPLE), "utf8")) as Transcript;
+    return found.model === macSpeech.MODEL && Array.isArray(found.words) && found.words.length > 0 ? found : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a recording's words here are rough (captions or Apple's) with no paid hearing beside them. */
+export function roughOnly(work: string): boolean {
+  return hearing.cached(work) === null && (captions.cached(work) !== null || appleCached(work) !== null);
+}
+
+/** A recording (or its `span` of the footage, in ms) heard by Apple on this Mac, kept in `work`; null where there's no Apple recogniser or it heard nothing (then Scribe hears it). */
+export async function appleHear(file: string, span: [number, number] | null, work: string, signal?: AbortSignal): Promise<Transcript | null> {
+  const kept = appleCached(work);
+  if (kept !== null) return kept;
+  if (!(await macSpeech.available()) || !isFile(file)) return null;
+  fs.mkdirSync(work, { recursive: true });
+  const cut = join(work, "apple-stretch.m4a");
+  try {
+    let source = file;
+    if (span !== null) {
+      const child = Bun.spawn([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", (span[0] / 1000).toFixed(3), "-t", ((span[1] - span[0]) / 1000).toFixed(3), "-i", file, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "96k", cut], { stdout: "ignore", stderr: "pipe", ...(signal ? { signal } : {}) });
+      const stderr = await new Response(child.stderr).text();
+      if ((await child.exited) !== 0) throw new Error(`could not take the sound out of the footage: ${diag.gist(stderr)}`);
+      source = cut;
+    }
+    const heard = await macSpeech.hear(source, join(work, APPLE), signal);
+    if (heard.words.length === 0) return null;
+    writeAtomic(join(work, APPLE), JSON.stringify({ ...heard, model: macSpeech.MODEL }));
+    return appleCached(work);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    diag.warn("writer", `${file}: Apple's recogniser didn't hear it (${diag.messageOf(error)}); Scribe hears it`);
+    return null;
+  } finally {
+    fs.rmSync(cut, { force: true });
+  }
+}
+
 /** Each recording's YouTube link, in the order of `recordings`. */
 function links(script: Script): (string | null)[] {
   const youtube = (url: string | undefined | null) => (url && isYoutube(url) ? url : null);
@@ -112,6 +168,7 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
   const youtube = links(script);
   const wantCaptions = captions.wanted(script);
   let captioned = 0;
+  let apple = 0;
   const heard: Word[] = [];
   for (const [index, recording] of all.entries()) {
     if (signal?.aborted) throw new Error("Stopped by you. Completed work is saved.");
@@ -123,6 +180,8 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
     let transcript: Transcript | null = script.status !== "ready" ? kept : null;
     transcript ??= url === null ? null : await captions.transcript(app, url, work, signal);
     transcript ??= script.status === "ready" ? kept : null;
+    // Free rough words before paid ones: Scribe hears only what the build chooses (exact.ts).
+    transcript ??= await appleHear(recording.file, recording.span, work, signal);
     if (transcript === null) {
       if (!isFile(recording.file)) throw new Error("The original video is missing, so it can't be transcribed.");
       transcript = await hearing.hear(recording.file, recording.span, work, await keyterms(), signal);
@@ -130,6 +189,9 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
     if (transcript.model === captions.MODEL) {
       captioned++;
       diag.info("writer", `${recording.key}: ${transcript.words.length} words from YouTube's captions`);
+    } else if (transcript.model === macSpeech.MODEL) {
+      apple++;
+      diag.info("writer", `${recording.key}: ${transcript.words.length} words from Apple's recogniser`);
     }
     onProgress(((index + 1) * 1000) / count, 1000);
     // A joined case's voices are its recordings' own: one recording's speaker_0 is not the next one's.
@@ -139,6 +201,7 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
   }
   if (heard.length === 0) throw new Error(NO_WORDS);
   script.captions = (script.captions ?? false) || captioned > 0;
+  script.rough = (script.rough ?? false) || captioned + apple > 0;
   // A recovery adds missing words without changing existing text, corrections, word ids (reuse highlights use them) or the timeline.
   if (script.words.length === 0) heard.forEach((word, index) => (word.id = `w${String(index).padStart(5, "0")}`));
   script.words = heard;
@@ -217,18 +280,23 @@ export function fillMissing(saved: Word[], recovered: Word[], corrections: Recor
   return out.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
 }
 
+/** Where a recording's words came from, when they're rough. */
+export type Rough = "captions" | "apple" | null;
+
 /** One recording already joined onto a compilation; captions stay on that recording's own clock until mapped onto `span` in the joined footage. */
-export async function transcribeSpan(app: App, file: string, span: [number, number], url: string | null, work: string, keyterms: readonly string[], tag: string, signal?: AbortSignal): Promise<[Word[], boolean]> {
+export async function transcribeSpan(app: App, file: string, span: [number, number], url: string | null, work: string, keyterms: readonly string[], tag: string, signal?: AbortSignal): Promise<[Word[], Rough]> {
   if (url !== null && isYoutube(url)) {
     const found = await captions.transcript(app, url, work, signal);
-    if (found !== null) return [onClock(found, span[0], Math.max(span[1] - span[0], 1), tag), true];
+    if (found !== null) return [onClock(found, span[0], Math.max(span[1] - span[0], 1), tag), "captions"];
   }
   // A span that covers the whole file is heard as the file.
   const whole = (await media.streams(file).catch(() => null))?.durationMs ?? 0;
   const part: [number, number] | null = span[0] > 0 || span[1] < whole ? span : null;
-  const transcript = await hearing.hear(file, part, work, keyterms, signal);
   const [from, to] = part ?? [0, Math.max(whole, 1)];
-  return [onClock(transcript, from, Math.max(to - from, 1), tag), false];
+  const apple = hearing.cached(work) === null ? await appleHear(file, part, work, signal) : null;
+  if (apple !== null) return [onClock(apple, from, Math.max(to - from, 1), tag), "apple"];
+  const transcript = await hearing.hear(file, part, work, keyterms, signal);
+  return [onClock(transcript, from, Math.max(to - from, 1), tag), null];
 }
 
 /** Keeps a recording's hearing beside the script, as hearing.ts reads it back. */

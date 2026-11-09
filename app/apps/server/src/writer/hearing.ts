@@ -47,8 +47,8 @@ export function cached(work: string): transcribe.Transcript | null {
   }
 }
 
-/** Hears `file` (its `span` in ms, or all of it) listening for `keyterms`; times in the transcript are seconds into what was heard. */
-export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [number, number] | null, work: string, keyterms: readonly string[]) {
+/** Hears `file` (its `span` in ms, or all of it) listening for `keyterms`; times in the transcript are seconds into what was heard. `withVoices` false: words only (exact.ts asks pyannote once for a whole stretch, not per piece). */
+export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [number, number] | null, work: string, keyterms: readonly string[], withVoices: boolean = true) {
   fs.mkdirSync(work, { recursive: true });
   const kept = cached(work);
   if (kept !== null && covers(kept.keyterms, keyterms)) return kept;
@@ -65,9 +65,9 @@ export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [
       source = cut;
     }
     // With pyannote's voices, Scribe hears the words only (no whole hearing); pyannote hears the cut while it's still here.
-    const pyannote = yield* Effect.promise(() => voices.on());
+    const pyannote = withVoices ? yield* Effect.promise(() => voices.on()) : false;
     const target = join(work, "transcript.json");
-    yield* transcribe.transcribeFile(source, target, keyterms, false, !pyannote);
+    yield* transcribe.transcribeFile(source, target, keyterms, false, withVoices && !pyannote);
     if (pyannote) yield* Effect.promise(() => voices.revoice(null, source, target, null));
   }).pipe(Effect.scoped);
   const heard = cached(work);
@@ -76,9 +76,9 @@ export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [
 });
 
 /** `hearing` for code that isn't Effect yet; a stop (`signal`) ends its FFmpeg and its request and says so. */
-export function hear(file: string, span: [number, number] | null, work: string, keyterms: readonly string[], signal?: AbortSignal): Promise<transcribe.Transcript> {
+export function hear(file: string, span: [number, number] | null, work: string, keyterms: readonly string[], signal?: AbortSignal, withVoices = true): Promise<transcribe.Transcript> {
   if (signal?.aborted) return Promise.reject(new Error(STOPPED));
-  return runPromise(transcribe.asConfigured(hearing(file, span, work, keyterms)), signal ? { signal } : undefined).catch((error: unknown) => {
+  return runPromise(transcribe.asConfigured(hearing(file, span, work, keyterms, withVoices)), signal ? { signal } : undefined).catch((error: unknown) => {
     if (signal?.aborted) throw new Error(STOPPED);
     throw error;
   });

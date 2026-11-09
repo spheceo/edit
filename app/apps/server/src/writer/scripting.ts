@@ -15,13 +15,13 @@ import * as house from "./house.ts";
 import * as commentary from "./commentary.ts";
 import { checkClips } from "./edits.ts";
 import * as exact from "./exact.ts";
-import { footageFor, footagePath, soon as hearSoon, unsigned } from "./exact_after.ts";
+import { afterCredit, footageFor, footagePath, soon as hearSoon, unsigned } from "./exact_after.ts";
 import { checkStopped, type Job, type Outcome, named } from "./jobs.ts";
 import * as lessonNote from "./lesson_note.ts";
 import { lessonsText } from "./lessons.ts";
 import * as media from "./media.ts";
 import { nameVoices } from "./naming.ts";
-import { ensureIds } from "./paragraphs.ts";
+import { clock, ensureIds } from "./paragraphs.ts";
 import { compile, type Plan } from "./plan.ts";
 import * as research from "./research.ts";
 import * as reuse from "./reuse.ts";
@@ -30,6 +30,7 @@ import * as store from "./store.ts";
 import { keepPeaks, readPeaks } from "./tidy.ts";
 import * as versions from "./versions.ts";
 import { THIS_MACHINE } from "../machine.ts";
+import { whyOf } from "../import_steps.ts";
 
 const CHANGED = "The script changed while Claude was editing it, so nothing was applied. Ask again.";
 
@@ -238,14 +239,16 @@ async function buildCommentary(data: string, dir: string, script: Script, note: 
 }
 
 /**
- * A script built before its captioned footage was heard exactly, heard and
- * cut again: the same words and narration, read back from its clips, with
- * the producer's clip notes kept.
+ * A script built before its rough footage was heard exactly (or whose
+ * hearing waited for the plan's credit), heard and cut again: the same words
+ * and narration, read back from its clips, with the producer's clip notes
+ * kept. POST /api/scripts/{id}/exact; also tried by itself every 30 minutes
+ * while the credit is out (exact_after.ts `afterCredit`).
  */
 export async function exactOnce(app: App, data: string, id: string, job: Job): Promise<Outcome> {
   const dir = store.scriptDir(data, id);
   const script = store.read(dir);
-  if (!exact.wanted(script)) throw new Error("Only footage transcribed from YouTube's captions needs hearing exactly.");
+  if (!exact.wanted(script)) throw new Error("Only footage with rough words (YouTube's captions or Apple's) needs hearing exactly.");
   if (!script.clips.some((clip) => clip.kind === "cut-in")) throw new Error("Build the script first.");
   const before = structuredClone(script);
   const peaks = await peaksOf(dir, script, job.signal);
@@ -260,24 +263,33 @@ export async function exactOnce(app: App, data: string, id: string, job: Job): P
 }
 
 /**
- * A captioned script's chosen footage heard exactly, then the same plan cut
+ * A rough script's chosen footage heard exactly, then the same plan cut
  * again on those times, without any piece that has no sound. Hearing that
- * fails leaves the captions' cut, and says so.
+ * fails leaves the rough cut, and says so: plainly when the transcription
+ * plan is out of credit, which Edit then waits for and tries again itself.
  */
 async function cutExactly(app: App, data: string, dir: string, script: Script, plan: Plan, clips: Clip[], peaks: ArrayLike<number>, job: Job): Promise<[Clip[], string]> {
   // Footage cleared from this Mac once the cloud held it is read from the cloud's preview, a stretch at a time.
   const source = await footageFor(app, data, dir, script.id, job);
-  if ("away" in source) return [clips, `The footage isn't on ${THIS_MACHINE} and couldn't be read from the cloud (${source.away}), so its cuts follow YouTube's captions. Build again to try once more.`];
+  if ("away" in source) return [clips, `The footage isn't on ${THIS_MACHINE} and couldn't be read from the cloud (${source.away}), so its cuts follow the rough words. Build again to try once more.`];
   const words = script.words;
+  const wanted = exact.stretches(script, clips).reduce((sum, [from, to]) => sum + to - from, 0);
   let heard: exact.Report;
   try {
     heard = await exact.run(script, dir, source.footage, clips, job.stage, job.signal);
   } catch (error) {
     checkStopped(job);
     const why = unsigned(diag.messageOf(error));
-    diag.warn("writer", `${named(script.id, script.title)}: the chosen footage couldn't be heard exactly: ${why}`);
-    return [clips, `The chosen footage couldn't be heard exactly (${why}), so its cuts follow YouTube's captions. Build again to try once more.`];
+    const name = named(script.id, script.title);
+    if (whyOf(error) === "quota") {
+      diag.warn("writer", `${name}: heard roughly; the exact hearing of ${exact.share(wanted, script.durationMs)} waits for the transcription plan's credit: ${why}`);
+      afterCredit(data, script.id);
+      return [clips, `Heard roughly; the exact hearing waits for the transcription plan's credit (${clock(wanted)} of the chosen footage to hear). Edit tries again every 30 minutes by itself.`];
+    }
+    diag.warn("writer", `${name}: the chosen footage couldn't be heard exactly: ${why}`);
+    return [clips, `The chosen footage couldn't be heard exactly (${why}), so its cuts follow the rough words. Build again to try once more.`];
   }
+  diag.info("writer", `${named(script.id, script.title)}: heard exactly ${exact.share(heard.heardMs, heard.footageMs)} of the footage in ${heard.stretches} stretches (${heard.retimed} retimed, ${heard.added} added, ${heard.respelled} respelled, ${heard.relabelled} relabelled)`);
   let cut: Clip[];
   try {
     cut = compile(script, plan, peaks).clips;

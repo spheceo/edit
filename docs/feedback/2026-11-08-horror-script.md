@@ -71,3 +71,8 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 **Broke.** Four of the agent's plans in cases 1 and 2 were refused with `motion "words" needs words_at`: "8 ARRESTED" with no words_at, others a frame outside the title or a count off. Each time it read the word times out of get_edit_context and wrote them in again.
 **Why.** Edit has the voice's word times (they time the desktop's notes and profile lines already) but asked the agent to copy them for Animation 9.
 **Fix.** `hearWords` (`edit_tools.ts`) puts each word of a horror `commentary_text {motion: "words"}` at the frame the voice says it (`edit_review.wordFrames`: in order inside the title's frames, a number as it's said, a word it doesn't say between its neighbours), unless the plan's own words_at fit. Only a title over none of its words is refused, saying so. The cut-ins skill and the tool's description no longer ask for words_at. Also two type errors in the desktop test of fix 10. Test: `edit_review.test.ts`.
+
+### 13. LAist's sign-in gate came back on another article
+**Broke.** Cut-in 10's "highlight 'his wish to be an actor'" on LAist's standoff article: capture_evidence twice returned LAist's "just log in to read them" form, not the article, and the agent went to the Wayback copy.
+**Why.** Fix 8 took a gate's shadow root off only when its host was fixed, absolute or sticky (the article of Nov 8). On this one the host is a static, 0-pixel div in the article body, and the gate (`allegro-content-gate`) draws its form over the words from inside it.
+**Fix.** `UNWALL`: a shadow root of a few words of sign-in is a gate wherever its host sits; one with no such words (a player) stays. Both LAist articles capture clean. Test: `evidence_capture.test.ts`.

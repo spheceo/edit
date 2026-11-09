@@ -44,6 +44,20 @@ test.skipIf(chrome === null)("a sign-in gate drawn in a shadow root is taken off
   }
 }, 30_000);
 
+test.skipIf(chrome === null)("a sign-in gate in a shadow root whose host sits in the article, 0 pixels high, is taken off too; a shadow with no gate stays", () => {
+  // LAist (Nov 9): allegro-content-gate in a static, 0-pixel host inside the article body, its login form drawn over the words.
+  const { dir, cleanup } = scratch("unwall-static");
+  try {
+    const html = `<html><body><div class="ArticlePage-articleBody" style="position:relative"><p>comments about his wish to be an actor</p><div id="host"></div><div id="player"></div></div>
+<script>document.getElementById('host').attachShadow({mode:'open'}).innerHTML='<div><allegro-content-gate class="overlay-active"><h2>Want to read more?</h2><p>Our stories are always free, just log in to read them.</p><input placeholder="Enter your email"><button>SIGN IN</button><button>Continue with Google</button></allegro-content-gate></div>';
+document.getElementById('player').attachShadow({mode:'open'}).innerHTML='<video></video><span>Play</span>';</script></body></html>`;
+    const seen = inChrome(dir, html, `{removed: ${UNWALL}, host: !!document.getElementById('host'), player: !!document.getElementById('player')}`) as unknown as { removed: number; host: boolean; player: boolean };
+    expect(seen).toEqual({ removed: 1, host: false, player: true });
+  } finally {
+    cleanup();
+  }
+});
+
 /** Runs `expression` in headless Chrome over `html` and gives back what it returns (as the page title). */
 function inChrome(dir: string, html: string, expression: string): string {
   fs.writeFileSync(`${dir}/check.js`, `setTimeout(()=>{document.title=JSON.stringify(${expression});},200);`);

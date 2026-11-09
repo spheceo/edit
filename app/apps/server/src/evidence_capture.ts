@@ -21,13 +21,13 @@ export const UNWALL = `(() => {
   const covering = (el) => { const r = el.getBoundingClientRect(); return r.width * r.height > area * 0.15; };
   let removed = 0;
   // A wall drawn in a shadow root over the article (LAist's "Want to read more? … log in", Nov 8): its words are
-  // in the shadow, never in the page's innerText.
+  // in the shadow, never in the page's innerText. A shadow of a few words of sign-in is a gate, never the page.
   for (const el of [...document.querySelectorAll('body *')]) {
     if (!el.shadowRoot) continue;
     // Its words, not its stylesheet (LAist's shadow is 6,000 characters of CSS around a few lines).
     const said = [...el.shadowRoot.querySelectorAll('style, script')].reduce((text, sheet) => text.replace(sheet.textContent || '', ''), el.shadowRoot.textContent || '');
-    const position = getComputedStyle(el).position;
-    if (walls.test(said) && said.length < 2000 && (position === 'absolute' || position === 'fixed' || position === 'sticky')) { el.remove(); removed++; }
+    // Wherever its host sits: in the article on Nov 9, a 0-pixel static host (allegro-content-gate) whose form drew over it.
+    if (walls.test(said) && said.trim().length < 2000) { el.remove(); removed++; }
   }
   for (const el of [...document.querySelectorAll('[role="dialog"], [aria-modal="true"]')]) {
     const said = el.innerText || '';

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConfirmHost } from "./confirm";
 
 import { Loader } from "../components/Logo";
-import { claudeStatus, getProgress, getScript, listScripts, message, onLibrary } from "./api";
+import { claudeStatus, closeScriptLock, getProgress, getScript, listScripts, message, onLibrary, openScriptLock, takeOverScript } from "./api";
 import { CommentaryEditor } from "./commentary-view";
 import { Editor } from "./editor";
 import { Library } from "./library";
@@ -16,6 +16,10 @@ import { lastOpened } from "./opened";
 import { navigate, usePath } from "../lib/route";
 import "./writer.css";
 import type { ClaudeStatus, ImportProgress, Script, Summary } from "./types";
+
+/** How often an open script says so (apps/server/src/sync_core.ts TIMING.HEARTBEAT), and who's saying it. */
+const HEARTBEAT_MS = 30_000;
+const LOCK_CLIENT = `script-${Math.random().toString(36).slice(2, 10)}`;
 
 type Route = { name: "library" } | { name: "script"; id: string };
 
@@ -154,6 +158,26 @@ export function ScriptMode() {
         if (ready) setError(message(cause));
       });
   }, [route, ready]);
+
+  // Open here: the script's cloud lock is kept while the page says so (apps/server/src/writer/locks.ts), and
+  // another computer holding it makes it read-only here, with Take over.
+  const [heldBy, setHeldBy] = useState<string | null>(null);
+  const scriptId = route.name === "script" ? route.id : null;
+  useEffect(() => {
+    if (scriptId === null) return;
+    let alive = true;
+    const say = () => {
+      void openScriptLock(scriptId, LOCK_CLIENT).then((lock) => alive && setHeldBy(lock.holder)).catch(() => {});
+    };
+    say();
+    const heartbeat = window.setInterval(say, HEARTBEAT_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(heartbeat);
+      setHeldBy(null);
+      void closeScriptLock(scriptId, LOCK_CLIENT).catch(() => {});
+    };
+  }, [scriptId]);
 
   // A script open here that another Mac changed comes down through the cloud
   // into its file; the open copy follows it.
@@ -294,6 +318,12 @@ export function ScriptMode() {
           onOpen={(id) => setRoute({ name: "script", id })}
           onChanged={refresh}
         />
+      )}
+      {heldBy !== null && scriptId !== null && (
+        <div className="notice" role="status" style={{ position: "fixed", left: "50%", bottom: 16, transform: "translateX(-50%)", zIndex: 40, display: "flex", alignItems: "center", gap: 12 }}>
+          <span>{heldBy} is editing this script, so it's read-only here.</span>
+          <button type="button" className="tool" onClick={() => void takeOverScript(scriptId).then((lock) => setHeldBy(lock.holder)).catch((cause) => setError(message(cause)))}>Take over</button>
+        </div>
       )}
       <ImportScreen item={importing} onLeave={home} />
       {importNotice && (

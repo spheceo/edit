@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { useAgent } from "../lib/agent";
 import { addElement, addMarker, clipEnd, closeGap, deleteClips, duplicateClips, rippleDelete, splitAt } from "../lib/edit";
 import { playhead, preview } from "../lib/playback";
 import { api, ApiError } from "../lib/api";
@@ -25,11 +26,14 @@ import { Loader } from "./Logo";
 import { toggleFullscreen, Viewer } from "./Viewer";
 import { rate } from "../lib/types";
 
+/** How often an open editor says so (the server keeps its lock while it does: sync_core.ts TIMING.HEARTBEAT, which a test checks this against). */
+const HEARTBEAT_MS = 30_000;
+
 export function Editor({ id }: { id: string }) {
   const project = useEditor((state) => state.project);
   const timelineHeight = useEditor((state) => state.timelineHeight);
   const [resizing, setResizing] = useState(false);
-  const agentWorking = useEditor((state) => state.agentActive > 0);
+  const agentWorking = useAgent((state) => state.running);
   const [importing, setImporting] = useState(false);
   const [researching, setResearching] = useState(false);
   const [sharing, setSharing] = useState(false);
@@ -64,6 +68,7 @@ export function Editor({ id }: { id: string }) {
         void api
           .resetAsked(id)
           .then(({ pending }) => alive && pending !== null && useEditor.setState({ resetAsked: true }))
+          // Noted by api.ts; the agent asks again in its turn if it still wants the reset.
           .catch(() => {});
         return api.mediaStatus(id).then(({ media }) => alive && useEditor.setState({ media }));
       })
@@ -73,12 +78,14 @@ export function Editor({ id }: { id: string }) {
       void cloudApi
         .open(id, clientId, true)
         .then((cloud) => alive && useEditor.setState({ cloud }))
+        // Noted by api.ts; the next beat says it again, well inside the lock's 75 s.
         .catch(() => {});
-    }, 30_000);
+    }, HEARTBEAT_MS);
     return () => {
       alive = false;
       clearInterval(heartbeat);
       preview.pause();
+      // Leaving: a close that doesn't arrive is the same as one, once the beats stop (the lock goes after 75 s).
       void leave().finally(() => cloudApi.close(id, clientId).catch(() => {}));
     };
   }, [id]);

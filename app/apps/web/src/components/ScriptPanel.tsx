@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 
 import { api } from "../lib/api";
 import { formatBytes } from "../lib/time";
+import { afterLines } from "../lib/import_progress";
 import { importPaste } from "../lib/import-input";
 import { CLIP_HEX } from "../lib/colors";
 import { clipEnd, withLinked } from "../lib/edit";
@@ -264,8 +265,12 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${(seconds % 60)
 
 function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
   const labels = fileLabels(project);
-  const waiting = job.state === "waiting";
   const missing = job.files.filter((file) => file.state === "failed").length;
+  // Waiting on the person (files it couldn't get), or by itself (the transcription plan's credit, the encoder): nothing to press then.
+  const byItself = job.state === "waiting" && missing === 0;
+  const waiting = job.state === "waiting" && !byItself;
+  const after = afterLines(job);
+  const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return (
     <div className="px-3.5 py-3">
       <div className="mb-2 text-[12px] font-medium">
@@ -275,11 +280,15 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
             ? "Laying out the edit…"
             : job.state === "transcribing"
               ? "Transcribing to find exact cuts…"
-              : waiting
-                ? `${missing === 1 ? "One file" : `${missing} files`} couldn’t be downloaded`
-                : job.state === "failed"
-                  ? explain(job.error ?? "The import stopped", "finish the import").title
-                  : "Downloading footage"}
+              : byItself
+                ? (job.error ?? "Waiting to carry on")
+                : waiting
+                  ? `${missing === 1 ? "One file" : `${missing} files`} couldn’t be downloaded`
+                  : job.state === "failed"
+                    ? explain(job.error ?? "The import stopped", "finish the import").title
+                    : job.state === "done"
+                      ? "Laid out"
+                      : "Downloading footage"}
       </div>
       {waiting && (
         <p className="mb-2.5 text-[12px] leading-relaxed text-muted">
@@ -310,6 +319,10 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
                         : "Cutting excerpts…"
                       : file.state === "done"
                         ? "Done"
+                        : file.state === "waiting"
+                          ? file.why === "quota"
+                            ? `Waiting for credit${file.retry_at ? ` · tries at ${time(file.retry_at)}` : ""}`
+                            : "Waiting for the encoder"
                         : later
                           ? `Trying again at ${new Date(file.retry_at!).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
                           : file.state === "failed"
@@ -330,6 +343,16 @@ function Downloads({ project, job }: { project: Project; job: ScriptJob }) {
           );
         })}
       </div>
+      {/* What follows the layout, a line each: never a failed import, only what didn't come with it. */}
+      {after.length > 0 && (
+        <div className="mt-3 flex flex-col gap-1 border-t border-line pt-2.5">
+          {after.map((one) => (
+            <div key={one.step} className={cx("text-[11px] leading-relaxed", one.state === "failed" ? "text-danger" : one.state === "running" ? "text-muted shimmer" : "text-muted")}>
+              {one.line}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

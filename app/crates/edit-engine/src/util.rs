@@ -418,6 +418,17 @@ pub fn catch<T>(what: &str, work: impl FnOnce() -> T) -> Result<T, String> {
     std::panic::catch_unwind(AssertUnwindSafe(work)).map_err(|payload| crashed(what, &*payload))
 }
 
+/// Marks this thread as utility work (macOS QoS): the system schedules it
+/// behind the threads drawing and playing, so decoding ahead and mixing sound
+/// never take the frame's time on a busy Mac. Elsewhere, nothing.
+pub fn utility_thread() {
+    #[cfg(target_os = "macos")]
+    // SAFETY: a plain call on the calling thread, with a constant class and no relative priority.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -137,9 +137,11 @@ export type Script = {
   edit?: EditLink;
   /** What the producer's brief called each of the case's videos, in the order they join (brief.ts). */
   labels?: Label[];
-  /** Some recording's words came from YouTube's captions: who speaks is read from the conversation, not watched. */
+  /** Some recording's words came from YouTube's captions (older scripts: `rough` says it now, for captions and Apple's words alike). */
   captions?: boolean;
-  /** The stretches (ms) of captioned footage heard exactly since: their words have Scribe's times and spelling. */
+  /** Some recording's words are rough (YouTube's captions or Apple's on-device recogniser), not Scribe's: the footage a build chooses is heard exactly (exact.ts). */
+  rough?: boolean;
+  /** The stretches (ms) of rough footage heard exactly since: their words have Scribe's times and spelling. */
   exact?: [number, number][];
   /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). `stage` is how far it is, as the share dialog prints it. */
   sharing?: { startedAt: number; stage?: string };

@@ -358,7 +358,7 @@ function later(project: string, side: "script" | "edit", work: () => Promise<voi
 }
 
 const IMPORTING = ["downloading", "transcribing", "placing", "voicing"];
-const importing = (app: App, project: string) => IMPORTING.includes(app.scripts.get(project)?.state ?? "");
+const importing = (app: App, project: string) => app.scripts.working?.(project) ?? IMPORTING.includes(app.scripts.get(project)?.state ?? "");
 
 /** Saves the agreed link into the script (no new revision: nothing of the script changed). */
 function keepLink(dir: string, link: EditLink): void {

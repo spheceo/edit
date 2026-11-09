@@ -8,6 +8,7 @@ import { api, ApiError, useConnection } from "./api";
 import { readOnly, type CloudStatus } from "./cloud";
 import { addContext, note } from "./diagnostics";
 import { validateProject } from "./edit";
+import { perFrame } from "./frame";
 import * as patches from "./patch";
 import { shareProject } from "./project-sharing";
 import { forgetSetting, readSetting, writeSetting } from "./storage";
@@ -109,7 +110,6 @@ interface EditorState {
   /** The chat's width, set by dragging its edge. */
   agentWidth: number;
   toasts: Toast[];
-  agentActive: number;
   /** The agent asked to reset the edit (`reset_edit`) and waits for the user's Accept / Reject in the chat. */
   resetAsked: boolean;
   /** The open project's cloud state (apps/server/src/cloud_projects.ts); null for none. */
@@ -193,15 +193,47 @@ function onTop(incoming: Project, local: patches.Patch): Project | null {
 /**
  * `incoming` (the server's newer version) with the unsaved edits on screen
  * put on top: `kept` when there were any and they fit, `lost` when they
- * didn't (the caller keeps the version on screen in the undo history).
+ * didn't (the caller keeps them on this browser). Edits to the same things
+ * the incoming version changed (an agent's, another client's) give way to it:
+ * they're `clashing`, kept on this browser for "Use mine" (Nov 8 audit, 2b:
+ * the edit on screen won item by item, last writer wins).
  */
-function rebase(incoming: Project): { project: Project; kept: boolean; lost: boolean } {
+function rebase(incoming: Project): { project: Project; kept: boolean; lost: boolean; clashing: patches.Patch | null } {
   const { project, dirty } = useEditor.getState();
-  if (!project || !dirty || synced === null || synced.id !== incoming.id) return { project: incoming, kept: false, lost: false };
+  if (!project || !dirty || synced === null || synced.id !== incoming.id) return { project: incoming, kept: false, lost: false, clashing: null };
   const local = patches.diff(synced, project);
-  if (patches.empty(local)) return { project: incoming, kept: false, lost: false };
-  const merged = onTop(incoming, local);
-  return merged === null ? { project: incoming, kept: false, lost: true } : { project: merged, kept: true, lost: false };
+  if (patches.empty(local)) return { project: incoming, kept: false, lost: false, clashing: null };
+  const clash = patches.overlap(patches.diff(synced, incoming), local);
+  const { rest, clashing } = clash.length > 0 ? patches.split(local, clash) : { rest: local, clashing: null };
+  if (patches.empty(rest)) return { project: incoming, kept: false, lost: false, clashing };
+  const merged = onTop(incoming, rest);
+  return merged === null ? { project: incoming, kept: false, lost: true, clashing } : { project: merged, kept: true, lost: false, clashing };
+}
+
+/**
+ * The undo history moved onto `incoming`: each step keeps only its own edits
+ * (what it changed since `base`, the server's version it was made on) that
+ * the incoming version didn't change, so Undo after a change from elsewhere
+ * steps back through this page's edits only and never saves the old project
+ * over the other party's change. A step that no longer fits is dropped, with
+ * every step before it.
+ */
+function rebaseHistory(past: Project[], base: Project, incoming: Project, top: Project): Project[] {
+  const theirs = patches.touched(patches.diff(base, incoming));
+  const out: Project[] = [];
+  let after = top;
+  for (let at = past.length - 1; at >= 0; at--) {
+    const step = past[at]!;
+    if (step.id !== incoming.id) break;
+    const own = patches.split(patches.diff(base, step), theirs).rest;
+    const moved = patches.empty(own) ? incoming : onTop(incoming, own);
+    if (moved === null) break;
+    // A step whose own edits all gave way is no step any more: Undo goes past it.
+    if (patches.empty(patches.diff(moved, after))) continue;
+    after = shareProject(incoming, moved);
+    out.unshift(after);
+  }
+  return out;
 }
 
 /** Projects with unsaved edits kept on this browser (unsaved.ts), forgotten once a save lands. */
@@ -239,6 +271,11 @@ async function restoreUnsaved(id: string) {
   const current = state.project;
   // Read-only here (another Mac has it): kept until it can be saved here.
   if (!current || current.id !== id || state.gestureBase || readOnly(state.cloud)) return;
+  // Kept because it met someone else's change to the same thing: offered, never put back by itself.
+  if (entry.collided === true) {
+    state.toast("A change of yours that met an edit from elsewhere is still kept on this computer.", "info", { label: "Use mine", run: () => void putBack(id) });
+    return;
+  }
   keptHere.add(id);
   const merged = onTop(current, entry.patch);
   if (merged === null) {
@@ -257,26 +294,67 @@ async function restoreUnsaved(id: string) {
   state.toast("Your unsaved changes from last time are back.");
 }
 
-/** Takes the server's newer `incoming` at `rev` with the edits on screen kept on top (one undo step). */
-function takeFromServer(rev: number, incoming: Project, extra: Partial<EditorState> = {}) {
+/**
+ * Takes the server's newer `incoming` at `rev` with the edits on screen kept
+ * on top. `asked`: a change made at this page's request (an import's answer),
+ * one undo step of its own; any other (an agent's, another client's, a save's
+ * conflict) moves the undo history onto it instead (`rebaseHistory`).
+ */
+function takeFromServer(rev: number, incoming: Project, extra: Partial<EditorState> = {}, asked = false) {
   const state = useEditor.getState();
   const current = state.project;
   if (!current) return;
-  const { project: merged, kept, lost } = rebase(incoming);
+  const base = synced;
+  const { project: merged, kept, lost, clashing } = rebase(incoming);
+  // Edits on screen that didn't fit at all: kept whole, as edits that met a change from elsewhere.
+  const unfit = lost && base !== null && base.id === incoming.id ? patches.diff(base, current) : null;
   synced = incoming;
   const next = shareProject(current, merged);
+  const past = asked || base === null || base.id !== incoming.id
+    ? (next === current ? state.past : [...state.past.slice(-HISTORY_LIMIT), current])
+    : rebaseHistory(state.past, base, incoming, next);
   useEditor.setState({
     project: next,
     rev,
     dirty: kept,
     gestureBase: null,
-    past: next === current ? state.past : [...state.past.slice(-HISTORY_LIMIT), current],
+    past,
     future: [],
     ...extra,
   });
   if (kept) scheduleSave(0);
-  if (lost) useEditor.getState().toast("The project changed while you were editing and your latest change didn't fit; undo brings it back.", "error");
+  const aside = unfit ?? clashing;
+  if (aside !== null && !patches.empty(aside)) keepCollided(rev, incoming.id, aside);
 }
+
+/**
+ * Edits that met a change from elsewhere to the same things: the other change
+ * is kept, these go on this browser (unsaved.ts, marked `collided`), and one
+ * toast offers them back.
+ */
+function keepCollided(rev: number, id: string, patch: patches.Patch) {
+  // Not forgotten by the next save (keptHere): it isn't in it.
+  void keepUnsaved({ id, base_rev: rev, patch, at: Date.now(), collided: true });
+  useEditor.getState().toast("Your last change met an edit from elsewhere to the same thing, so theirs is kept. Yours is saved on this computer.", "info", { label: "Use mine", run: () => putBack(id) });
+}
+
+/** Puts kept edits back on top of the project open now, as one undo step, and saves them. */
+async function putBack(id: string) {
+  const entry = await readUnsaved(id);
+  const state = useEditor.getState();
+  const current = state.project;
+  if (entry === null || !current || current.id !== id || readOnly(state.cloud)) return;
+  const merged = onTop(current, entry.patch);
+  if (merged === null) {
+    state.toast("Your change doesn't fit the latest version any more; it's still kept on this computer.", "error");
+    return;
+  }
+  // Forgotten once the save with it lands.
+  keptHere.add(id);
+  useEditor.setState({ project: shareProject(current, merged), past: [...state.past.slice(-HISTORY_LIMIT), current], future: [], dirty: true });
+  scheduleSave(0);
+}
+
 let readOnlySaid = 0;
 
 /** A cloud project someone else is editing can't be changed here: says so (now and then) and refuses. */
@@ -315,7 +393,6 @@ export const useEditor = create<EditorState>((set, get) => ({
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
   agentWidth: Number(readSetting("edit.agentWidth")) || 340,
   toasts: [],
-  agentActive: 0,
   resetAsked: false,
   cloud: null,
   playback: null,
@@ -402,8 +479,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     remember(rev, next);
     // The live event for the change can land first and have brought it already.
     if (rev === get().rev && JSON.stringify(project) === JSON.stringify(next)) return;
-    // Edits made while the server worked on it (a rename during an import) stay.
-    takeFromServer(rev, next);
+    // Edits made while the server worked on it (a rename during an import) stay; the change asked for is one undo step.
+    takeFromServer(rev, next, {}, true);
   },
 
   select: (ids, mode = "replace") => {
@@ -598,37 +675,47 @@ export function settled(): Promise<void> {
 // Live events: agent edits, media processing, exports.
 
 let socket: WebSocket | null = null;
-let agentTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Media statuses heard since the last frame, by file path (the last for each). */
+let mediaHeard = new Map<string, MediaStatus>();
+const mediaEvents = perFrame(() => {
+  const heard = mediaHeard;
+  mediaHeard = new Map();
+  const state = useEditor.getState();
+  if (!state.project || heard.size === 0) return;
+  let media: Record<string, MediaStatus> | null = null;
+  for (const item of state.project.media) {
+    const status = heard.get(item.path);
+    // Unchanged statuses stay the same objects, so nothing that reads them renders again.
+    if (status === undefined || sameStatus(state.media[item.id], status)) continue;
+    media ??= { ...state.media };
+    media[item.id] = status;
+  }
+  if (media !== null) useEditor.setState({ media });
+});
+
+const sameStatus = (a: MediaStatus | undefined, b: MediaStatus) => a !== undefined && JSON.stringify(a) === JSON.stringify(b);
+
+/** Applies the media statuses heard so far now (tests). */
+export const flushMediaEvents = () => mediaEvents.flush();
 
 let dropped = false;
 let downTimer: ReturnType<typeof setTimeout> | undefined;
 
 /**
- * Shows a script import's progress, and picks it up again if it stopped
- * (the server restarted mid-download): downloads resume where they left off.
+ * Shows a script import's progress. Carrying one on after a restart is the
+ * server's (its job table resumes it from what each file had); the page only
+ * shows what it says, the Downloads tab open while it works or waits.
  */
 export async function syncScriptJob(id: string) {
   const project = useEditor.getState().project;
   if (project?.id !== id || !project.script) return;
   try {
-    const { job, unfinished } = await api.scriptJob(id);
+    const { job } = await api.scriptJob(id);
     if (useEditor.getState().project?.id !== id) return;
     const running = job && (job.state === "downloading" || job.state === "transcribing" || job.state === "placing" || job.state === "voicing");
-    // Running, or waiting for the person's answer about footage it couldn't fetch: the Downloads tab, open.
+    // Running, or waiting (for the person's answer, or by itself): the Downloads tab, open.
     useEditor.setState(running || job?.state === "waiting" ? { scriptJob: job, mediaTab: "downloads", showMedia: true } : { scriptJob: job });
-    // A failed run waits for Retry; an import that stopped part-way (blocks never
-    // placed) carries on by itself. A placed block whose clip is gone was removed
-    // on purpose (a cut-in card replaced by B-roll): never put it back.
-    // Laid out once (any block placed): finished, never resumed (only a Re-cut lays it out again; the server refuses too).
-    const laidOut = project.script.blocks.some((block) => block.clip || (block.kind === "narration" && block.voiceover));
-    const neverPlaced = !laidOut && project.script.blocks.some((block) => !block.clip);
-    // Only an import that stopped part-way, never one that finished: a finished edit
-    // whose blocks lost their clip links was laid out again on top of itself when it
-    // was opened (Mom Leaves 5 Kids, Oct 23: a second copy after 30:50).
-    if (unfinished && neverPlaced && !running && job?.state !== "failed" && job?.state !== "waiting" && job?.state !== "done") {
-      const resumed = await api.resumeScript(id);
-      if (useEditor.getState().project?.id === id) useEditor.setState({ scriptJob: resumed.job });
-    }
   } catch {
     // Offline: the next reconnect tries again.
   }
@@ -711,18 +798,13 @@ export function connectEvents() {
       // to save (their save then meets it and keeps both).
       if (event.origin === clientId && (state.dirty || inFlight !== null)) return;
       takeFromServer(event.rev, full, { selection: state.selection.filter((id) => full.clips.some((clip) => clip.id === id)) });
-      if (event.origin === "agent") {
-        clearTimeout(agentTimer);
-        useEditor.setState({ agentActive: Date.now() });
-        agentTimer = setTimeout(() => useEditor.setState({ agentActive: 0 }), 2500);
-      }
     } else if (event.type === "media" && project) {
-      const ids = project.media.filter((media) => media.path === event.path).map((media) => media.id);
-      if (ids.length) {
-        const media = { ...state.media };
-        for (const id of ids) media[id] = event.status;
-        useEditor.setState({ media });
-      }
+      // Hundreds can come at once (a 300-media project's statuses): one update a frame (Nov 8, Marc's Mac: 503 in a quarter second).
+      mediaHeard.set(event.path, event.status);
+      mediaEvents.schedule();
+    } else if (event.type === "native-sources" && project && event.id === project.id) {
+      // The cleaner took a copy Edit.app's window reads (the server's native_preview.ts): lib/playback.ts asks again.
+      window.dispatchEvent(new CustomEvent("edit:native-sources", { detail: event.id }));
     } else if (event.type === "export" && project && event.id === project.id) {
       useEditor.setState({ exportState: event });
     } else if (event.type === "playback" && project && event.id === project.id) {
@@ -734,6 +816,9 @@ export function connectEvents() {
     } else if (event.type === "cloud" && project && event.id === project.id) {
       useEditor.setState({ cloud: event.status });
     } else if (event.type === "cloud-conflict") {
+      useEditor.getState().toast(event.message, "error");
+    } else if (event.type === "cloud-lost" && project && event.id === project.id) {
+      // Someone took over on their computer: read-only here now, and a turn running on it stopped (agent.ts lockLost).
       useEditor.getState().toast(event.message, "error");
     } else if (event.type === "review-refused") {
       // A review note tried to take the agent outside its video (review_guard.ts).

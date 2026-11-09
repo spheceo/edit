@@ -2,7 +2,8 @@ import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import type { App } from "../src/app.ts";
+import { createApp, type App } from "../src/app.ts";
+import { Store } from "../src/store.ts";
 import { hooks as planHooks } from "../src/edit_plan.ts";
 import { addedClip, closeGaps, clipRow, EDITING_TOOLS, hooks, introLong, introWithoutArrest, lineSeconds, windowsUnderused, desktopsSparse, graphicsShort, registerEditingTools, resolveRefs, unfinishedNote } from "../src/edit_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
@@ -350,14 +351,64 @@ test("a plan on a revision the agent was shown still saves over background media
   expect(done).toMatchObject({ rev: shown.rev + 2, saved: true });
   expect(projectOf(app, id).media[0]!.path).toBe("/tmp/edit-test-b.mp4");
   expect(projectOf(app, id).clips.length).toBe(1);
-  // Someone moved a clip meanwhile: the plan is refused as before.
+  // Someone changed that clip by hand meanwhile: a plan changing it too is refused, naming it.
   const again = JSON.parse(await said(app, "get_edit_context")) as { rev: number };
+  const clipId = projectOf(app, id).clips[0]!.id;
   await app.store.update(id, "ui", (project) => {
     project.clips[0]!.duration = 20;
   });
-  expect(await refused(app, "apply_edit_plan", { base_rev: again.rev, operations })).toBe(
-    `revision conflict: expected ${again.rev}, current ${again.rev + 1}; nothing saved; refresh get_edit_context`,
+  const update = [{ op: "update", select: { ids: [clipId] }, patch: { duration: 45 } }];
+  expect(await refused(app, "apply_edit_plan", { base_rev: again.rev, operations: update })).toBe(
+    `revision conflict: expected ${again.rev}, current ${again.rev + 1}; clips ${clipId} changed since you read it; nothing saved; refresh get_edit_context`,
   );
+  expect(projectOf(app, id).clips[0]!.duration).toBe(20);
+  // One that leaves it alone goes on top, the hand edit kept (Nov 8 audit, 2d: 13 plans refused on Marc's Mac over hand edits elsewhere).
+  const added = JSON.parse(await said(app, "apply_edit_plan", { base_rev: again.rev, operations })) as Record<string, unknown>;
+  expect(added).toMatchObject({ rev: again.rev + 2, saved: true });
+  expect(projectOf(app, id).clips.length).toBe(2);
+  expect(projectOf(app, id).clips[0]!.duration).toBe(20);
+});
+
+// Nov 8 audit (2d): every tool but apply_edit_plan wrote with no revision
+// check, so the agent silently won over a hand edit made while it worked.
+test("an agent tool changing what was edited by hand since the agent read it is refused; one changing something else goes on top", async () => {
+  const { app, id } = setUp("tools-hand-edit");
+  await app.store.update(id, "test", (project) => {
+    project.clips.push(clip({ id: "t1", type: "text", track: project.tracks[0]!.id, start: 0, duration: 30, text: "first" }));
+    project.clips.push(clip({ id: "t2", type: "text", track: project.tracks[0]!.id, start: 60, duration: 30, text: "second" }));
+  });
+  await said(app, "get_edit_context");
+  // The person moves t1 by hand while the agent works.
+  await app.store.update(id, "ui", (project) => {
+    project.clips.find((one) => one.id === "t1")!.start = 5;
+  });
+  // The agent deletes t1, which it read before the move: refused, nothing saved.
+  const asked = await tool(app, "delete_clips", { clip_ids: ["t1"] });
+  expect(asked.isError).toBe(true);
+  expect(asked.content[0]!.text).toContain("clips t1 changed since you read it; nothing saved; refresh get_edit_context");
+  expect(projectOf(app, id).clips.map((one) => one.id)).toEqual(["t1", "t2"]);
+  // Deleting t2, which nobody touched: done, the hand edit kept.
+  expect((await tool(app, "delete_clips", { clip_ids: ["t2"] })).isError).toBe(false);
+  expect(projectOf(app, id).clips.map((one) => [one.id, one.start])).toEqual([["t1", 5]]);
+  // Read again, it may change t1.
+  await said(app, "get_edit_context");
+  expect((await tool(app, "delete_clips", { clip_ids: ["t1"] })).isError).toBe(false);
+});
+
+// Nov 8 audit (2b): revisions began from a random base at every start, so a
+// plan the agent made before a restart was refused (13 on Marc's Mac in a day).
+test("a plan made before a restart still applies after it", async () => {
+  const { app, id, fixture: made } = setUp("tools-plan-restart");
+  await app.store.update(id, "ui", (project) => {
+    project.name = "renamed";
+  });
+  const shown = JSON.parse(await said(app, "get_edit_context")) as { rev: number };
+  // The server starts again on the same folder.
+  const restarted = createApp({ store: Store.open(made.home) });
+  restarted.store.setActive(id);
+  const operations = [{ op: "add", clip: { type: "solid", track: "v1", start: 0, duration: 30, fill: [0, 0, 0, 1] } }];
+  const done = JSON.parse(await said(restarted, "apply_edit_plan", { base_rev: shown.rev, operations })) as Record<string, unknown>;
+  expect(done).toMatchObject({ rev: shown.rev + 1, saved: true });
 });
 
 test("a plan saves once, dry runs save nothing, and a stale one is refused", async () => {

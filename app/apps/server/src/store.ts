@@ -13,7 +13,7 @@
 // here that changed what `get` returned would change every reader's copy.
 // `checkout` gives a copy to edit; `update` does read-modify-write in one go.
 
-import { randomInt } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs";
 
 import { creator } from "./accounts.ts";
@@ -27,6 +27,7 @@ import { native, type Prepared } from "./native/index.ts";
 import { canonical, extension, fileStem, join } from "./paths.ts";
 import { clipEnd, duration, mediaOf, newProject } from "./project.ts";
 import { asSerdeRead, jsonForSerde } from "./rust.ts";
+import * as patches from "./patch.ts";
 import { RELEASE } from "./version.ts";
 
 export { nextFileId, nowMs, writeAtomic } from "./files.ts";
@@ -70,6 +71,23 @@ export interface CloudHook {
 }
 
 export type Event = Record<string, unknown>;
+
+/**
+ * An agent tool call under way (mcp/index.ts `call`): every `update` it makes
+ * is checked against what the agent last read of the project (`agentView`),
+ * and refused with the conflict when it changes what changed since (by hand
+ * or by another tool), so the agent never silently wins over a hand edit
+ * (Nov 8 audit, 2d). `active` goes false when the call returns: work it left
+ * running in the background (a smoothed shot swapped in) isn't the agent's
+ * edit and isn't checked.
+ */
+export const agentCalls = new AsyncLocalStorage<{ active: boolean }>();
+
+/** What the agent last read of a project, and what it learns from its own writes (edit_tools.ts keeps it). */
+export const agentView = {
+  known: (_id: string): { rev: number; project: Project } | null => null,
+  learned: (_id: string, _rev: number, _project: Project): void => {},
+};
 
 /**
  * Everything clients hear about (`/api/ws`): project saves, media progress,
@@ -116,18 +134,22 @@ export class Store {
   }
 
   /**
-   * The revision a project starts at when this server loads it: a different
-   * one each start, so a save from a page still on the last server's revisions
-   * is a conflict (it reloads), never a match overwriting what's changed since
-   * (the audit, Oct 23: revisions restarted at 1). Tests count from 1.
+   * The revision a project new to this machine starts at. Revisions then go on
+   * from the last one across restarts (kept beside each project file,
+   * `projects/revs/<id>.json`, with the hash of the file it was), so a page
+   * or an agent plan from before a restart still matches what it read; a file
+   * that changed without its revision (a crash between the two writes, a copy
+   * put in by hand) gets the next one, which nobody holds. Until Nov 8 each
+   * start began from a random base, and every plan made before a restart was
+   * refused (13 on Marc's Mac in a day).
    */
-  readonly firstRev = process.env.NODE_ENV === "test" ? 1 : 1 + 1000 * randomInt(1, 2_000_000);
+  readonly firstRev = 1;
 
   /**
    * Whether new projects are marked dev projects (`Project::origin` "dev"):
    * on any build that isn't a release (`just dev`, the dev server, the trial
    * server), so Home can hide and clear the test projects (Sphe, Oct 31: "the
-   * project list gets huge"). `EDIT_DEV_PROJECTS=0`/`1` overrides; off in tests.
+   * project list gets huge"). Off in tests.
    */
   marksDev = devBuild();
 
@@ -301,14 +323,14 @@ export class Store {
     if (read === null || "problem" in read) return read;
     const project = read.project;
     this.resolveMedia?.(project);
-    const live: Live = { rev: this.firstRev, project: deepFreeze(project) };
+    const live: Live = { rev: this.revOnDisk(id, read.text), project: deepFreeze(project) };
     this.projects.set(id, live);
     this.summaries.delete(id);
     return live;
   }
 
   /** Project `id`'s file, parsed and validated (not kept), or why not. */
-  private read(id: string): { project: Project } | { problem: string } | null {
+  private read(id: string): { project: Project; text: string } | { problem: string } | null {
     let text: string;
     try {
       text = fs.readFileSync(this.path(id), "utf8");
@@ -328,7 +350,52 @@ export class Store {
     }
     const project = JSON.parse(loaded.json) as Project;
     if (project.id !== id) return { problem: `its file holds project ${project.id}` };
-    return { project };
+    return { project, text };
+  }
+
+  private revPath(id: string): string {
+    return join(this.home, "projects", "revs", `${id}.json`);
+  }
+
+  /**
+   * The revision project `id`'s file `text` is: the one kept beside it when it
+   * was written, else (none kept, or the file changed since) the next one,
+   * kept now so the next start agrees.
+   */
+  private revOnDisk(id: string, text: string): number {
+    const hash = fileHash(text);
+    let kept: { rev?: unknown; hash?: unknown } | null = null;
+    try {
+      kept = JSON.parse(fs.readFileSync(this.revPath(id), "utf8")) as { rev?: unknown; hash?: unknown };
+    } catch {
+      kept = null;
+    }
+    const rev = typeof kept?.rev === "number" && Number.isSafeInteger(kept.rev) && kept.rev > 0 ? kept.rev : null;
+    if (rev !== null && kept?.hash === hash) return rev;
+    const next = rev === null ? this.firstRev : rev + 1;
+    this.keepRev(id, next, hash);
+    return next;
+  }
+
+  /** The revision kept for project `id` (0: none). */
+  private keptRev(id: string): number {
+    try {
+      const rev = (JSON.parse(fs.readFileSync(this.revPath(id), "utf8")) as { rev?: unknown }).rev;
+      return typeof rev === "number" && Number.isSafeInteger(rev) && rev > 0 ? rev : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Keeps `rev` as the revision of project `id`'s file (its hash `hash`). */
+  private keepRev(id: string, rev: number, hash: string): void {
+    try {
+      fs.mkdirSync(join(this.home, "projects", "revs"), { recursive: true });
+      writeAtomic(this.revPath(id), JSON.stringify({ rev, hash }));
+    } catch (error) {
+      // The next start then gives the file a revision nobody holds: a reload, never a wrong match.
+      diag.warn("store", `keeping ${id}'s revision: ${ioMessage(error)}`);
+    }
   }
 
   /** A new project (the default style). */
@@ -379,7 +446,8 @@ export class Store {
     for (let attempt = 0; attempt < 5; attempt++) {
       const current = this.load(id);
       if (current === null) {
-        const live = this.save(id, this.firstRev, prepared);
+        // Past any revision a project of this id had here before (deleted, then brought back from the cloud).
+        const live = this.save(id, this.keptRev(id) + 1, prepared);
         this.projects.set(id, live);
         return live;
       }
@@ -458,7 +526,7 @@ export class Store {
    * one into a conflict (edits count and collect as they go, so they aren't
    * run twice).
    */
-  async update<T>(id: string, origin: string, edit: (project: Project) => T): Promise<[Live, T]> {
+  async update<T>(id: string, origin: string, edit: (project: Project) => T, read?: { rev: number; project: Project }): Promise<[Live, T]> {
     if (this.get(id) === null) throw new Error(`no project ${id}`);
     const cloud = this.cloudHook;
     if (cloud !== null) {
@@ -481,9 +549,19 @@ export class Store {
     enforcePointers(current.project, project);
     const refused = refusalOf(current.project, project);
     if (refused !== null) throw new Error(refused);
+    // Made from what the caller read (an agent tool): refused when it changes what changed since, by hand or by another tool.
+    const call = agentCalls.getStore();
+    const knew = read ?? (call?.active === true ? agentView.known(id) : null);
+    const mine = knew === null ? null : patches.diff(current.project, project);
+    if (knew !== null && mine !== null && knew.project !== current.project) {
+      const clash = patches.overlap(patches.diff(knew.project, current.project), mine);
+      if (clash.length > 0) throw new Error(revisionConflict(knew.rev, current.rev, clash));
+    }
     try {
       const live = this.commitUnguarded(id, current.rev, this.prepare(id, project), origin);
       cloud?.wrote(id);
+      // What the agent knows now: what it read, with its own change on top (not what changed by hand meanwhile, which it hasn't read).
+      if (call?.active === true && knew !== null && mine !== null) agentView.learned(id, live.rev, knew.project === current.project ? live.project : patches.apply(knew.project, mine));
       return [live, value];
     } catch (error) {
       if (!(error instanceof UpdateError)) throw error;
@@ -542,7 +620,7 @@ export class Store {
     if (current === undefined) throw new UpdateError("not_found", `no project ${id}`);
     if (current.rev !== rev) throw new UpdateError("conflict", `revision conflict: current ${current.rev}`, current);
     try {
-      this.writeFile(id, prepared.json);
+      this.writeFile(id, prepared.json, rev + 1);
     } catch (error) {
       throw new UpdateError("invalid", ioMessage(error));
     }
@@ -564,7 +642,7 @@ export class Store {
 
   private save(id: string, rev: number, prepared: Prepared): Live {
     try {
-      this.writeFile(id, prepared.json);
+      this.writeFile(id, prepared.json, rev);
     } catch (error) {
       throw new Error(ioMessage(error));
     }
@@ -576,7 +654,7 @@ export class Store {
    * Writes a project file: compact JSON (speed-plan 6.1: 40% smaller than the
    * pretty-printed files were, on disk and in every history copy).
    */
-  private writeFile(id: string, text: string): void {
+  private writeFile(id: string, text: string, rev: number): void {
     const path = this.path(id);
     // A bad save (a bug, an agent gone wrong) can always be walked back.
     try {
@@ -585,6 +663,8 @@ export class Store {
       diag.warn("store", `keeping history for ${id}: ${ioMessage(error)}`);
     }
     writeAtomic(path, text);
+    // After the file: a crash between the two leaves a hash that doesn't match, so the next start counts on past it.
+    this.keepRev(id, rev, fileHash(text));
   }
 
   /**
@@ -646,10 +726,24 @@ export class Store {
   }
 }
 
+/**
+ * Why a change made from revision `read` doesn't go on `current`: what it
+ * changes was changed since (by hand, or by another tool), named. The agent
+ * reads the project again (Nov 8 audit, 2d: its other tools silently won
+ * over hand edits).
+ */
+export function revisionConflict(read: number, current: number, clash: string[]): string {
+  const named = clash.slice(0, 6).map((name) => name.replace(":", " ")).join(", ");
+  return `revision conflict: expected ${read}, current ${current}; ${named}${clash.length > 6 ? ` and ${clash.length - 6} more` : ""} changed since you read ${clash.length === 1 ? "it" : "them"}; nothing saved; refresh get_edit_context`;
+}
+
+/** A project file's hash, for the revision kept beside it (fast, not a secret). */
+function fileHash(text: string): string {
+  return Bun.hash(text).toString(36);
+}
+
 /** A dev build, as `Store.marksDev` says. */
 function devBuild(): boolean {
-  const given = process.env.EDIT_DEV_PROJECTS;
-  if (given === "1" || given === "0") return given === "1";
   return process.env.NODE_ENV !== "test" && !RELEASE;
 }
 

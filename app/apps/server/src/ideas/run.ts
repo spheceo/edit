@@ -5,7 +5,9 @@
 // (sources.ts, board.ts) and goes in one prompt; Claude writes through the
 // tools below, each checked (policy.ts) and saved to the cloud at once, so
 // the page shows titles as they come and a refusal is fixed in the same turn.
-// Three runs at a time on a Mac; a run another Mac holds is that Mac's.
+// Three runs at a time on a Mac; a run another Mac holds is that Mac's while
+// its lease holds (run_lease.ts), and its ending is in jobs.json until the
+// cloud has it.
 
 import * as fs from "node:fs";
 
@@ -15,6 +17,8 @@ import { ideasGuide } from "../agent_text.ts";
 import { inlinePictures, pictureFile } from "../chat_pictures.ts";
 import * as cloudStorage from "../cloud.ts";
 import * as diag from "../diag.ts";
+import * as jobs from "../jobs.ts";
+import * as runLease from "../run_lease.ts";
 import * as modelChoice from "../model_choice.ts";
 import * as notices from "../notices.ts";
 import { join } from "../paths.ts";
@@ -62,7 +66,7 @@ async function slot<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-type Running = { turn: live.Turn; abort: AbortController; step: string };
+type Running = { turn: live.Turn; abort: AbortController; step: string; startedAt: number; ending?: true };
 /** The runs on this Mac, by idea: their live turn (what Claude has said, its tools) and how to stop them. */
 const runs = new Map<string, Running>();
 
@@ -70,7 +74,7 @@ const runs = new Map<string, Running>();
 export function liveOf(id: string): Pick<IdeaRun, "said" | "tools" | "step"> | null {
   const run = runs.get(id);
   if (run === undefined) return null;
-  return { said: run.turn.text, tools: toolsOf(run.turn), step: run.step };
+  return { said: run.turn.text, tools: toolsOf(run.turn), step: run.ending ? "Saving how it ended" : run.step };
 }
 
 export const isRunning = (id: string): boolean => runs.has(id);
@@ -606,17 +610,71 @@ export async function chat(context: Context, id: string, text: string, images: I
   void work(context, id, "chat", {}, asked);
 }
 
-/** Marks the run queued in the cloud (refused while another Mac runs one). */
+/** A run's job in jobs.json: its lease while it runs, then its ending until the cloud has it. */
+const jobOf = (id: string): string => jobs.keyOf("idea", id);
+
+/** Marks the run queued in the cloud (refused while another Mac holds one), and lists it. */
 async function begin(context: Context, id: string, what: IdeaRun["what"], also: (idea: Idea) => void): Promise<void> {
+  // The last run's ending first, if it hasn't landed: the new run would take its place.
+  await runLease.land(context.home, jobOf(id), (ending) => saveEnding(id, ending), "ideas");
+  const startedAt = Date.now();
   await cloud.change(id, context.by, (idea) => {
     const other = idea.run;
-    if (other !== null && (other.state === "running" || other.state === "queued") && other.holder !== context.holder && Date.now() - other.startedAt < 20 * 60_000) {
-      throw new Error(`Claude is working on this idea on ${other.holder}: wait for it there.`);
-    }
-    idea.run = { what, state: "queued", holder: context.holder, by: context.by, startedAt: Date.now(), step: "Waiting for a turn" };
+    if (runLease.heldElsewhere(other, context.holder)) throw new Error(`Claude is working on this idea on ${other!.holder}: wait for it there.`);
+    idea.run = { what, state: "queued", holder: context.holder, by: context.by, startedAt, renewedAt: startedAt, step: "Waiting for a turn" };
     also(idea);
   });
-  runs.set(id, { turn: { text: "", trace: [], startedAt: Date.now() }, abort: new AbortController(), step: "Waiting for a turn" });
+  jobs.begin(context.home, "idea", id, { holder: context.holder, by: context.by, what, startedAt }, "", "queued");
+  runs.set(id, { turn: { text: "", trace: [], startedAt }, abort: new AbortController(), step: "Waiting for a turn", startedAt });
+}
+
+/** Renews this Mac's lease on a run while it goes. */
+function renewLease(context: Context, id: string, startedAt: number): () => void {
+  return runLease.renewing(context.home, jobOf(id), () =>
+    cloud.change(id, context.by, (idea) => {
+      if (idea.run === null || idea.run.holder !== context.holder || idea.run.startedAt !== startedAt || (idea.run.state !== "running" && idea.run.state !== "queued")) return false;
+      idea.run = { ...idea.run, renewedAt: Date.now() };
+    }), "ideas");
+}
+
+/** An ending as noted in jobs.json, and how it's saved on the idea. */
+type Noted = { what: IdeaRun["what"]; state: Ending["state"]; error?: string; text: string; tools?: IdeaTool[]; workedMs?: number; holder: string; by: string; startedAt: number; endedAt: number; interrupted?: boolean };
+
+/** Saves a noted ending on its run (false: the idea's gone, or a newer run took its place). */
+async function saveEnding(id: string, given: Record<string, unknown>, named?: (title: string, titled: boolean) => void): Promise<boolean> {
+  const ending = given as unknown as Noted;
+  let saved = false;
+  try {
+    await cloud.change(id, ending.by, (idea) => {
+      if (idea.run !== null && (idea.run.holder !== ending.holder || idea.run.startedAt !== ending.startedAt)) return false;
+      named?.(cloud.summarize(idea).title, idea.titles.length > 0);
+      idea.run = { what: ending.what, state: ending.state, holder: ending.holder, by: ending.by, startedAt: ending.startedAt, endedAt: ending.endedAt, ...(ending.error ? { error: ending.error } : {}), ...(ending.tools && ending.tools.length > 0 ? { tools: ending.tools } : {}) };
+      if (ending.interrupted !== true) {
+        const turn: IdeaTurn = { role: "claude", text: ending.text, at: ending.endedAt, workedMs: ending.workedMs ?? 0, ...(ending.tools && ending.tools.length > 0 ? { tools: ending.tools } : {}), ...(ending.state === "failed" || ending.state === "stopped" ? { failed: true } : {}) };
+        idea.chat = [...idea.chat, turn].slice(-KEPT_TURNS);
+      }
+      saved = true;
+    });
+  } catch (error) {
+    if (error instanceof cloud.Missing) return false;
+    throw error;
+  }
+  return saved;
+}
+
+/**
+ * A run a restart cut short (serve.ts's resumer for `idea`): its noted ending
+ * saved, or, cut short before it ended, marked stopped, until the cloud has it.
+ */
+export function resumeRun(home: string, job: jobs.Job): void {
+  const id = job.project;
+  if (runs.has(id)) return;
+  if (job.args.ending === undefined) {
+    const { holder, by, what, startedAt } = job.args as { holder: string; by: string; what: IdeaRun["what"]; startedAt: number };
+    const text = "Edit restarted before Claude finished. Ask again.";
+    runLease.ended(home, job.key, { what, state: "stopped", error: text, text, holder, by, startedAt, endedAt: Date.now(), interrupted: true } satisfies Noted);
+  }
+  void runLease.land(home, job.key, (ending) => saveEnding(id, ending), "ideas");
 }
 
 async function work(context: Context, id: string, what: IdeaRun["what"], options: { improve?: boolean; changes?: boolean }, asked: string | null): Promise<void> {
@@ -624,6 +682,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
   const signal = running.abort.signal;
   let ending: Ending;
   let folder: string | null = null;
+  const stopRenewing = renewLease(context, id, running.startedAt);
   try {
     ending = await slot(async () => {
       if (signal.aborted) return { state: "stopped" as const, text: "Stopped." };
@@ -720,21 +779,18 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
     if (!signal.aborted) diag.warn("ideas", `${id}: ${what} failed: ${message}`);
     ending = { state: signal.aborted ? "stopped" : "failed", error: message, text: message };
   }
+  stopRenewing();
   const tools = toolsOf(running.turn);
   const workedMs = Date.now() - running.turn.startedAt;
   if (folder !== null) fs.rmSync(folder, { recursive: true, force: true });
-  // Still running until its ending is saved: dropped first, a look in between saw it not running with its run still "running".
+  // Noted before the cloud is told, and saved until it lands (run_lease.ts); still running here until the first try's done,
+  // so a look in between never sees it not running with its run still "running".
+  const noted: Noted = { what, state: ending.state, text: ending.text, ...(ending.error ? { error: ending.error } : {}), ...(tools.length > 0 ? { tools } : {}), workedMs, holder: context.holder, by: context.by, startedAt: running.startedAt, endedAt: Date.now() };
+  runLease.ended(context.home, jobOf(id), noted);
+  running.ending = true;
   let named: { title: string; titled: boolean } | null = null;
   try {
-    await cloud.change(id, context.by, (idea) => {
-      if (idea.run !== null && idea.run.holder !== context.holder) return false;
-      named = { title: cloud.summarize(idea).title, titled: idea.titles.length > 0 };
-      idea.run = { what, state: ending.state, holder: context.holder, by: context.by, startedAt: idea.run?.startedAt ?? Date.now(), endedAt: Date.now(), ...(ending.error ? { error: ending.error } : {}), ...(tools.length > 0 ? { tools } : {}) };
-      const turn: IdeaTurn = { role: "claude", text: ending.text, at: Date.now(), workedMs, ...(tools.length > 0 ? { tools } : {}), ...(ending.state === "failed" || ending.state === "stopped" ? { failed: true } : {}) };
-      idea.chat = [...idea.chat, turn].slice(-KEPT_TURNS);
-    });
-  } catch (error) {
-    diag.warn("ideas", `${id}: saving how the run ended: ${diag.messageOf(error)}`);
+    await runLease.land(context.home, jobOf(id), (given) => saveEnding(id, given, (title, titled) => (named = { title, titled })), "ideas");
   } finally {
     runs.delete(id);
   }
@@ -750,14 +806,14 @@ function tell(id: string, what: IdeaRun["what"], ending: Ending, named: { title:
   notices.notify({ key: `idea:${id}:${Date.now()}`, title, body: titles ? name : `${name}: ${notices.line(ending.text)}`, path: `/ideas/${id}` });
 }
 
-/** Runs this Mac had going when Edit stopped: stopped, to be started again by hand. */
-export async function markInterrupted(holder: string): Promise<void> {
+/** Runs this Mac had going when Edit stopped and has no job for (from before jobs.json listed them): stopped, to be started again by hand. */
+export async function markInterrupted(holder: string, home: string | null = null): Promise<void> {
   const rows = await cloud.list();
   for (const row of rows) {
     if (row.summary.run !== "running" && row.summary.run !== "queued") continue;
     await cloud
       .change(row.id, holder, (idea) => {
-        if (idea.run === null || idea.run.holder !== holder || (idea.run.state !== "running" && idea.run.state !== "queued") || runs.has(idea.id)) return false;
+        if (idea.run === null || idea.run.holder !== holder || (idea.run.state !== "running" && idea.run.state !== "queued") || runs.has(idea.id) || jobs.get(home, jobOf(idea.id)) !== undefined) return false;
         idea.run = { ...idea.run, state: "stopped", endedAt: Date.now(), error: "Edit restarted before Claude finished. Ask again." };
       })
       .catch((error: unknown) => diag.warn("ideas", `${row.id}: marking its run stopped: ${diag.messageOf(error)}`));

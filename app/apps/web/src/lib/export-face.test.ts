@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityLine, cardFace, exportLabel, folderDetail, shareChip, type FaceJob } from "./export-face";
+import { activityLine, cardFace, exportLabel, folderDetail, shareChip, shareStatus, type FaceJob } from "./export-face";
 
 const job = (over: Partial<FaceJob>): FaceJob => ({ name: "Republican Chairman", state: "running", progress: 0, ...over });
 
@@ -52,5 +52,32 @@ describe("the share chip", () => {
     expect(shareChip("waiting for smooth playback's render to finish")).toBe("Waiting for smooth playback's render to finish");
     expect(shareChip("cutting the footage, 40 of 225")).toBe("Cutting the footage, 40 of 225");
     expect(shareChip("exporting 20%")).toBe("Exporting 20%");
+  });
+});
+
+describe("the Share dialog's line", () => {
+  const base = { exportState: null, sharing: null, share: null, linked: true, stopped: false };
+
+  it("never says Up on the link when only the export is done: the share's own line shows until it's published", () => {
+    const exported = { state: "done", progress: 1 };
+    expect(shareStatus({ ...base, exportState: exported, sharing: "uploading 40%", share: { state: "running" } })).toEqual({ kind: "progress", text: "Uploading 40%…" });
+    // The export done and the server's share still running (between polls the line may be briefly absent): not up yet.
+    expect(shareStatus({ ...base, exportState: exported, share: { state: "running" } }).kind).toBe("none");
+    expect(shareStatus({ ...base, exportState: exported, share: { state: "done" } })).toEqual({ kind: "up" });
+  });
+
+  it("says why a share failed after its export, from the server", () => {
+    expect(shareStatus({ ...base, exportState: { state: "done", progress: 1 }, share: { state: "failed", error: "the review copy came out wrong" } })).toEqual({ kind: "share-failed", error: "the review copy came out wrong" });
+  });
+
+  it("shows the export's progress first, then the share's", () => {
+    expect(shareStatus({ ...base, exportState: { state: "running", progress: 0.25 }, sharing: "exporting" })).toEqual({ kind: "progress", text: "Exporting… 25%" });
+    expect(shareStatus({ ...base, exportState: { state: "queued", progress: 0, waiting: "waiting for the encoder" } })).toEqual({ kind: "progress", text: "Export queued · waiting for the encoder" });
+    expect(shareStatus({ ...base, sharing: "publishing" })).toEqual({ kind: "progress", text: "Publishing…" });
+  });
+
+  it("says a cancel and an export's failure", () => {
+    expect(shareStatus({ ...base, stopped: true })).toEqual({ kind: "cancelled" });
+    expect(shareStatus({ ...base, exportState: { state: "failed", progress: 0, error: "Native encoder stalled" } })).toEqual({ kind: "export-failed", error: "Native encoder stalled" });
   });
 });

@@ -61,8 +61,8 @@ export function portTaken(port: number): boolean {
 
 /**
  * The window helper to run: the binary's own, written to `<home>/bin/Edit`
- * when it differs from what's there; else `EDIT_WINDOW`, one beside this
- * binary, or the dev build's. Null when this build has none.
+ * when it differs from what's there; else one beside this binary, or the
+ * dev build's. Null when this build has none.
  */
 export function windowHelper(home: string): string | null {
   const inside = embedded()?.window ?? null;
@@ -86,8 +86,6 @@ export function windowHelper(home: string): string | null {
     }
     return target;
   }
-  const given = process.env.EDIT_WINDOW;
-  if (given !== undefined && given !== "") return isFile(given) ? given : null;
   const candidates: string[] = [];
   const beside = parent(fs.realpathSync(process.execPath));
   if (beside !== null) candidates.push(join(beside, "edit-window"));

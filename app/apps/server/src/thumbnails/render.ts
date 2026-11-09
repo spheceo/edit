@@ -41,6 +41,7 @@ async function drawDesign(design, id) {
   const loaded = new Map();
   for (const layer of design.layers) {
     if (layer.kind === "image") loaded.set(layer.source, await picture(sourceUrl(id, layer.source)));
+    // Every font is the page's own (@font-face above): one that won't load draws in the fallback, which the look shows.
     else await document.fonts.load(fontOf(layer), layer.text).catch(() => {});
   }
   const canvas = document.createElement("canvas");
@@ -240,6 +241,7 @@ function close(): void {
       one.child.kill();
       fs.rmSync(one.profile, { recursive: true, force: true });
     })
+    // A Chrome that never started: its error went to the drawing that waited on it.
     .catch(() => {});
 }
 
@@ -270,6 +272,7 @@ function inChrome(origin: string, expression: string): Promise<{ bytes: Uint8Arr
   const work = queue.then(async () => {
     if (idle !== null) clearTimeout(idle);
     for (let attempt = 0; ; attempt++) {
+      // One that didn't start is started again here; a second failure is this drawing's error.
       const warm = browser === null ? null : await browser.catch(() => null);
       if (warm === null || warm.closed || warm.origin !== origin) {
         close();
@@ -289,6 +292,7 @@ function inChrome(origin: string, expression: string): Promise<{ bytes: Uint8Arr
       }
     }
   });
+  // The line only orders the drawings: each one's error goes to its own caller.
   queue = work.catch(() => {});
   void work.finally(() => {
     if (idle !== null) clearTimeout(idle);

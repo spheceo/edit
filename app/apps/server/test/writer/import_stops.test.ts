@@ -4,6 +4,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
+import * as jobs from "../../src/jobs.ts";
+import { waitingByItself } from "../../src/remote_actions.ts";
 import * as tools from "../../src/tools.ts";
 import * as captionTurns from "../../src/writer/caption_turns.ts";
 import { timing } from "../../src/transcribe.ts";
@@ -142,3 +144,35 @@ test("footage Edit made whose sound can't be read is taken away to be made again
     cleanup();
   }
 });
+
+test.skipIf(ffmpeg === null)("an import refused for the transcription plan's credit waits in the job table, said once in Needs attention, and is woken to try again", async () => {
+  const { dir, app, cleanup } = fixtureHome("import-credit");
+  try {
+    const source = `${dir}/call.m4a`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=20", "-c:a", "aac", "-b:a", "32k", source]).exitCode).toBe(0);
+    // ElevenLabs' answer when the plan runs out (Nov 8, four imports on two Macs).
+    mock.on("POST", "/v1/transcribe", () => Response.json({ detail: { status: "quota_exceeded", message: "This request exceeds your quota of 100000. You have 15 credits remaining, while 230 credits are required for this request." } }, { status: 401 }));
+    const data = store.dataDir(app.store.home);
+    const failed = await imports.fromFile(app, data, source, null, "Credit", null).catch((error: unknown) => error);
+    expect((failed as Error).message).toContain("The transcription plan is out of credit; Edit tries again by itself at");
+    const [id] = store.ids(data);
+    const waiting = jobs.get(app.store.home, jobs.keyOf("script", id!));
+    expect(waiting).toMatchObject({ kind: "script", state: "waiting", args: { waiting_on: "quota" } });
+    expect(waiting!.retry_at).toBeGreaterThan(Date.now() + 20 * 60_000);
+    expect(waitingByItself(app.store.home)[0]).toStartWith("The transcription plan is out of credit: 1 import waiting");
+    // Never cut short by a restart, nor tried before its time.
+    expect(jobs.takeOver(app.store.home, ["script"])).toEqual([]);
+    const woken: string[] = [];
+    jobs.useResumers(app.store.home, { script: (job) => void woken.push(job.project) });
+    await jobs.wake(app.store.home, ["script"]);
+    expect(woken).toEqual([]);
+    // Its time come: the one resumer tries it again.
+    const listed = JSON.parse(fs.readFileSync(`${app.store.home}/jobs.json`, "utf8")) as jobs.Job[];
+    for (const job of listed) if (job.kind === "script") job.retry_at = Date.now() - 1;
+    fs.writeFileSync(`${app.store.home}/jobs.json`, JSON.stringify(listed));
+    await jobs.wake(app.store.home, ["script"]);
+    expect(woken).toEqual([id!]);
+  } finally {
+    cleanup();
+  }
+}, 120_000);

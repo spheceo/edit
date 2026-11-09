@@ -397,20 +397,33 @@ test("deleting a project removes what Edit rendered for it (smoothed footage, ma
   }
 });
 
-test("each server start counts a project's revisions from its own base, so a page from the last start can't match one", () => {
-  const was = process.env.NODE_ENV;
-  process.env.NODE_ENV = "production";
-  const first = fixtureHome("rev-base-1");
-  const second = fixtureHome("rev-base-2");
+// Nov 8 audit (2b, 2d): each start began revisions from a random base, so a
+// plan the agent made before a restart was refused and a page open across one
+// could ignore the server's changes. They go on from the last one now.
+test("a project's revisions go on across a restart, and a file changed behind them gets one nobody holds", async () => {
+  const { home, store, cleanup } = fixtureHome("rev-restart");
   try {
-    expect(first.store.firstRev).toBeGreaterThan(1000);
-    expect(first.store.firstRev).not.toBe(second.store.firstRev);
-    const made = first.store.createAs("Case", "bodycam", { width: 1920, height: 1080, fps: 30 });
-    expect(made.rev).toBe(first.store.firstRev);
+    const live = store.create("Case", SETTINGS);
+    const id = live.project.id;
+    const renamed = { ...structuredClone(live.project), name: "Case 2" } as Project;
+    const saved = await store.replace(id, live.rev, renamed, "test");
+    expect(saved.rev).toBe(2);
+    // A restart: the same folder, a new store.
+    const again = Store.open(home);
+    expect(again.get(id)!.rev).toBe(2);
+    const third = await again.replace(id, 2, { ...structuredClone(renamed), name: "Case 3" } as Project, "test");
+    expect(third.rev).toBe(3);
+    // The file changed without its revision (a crash between the writes, a copy by hand): the next one.
+    const path = `${home}/projects/${id}.json`;
+    const text = fs.readFileSync(path, "utf8");
+    fs.writeFileSync(path, text.replace("Case 3", "Case 4"));
+    expect(Store.open(home).get(id)!.rev).toBe(4);
+    expect(Store.open(home).get(id)!.rev).toBe(4);
+    // A project from before revisions were kept counts from the first.
+    fs.rmSync(`${home}/projects/revs/${id}.json`);
+    expect(Store.open(home).get(id)!.rev).toBe(again.firstRev);
   } finally {
-    process.env.NODE_ENV = was;
-    first.cleanup();
-    second.cleanup();
+    cleanup();
   }
 });
 

@@ -4,6 +4,7 @@ import * as os from "node:os";
 import { join as joinPath } from "node:path";
 
 import { ffmpeg } from "../../src/tools.ts";
+import * as encoder from "../../src/encoder.ts";
 import { append, encodeProxy, inputsOf, join, overview, PACE, peaks, streams } from "../../src/writer/media.ts";
 
 function make(args: string[], out: string) {
@@ -106,6 +107,30 @@ test("an encode that makes no progress is stopped by its pace, not left to run o
     expect(Date.now() - began).toBeLessThan(15_000);
     expect(fs.existsSync(joinPath(dir, "out.mp4"))).toBe(false);
   } finally {
+    Object.assign(PACE, was);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 30_000);
+
+test("an encode sharing the hardware encoder with an export isn't judged by its pace until the export ends", async () => {
+  const dir = fs.mkdtempSync(joinPath(os.tmpdir(), "edit-pace-shared-"));
+  const never = joinPath(dir, "never.mp4");
+  expect(Bun.spawnSync(["mkfifo", never]).exitCode).toBe(0);
+  const was = { ...PACE };
+  Object.assign(PACE, { afterMs: 400, everyMs: 100 });
+  let exporting = true;
+  const undo = encoder.register(() => (exporting ? "an export" : null));
+  try {
+    const encode = encodeProxy(never, joinPath(dir, "out.mp4"), 3_600_000).then(() => null, (error: unknown) => error as Error);
+    // Well past its judging time: an export holds the encoder, so it isn't stopped as slow.
+    const early = await Promise.race([encode, Bun.sleep(1500).then(() => "still going" as const)]);
+    expect(early).toBe("still going");
+    // The export ends: from then on its pace counts, and it's stopped as one that made no progress.
+    exporting = false;
+    const failed = await encode;
+    expect(failed?.message).toMatch(/made no progress/);
+  } finally {
+    undo();
     Object.assign(PACE, was);
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -20,6 +20,7 @@ import * as board from "./board.ts";
 import * as cloud from "./cloud.ts";
 import { cleanGuide, cleanTitle, guideProblem, lengthStyle, titleProblem } from "./policy.ts";
 import * as run from "./run.ts";
+import { stale } from "../run_lease.ts";
 import * as sources from "./sources.ts";
 
 type Context = RouteContext<App>;
@@ -147,7 +148,8 @@ async function page(id: string) {
   const { idea, rev } = found;
   guardWorkspace(idea.workspace);
   const live = run.liveOf(id);
-  const shown: Idea = live !== null && idea.run !== null ? { ...idea, run: { ...idea.run, ...live } } : idea;
+  // Live here: its turn as it goes. Going on a Mac that stopped renewing its lease: stopped, not "running" for good.
+  const shown: Idea = idea.run === null ? idea : live !== null ? { ...idea, run: { ...idea.run, ...live } } : { ...idea, run: stale(idea.run) };
   const style = lengthStyle((await board.approved(idea.workspace).catch(() => [])).map((one) => one.title));
   const problems: Record<string, string> = {};
   for (const title of idea.titles) {

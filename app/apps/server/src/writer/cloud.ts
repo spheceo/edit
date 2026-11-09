@@ -10,10 +10,16 @@
 // holds and this Mac doesn't (the preview, once it was left to the cloud) is
 // named again: leaving it out of the commit deletes it for every Mac. A
 // commit another Mac overtook is refused; then this Mac's version is kept as
-// a "(conflicted copy)" and the cloud's taken, never an overwrite. Scripts
-// importing or being written wait until they're done. Deleting a script
-// deletes it everywhere. Footage isn't
-// downloaded: a script another Mac made plays its preview from the cloud.
+// a "(conflicted copy)" and the cloud's taken, never an overwrite. Since Nov 8
+// a script has the same cloud lock as an edit (locks.ts, sync_core.ts): held
+// by presence, a save to one another computer holds refused, so two Macs no
+// longer both change one; a push goes only with the lock (or where the cloud
+// keeps none). A commit is written down before it goes (the ledger's
+// `attempts`), so one whose answer was lost is known as this Mac's own and
+// never kept as a copy. Scripts importing or being written wait until they're
+// done (and hold the lock meanwhile). Deleting a script deletes it
+// everywhere. Footage isn't downloaded: a script another Mac made plays its
+// preview from the cloud.
 
 import * as fs from "node:fs";
 
@@ -32,6 +38,8 @@ import * as storage from "./storage.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join, parent } from "../paths.ts";
 import * as machine from "../machine.ts";
+import { displayName } from "../sync_core.ts";
+import * as locks from "./locks.ts";
 import * as relay from "../relay.ts";
 import { importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
@@ -152,8 +160,19 @@ interface Known {
   summary?: number;
 }
 
-/** `copied`: the rev a script's conflicted copy was kept for, until that rev has come down, so a pull tried again doesn't keep another. */
-type Ledger = { scripts: Record<string, Known>; copied?: Record<string, number> };
+/** A commit sent and not yet answered, written down before it went (`ownCommit`). */
+interface Attempt {
+  base: number;
+  bodyKey: string;
+  /** What the ledger keeps once it's known to have landed. */
+  known: Known;
+}
+
+/**
+ * `copied`: the rev a script's conflicted copy was kept for, until that rev has come down, so a pull tried again doesn't keep another.
+ * `attempts`: commits sent whose answer hasn't come (`ownCommit`).
+ */
+type Ledger = { scripts: Record<string, Known>; copied?: Record<string, number>; attempts?: Record<string, Attempt> };
 
 const ledgerPath = (data: string) => join(data, "cloud", "ledger.json");
 const deletingPath = (data: string) => join(data, "cloud", "deleted.json");
@@ -576,8 +595,10 @@ export async function stream(request: Request, data: string, id: string, blocks?
 
 // ---- The loop ----
 
-/** Who this Mac is, as commits name it. */
-const holder = (): string => machine.name().slice(0, 120);
+/** Who holds a script's lock from here (the same as an edit's: cloud_projects' holder, with this data folder's id); set by `start`. */
+let lockHolder = machine.name().slice(0, 120);
+/** Who this Mac is, as commits name it (the name teammates see). */
+const holder = (): string => displayName(lockHolder).slice(0, 120);
 
 /**
  * The sync, one fiber for as long as Edit runs (round 3): a round every
@@ -615,10 +636,21 @@ const syncing = (data: string) =>
     }
   }).pipe(inArea("writer"));
 
-/** Starts syncing in the background, for as long as Edit runs. */
-export function start(data: string): void {
+/** Starts syncing in the background, for as long as Edit runs; `holderLabel` holds the scripts' locks (cloud_projects' holder). */
+export function start(data: string, holderLabel?: string): void {
   lessonHooks.changed = syncSoon;
+  if (holderLabel !== undefined) lockHolder = holderLabel;
+  locks.start(data, busy);
+  store.hooks.mayWrite = locks.mayWrite;
   runtime.runFork(syncing(data));
+}
+
+/** Who holds the scripts' locks from here. */
+export const lockHolderNow = (): string => lockHolder;
+
+/** Sets who holds the scripts' locks from here (tests). */
+export function useHolderForTests(label: string): void {
+  lockHolder = label;
 }
 
 /** A script Edit is working on now: importing or being written. */
@@ -750,6 +782,8 @@ async function tick(data: string, pull: boolean): Promise<number> {
   const changed: [string, string, Script, Uint8Array, Known | undefined, Record<string, Kept>][] = [];
   for (const id of store.ids(data).sort()) {
     const until = backoff.get(id)?.until ?? 0;
+    // Worked on here: its lock is taken and kept meanwhile; pushed once done.
+    if (busy(id)) locks.touch(id);
     if (busy(id) || until > Date.now() || archive.archived(data, id)) continue;
     const dir = store.scriptDir(data, id);
     let body: Uint8Array;
@@ -775,10 +809,17 @@ async function tick(data: string, pull: boolean): Promise<number> {
   }
   let left = changed.length;
   let refusal: Problem | null = null;
+  const unpushed = new Set(changed.map(([id]) => id));
   for (const [id, dir, script, body, known, files] of changed) {
     Object.assign(status, { state: "syncing", pending: left + waiting });
     try {
-      const pushed = await push(data, id, dir, script, body, known, files);
+      // Someone else's (another computer holds the lock): left, and their version comes down.
+      if (!(await locks.mayPush(id, lockHolder))) {
+        waiting++;
+        left--;
+        continue;
+      }
+      const pushed = await push(data, id, dir, script, body, known, files, ledger, save);
       if (pushed === "overtaken") {
         // Another Mac saved it first: theirs comes down, then this waits a
         // little longer each time, so a newer copy that can't come down (its
@@ -793,6 +834,8 @@ async function tick(data: string, pull: boolean): Promise<number> {
         refusals.delete(id);
         ledger.scripts[id] = pushed;
         save();
+        unpushed.delete(id);
+        locks.pushed(id);
       }
     } catch (error) {
       const problem = error instanceof Problem ? error : new Problem(diag.messageOf(error));
@@ -816,6 +859,8 @@ async function tick(data: string, pull: boolean): Promise<number> {
     left--;
   }
   if (pull) await syncLessons(data);
+  // The locks: taken for what's open or worked on here, renewed, let go once nobody here needs them.
+  await locks.round(lockHolder, (id) => unpushed.has(id));
   if (refusal !== null) throw refusal;
   return waiting;
 }
@@ -943,6 +988,8 @@ async function pullOne(data: string, ledger: Ledger, row: Record<string, unknown
     return;
   }
   if (decision.do === "skip") return;
+  // This Mac's own commit, whose answer was lost: taken as pushed, never kept as a copy.
+  if (ownCommit(ledger, id, row)) return;
   const body = await fetchBytes(String(row.bodyKey ?? ""));
   decision = decidePull(seen(body));
   if (decision.do === "fail") throw new Problem("Its body isn't in the cloud.");
@@ -1082,7 +1129,32 @@ async function keepCloudFiles(data: string, id: string, dir: string, base: numbe
 }
 
 /** Sends a script's changed files and its body, then commits them. */
-async function push(data: string, id: string, dir: string, script: Script, body: Uint8Array, known: Known | undefined, files: Record<string, Kept>): Promise<Known | "overtaken"> {
+/**
+ * Whether the cloud's row of `id` is this Mac's own commit whose answer was
+ * lost (the rev after the one it was sent on, naming its body): then the
+ * ledger takes it as pushed. A copy kept for it would be a "(conflicted
+ * copy)" of a script nobody else changed.
+ */
+function ownCommit(ledger: Ledger, id: string, row: Record<string, unknown>): boolean {
+  const attempt = ledger.attempts?.[id];
+  if (attempt === undefined) return false;
+  if (Number(row.rev ?? 0) !== attempt.base + 1 || String(row.bodyKey ?? "") !== attempt.bodyKey) return false;
+  ledger.scripts[id] = { ...attempt.known, rev: attempt.base + 1 };
+  delete ledger.attempts![id];
+  diag.info("writer", `${jobs.named(id, String(row.title ?? ""))}: the cloud's rev ${attempt.base + 1} is this Mac's own save (its answer was lost): taken as saved, no copy`);
+  return true;
+}
+
+async function push(data: string, id: string, dir: string, script: Script, body: Uint8Array, known: Known | undefined, files: Record<string, Kept>, ledger?: Ledger, save?: () => void): Promise<Known | "overtaken"> {
+  // A commit sent before whose answer never came (Edit quit, the connection dropped): landed, it's this Mac's, and nothing more is sent for it.
+  if (ledger?.attempts?.[id] !== undefined) {
+    const listed = await convex("query", "writer:getScript", { scriptId: id }).catch((error: unknown) => {
+      if (error instanceof Problem && error.offline) throw error;
+      return null;
+    });
+    if (listed?.ok === true && listed.value !== null && typeof listed.value === "object" && ownCommit(ledger, id, listed.value as Record<string, unknown>)) return ledger.scripts[id]!;
+    delete ledger.attempts[id];
+  }
   const base = known?.rev ?? 0;
   await keepCloudFiles(data, id, dir, base, files);
   const kept: Record<string, Kept> = {};
@@ -1130,6 +1202,11 @@ async function push(data: string, id: string, dir: string, script: Script, body:
   // clean-up deleted the winner's body (Oct 30, Predator Tutor's rev 5: "Its body isn't in the cloud" on every Mac).
   const bodyKey = `${PREFIX}/${id}/body/${base + 1}-${digest.slice(0, 12)}-${pushId}.json`;
   await uploadBytes(bodyKey, body);
+  // Written down before it goes: an answer lost on the way back is known as this Mac's (`ownCommit`).
+  if (ledger !== undefined) {
+    ledger.attempts = { ...ledger.attempts, [id]: { base, bodyKey, known: { rev: base + 1, body: digest, files: kept, summary: SUMMARY_VERSION } } };
+    save?.();
+  }
   const answer = await convex("mutation", "writer:commitScript", {
     scriptId: id,
     baseRev: base,
@@ -1141,12 +1218,14 @@ async function push(data: string, id: string, dir: string, script: Script, body:
     holder: holder(),
   });
   if (answer.ok) {
+    if (ledger?.attempts !== undefined) delete ledger.attempts[id];
     const value = (answer.value ?? {}) as { stale?: unknown; rev?: unknown };
     await remove((Array.isArray(value.stale) ? value.stale : []).filter((key): key is string => typeof key === "string"));
     const rev = typeof value.rev === "number" ? value.rev : base + 1;
     diag.info("writer", `${jobs.named(id, script.title)}: saved to the cloud as rev ${rev}${sent > 0 ? ` with ${sent} ${sent === 1 ? "file" : "files"} (${Math.round(sentBytes / 1e6)} MB)` : ""} in ${Math.round((Date.now() - began) / 1000)} s`);
     return { rev, body: digest, files: kept, summary: SUMMARY_VERSION };
   }
+  if (ledger?.attempts !== undefined) delete ledger.attempts[id];
   await remove([...uploaded, bodyKey]);
   if (answer.code === "conflict") {
     diag.warn("writer", `${jobs.named(id, script.title)}: ${ANOTHER_MACHINE} saved it first (rev ${base} is behind); taking theirs and keeping ${THIS_MACHINE}'s as a copy`);

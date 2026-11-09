@@ -110,13 +110,38 @@ export const NARRATION: Record<Style, "house" | "recording" | "none"> = {
   shorts: "none",
 };
 
-/** A script import's footage downloads (apps/server/src/script.ts `Job`). */
+/**
+ * A script import (apps/server/src/script.ts `Jobs`), kept in the job table
+ * as it changes, so a restart shows the same thing and carries on from it.
+ */
 export interface ScriptJob {
-  /** `waiting`: some footage couldn't be downloaded, even tried again; the person gives another link or goes on without it. */
+  /**
+   * `waiting`: footage it couldn't get, even tried again (the person gives
+   * another link or goes on without it), or footage waiting by itself on the
+   * transcription plan's credit or the hardware encoder (`retry_at`).
+   * `done`: the footage is ready and laid out; what follows (`after`) has its own lines.
+   */
   state: "downloading" | "transcribing" | "placing" | "voicing" | "waiting" | "done" | "failed";
   error?: string;
-  /** `retry_at`: when Edit tries a failed file again by itself (ms). */
-  files: { file: string; name?: string; bytes: number; total?: number; state: "queued" | "downloading" | "cutting" | "done" | "failed"; error?: string; retry_at?: number; cut?: { done: number; total: number } }[];
+  /** State waiting by itself: when Edit tries again (ms), or none while it waits for the encoder. */
+  retry_at?: number;
+  /**
+   * `retry_at`: when Edit tries a failed file again by itself (ms). `why`: what
+   * its failure is (`import_steps.ts`): passing (Retry helps), person (another
+   * link, or go on without it), quota or encoder (it waits, state waiting).
+   */
+  files: { file: string; name?: string; bytes: number; total?: number; state: "queued" | "downloading" | "cutting" | "done" | "failed" | "waiting"; error?: string; why?: ImportWhy; retry_at?: number; cut?: { done: number; total: number } }[];
+  /** What follows the layout, each its own line: the voice-over, the team's recording placed, the research, the words. Never fails the import. */
+  after?: ImportAfter[];
+}
+
+export type ImportWhy = "passing" | "person" | "quota" | "encoder";
+
+export interface ImportAfter {
+  step: "voiceover" | "recording" | "research" | "words";
+  state: "running" | "done" | "failed" | "waiting";
+  /** What happened, in a line (why it failed, what's still going). */
+  note?: string;
 }
 
 export interface ProjectSummary {

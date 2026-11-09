@@ -1,4 +1,4 @@
-// A captioned script's new footage, heard exactly after the revision that
+// A rough script's new footage, heard exactly after the revision that
 // brought it in, not before it's done (Nov 5, JJ's Mac: Claude's revisions
 // answered in 8 to 25 s, then waited a minute or two on the footage coming
 // back and being heard; Repack's took about 30 s in all). The revision's
@@ -19,6 +19,9 @@ import type { Clip, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import { QUOTA_RETRY_MS, retryAt, whyOf } from "../import_steps.ts";
+import * as table from "../jobs.ts";
+import { parent } from "../paths.ts";
 import { isFile } from "../paths.ts";
 import * as chat from "./chat.ts";
 import * as cloud from "./cloud.ts";
@@ -26,7 +29,6 @@ import { checkClips } from "./edits.ts";
 import * as exact from "./exact.ts";
 import { importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
-import { clock } from "./paragraphs.ts";
 import * as storage from "./storage.ts";
 import * as store from "./store.ts";
 import { readPeaks } from "./tidy.ts";
@@ -37,6 +39,33 @@ const WAIT_MS = 2 * 3_600_000;
 
 const going = new Map<string, Promise<void>>();
 const again = new Set<string>();
+
+/** Edit's data folder, whose job table a script's wait is kept in (`store.dataDir` is its `writer/`). */
+const homeOf = (data: string): string => parent(data) ?? data;
+/** The job table's key for a script's exact hearing waiting on the plan's credit (apart from its import's wait under the same kind). */
+const creditKey = (id: string): string => table.keyOf("script", id, "exact");
+
+/**
+ * A hearing the transcription plan's credit refused, tried again by itself
+ * every 30 minutes (import_steps.ts `QUOTA_RETRY_MS`, as an import's files
+ * wait) until it's heard or nothing is left to hear. Kept in the job table
+ * (`<home>/jobs.json`, `script:<id>:exact`), so a quit or an update in between
+ * loses nothing: the script keeps its rough cut and its chosen clips, and the
+ * next run's job table wakes the hearing when its time comes (serve.ts).
+ */
+export function afterCredit(data: string, id: string): void {
+  const home = homeOf(data);
+  const key = table.begin(home, "script", id, { waiting_on: "exact" }, "exact", "waiting for credit");
+  table.settle(home, key, "waiting", { step: "waiting for credit", retry_at: retryAt("quota", Date.now()) ?? Date.now() + QUOTA_RETRY_MS.value, args: { waiting_on: "exact" } });
+}
+
+/** The wait is over: the chosen footage was heard (nothing when there was none). */
+export function creditBack(data: string, id: string): void {
+  table.end(homeOf(data), creditKey(id));
+}
+
+/** Whether a script's exact hearing waits for the plan's credit. */
+export const waitsForCredit = (data: string, id: string): boolean => table.get(homeOf(data), creditKey(id))?.state === "waiting";
 
 /** The footage a script plays: its original where it's still on this Mac, else its preview. */
 export const footagePath = (dir: string, script: Script): string => (script.originalPath !== "" && isFile(script.originalPath) ? script.originalPath : store.proxyPath(dir));
@@ -117,14 +146,21 @@ async function once(data: string, id: string): Promise<void> {
   const name = jobs.named(id, script.title);
   const source = await footageFor(null, data, dir, id, null);
   if ("away" in source) {
-    diag.warn("writer", `${name}: its new footage wasn't heard exactly (${source.away}); its cuts follow YouTube's captions`);
+    diag.warn("writer", `${name}: its new footage wasn't heard exactly (${source.away}); its cuts follow the rough words`);
     return;
   }
   const from = isFile(source.footage) ? "here" : "the cloud's preview";
   const heardFrom = stamp(script.words);
   const wordsBefore = structuredClone(script.words);
   const work = structuredClone(script);
-  const report = await exact.run(work, dir, source.footage, work.clips, () => {});
+  let report: exact.Report;
+  try {
+    report = await exact.run(work, dir, source.footage, work.clips, () => {});
+  } catch (error) {
+    if (whyOf(error) === "quota") afterCredit(data, id);
+    throw error;
+  }
+  creditBack(data, id);
   // A job or an import on the script writes it when it ends: the pass lands after it.
   const until = Date.now() + WAIT_MS;
   while (jobs.running(id) || importing(id)) {
@@ -155,5 +191,5 @@ async function once(data: string, id: string): Promise<void> {
   store.write(dir, latest);
   versions.keep(dir, "claude", before, latest);
   if (silent.size > 0) chat.add(dir, "editor", `Heard the new footage exactly and dropped ${silent.size} ${silent.size === 1 ? "piece" : "pieces"} with no sound in ${silent.size === 1 ? "it" : "them"}.`);
-  diag.info("writer", `${name}: new footage heard exactly from ${from} in ${Math.round((Date.now() - began) / 1000)} s: ${clock(report.heardMs)} in ${report.stretches} ${report.stretches === 1 ? "stretch" : "stretches"}, ${report.retimed} words retimed, ${report.respelled} respelled, ${report.relabelled} relabelled${silent.size > 0 ? `, ${silent.size} silent pieces dropped` : ""}`);
+  diag.info("writer", `${name}: new footage heard exactly from ${from} in ${Math.round((Date.now() - began) / 1000)} s: ${exact.share(report.heardMs, report.footageMs)} in ${report.stretches} ${report.stretches === 1 ? "stretch" : "stretches"}, ${report.retimed} words retimed, ${report.respelled} respelled, ${report.relabelled} relabelled${silent.size > 0 ? `, ${silent.size} silent pieces dropped` : ""}`);
 }

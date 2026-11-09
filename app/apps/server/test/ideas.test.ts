@@ -13,6 +13,8 @@ import * as cloud from "../src/ideas/cloud.ts";
 import * as frames from "../src/ideas/frames.ts";
 import { cleanGuide, cleanTitle, closest, framesProblem, guideProblem, lookProblem, lengthStyle, sourceProblem, summaryProblem, titleProblem } from "../src/ideas/policy.ts";
 import { applyPatch, linksIn, mayIdeas, mayWorkspace, readiness, workspacesOf } from "../src/ideas/routes.ts";
+import * as jobs from "../src/jobs.ts";
+import * as runLease from "../src/run_lease.ts";
 import * as run from "../src/ideas/run.ts";
 import * as sources from "../src/ideas/sources.ts";
 import * as live from "../src/writer/live.ts";
@@ -27,6 +29,8 @@ let cleanup: () => void;
 /** mamagi's ideas functions, in memory, refusing a stale rev as the real ones do. */
 const rows = new Map<string, { body: Idea; rev: number }>();
 let conflicts = 0;
+/** Writes refused while above 0 (the cloud down), each counting one down. */
+let down = 0;
 
 beforeAll(() => {
   mock = MockServer.start();
@@ -39,6 +43,10 @@ beforeAll(() => {
     if (path === "ideas:list") return ok([...rows.entries()].map(([ideaId, row]) => ({ ideaId, rev: row.rev, summary: cloud.summarize(row.body), updatedAt: row.body.updatedAt, updatedBy: "Test", createdBy: null })));
     if (path === "ideas:get") return ok(rows.has(id) ? { body: rows.get(id)!.body, rev: rows.get(id)!.rev } : null);
     if (path === "ideas:remove") return ok({ deleted: rows.delete(id) });
+    if (down > 0) {
+      down--;
+      return Response.json({ status: "error", errorMessage: "the cloud is down", errorData: { code: "down", message: "the cloud is down" } });
+    }
     const rev = rows.get(id)?.rev ?? 0;
     if (conflicts > 0 || args.baseRev !== rev) {
       conflicts = Math.max(0, conflicts - 1);
@@ -61,6 +69,7 @@ beforeAll(() => {
 afterEach(() => {
   rows.clear();
   conflicts = 0;
+  down = 0;
   board.forget();
 });
 
@@ -486,5 +495,76 @@ test("a repackaging looks through the case's video and puts the frames its guide
     expect(seen.answers[7]).toContain("on the first frame, with 2 frames on the card");
   } finally {
     Object.assign(frames.looks, before);
+  }
+});
+
+test("a run's ending survives a cloud save that fails: kept in jobs.json, and saved when the cloud's back, so the page never keeps it running", async () => {
+  const retry = runLease.lease.retryMs;
+  runLease.lease.retryMs = () => 30;
+  try {
+    await cloud.commit(videoIdea("i12-test"), 0, "Sphe");
+    run.asking.ask = async () => {
+      // The cloud goes as Claude answers: the ending can't be saved.
+      down = 1000;
+      return { structured: null, text: "Here's what I think.", session: null, costUsd: 0, result: {}, replies: 1, biggestReply: 0 };
+    };
+    await run.chat(context(), "i12-test", "what do you think?");
+    await settled("i12-test");
+    const key = jobs.keyOf("idea", "i12-test");
+    expect(jobs.get(home, key)).toMatchObject({ state: "waiting", step: "saving how it ended", args: { ending: { state: "done", text: "Here's what I think." } } });
+    expect(rows.get("i12-test")!.body.run!.state).not.toBe("done");
+    // The cloud back: the next try saves it, and the job's crossed off.
+    down = 0;
+    for (let tries = 0; tries < 100 && jobs.get(home, key) !== undefined; tries++) await Bun.sleep(10);
+    expect(jobs.get(home, key)).toBeUndefined();
+    const idea = rows.get("i12-test")!.body;
+    expect(idea.run).toMatchObject({ state: "done", holder: "test-mac" });
+    expect(idea.chat.at(-1)).toMatchObject({ role: "claude", text: "Here's what I think." });
+  } finally {
+    runLease.lease.retryMs = retry;
+  }
+});
+
+test("a run a restart cut short (listed, no ending) is marked stopped by its resumer, without a turn of Claude's", async () => {
+  const startedAt = Date.now() - 60_000;
+  const mine = videoIdea("i13-test");
+  mine.run = { what: "chat", state: "running", holder: "test-mac", by: "Sphe", startedAt, renewedAt: startedAt };
+  await cloud.commit(mine, 0, "Sphe");
+  const key = jobs.begin(home, "idea", "i13-test", { holder: "test-mac", by: "Sphe", what: "chat", startedAt });
+  run.resumeRun(home, jobs.get(home, key)!);
+  for (let tries = 0; tries < 100 && jobs.get(home, key) !== undefined; tries++) await Bun.sleep(10);
+  expect(rows.get("i13-test")!.body.run).toMatchObject({ state: "stopped", error: "Edit restarted before Claude finished. Ask again." });
+  expect(rows.get("i13-test")!.body.chat).toEqual([]);
+});
+
+test("a run is held by a lease its Mac renews while it goes; another Mac takes it only once the lease has lapsed", async () => {
+  const renew = runLease.lease.renewMs;
+  runLease.lease.renewMs = 20;
+  try {
+    // Another Mac's run, renewed a moment ago though it began half an hour back (a long turn): still theirs.
+    const theirs = videoIdea("i14-test");
+    theirs.run = { what: "chat", state: "running", holder: "other-mac", by: "JJ", startedAt: Date.now() - 30 * 60_000, renewedAt: Date.now() };
+    await cloud.commit(theirs, 0, "JJ");
+    await expect(run.chat(context(), "i14-test", "go on")).rejects.toThrow("Claude is working on this idea on other-mac");
+    // Not renewed for longer than the lease: theirs stopped answering, so it's taken.
+    const lapsed = structuredClone(rows.get("i14-test")!.body);
+    lapsed.run = { ...lapsed.run!, renewedAt: Date.now() - runLease.lease.ms - 1000 };
+    await cloud.commit(lapsed, rows.get("i14-test")!.rev, "JJ");
+    // The page shows the lapsed run stopped, not running for good.
+    expect(runLease.stale(rows.get("i14-test")!.body.run!)).toMatchObject({ state: "stopped" });
+    let renewed = 0;
+    run.asking.ask = async () => {
+      // While it runs, this Mac renews its lease.
+      const before = rows.get("i14-test")!.body.run!.renewedAt!;
+      for (let tries = 0; tries < 50 && rows.get("i14-test")!.body.run!.renewedAt === before; tries++) await Bun.sleep(10);
+      renewed = rows.get("i14-test")!.body.run!.renewedAt! - before;
+      return { structured: null, text: "Done.", session: null, costUsd: 0, result: {}, replies: 1, biggestReply: 0 };
+    };
+    await run.chat(context(), "i14-test", "go on");
+    const idea = await settled("i14-test");
+    expect(renewed).toBeGreaterThan(0);
+    expect(idea.run).toMatchObject({ state: "done", holder: "test-mac" });
+  } finally {
+    runLease.lease.renewMs = renew;
   }
 });

@@ -236,6 +236,73 @@ impl Source {
     }
 }
 
+/// Where a preview frame's decoding went (the native player reads and resets
+/// them per frame, `crate::player`): decoders opened, seeks, frames read on
+/// from just behind, FFmpeg reads, each with its time. One process draws one
+/// preview, so plain counters across its decoder threads are enough.
+pub mod decode_stats {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    pub(crate) static OPENS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static OPEN_NS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SEEKS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static SEEK_NS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static FORWARD: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static FORWARD_NS: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static FFMPEG: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static FFMPEG_NS: AtomicU64 = AtomicU64::new(0);
+    /// Decoders opened and seeked ahead of the playhead (`PreviewPictures::warm`), on their own threads.
+    pub(crate) static AHEAD: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static AHEAD_NS: AtomicU64 = AtomicU64::new(0);
+
+    std::thread_local! {
+        /// Set on a decode-ahead thread: its opens and seeks count as `AHEAD`, not as a frame's.
+        pub(crate) static AHEAD_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    pub(crate) fn add(count: &AtomicU64, time: &AtomicU64, since: std::time::Instant) {
+        if AHEAD_THREAD.with(std::cell::Cell::get) {
+            AHEAD.fetch_add(1, Ordering::Relaxed);
+            AHEAD_NS.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            return;
+        }
+        count.fetch_add(1, Ordering::Relaxed);
+        time.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    }
+
+    /// Counts and milliseconds since the last call: opens, seeks, forward reads, FFmpeg reads.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct Taken {
+        pub opens: u64,
+        pub open_ms: f64,
+        pub seeks: u64,
+        pub seek_ms: f64,
+        pub forward: u64,
+        pub forward_ms: f64,
+        pub ffmpeg: u64,
+        pub ffmpeg_ms: f64,
+        /// Opens and seeks done ahead of the playhead since the last call, and their time.
+        pub ahead: u64,
+        pub ahead_ms: f64,
+    }
+
+    pub fn take() -> Taken {
+        let ms = |time: &AtomicU64| time.swap(0, Ordering::Relaxed) as f64 / 1e6;
+        Taken {
+            ahead: AHEAD.swap(0, Ordering::Relaxed),
+            ahead_ms: ms(&AHEAD_NS),
+            opens: OPENS.swap(0, Ordering::Relaxed),
+            open_ms: ms(&OPEN_NS),
+            seeks: SEEKS.swap(0, Ordering::Relaxed),
+            seek_ms: ms(&SEEK_NS),
+            forward: FORWARD.swap(0, Ordering::Relaxed),
+            forward_ms: ms(&FORWARD_NS),
+            ffmpeg: FFMPEG.swap(0, Ordering::Relaxed),
+            ffmpeg_ms: ms(&FFMPEG_NS),
+        }
+    }
+}
+
 /// Sequential reader for one source that restarts on jumps: AVFoundation on
 /// the Mac, FFmpeg for what it can't read (and elsewhere), ImageIO for stills.
 pub(crate) struct VideoReader {
@@ -255,6 +322,8 @@ pub(crate) struct VideoReader {
     spare: Vec<u8>,
     /// Source seconds last asked for: which pooled reader continues best.
     position: Option<f64>,
+    /// The frame asked for now continues from the last one (for `decode_stats`).
+    forward: bool,
     /// A still has been copied out since it was decoded.
     copied: bool,
     /// A cloud original's stretches cut to this Mac (`crate::excerpts`), read instead of the URL where they reach.
@@ -283,6 +352,8 @@ impl VideoReader {
     }
 
     fn open(source: Source) -> Self {
+        #[cfg(test)]
+        tests::OPENED.with(|opened| opened.set(opened.get() + 1));
         let (width, height) = (source.key.width, source.key.height);
         #[cfg(target_os = "macos")]
         let url = crate::util::is_url(&source.key.path);
@@ -304,6 +375,7 @@ impl VideoReader {
             eof: false,
             spare: Vec::new(),
             position: None,
+            forward: false,
             copied: false,
             excerpts,
             excerpt: None,
@@ -536,6 +608,10 @@ impl VideoReader {
     /// `if_changed`, Ok(false) leaves `out` alone when the picture is the one
     /// last copied out (a slowed clip shows each frame several times).
     fn frame_into(&mut self, time: f64, out: &mut [u8], if_changed: bool) -> Result<bool, String> {
+        // Read on from just behind (as the pool picks one), else a seek.
+        self.forward = self
+            .position
+            .is_some_and(|position| position <= time + 1e-6 && time - position <= 2.0);
         self.position = Some(time);
         if self.source.still {
             if !self.has_frame {
@@ -575,7 +651,9 @@ impl VideoReader {
         }
         #[cfg(not(target_os = "macos"))]
         let _ = if_changed; // only the Mac's reader can tell a picture didn't change
+        let started = Instant::now();
         self.read_ffmpeg(time)?;
+        decode_stats::add(&decode_stats::FFMPEG, &decode_stats::FFMPEG_NS, started);
         out.copy_from_slice(self.frame.get(..out.len()).ok_or("decoded size changed")?);
         Ok(true)
     }
@@ -588,19 +666,30 @@ impl VideoReader {
         if_changed: bool,
     ) -> Result<bool, String> {
         let decoded = (|| {
+            use decode_stats as stats;
             if self.native.is_none() {
+                let started = Instant::now();
                 self.native = Some(crate::mac_media::Reader::open(
                     &self.source.key.path,
                     self.width,
                     self.height,
                 )?);
+                stats::add(&stats::OPENS, &stats::OPEN_NS, started);
+                self.forward = false;
             }
-            self.native.as_mut().ok_or("native reader missing")?.frame(
+            let started = Instant::now();
+            let read = self.native.as_mut().ok_or("native reader missing")?.frame(
                 time,
                 out,
                 self.source.key.order,
                 if_changed,
-            )
+            );
+            if self.forward {
+                stats::add(&stats::FORWARD, &stats::FORWARD_NS, started);
+            } else {
+                stats::add(&stats::SEEKS, &stats::SEEK_NS, started);
+            }
+            read
         })();
         if let Err(error) = &decoded {
             crate::log::warn(
@@ -734,6 +823,18 @@ impl ReaderPool {
         }
     }
 
+    /// Whether a pooled reader of `source` would read on to `time` (it's just behind it) rather than seek.
+    /// Asked by the window's decode-ahead (PreviewPictures), which only Edit.app has.
+    #[cfg(target_os = "macos")]
+    fn ready(&self, source: &Source, time: f64) -> bool {
+        self.readers.iter().any(|(reader, _)| {
+            reader.source.key == source.key
+                && reader
+                    .position
+                    .is_some_and(|position| position <= time + 1e-6 && time - position <= FORWARD)
+        })
+    }
+
     fn put(&mut self, reader: VideoReader) {
         self.clock += 1;
         let key = reader.source.key.clone();
@@ -791,32 +892,56 @@ fn decode_all(
     let threads = threads.clamp(1, requests.len().max(1));
     let share = order.len().div_ceil(threads).max(1);
     let shares: Vec<Vec<usize>> = order.chunks(share).map(<[usize]>::to_vec).collect();
+    // Each share's readers, taken from the pool before the threads start: one
+    // for every change of file or size along it. A share holding two layers
+    // (a picture over its own blurred copy, B-roll over a shot) opened a new
+    // reader for the second on every frame, and seeked it: 473 opens and 490
+    // seeks in 160 s of Cops Realize (Nov 8), 20–30 ms a frame.
     let mut work = Vec::new();
     for share in shares {
-        let Some((source, time)) = share.first().and_then(|index| requests.get(*index)) else {
-            continue;
-        };
-        let reader = pool.take(source, *time);
-        work.push((share, reader));
+        let mut readers = VecDeque::new();
+        let mut last: Option<&DecodeKey> = None;
+        for index in &share {
+            let Some((source, time)) = requests.get(*index) else {
+                continue;
+            };
+            if last != Some(&source.key) {
+                readers.push_back(pool.take(source, *time));
+                last = Some(&source.key);
+            }
+        }
+        if !readers.is_empty() {
+            work.push((share, readers));
+        }
     }
-    let run = |(share, mut reader): (Vec<usize>, VideoReader)| {
+    let run = |(share, mut readers): (Vec<usize>, VecDeque<VideoReader>)| {
         let mut done = Vec::new();
         let mut spent = Vec::new();
+        let mut reader: Option<VideoReader> = None;
         for index in share {
             let Some((source, time)) = requests.get(index) else {
                 continue;
             };
-            if reader.source.key != source.key {
-                spent.push(std::mem::replace(
-                    &mut reader,
-                    VideoReader::open(source.clone()),
-                ));
+            if reader
+                .as_ref()
+                .is_none_or(|one| one.source.key != source.key)
+            {
+                spent.extend(reader.take());
+                reader = Some(
+                    readers
+                        .pop_front()
+                        .unwrap_or_else(|| VideoReader::open(source.clone())),
+                );
             }
+            let Some(reader) = reader.as_mut() else {
+                continue;
+            };
             let mut out = vec![0_u8; source.bytes()];
             let decoded = reader.frame_into(*time, &mut out, false);
             done.push((index, decoded.map(|_| out)));
         }
-        spent.push(reader);
+        spent.extend(reader);
+        spent.extend(readers);
         (done, spent)
     };
     let results: Vec<_> = if work.len() <= 1 {
@@ -1051,8 +1176,15 @@ impl FrameRenderer {
 /// through `pool` so playing on decodes forward and a jump seeks.
 #[cfg(target_os = "macos")]
 pub(crate) struct PreviewPictures {
-    pool: ReaderPool,
+    /// Shared with the decode-ahead threads, which put the readers they opened and seeked here.
+    pool: Arc<Mutex<ReaderPool>>,
+    ahead: mpsc::Sender<(Source, f64)>,
 }
+
+/// Threads opening and seeking readers ahead of the playhead (a cut to a new
+/// file cost its seek, 20-80 ms, on the drawing path: Cops Realize, Nov 9).
+#[cfg(target_os = "macos")]
+const AHEAD_THREADS: usize = 1;
 
 /// A clip's decoded picture: its clip, width, height and BGRA pixels.
 #[cfg(target_os = "macos")]
@@ -1061,14 +1193,81 @@ pub(crate) type Picture = (String, u32, u32, Vec<u8>);
 #[cfg(target_os = "macos")]
 impl PreviewPictures {
     pub(crate) fn new() -> Self {
-        // A few readers per file: two layers of one source, and the way back after a jump.
-        Self {
-            pool: ReaderPool::new(12, 3),
+        // A few readers per file: two layers of one source, the way back after a jump, and the next cut's.
+        let pool = Arc::new(Mutex::new(ReaderPool::new(12, 3)));
+        // What the ahead threads are opening now (file, size and the time in ms): a cut asked for every frame is opened once.
+        let opening: Arc<Mutex<HashSet<(DecodeKey, i64)>>> = Arc::new(Mutex::new(HashSet::new()));
+        let (ahead, requests) = mpsc::channel::<(Source, f64)>();
+        let requests = Arc::new(Mutex::new(requests));
+        for _ in 0..AHEAD_THREADS {
+            let (pool, opening, requests) = (
+                Arc::clone(&pool),
+                Arc::clone(&opening),
+                Arc::clone(&requests),
+            );
+            let _ = std::thread::Builder::new()
+                .name("edit preview ahead".to_owned())
+                .spawn(move || {
+                    // Behind the frame being drawn: utility work, never ahead of the player's thread.
+                    crate::util::utility_thread();
+                    decode_stats::AHEAD_THREAD.with(|ahead| ahead.set(true));
+                    loop {
+                        // One receiver shared: whichever thread is free takes the next request.
+                        let next = requests.lock().recv();
+                        let Ok((source, time)) = next else { return };
+                        let key = (source.key.clone(), (time * 1000.0).round() as i64);
+                        if pool.lock().ready(&source, time) || !opening.lock().insert(key.clone()) {
+                            continue;
+                        }
+                        let mut reader = VideoReader::open(source.clone());
+                        let mut scratch = vec![0_u8; source.bytes()];
+                        // The frame decoded here is dropped: the reader now stands on it, and the frame's own
+                        // read is a copy out of what it holds.
+                        if reader.frame_into(time, &mut scratch, false).is_ok() {
+                            pool.lock().put(reader);
+                        }
+                        opening.lock().remove(&key);
+                    }
+                });
         }
+        Self { pool, ahead }
     }
 
     pub(crate) fn clear(&mut self) {
-        self.pool.clear();
+        self.pool.lock().clear();
+    }
+
+    /// Has a reader of `media` opened and seeked to `source_time` on another
+    /// thread, unless one is there (or on its way), so a cut to it reads on
+    /// instead of seeking on the drawing path.
+    pub(crate) fn warm(
+        &self,
+        project: &Project,
+        media: &str,
+        source_time: f64,
+        shown: (u32, u32),
+        sources: &std::collections::HashMap<String, PathBuf>,
+    ) {
+        let Some(found) = project.media(media) else {
+            return;
+        };
+        if found.kind == edit_core::MediaKind::Image {
+            return;
+        }
+        let path = sources
+            .get(media)
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from(&found.path));
+        let source = Source::new(
+            found,
+            path,
+            decode_size(found, shown.0, shown.1),
+            Order::Bgra,
+        );
+        if self.pool.lock().ready(&source, source_time) {
+            return;
+        }
+        let _ = self.ahead.send((source, source_time));
     }
 
     /// `(clip, width, height, BGRA pixels)` for each video layer of `scene`.
@@ -1109,7 +1308,7 @@ impl PreviewPictures {
             }
         }
         let threads = if requests.len() > 2 { 4 } else { 1 };
-        let decoded = decode_all(&mut self.pool, &requests, threads)?;
+        let decoded = decode_all(&mut self.pool.lock(), &requests, threads)?;
         Ok(clips
             .into_iter()
             .zip(&requests)
@@ -3138,6 +3337,43 @@ fn render_frames_watched(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Readers opened on this thread (`VideoReader::open`).
+        pub(super) static OPENED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Two layers of one file at two sizes, played on: each keeps its pooled
+    /// reader, where the second was opened (and seeked) again every frame.
+    #[test]
+    fn two_layers_keep_their_readers_from_frame_to_frame() {
+        let dir = temp_dir("two-layers");
+        let video = dir.join("bars.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("testsrc2=size=320x180:rate=30:duration=2")
+            .args(["-c:v", "libx264", "-g", "15", "-pix_fmt", "yuv420p"])
+            .arg(&video)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "bars", "path": video, "kind": "video", "duration": 2.0,
+            "width": 320, "height": 180, "fps": 30, "has_audio": false
+        }))
+        .unwrap();
+        let big = Source::new(&media, video.clone(), (320, 180), Order::Bgra);
+        let small = Source::new(&media, video.clone(), (160, 90), Order::Bgra);
+        let mut pool = ReaderPool::new(12, 3);
+        let before = OPENED.with(std::cell::Cell::get);
+        for frame in 0..20 {
+            let time = f64::from(frame) / 30.0;
+            let decoded =
+                decode_all(&mut pool, &[(big.clone(), time), (small.clone(), time)], 1).unwrap();
+            assert_eq!(decoded.len(), 2);
+        }
+        assert_eq!(OPENED.with(std::cell::Cell::get) - before, 2);
+    }
 
     /// A photo's still is taken with no seek (FFmpeg 8 gives nothing for a JPEG or PNG asked from -ss 0).
     #[test]

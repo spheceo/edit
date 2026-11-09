@@ -35,7 +35,7 @@ import * as seams from "./seams.ts";
 const API = "https://www.googleapis.com/drive/v3";
 
 /** The team's Watermarks folder (Drive): one picture per channel. */
-export const FOLDER = process.env.EDIT_WATERMARKS_FOLDER ?? "1E1I0ykeqXFqrjIcU8P6fQEXgNBwdS6OU";
+export const FOLDER = "1E1I0ykeqXFqrjIcU8P6fQEXgNBwdS6OU";
 
 /** What a channel's short name in its file stands for, when the team has said. */
 const NAMES: Record<string, string> = { SI: "Sams Interrogations" };

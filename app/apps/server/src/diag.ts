@@ -105,6 +105,18 @@ export function error(area: string, message: string): void {
   log("error", area, message);
 }
 
+/**
+ * A failure the caller carries on past with `fallback`, said in the log with
+ * what it was doing: `.catch(diag.warned("thumbnails", "listing models", []))`
+ * in place of a `.catch(() => [])` nobody hears about.
+ */
+export function warned<T>(area: string, what: string, fallback: T): (error: unknown) => T {
+  return (error) => {
+    warn(area, `${what}: ${messageOf(error)}`);
+    return fallback;
+  };
+}
+
 /** A moment as this Mac's local time, to the millisecond: 2026-10-22 21:23:05.123. */
 export function stamp(at: number): string {
   const date = new Date(at);

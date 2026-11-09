@@ -11,6 +11,9 @@ import * as scriptSync from "../script_sync.ts";
 import * as archive from "./archive.ts";
 import * as build from "./build.ts";
 import * as cloud from "./cloud.ts";
+import { readSettings } from "../cloud_projects.ts";
+import * as machine from "../machine.ts";
+import { holderFor } from "../sync_core.ts";
 import * as reviews from "./reviews.ts";
 import * as drive from "./drive.ts";
 import * as handoff from "./handoff.ts";
@@ -21,7 +24,7 @@ import * as store from "./store.ts";
 import { THIS_MACHINE } from "../machine.ts";
 
 /** Where Writer kept its scripts on this Mac. */
-export const WRITER_FOLDER = (): string => process.env.EDIT_WRITER_FOLDER ?? join(userHome(), "Library", "Application Support", "com.spheceo.writer");
+export const WRITER_FOLDER = (): string => join(userHome(), "Library", "Application Support", "com.spheceo.writer");
 
 /** Background work Script mode's parts start with the server (the cloud, review polling…). */
 export const starters: ((app: App) => void)[] = [];
@@ -41,7 +44,7 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   if (options.trials === true) {
     carryOn(app, data, store.markInterrupted(data));
     for (const id of store.ids(data)) jobs.markInterrupted(data, id);
-    cloud.start(data);
+    cloud.start(data, holderFor(app.store.home, readSettings(app.store.home).holder ?? machine.name()));
     storage.start(data, join(app.store.home, "projects"), app.store.cacheDir());
     scriptSync.start(app);
     return;
@@ -58,7 +61,7 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   }
   carryOn(app, data, store.markInterrupted(data));
   for (const id of store.ids(data)) jobs.markInterrupted(data, id);
-  cloud.start(data);
+  cloud.start(data, holderFor(app.store.home, readSettings(app.store.home).holder ?? machine.name()));
   reviews.start(app, data);
   // Idle scripts' footage left to the cloud as room runs short.
   storage.start(data, join(app.store.home, "projects"), app.store.cacheDir());

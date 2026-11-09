@@ -288,8 +288,9 @@ export const api = {
   cancelShare: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/share/cancel`),
   /** Smooth playback (playback_render.ts): what's rendered, and asking for the edit as it is now. */
   playback: (id: string) => request<PlaybackStatus>("GET", `/api/projects/${id}/playback`),
-  /** What Edit.app's native preview decodes each picture from, and the media cache (routes.ts `nativeSources`). */
-  nativeSources: (id: string) => request<{ cache: string; sources: Record<string, string> }>("GET", `/api/projects/${id}/native-sources`),
+  /** What Edit.app's native preview decodes each picture from and reads each sound from, the local excerpts of streamed ones, and the media cache (routes.ts `nativeSources`). */
+  nativeSources: (id: string) =>
+    request<{ cache: string; sources: Record<string, string>; sounds?: Record<string, string>; excerpts?: Record<string, { from: number; to: number; path: string }[]> }>("GET", `/api/projects/${id}/native-sources`),
   /** `frame`: the playhead, whose chunk is rendered first. */
   renderPlayback: (id: string, frame?: number) => request<PlaybackStatus>("POST", `/api/projects/${id}/playback`, frame === undefined ? undefined : { frame }),
   /** Sets who a voice is (its role decides its colour); returns the updated transcript. */
@@ -458,11 +459,26 @@ export interface ReviewNote {
   fixing: boolean;
 }
 
+/** How a project's last share stands (its job on the server): running (its step), done (published: up on the link), or failed (why). */
+export interface ShareState {
+  state: "running" | "done" | "failed";
+  step: string | null;
+  at: number;
+  version?: number;
+  url?: string;
+  error?: string;
+}
+
 export interface Review {
+  /** Where its share is while it runs: the same line Home and the Exports panel show. */
   sharing: string | null;
+  /** How the last share stands; "Up on the link" only once it's `done`. */
+  share?: ShareState | null;
   /** The channel whose watermark this project's shares carry (a picture id in the Watermarks folder), or none. */
   watermark?: string | null;
   review: { url: string; versions: { n: number; path: string }[]; approved: { version: number; by: string; at: number } | null } | null;
+  /** What the next share makes: its version, and whether it replaces the latest (no reviewer comments on it). Null before the first. */
+  next?: { version: number; replace: boolean } | null;
   notes: ReviewNote[];
 }
 

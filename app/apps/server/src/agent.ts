@@ -18,6 +18,7 @@ import { attachedText, pictures as attachedPictures, savedAttached, type Attache
 import * as claude from "./claude.ts";
 import { ClaudeSupport, type SupportAction, type SupportStatus } from "./claude_support.ts";
 import * as diag from "./diag.ts";
+import * as jobs from "./jobs.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
@@ -210,14 +211,8 @@ function stillOn(chat: Chat, generation: number): boolean {
 const SESSION_GONE =
   "(Edit, automatically) The earlier conversation couldn't be picked up again (Claude Code no longer has it), so this is a new one: get_edit_context shows what's already done. My message:";
 
-/**
- * The running turns, noted in `<home>/agent` as each starts and ends and
- * every minute while any runs, so a quit or a crash leaves the ones it cut.
- */
-const RUNNING = "running-turns.json";
-
-/** Edit back this soon after it last noted its turns was a restart: they carry on. */
-export const RESUME_WITHIN_MS = 10 * 60_000;
+/** Edit back this soon after it last noted a turn (jobs.json kind `turn`) was a restart: it carries on. */
+export const RESUME_WITHIN_MS = jobs.TURN_RESUME_MS;
 /** How long after a turn ends the person is told, so Edit's own next turn (a follow-up, the fresh-eyes pass) has started by then. */
 const SETTLE_MS = 3_000;
 
@@ -229,7 +224,7 @@ const SETTLE_MS = 3_000;
 export const agentHooks = {
   unfinished: (_project: string): { note: string; count: number } | null => null,
   /** The fresh-eyes final pass after a whole edit (off on a trial server: the teaching loop runs it as its own step). */
-  freshEyes: process.env.EDIT_FRESH_EYES === "1" || process.env.EDIT_TRIALS !== "1",
+  freshEyes: process.env.EDIT_TRIALS !== "1",
 };
 
 /** Follow-ups Edit sends after one message at most, each only while the last cut the flags by a fifth or more. */
@@ -272,6 +267,20 @@ function sharedForReview(home: string, project: string): boolean {
   }
 }
 
+/** Where the person's last message is in a chat's entries (-1 when there's none): Edit's own "(Edit, automatically)" ones don't count. */
+function lastAsked(entries: readonly Entry[]): number {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const item = entries[index]!;
+    if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) return index;
+  }
+  return -1;
+}
+
+/** Whether these entries ran a whole edit or its final pass (the edit-workflow or final-pass skill). */
+function ranWholeEdit(entries: readonly Entry[]): boolean {
+  return entries.some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
+}
+
 /** The turn that carries on one a restart cut short. */
 const RESUMED =
   "(Edit, automatically) Edit restarted while you were working, which cut your last turn off; your last tool call may not have finished. Carry on from where you stopped: get_edit_context shows what's already done; then finish the task.";
@@ -295,20 +304,30 @@ class Lock {
 export class Agents implements seams.AgentPanel {
   /**
    * Remote updates (and the dev server's restarts) wait for all agent turns to finish, a cut one still to carry on
-   * included: for up to 20 s after a restart (serve.ts waits for sign-in) it is only noted in `RUNNING`, and a restart
+   * included: for up to 20 s after a restart (serve.ts waits for sign-in) it is only listed in jobs.json, and a restart
    * then cut it again (Nov 6).
    */
   hasRunningTurns(): boolean {
-    return [...this.chats.values()].some((chat) => chat.running) || this.queued.size > 0 || this.carryingOn();
+    return [...this.chats.values()].some((chat) => chat.running) || this.queued.size > 0 || this.retrying.size > 0 || this.carryingOn();
+  }
+
+  /** Whether a chat's turn is running, or Edit's own next one in it is about to start (a follow-up, the fresh-eyes pass, a retry after a busy model). */
+  private pending(key: string): boolean {
+    return this.chats.get(key)?.running === true || this.queued.has(key) || this.retrying.has(key);
   }
 
   private carryingOn(): boolean {
-    try {
-      const noted = JSON.parse(fs.readFileSync(join(this.dir, RUNNING), "utf8")) as { at?: unknown; projects?: unknown };
-      return typeof noted.at === "number" && nowMs() - noted.at <= RESUME_WITHIN_MS && Array.isArray(noted.projects) && noted.projects.length > 0;
-    } catch {
-      return false;
-    }
+    return jobs.list(this.home(), "turn").some((job) => jobs.live(job) && !this.noted.has(job.key) && nowMs() - job.updated_ms <= RESUME_WITHIN_MS);
+  }
+
+  private home(): string | null {
+    return (this.store as { home?: string }).home ?? null;
+  }
+
+  /** A chat's turn in jobs.json. */
+  private turnKey(chat: string): string {
+    const project = projectOf(chat);
+    return jobs.keyOf("turn", project, chat === project ? "" : chat);
   }
 
   /** The projects whose agent turn is running now. */
@@ -352,8 +371,10 @@ export class Agents implements seams.AgentPanel {
   private claudeQueries = new Map<string, claude.Query>();
   /** Looks for stalled turns while any runs. */
   private watchdog: ReturnType<typeof setInterval> | null = null;
-  /** Edit is quitting: the turns it ends stay noted as running (`RUNNING`). */
+  /** Edit is quitting: the turns it ends stay listed as running (jobs.json kind `turn`). */
   private quitting = false;
+  /** The turn jobs this run listed (and so may cross off). */
+  private noted = new Set<string>();
   /** The SDK's `query`, the user's `claude` and its model list (tests put stand-ins here). */
   claudeQuery: (params: { prompt: string | AsyncIterable<claude.UserMessage>; options: claude.Options }) => Promise<claude.Query> = async (params) =>
     (await claude.sdk()).query(params);
@@ -1094,6 +1115,20 @@ export class Agents implements seams.AgentPanel {
     return claude.ask(binary, workspace, model, effort, instructions, texts.join("\n\n"), shape, timeoutMs, images);
   }
 
+  /**
+   * Someone else took over `project` on their computer (cloud_projects
+   * `tookOver`): a turn running on it here could save nothing more, so it's
+   * stopped, said in the chat. Until Nov 8 it went on for up to 45 s, every
+   * write refused.
+   */
+  lockLost(project: string, holder: string): void {
+    const running = [...this.chats.entries()].filter(([key, chat]) => chat.running && projectOf(key) === project).map(([key]) => key);
+    for (const key of running) {
+      this.upsert(key, entry({ id: newId("error"), kind: "error", text: `${holder} took over this project, so this turn stopped: nothing more can be saved here. Take over in the editor to carry on.` }));
+      void this.stop(key).catch((error: unknown) => diag.warn("agent", `stopping ${key} after ${holder} took over: ${diag.messageOf(error)}`));
+    }
+  }
+
   async stop(project: string): Promise<void> {
     this.authPending.delete(project);
     this.saveAuthPending();
@@ -1172,13 +1207,31 @@ export class Agents implements seams.AgentPanel {
     }
   }
 
-  /** Notes the running turns the user hasn't stopped (`RUNNING`), or that none runs. */
+  /**
+   * Notes the running turns the user hasn't stopped in jobs.json (kind
+   * `turn`): one starting is listed, one running has its minute noted (and
+   * its restarts forgiven: it got further), one that ended is crossed off.
+   * Only this run's: a turn the last run left stays listed for its resumer.
+   */
   private noteRunning(): void {
-    const path = join(this.dir, RUNNING);
-    const projects = [...this.chats].filter(([, chat]) => chat.running && !chat.halted).map(([project]) => project);
+    const home = this.home();
     try {
-      if (projects.length === 0) fs.rmSync(path, { force: true });
-      else writeAtomic(path, JSON.stringify({ at: nowMs(), projects }));
+      const running = new Set([...this.chats].filter(([, chat]) => chat.running && !chat.halted).map(([chat]) => this.turnKey(chat)));
+      for (const key of this.noted) {
+        if (running.has(key)) continue;
+        jobs.end(home, key);
+        this.noted.delete(key);
+      }
+      for (const [chat, one] of this.chats) {
+        if (!one.running || one.halted) continue;
+        const key = this.turnKey(chat);
+        if (this.noted.has(key)) jobs.touch(home, key);
+        else {
+          const project = projectOf(chat);
+          jobs.begin(home, "turn", project, { chat }, chat === project ? "" : chat, "working");
+          this.noted.add(key);
+        }
+      }
     } catch (error) {
       diag.warn("agent", `noting the running turns: ${diag.messageOf(error)}`);
     }
@@ -1220,32 +1273,32 @@ export class Agents implements seams.AgentPanel {
    * carry on, each as a new turn of the same conversation, when it noted
    * them within RESUME_WITHIN_MS (a restart). A server restart for a code
    * change then costs an agent its last tool call, not its whole task.
+   * serve.ts's resumer does this for every kind at once; this is the turns
+   * alone (tests).
    */
-  resumeInterrupted(): void {
-    const path = join(this.dir, RUNNING);
-    let noted: { at?: unknown; projects?: unknown };
-    try {
-      noted = JSON.parse(fs.readFileSync(path, "utf8")) as typeof noted;
-    } catch {
-      return;
-    } finally {
-      fs.rmSync(path, { force: true });
-    }
-    if (typeof noted.at !== "number" || !Array.isArray(noted.projects) || nowMs() - noted.at > RESUME_WITHIN_MS) return;
-    for (const project of noted.projects) {
-      if (typeof project !== "string" || this.store.get(projectOf(project)) === null) continue;
-      diag.info("agent", `${project}: carrying on the turn the restart cut short`);
-      // The "Edit was closed" note is answered now: no longer a problem to show.
-      const chat = this.withChat(project);
-      for (const item of chat.entries) {
-        if (item.kind === "error" && item.status !== "done" && item.text.startsWith("Edit was closed during this turn")) {
-          this.upsert(project, { ...item, status: "done", detail: item.detail ?? item.text, text: "Edit restarted; the agent carried on where it stopped." });
-        }
+  resumeInterrupted(): Promise<void> {
+    const home = this.home();
+    return home === null ? Promise.resolve() : jobs.resume(home, { turn: (job) => this.resumeTurn(job) }, ["turn"]);
+  }
+
+  /** One turn the last run left running, carried on (jobs.ts resumer for `turn`). */
+  resumeTurn(job: jobs.Job): void {
+    const chat = typeof job.args.chat === "string" ? job.args.chat : job.project;
+    if (nowMs() - job.updated_ms > RESUME_WITHIN_MS) throw new jobs.Gone(`Edit was away ${diag.human(nowMs() - job.updated_ms)}, not a restart`);
+    if (this.store.get(projectOf(chat)) === null) throw new jobs.Gone("the project is gone");
+    if (this.withChat(chat).running) return;
+    diag.info("agent", `${chat}: carrying on the turn the restart cut short`);
+    // Listed still: as the turn carried on starts, this run takes the listing over (noteRunning), and crosses it off when it ends.
+    // The "Edit was closed" note is answered now: no longer a problem to show.
+    const one = this.withChat(chat);
+    for (const item of one.entries) {
+      if (item.kind === "error" && item.status !== "done" && item.text.startsWith("Edit was closed during this turn")) {
+        this.upsert(chat, { ...item, status: "done", detail: item.detail ?? item.text, text: "Edit restarted; the agent carried on where it stopped." });
       }
-      void this.send(project, RESUMED, null, null).catch((error: unknown) => {
-        diag.warn("agent", `carrying on the turn in ${project}: ${diag.messageOf(error)}`);
-      });
     }
+    void this.send(chat, RESUMED, null, null).catch((error: unknown) => {
+      diag.warn("agent", `carrying on the turn in ${chat}: ${diag.messageOf(error)}`);
+    });
   }
 
   private finish(project: string, error: string | null): void {
@@ -1274,7 +1327,7 @@ export class Agents implements seams.AgentPanel {
   /** Whether the project's agent has more coming: a turn of its chat or a sub-agent's running, or Edit's own next one about to start. */
   private busy(root: string): boolean {
     const mine = (key: string) => key === root || key.startsWith(`${root}${SUB}`);
-    return [...this.chats].some(([key, chat]) => mine(key) && chat.running) || [...this.queued].some(mine) || [...this.retrying].some(mine);
+    return [...new Set([...this.chats.keys(), ...this.queued, ...this.retrying])].some((key) => mine(key) && this.pending(key));
   }
 
   /** A turn ended: once its project's agent has nothing more coming (follow-ups, the fresh-eyes pass), the person is told how it went. */
@@ -1294,10 +1347,7 @@ export class Agents implements seams.AgentPanel {
     const chat = this.chats.get(root);
     const live = this.store.get(root);
     if (chat === undefined || live === null || chat.halted || reviewGuard.inReviewTurn(root)) return;
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
+    const asked = lastAsked(chat.entries);
     const message = chat.entries[Math.max(asked, 0)];
     if (message === undefined) return;
     const since = chat.entries.slice(asked + 1);
@@ -1374,13 +1424,8 @@ export class Agents implements seams.AgentPanel {
     const chat = this.withChat(project);
     // A whole edit or its final pass, in this message's turns (the user's last
     // message and Edit's follow-ups after it).
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
-    const whole = chat.entries
-      .slice(asked + 1)
-      .some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
+    const asked = lastAsked(chat.entries);
+    const whole = ranWholeEdit(chat.entries.slice(asked + 1));
     if (!whole) return void this.notesLeft(project, generation, chat, asked, mine);
     let left: { note: string; count: number } | null;
     try {
@@ -1483,11 +1528,8 @@ export class Agents implements seams.AgentPanel {
     const chat = this.withChat(project);
     if (chat.built !== null) return true;
     if (sharedForReview(this.store.home, projectOf(project))) return true;
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
-    return chat.entries.slice(0, Math.max(asked, 0)).some((item) => (item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text)) || (item.kind === "subagent" && item.text.startsWith("Fresh-eyes")));
+    const before = chat.entries.slice(0, Math.max(lastAsked(chat.entries), 0));
+    return ranWholeEdit(before) || before.some((item) => item.kind === "subagent" && item.text.startsWith("Fresh-eyes"));
   }
 
   /** The whole edit and its follow-ups are done: the turns after it revise it. */
@@ -1508,12 +1550,7 @@ export class Agents implements seams.AgentPanel {
   private freshEyes(project: string, generation: number): void {
     const chat = this.withChat(project);
     // Only after a whole edit or its final pass (as the follow-ups judge it).
-    let asked = -1;
-    chat.entries.forEach((item, index) => {
-      if (item.kind === "user" && !item.text.startsWith("(Edit, automatically)")) asked = index;
-    });
-    const whole = chat.entries.slice(asked + 1).some((item) => item.kind === "tool" && item.tool === "skill" && /edit-workflow|final-pass/u.test(item.text));
-    if (!whole) return;
+    if (!ranWholeEdit(chat.entries.slice(lastAsked(chat.entries) + 1))) return;
     // The edit is done, follow-ups and all.
     this.markBuilt(project);
     if (agentHooks.freshEyes === false || this.reviewed.get(project) === generation) return;

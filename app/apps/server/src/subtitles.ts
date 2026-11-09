@@ -98,9 +98,15 @@ export const HOUSE_TERMS = [
   "nude",
   "nudity",
   "masturbate",
+  // Repack only muted these; starred too since Nov 8 (Marc: "it doesn't star censor the subtitles").
+  "kill",
+  "shot",
+  "shoot",
+  "drug",
+  "dead",
+  "deadly",
+  "marijuana",
 ] as const;
-/** Words whose sound is muted but which stay readable in the subtitles. */
-export const HOUSE_MUTE_ONLY = ["kill", "shot", "shoot", "drug", "drugs", "dead", "marijuana"] as const;
 /** Internet Janitor's additional terms: precise silence, first-letter stars. */
 export const COMMENTARY_TERMS = ["robbed", "robbery", "die", "dying", "death", "dead", "kill", "drug", "drugs", "marijuana", "murder", "shoot", "shot", "cunt", "faggot", "torture", "armed", "gun", "pussy"] as const;
 /**
@@ -123,7 +129,6 @@ export const NEGLECT_TERMS = [
   "hit",
   "punch",
   "beat",
-  "kill",
   "blood",
   "lash",
   "whoop",
@@ -317,32 +322,30 @@ export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number
   words.forEach((word, index) => {
     for (const token of tokens(word.text)) stream.push([token, index]);
   });
-  // A word on both lists is starred out.
   interface Listed {
     key: string;
     term: string;
     display: string | null;
-    starred: boolean;
     parts: string[];
   }
   let listed: Listed[] = [];
-  const add = (entry: string, starred: boolean, override = false) => {
+  // A later entry with a set form ("word = w**d") replaces an earlier one.
+  const add = (entry: string, override = false) => {
     const [term, display] = parseTerm(entry);
     const parts = tokens(term);
     const key = parts.join(" ");
     if (parts.length === 0) return;
-    const fresh: Listed = { key, term, display, starred, parts };
+    const fresh: Listed = { key, term, display, parts };
     const known = listed.findIndex((other) => other.key === key);
     if (known < 0) listed.push(fresh);
-    else if (override || !listed[known]!.starred) listed[known] = fresh;
+    else if (override) listed[known] = fresh;
   };
-  for (const entry of HOUSE_MUTE_ONLY) add(entry, false);
-  if (neglect) {
-    for (const entry of NEGLECT_TERMS) add(entry, true);
-  }
   for (const entry of HOUSE_TERMS) add(entry, true);
+  if (neglect) {
+    for (const entry of NEGLECT_TERMS) add(entry);
+  }
   // A video's own words (a Doc's "Blur this"), muted and starred like the house's.
-  for (const entry of extra) add(entry, true, entry.includes("="));
+  for (const entry of extra) add(entry, entry.includes("="));
   // Longest first (a stable sort, as Rust's).
   listed = [...listed].sort((a, b) => b.parts.length - a.parts.length);
   const out: Suggestion[] = [];
@@ -392,7 +395,6 @@ export function suggestions(words: TimedWord[], neglect: boolean, fromMs: number
           const [said, display] = loose && token !== term.key ? [token, null] : [term.term, term.display];
           out.push({
             term: said,
-            starred: term.starred,
             display,
             word: firstIndex,
             at_ms: round(first.start_ms),
@@ -475,7 +477,7 @@ function termSpans(text: string[], term: string): [number, number][] {
 export function star(text: string, found: Suggestion[]): string {
   let letters = chars(text);
   const done: string[] = [];
-  for (const suggestion of found.filter((s) => s.starred)) {
+  for (const suggestion of found) {
     if (done.includes(suggestion.term)) continue;
     done.push(suggestion.term);
     const out: string[] = [];
@@ -1059,7 +1061,6 @@ export async function repackSubtitles(app: App, projectId: string, options: Subt
       muted.push({
         term: suggestion.term,
         time: round(onTimeline(suggestion.at_ms) / 10.0) / 100.0,
-        starred: suggestion.starred,
         clip: clip.id,
       });
     }
@@ -1464,7 +1465,6 @@ export async function houseWords(
       const listed: Record<string, unknown> = {
         term: suggestion.term,
         time: round(onTimeline(suggestion.at_ms) / 10.0) / 100.0,
-        starred: suggestion.starred,
         clip: clip.id,
       };
       if (voiceOver) {
@@ -1484,7 +1484,7 @@ export async function houseWords(
 }
 
 /**
- * The starred words of `found` said while a subtitle from `start` to `end`
+ * The words of `found` said while a subtitle from `start` to `end`
  * (timeline frames) is up, give or take half a second.
  */
 function saidDuring(found: Found[], start: number, end: number, fps: number): Suggestion[] {

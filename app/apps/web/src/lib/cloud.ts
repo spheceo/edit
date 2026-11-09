@@ -12,6 +12,8 @@ export interface CloudStatus {
   /** Cloud is on here. */
   on: boolean;
   lock?: "unknown" | "provisional" | "held" | "elsewhere";
+  /** Whether this computer may change it now: the server's one answer (cloud_projects `writable`). */
+  writable?: boolean;
   /** Who's editing it, when it's someone else. */
   holder?: string | null;
   sync?: "off" | "synced" | "pending" | "syncing" | "offline" | "conflict" | "readonly" | "error";
@@ -60,6 +62,8 @@ export interface CloudProject {
   created_by?: Creator | null;
   /** Who's editing it now (a live lock), if anyone. */
   holder: string | null;
+  /** A conflicted copy: what it's a copy of, who kept it and when (apps/server/src/sync_core.ts CopyOf). */
+  conflicted_of?: { id: string; by: string; at: number } | null;
   /** This machine holds its lock. */
   here: boolean;
   /** It's on this machine too. */
@@ -89,8 +93,8 @@ export const cloudApi = {
   moveToCloud: (id: string) => request<CloudStatus>("POST", `/api/projects/${id}/cloud/upload`),
 };
 
-/** Someone else is editing it: read-only here. */
-export const readOnly = (status: CloudStatus | null | undefined) => status?.lock === "elsewhere";
+/** Someone else is editing it: read-only here (the server's answer, `writable`; its lock for a server from before it said). */
+export const readOnly = (status: CloudStatus | null | undefined) => (status?.writable !== undefined ? !status.writable : status?.lock === "elsewhere");
 
 /** What the top bar says about a project's sync, or null when there's nothing to say. */
 export function syncLabel(status: CloudStatus | null | undefined): { text: string; tone: "ok" | "busy" | "warn" | "bad" } | null {

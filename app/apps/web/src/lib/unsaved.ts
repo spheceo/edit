@@ -14,6 +14,12 @@ export interface Unsaved {
   patch: Patch;
   /** When it was kept (ms). */
   at: number;
+  /**
+   * Kept because it met a change from elsewhere to the same things (an agent's,
+   * another client's): the other change won, and this one is put back only when
+   * asked (store.ts `rebase`), never by itself on the next open.
+   */
+  collided?: boolean;
 }
 
 const DB = "edit.unsaved";

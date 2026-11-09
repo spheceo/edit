@@ -80,6 +80,27 @@ export function buildTurns(entries: AgentEntry[], running: boolean): Turn[] {
   return turns;
 }
 
+const samePart = (a: TurnPart, b: TurnPart): boolean =>
+  a.kind === "group" ? b.kind === "group" && a.id === b.id && a.calls.length === b.calls.length && a.calls.every((call, index) => call === b.calls[index])
+  : a.kind === "entry" ? b.kind === "entry" && a.entry === b.entry
+  : b.kind === "thinking" && a.id === b.id && a.text === b.text && a.active === b.active;
+
+/**
+ * The turns, with each one that's made of the same entries as before kept as
+ * the same object: a word streaming into the live turn re-renders that turn
+ * alone, not every turn of a long chat (Nov 8 audit, item G).
+ */
+export function keepUnchanged(before: Turn[], after: Turn[]): Turn[] {
+  let changed = before.length !== after.length;
+  const turns = after.map((turn, index) => {
+    const old = before[index];
+    if (old !== undefined && old.live === turn.live && old.user === turn.user && old.parts.length === turn.parts.length && old.parts.every((part, at) => samePart(part, turn.parts[at]!))) return old;
+    changed = true;
+    return turn;
+  });
+  return changed ? turns : before;
+}
+
 const args = (entry: AgentEntry): Record<string, unknown> => {
   try {
     return JSON.parse(entry.detail ?? "{}") ?? {};

@@ -3,6 +3,8 @@
 // package's services, the speaker watcher, cloud projects, Ctrl-C, and one
 // listener per address `bindAddresses` gives.
 
+import { TIMING } from "./sync_core.ts";
+import * as writerLocks from "./writer/locks.ts";
 import type { Server } from "bun";
 import * as fs from "node:fs";
 
@@ -20,6 +22,7 @@ import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
 import { archiveFinished, ExportRegistry, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
+import * as encoder from "./encoder.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
@@ -40,7 +43,10 @@ import * as seams from "./seams.ts";
 import { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as update from "./update.ts";
+import * as exactAfter from "./writer/exact_after.ts";
 import * as writer from "./writer/index.ts";
+import * as writerImports from "./writer/imports.ts";
+import * as writerStore from "./writer/store.ts";
 import * as ideas from "./ideas/index.ts";
 import * as thumbnails from "./thumbnails/index.ts";
 import { BUILD, NIGHTLY, RELEASE } from "./version.ts";
@@ -278,7 +284,8 @@ export function start(home: string, host: string | null, port: number): { app: A
     if (quitting) process.exit(code);
     quitting = true;
     lastRun.quitting();
-    setTimeout(() => process.exit(code), 5_000).unref();
+    // TIMING.QUIT_BUDGET: one cloud call fits (sync_core.ts); a push left over is sent by the next start.
+    setTimeout(() => process.exit(code), TIMING.QUIT_BUDGET).unref();
     // The agents first: a turn left running goes on editing (and spending) with no Edit to answer it.
     try {
       app.agents.shutdown?.();
@@ -287,7 +294,8 @@ export function start(home: string, host: string | null, port: number): { app: A
     }
     void (async () => {
       try {
-        await seams.cloudProjects.shutdown();
+        // Edits' and scripts' locks let go together, inside the quit budget.
+        await Promise.all([seams.cloudProjects.shutdown(), writerLocks.releaseAll()]);
       } catch (error) {
         if (!seams.isUnavailable(error)) diag.warn("cloud", `on the way out: ${diag.messageOf(error)}`);
       }
@@ -333,14 +341,9 @@ export function start(home: string, host: string | null, port: number): { app: A
   });
   // Once listening (the agents reach Edit's MCP on this port) and signed in
   // again (or 20 s on, signed out): the jobs and agent turns a restart cut short.
-  void Promise.race([signedIn.catch(() => undefined), Bun.sleep(20_000)]).then(() => {
-    resumeJobs(app);
-    try {
-      app.agents.resumeInterrupted?.();
-    } catch (error) {
-      diag.warn("agent", `carrying on cut turns: ${diag.messageOf(error)}`);
-    }
-  });
+  // An export holds the hardware encoder (encoder.ts): an import's encode beside it isn't called stuck, and one that waits for it is woken when it ends.
+  encoder.register(() => (app.exports.running() ? "an export" : null));
+  void Promise.race([signedIn.catch(() => undefined), Bun.sleep(20_000)]).then(() => resumeJobs(app));
   if (update.enabled()) {
     void update
       .check(update.readChannel(home))
@@ -365,7 +368,11 @@ function optional(area: string, work: () => void): void {
   }
 }
 
-/** Starts again the exports, uploads, smoothing, watches and map renders a restart cut short (jobs.ts). */
+/**
+ * Starts again everything a restart cut short (jobs.ts), from the one table:
+ * exports, archives, shares, fixes, agent turns, Ideas and Thumbnails runs,
+ * uploads, smoothing, watches and map renders.
+ */
 function resumeJobs(app: App): void {
   const project = (id: string) => {
     const live = app.store.get(id);
@@ -375,23 +382,23 @@ function resumeJobs(app: App): void {
   void jobs.resume(app.store.home, {
     case: (job) => {
       project(job.project);
-      // Nothing left to import (laid out since), and no import of it running to own the job: crossed off.
-      const running = app.scripts.get(job.project)?.state;
-      if (seams.script.start(app, job.project, false) === null && !["downloading", "transcribing", "placing", "voicing"].includes(running ?? "")) {
-        throw new jobs.Gone("its import has nothing left to do");
-      }
+      // Carried on from what the job kept (script.carryOn: the same way Retry, a remote resume and unstick do). Nothing left to do: crossed off.
+      const did = seams.script.carryOn(app, job.project);
+      if (did === "finished" || did === "nothing") throw new jobs.Gone("its import has nothing left to do");
     },
     export: async (job) => {
-      // Jobs from before Nov 3 may name a Modal or Relay-worker backend: every export renders here now.
       const { options, output, drive, keepLocal, share, note, watermark, replace } = job.args as unknown as { options: ExportOptions; output: string } & StartExtra;
       // The timeline it was started with, not edits made since.
       const current = project(job.project);
       const asked = resumeSnapshot(app.store.home, job.project, job.args) ?? current;
-      // A share's export carries on as the share it was: watermarked again, then shared.
+      // A share's export is its share's: the share job carries it on (and starts it again under this key).
       if (share === true) {
+        const owner = jobs.get(app.store.home, jobs.keyOf("share", job.project));
+        if (owner !== undefined && jobs.live(owner)) throw new jobs.Gone("its share carries it on");
+        // From a build before shares were jobs: listed as a share now, at its export.
         void reviews
           .resumeShare(app, job.project, asked, options, { ...(replace === true ? { replace } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) })
-          .catch((error: unknown) => diag.warn("review", `sharing ${job.project} after the restart: ${diag.messageOf(error)}`));
+          .catch((error: unknown) => diag.warn("review", `sharing ${job.project} after the restart (key ${job.key}): ${diag.messageOf(error)}`));
         return;
       }
       await app.exports.start(app.store, app.library, asked, options, output, { drive, ...(keepLocal === true ? { keepLocal } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) });
@@ -423,6 +430,31 @@ function resumeJobs(app: App): void {
       const { name, path, key, version } = job.args as { name: string; path: string; key: string; version?: number };
       if (!fs.existsSync(path)) throw new jobs.Gone(`${path} is gone`);
       void reviews.fullBehind(app.store.home, job.project, name, path, key, version);
+    },
+    share: (job) => reviews.resumeShareJob(app, job),
+    fix: (job) => reviews.resumeFix(app, job),
+    turn: (job) => {
+      if (app.agents.resumeTurn === undefined) throw new jobs.Gone("no agent panel here");
+      app.agents.resumeTurn(job);
+    },
+    // A Writer script's import, or its chosen footage's exact hearing (writer/exact_after.ts), that waited on the transcription plan's credit: tried again (it waits again if there's still none).
+    script: async (job) => {
+      const data = writerStore.dataDir(app.store.home);
+      if (!writerStore.ids(data).includes(job.project)) throw new jobs.Gone("the script is gone");
+      if (job.args.waiting_on === "exact") {
+        jobs.end(app.store.home, job.key);
+        exactAfter.soon(data, job.project);
+        return;
+      }
+      if (writerImports.importing(job.project)) return;
+      jobs.end(app.store.home, job.key);
+      void writerImports.resume(app, data, job.project, { kind: "retry" }).catch((error: unknown) => diag.warn("writer", `trying ${job.project}'s import again: ${diag.messageOf(error)}`));
+    },
+    idea: (job) => ideas.resumeRun(app, job),
+    thumbnail: (job) => thumbnails.resumeRun(app, job),
+    // Smooth playback renders are made again when wanted; listed only so a restart or an update waits for them.
+    playback: () => {
+      throw new jobs.Gone("made again when it's wanted");
     },
     map: (job) => {
       const { first } = job.args as { first: string };

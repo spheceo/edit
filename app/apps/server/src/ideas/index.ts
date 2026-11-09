@@ -7,18 +7,24 @@ import * as accounts from "../accounts.ts";
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
 import { holderOf, mayIdeas } from "./routes.ts";
-import { markInterrupted } from "./run.ts";
+import type * as jobs from "../jobs.ts";
+import { markInterrupted, resumeRun as resumeOne } from "./run.ts";
 
 export function start(app: App): void {
   let done = false;
   const look = () => {
     if (done || accounts.creator() === null || !mayIdeas()) return;
     done = true;
-    void markInterrupted(holderOf(app)).catch((error: unknown) => {
+    void markInterrupted(holderOf(app), app.store.home).catch((error: unknown) => {
       done = false;
       diag.warn("ideas", `marking runs stopped by the restart: ${diag.messageOf(error)}`);
     });
   };
   accounts.onSessionChange(look);
   setTimeout(look, 15_000).unref?.();
+}
+
+/** A run a restart cut short: its ending saved, or marked stopped (serve.ts's resumer for `idea`). */
+export function resumeRun(app: App, job: jobs.Job): void {
+  resumeOne(app.store.home, job);
 }

@@ -18,7 +18,7 @@ import { cloudKeyFor, deleteExport, listExports } from "./exports.ts";
 import * as cloud from "./cloud.ts";
 import * as cloudMedia from "./cloud_media.ts";
 import { nativeSources } from "./native_preview.ts";
-import { PLAYBACK_ROUTE, previewable } from "./cloud_playback.ts";
+import { PLAYBACK_ROUTE, playbackKey, previewable } from "./cloud_playback.ts";
 import { ioMessage } from "./files.ts";
 import { ApiError, bad, json, notFound } from "./http/errors.ts";
 import { serveFile } from "./http/files.ts";
@@ -26,7 +26,7 @@ import { badShape, pathEndingAt, readJson, showPath, type RouteContext, type Rou
 import { baseRouter } from "./http/server.ts";
 import { importPaths } from "./import.ts";
 import { routes as mediaRoutes } from "./media_tools.ts";
-import { isMediaPath, Semaphore } from "./media.ts";
+import { checkKey, isMediaPath, Semaphore } from "./media.ts";
 import type { ExportOptions, Project, Style } from "./model.ts";
 import { withProjectAsync } from "./native/index.ts";
 import * as patches from "./patch.ts";
@@ -205,7 +205,15 @@ export function buildRouter(): Router<App> {
     .get("/api/export/encoders", exportEncoders)
     .get("/api/exports/activity", ({ app }) => {
       const visible = new Set(app.store.visible().map(project => project.id));
-      const edits = (app.exports.activity?.() ?? []).filter(job => visible.has(job.id));
+      // A share's export is the share's: while the share goes on past it (the review copy, the upload, the publish) it's
+      // shown going, with the share's own line, and a share that failed after it shows why; never "done" before it's up.
+      const edits = (app.exports.activity?.() ?? []).filter(job => visible.has(job.id)).map((job) => {
+        if (job.state !== "done") return job;
+        const { line, share } = reviews.shareNow(app.store.home, job.id);
+        if (line !== null) return { ...job, state: "running" as const, phase: `Sharing: ${line}` };
+        if (share?.state === "failed" && share.at >= job.updated_ms) return { ...job, state: "failed" as const, error: share.error ?? "the share failed" };
+        return job;
+      });
       // Script shares join the same queue. Only the ones running: a share has no file, and a settled one is not kept (it would linger in this process and show up in the activity check).
       const shares = writerReviews.shareQueue().filter(share => writer.seesScript(writer.dataOf(app), share.id)).map(share => ({
         id: share.id,
@@ -540,10 +548,18 @@ function getProject({ app, params }: Context): Response {
 }
 
 /** The footage the timeline plays that isn't here and can't be fetched: the editor says so. */
-function missingFootage({ app, params }: Context): Response {
+async function missingFootage({ app, params }: Context): Promise<Response> {
   const live = liveOr404(app, params.id!);
-  const missing = missingMedia(live.project);
   const used = new Set(live.project.clips.flatMap((clip) => ("media" in clip && typeof clip.media === "string" ? [clip.media] : [])));
+  // And footage streamed from the cloud whose proxy the cloud doesn't have (it 404s: "Loading frame…" for good otherwise).
+  const streamed = live.project.media.filter((media) => used.has(media.id) && playbackKey(media.path) !== null);
+  const gone = new Set<string>();
+  for (let at = 0; at < streamed.length; at += 8) {
+    await Promise.all(streamed.slice(at, at + 8).map(async (media) => {
+      if ((await checkKey(playbackKey(media.path)!)) === false) gone.add(media.id);
+    }));
+  }
+  const missing = [...missingMedia(live.project), ...streamed.filter((media) => gone.has(media.id))];
   return json({
     used: live.project.media.filter((media) => used.has(media.id)).length,
     missing: missing.map((media) => ({ id: media.id, name: media.name, path: media.path })),
@@ -1139,9 +1155,16 @@ async function retryExport({ app, params }: Context): Promise<Response> {
   const id = params.id!;
   liveOr404(app, id);
   const held = app.exports.replay?.(id) ?? null;
-  if (held === null) throw bad("nothing to retry");
-  if (held.extra.share === true) {
-    const started = reviews.exportAndShare(app, id, held.options, held.extra.replace === true, held.extra.note, held.extra.watermark);
+  // A share that failed after its export carries on from where it stopped; its export isn't made again.
+  let again: Promise<{ url: string; version: number }> | null = null;
+  try {
+    again = reviews.retryShare(app, id);
+  } catch (error) {
+    throw bad(diag.messageOf(error));
+  }
+  if (again === null && held === null) throw bad("nothing to retry");
+  if (again !== null || held?.extra.share === true) {
+    const started = again ?? reviews.exportAndShare(app, id, held!.options, held!.extra.replace === true, held!.extra.note, held!.extra.watermark);
     started.catch((error: unknown) => {
       const message = diag.messageOf(error);
       if (message === "the share was cancelled" || message === "the export was cancelled") return;
@@ -1156,7 +1179,7 @@ async function retryExport({ app, params }: Context): Promise<Response> {
     return json(first === null ? { started: true } : first.done);
   }
   try {
-    return json({ path: await app.exports.start(app.store, app.library, app.store.get(id)!.project, held.options, held.output, held.extra) });
+    return json({ path: await app.exports.start(app.store, app.library, app.store.get(id)!.project, held!.options, held!.output, held!.extra) });
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

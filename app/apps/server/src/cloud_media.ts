@@ -59,6 +59,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as cloudBlocks from "./cloud_blocks.ts";
 import * as exportExcerpts from "./export_excerpts.ts";
+import * as player from "./player.ts";
 import { prepLine } from "./export_prep.ts";
 import * as pieces from "./proxy_pieces.ts";
 import * as cloud from "./cloud.ts";
@@ -69,6 +70,7 @@ import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
 import { isBug } from "./guard.ts";
 import * as jobs from "./jobs.ts";
+import * as steps from "./import_steps.ts";
 import { mediaHooks, mediaKey, Semaphore } from "./media.ts";
 import * as finished from "./finished.ts";
 import * as youtube from "./youtube.ts";
@@ -90,15 +92,49 @@ import { THIS_MACHINE } from "./machine.ts";
  * the sound); a sound-only file's is its sound alone, 160 kbit/s AAC in an
  * MP4 (Serial Predator's Tarrytown_PD_call.m4a failed its import: "only
  * footage gets a cloud proxy").
+ *
+ * Held on the hardware encoder while it runs (encoder.ts) and bounded by
+ * `LIMITS.proxy` (import_steps.ts): past it the step fails, saying whether
+ * an export or another encode had the encoder too (then the file waits for
+ * it to be free instead of failing). It's made under a name of its own and
+ * moved to `out` only when it finished in time: an addon encode can't be
+ * stopped, and one that answers late must never leave a file a retry takes
+ * as made.
  */
 async function makeProxy(source: string, probe: Probe, out: string): Promise<void> {
-  if (probe.kind !== "audio") return native().makeCloudProxy(source, probe, out);
-  const made = await tools.run([
-    tools.ffmpeg(), "-hide_banner", "-nostdin", "-v", "error", "-y",
-    "-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source),
-    "-i", source, "-vn", "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-f", "mp4", out,
-  ]).then(() => true, (error: unknown) => { fs.rmSync(out, { force: true }); throw new Error(`the sound's proxy: ${diag.scrub(diag.messageOf(error))}`); });
-  if (!made) throw new Error("the sound's proxy wasn't made");
+  const temp = out.replace(/(\.[^./]+)?$/, (ext) => `.making-${process.pid}-${nextFileId()}${ext}`);
+  let late = false;
+  try {
+    await steps.encoding("Making the footage's proxy", steps.LIMITS.proxy(probe.duration), async (signal) => {
+      const made =
+        probe.kind !== "audio"
+          ? native().makeCloudProxy(source, probe, temp)
+          : tools
+              .run([
+                tools.ffmpeg(), "-hide_banner", "-nostdin", "-v", "error", "-y",
+                "-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source),
+                "-i", source, "-vn", "-c:a", "aac", "-b:a", "160k", "-ac", "2", "-f", "mp4", temp,
+              ], { signal })
+              .then(
+                () => undefined,
+                (error: unknown) => {
+                  throw new Error(`the sound's proxy: ${diag.scrub(diag.messageOf(error))}`);
+                },
+              );
+      // Finishing after its time ran out: what it wrote goes.
+      void made.then(
+        () => late && fs.rmSync(temp, { force: true }),
+        () => fs.rmSync(temp, { force: true }),
+      );
+      await made;
+    });
+    if (!isFile(temp)) throw new Error(probe.kind === "audio" ? "the sound's proxy wasn't made" : "the proxy wasn't made");
+    fs.renameSync(temp, out);
+  } catch (error) {
+    late = true;
+    fs.rmSync(temp, { force: true });
+    throw error;
+  }
 }
 
 export { isLocalCopy } from "./media.ts";
@@ -125,6 +161,11 @@ const piecesContexts = new Map<string, pieces.Context>();
 function originalFor(cache: string, key: string): Promise<string> {
   const here = localOriginal(cache, key);
   return here !== null ? Promise.resolve(here) : getUrl(key, 6 * HOUR);
+}
+
+/** This Mac's pieced proxies' context (where pieces are kept, how they're made): for native_preview.ts. */
+export function piecesHere(cache: string): pieces.Context {
+  return piecesContext(cache);
 }
 
 function piecesContext(cache: string): pieces.Context {
@@ -290,7 +331,7 @@ export async function getRecord(source: string): Promise<Record_ | null> {
 export async function registeredOriginal(source: string, expectedKey?: string): Promise<Original> {
   if (!/^sha256:[a-fA-F0-9]{64}$/u.test(source)) throw new Error("invalid shared master source");
   const record = await getRecord(source);
-  if (record === null || !record.originalReady || !cloud.validKey(record.originalKey)) throw new Error("The folder master is not uploaded yet. Finish syncing the script in Writer, then retry.");
+  if (record === null || !record.originalReady || !cloud.validKey(record.originalKey)) throw new steps.NeedsPerson("The folder master is not uploaded yet. Finish syncing the script in Writer, then retry.");
   if (expectedKey !== undefined && record.originalKey !== expectedKey) throw new Error("Writer's folder master does not match its shared original. Sync the script again.");
   return { file: source, source, key: record.originalKey, name: record.name, size: record.size };
 }
@@ -436,6 +477,7 @@ export async function fetchKey(key: string, local: string): Promise<void> {
   for (;;) {
     const running = fetching.get(local);
     if (running === undefined) break;
+    // Only to wait it out: that fetch's own caller hears how it ended, and this one looks again.
     await running.catch(() => {});
   }
   if (isFile(local)) return;
@@ -724,7 +766,11 @@ async function runUpload(upload: Upload, progressed: () => void): Promise<void> 
   if (upload.uploadOriginal) {
     // Up already, whole (the same footage imported again while its first upload went on: the 10-hour trial,
     // Nov 4, sent 58 GB twice): the key is its content's, so it isn't sent again.
-    if ((await cloud.head(upload.originalKey).catch(() => null))?.size === upload.size) {
+    const there = await cloud.head(upload.originalKey).catch((error: unknown) => {
+      diag.warn("cloud", `${upload.originalKey}: couldn't ask R2 whether it's up already, so it's sent: ${diag.messageOf(error)}`);
+      return null;
+    });
+    if (there?.size === upload.size) {
       cloud.forgetUpload(upload.originalKey);
     } else {
       // The first report is what's up already; any later one is new.
@@ -915,7 +961,7 @@ export async function driveOriginal(
   scratch: string,
   progress: (bytes: number, total: number | null, name: string) => void,
 ): Promise<Original> {
-  if (!driveIdOk(file)) throw new Error(`${debugStr(file)} isn't a Drive file id`);
+  if (!driveIdOk(file)) throw new steps.NeedsPerson(`${debugStr(file)} isn't a Drive file id`);
   const source = `drive:${file}`;
   const record = await getRecord(source);
   const ready = readyOriginal(record);
@@ -932,7 +978,7 @@ export async function driveOriginal(
   // Copied in the cloud where the relay can (it finishes without this Mac),
   // else streamed through this Mac as before.
   const size =
-    (await driveInTheCloud(file, key, (sent) => progress(sent, head.total, name))) ??
+    (await driveInTheCloud(file, key, (sent) => progress(sent, head.total, name), head.total)) ??
     (await streamDrive(url, key, head.total, (sent) => progress(sent, head.total, name)));
   let duration: number | null = null;
   try {
@@ -959,7 +1005,7 @@ export async function youtubeOriginal(
   progress: (bytes: number, total: number | null, name: string) => void,
 ): Promise<[Original, string | null]> {
   const id = youtube.idOf(file);
-  if (id === null) throw new Error(`${debugStr(file)} isn't a YouTube video`);
+  if (id === null) throw new steps.NeedsPerson(`${debugStr(file)} isn't a YouTube video`);
   const source = file;
   const record = await getRecord(source);
   const ready = readyOriginal(record);
@@ -1121,7 +1167,7 @@ export const jobTiming = { poll: 2000, stall: 10 * 60_000, sleep: (ms: number) =
  * null when the relay can't (an older relay, no Google sign-in there, the
  * job failed or stood still), so this Mac streams it instead.
  */
-async function driveInTheCloud(file: string, key: string, progress: (sent: number) => void): Promise<number | null> {
+async function driveInTheCloud(file: string, key: string, progress: (sent: number) => void, total: number | null = null): Promise<number | null> {
   let id: string;
   try {
     const started = await cloud.relayJson("jobs/drive", { file, key });
@@ -1135,13 +1181,28 @@ async function driveInTheCloud(file: string, key: string, progress: (sent: numbe
   diag.info("cloud", `copying Drive file ${file} to the cloud there (job ${id})`);
   let last = -1;
   let moved = Date.now();
+  // Bounded in all (import_steps.ts): a copy that never ends is taken over by this Mac, as one standing still is.
+  const deadline = Date.now() + steps.LIMITS.relayCopy(total);
+  let unreachableSince: number | null = null;
+  const takeOver = async (why: string): Promise<null> => {
+    diag.warn("cloud", `the cloud copy of ${file} ${why}; streaming it through ${THIS_MACHINE}`);
+    try {
+      await cloud.relayJson("jobs/cancel", { id, key });
+    } catch {
+      // It stops on its own.
+    }
+    return null;
+  };
   for (;;) {
     let status: Record<string, unknown>;
     try {
       status = await cloud.relayJson("jobs/status", { id, key });
+      unreachableSince = null;
     } catch (error) {
-      // The relay unreachable for a moment: the job carries on there.
+      // The relay unreachable for a moment: the job carries on there. For long, it's no different from the copy standing still.
       diag.warn("cloud", `asking about job ${id}: ${scrub(diag.messageOf(error))}`);
+      unreachableSince ??= Date.now();
+      if (Date.now() - unreachableSince > steps.LIMITS.relayUnreachable) return takeOver(`couldn't be asked about for ${Math.round(steps.LIMITS.relayUnreachable / 60_000)} minutes (the relay didn't answer)`);
       status = { status: "running" };
     }
     const state = String(status.status);
@@ -1161,15 +1222,8 @@ async function driveInTheCloud(file: string, key: string, progress: (sent: numbe
       moved = Date.now();
       progress(bytes);
     }
-    if (Date.now() - moved > jobTiming.stall) {
-      diag.warn("cloud", `the cloud copy of ${file} stood still for ${jobTiming.stall / 60_000} minutes; streaming it through ${THIS_MACHINE}`);
-      try {
-        await cloud.relayJson("jobs/cancel", { id, key });
-      } catch {
-        // It stops on its own.
-      }
-      return null;
-    }
+    if (Date.now() - moved > jobTiming.stall) return takeOver(`stood still for ${jobTiming.stall / 60_000} minutes`);
+    if (Date.now() > deadline) return takeOver(`ran past ${Math.round(steps.LIMITS.relayCopy(total) / 60_000)} minutes`);
     await jobTiming.sleep(jobTiming.poll);
   }
 }
@@ -1195,6 +1249,7 @@ async function driveSource(url: string, stall: cloud.Stall): Promise<cloud.Sourc
     }
     const location = response.headers.get("location");
     if (response.status >= 300 && response.status < 400 && location !== null) {
+      // The redirect's own body is never read: letting it go may fail on a closed socket, which changes nothing.
       await response.body?.cancel().catch(() => {});
       target = new URL(location, target).toString();
       continue;
@@ -1204,6 +1259,7 @@ async function driveSource(url: string, stall: cloud.Stall): Promise<cloud.Sourc
   stall.connected();
   if (response === null || (response.status >= 300 && response.status < 400)) throw stopped("Maximum (50) redirects followed");
   if (response.status >= 400) {
+    // As above: the error is the status, thrown next.
     await response.body?.cancel().catch(() => {});
     throw stopped(`The requested URL returned error: ${response.status}`);
   }
@@ -1626,6 +1682,11 @@ export const PREFETCH = { seconds: 600, bytes: 600_000_000 };
 /** The newest prefetch per project: an older one stops. */
 const prefetches = new Map<string, number>();
 
+/** Stops project `id`'s block prefetch (Edit.app's window took the project: whole copies come instead). */
+export function stopPrefetch(id: string): void {
+  prefetches.set(id, (prefetches.get(id) ?? 0) + 1);
+}
+
 /**
  * Reads the proxies' stretches project `id`'s timeline plays, in timeline
  * order from frame `from`, into the block cache before the viewer asks
@@ -1637,7 +1698,8 @@ const prefetches = new Map<string, number>();
  * second), a block either side kept for the slack.
  */
 export async function prefetchProject(app: App, id: string, from = 0): Promise<number> {
-  if (playbackBlocks === null || !cloud.enabled()) return 0;
+  // Drawn by Edit.app's window: its whole copies come down instead (native_preview.ts), never blocks.
+  if (playbackBlocks === null || !cloud.enabled() || player.isNative(id)) return 0;
   const root = playbackBlocks;
   const live = app.store.get(id);
   if (live === null) return 0;
@@ -1680,7 +1742,10 @@ export async function prefetchProject(app: App, id: string, from = 0): Promise<n
     if (media === undefined || key === null || !(media.duration > 0)) continue;
     let size = sizes.get(key);
     if (size === undefined) {
-      size = cloudBlocks.sizeOf(root, key) ?? (await cloud.head(key).catch(() => null))?.size ?? null;
+      size = cloudBlocks.sizeOf(root, key) ?? (await cloud.head(key).catch((error: unknown) => {
+        diag.warn("cloud", `${id}: ${key} isn't read ahead: R2 didn't say its size (${diag.messageOf(error)})`);
+        return null;
+      }))?.size ?? null;
       sizes.set(key, size);
     }
     if (size === null || size <= 0) continue;
@@ -1752,7 +1817,7 @@ async function ensureLocalNow(app: App, id: string): Promise<void> {
   // Shared analysis is keyed by the streamed input, without requiring a video file.
   await fetchAnalysis(app, id);
   // Music and sound effects say so on the media, not just by their path (never transcribed).
-  await seams.library.tagSounds(app, id).catch(() => {});
+  await seams.library.tagSounds(app, id).catch((error: unknown) => diag.warn("library", `${id}: its music and sound effects weren't tagged: ${diag.messageOf(error)}`));
   const live = app.store.get(id);
   const left = live === null ? [] : stranded(live.project);
   const one = left.length === 1;
@@ -2207,7 +2272,11 @@ export async function playbackSounds(project: Project, start: number, end: numbe
           sounds[mediaId] = original;
           return;
         }
-        if ((await cloud.head(soundKey(where.original)).catch(() => null)) !== null) {
+        const up = await cloud.head(soundKey(where.original)).catch((error: unknown) => {
+          diag.warn("export", `${mediaId}: R2 didn't say whether its original's sound is there, so its proxy's is used: ${diag.messageOf(error)}`);
+          return null;
+        });
+        if (up !== null) {
           await fetchKey(soundKey(where.original), original);
           sounds[mediaId] = original;
           return;
@@ -2674,6 +2743,11 @@ export async function wholeTranscript(source: string, target: string, scratch: s
 }
 
 mediaHooks.wholeTranscript = (source, target) => wholeTranscript(source, target, parent(target) ?? ".");
+// A streamed proxy is ready only while its key is there (media.ts `keyVerdict`): a cloud without it (offline, signed out) can't say.
+mediaHooks.keyAnswers = async (key) => {
+  if (!cloud.enabled()) throw new Error("the cloud is off");
+  return (await cloud.head(key)) !== null;
+};
 
 /** When each source's shared analysis was last looked for. *//** When each source's shared analysis was last looked for. */
 const checked = new Map<string, number>();

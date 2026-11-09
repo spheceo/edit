@@ -843,8 +843,9 @@ export function setSpeed(project: Project, ids: Iterable<string>, speed: number)
 }
 
 /** The checks edit-core's `Project::validate` runs, so a change the server would refuse is never shown. */
+const finite = (value: unknown): boolean => typeof value === "number" ? Number.isFinite(value) : value !== null && typeof value === "object" ? Object.values(value).every(finite) : true;
+
 export function validateProject(project: Project, options: { people?: boolean } = {}): string | null {
-  const finite = (value: unknown): boolean => typeof value === "number" ? Number.isFinite(value) : value !== null && typeof value === "object" ? Object.values(value).every(finite) : true;
   if (!finite(project)) return `project numbers must be finite`;
   if (!Number.isSafeInteger(project.next_id) || project.next_id < 0) return `next_id must be a nonnegative safe integer`;
   if (![project.settings.width, project.settings.height, project.settings.fps].every((value) => Number.isSafeInteger(value) && value > 0)) return `settings must be positive integers`;
@@ -860,37 +861,80 @@ export function validateProject(project: Project, options: { people?: boolean } 
   const tracks = new Map(project.tracks.map((track) => [track.id, track]));
   const byTrack = new Map<string, Clip[]>();
   for (const clip of project.clips) {
-    const track = tracks.get(clip.track);
-    if (!track) return `a clip is on a track that no longer exists`;
-    if (clip.duration <= 0) return `a clip would have no length`;
-    if (![clip.start, clip.duration, clipEnd(clip)].every(Number.isSafeInteger)) return `clip times must be safe integer frames`;
-    if (clip.start < 0) return `a clip would start before the beginning`;
-    if ((clip.type === "audio") !== (track.kind === "audio")) return `a clip is on the wrong kind of track`;
-    if ((clip.type === "video" || clip.type === "audio") && !mediaOf(project, clip.media)) return `a clip's media is missing`;
-    if ((clip.type === "video" || clip.type === "audio") && (clip.source_in < 0 || clip.speed < 0.05 || clip.speed > 20)) return `source timing or speed is invalid`;
-    if (clip.type === "video" && clip.crop) {
-      const { left = 0, right = 0, top = 0, bottom = 0 } = clip.crop;
-      if ([left, right, top, bottom].some((side) => !(side >= 0 && side < 1)) || left + right >= 0.99 || top + bottom >= 0.99) return `a crop must leave some of the picture`;
-    }
-    if (clip.type === "audio" && clip.mutes?.some((mute) => !(Number.isFinite(mute.from) && Number.isFinite(mute.to) && mute.from < mute.to))) return `a mute must run from before it ends`;
-    if (clip.type === "solid" && clip.gradient && Math.abs(clip.gradient.from - clip.gradient.to) < 1e-3) return `a gradient's from and to must differ`;
-    if (clip.fade_in < 0 || clip.fade_out < 0 || !Number.isSafeInteger(clip.fade_in) || !Number.isSafeInteger(clip.fade_out)) return `fades must be nonnegative integer frames`;
-    for (const [param, keys] of Object.entries(clip.keyframes ?? {})) {
-      if (!animatableParams(clip).includes(param)) return `a clip cannot animate ${param}`;
-      if (!keys.length || keys.some((key, index) => index > 0 && key.frame <= keys[index - 1].frame)) return `keyframes must be in strictly increasing order`;
-      if (keys.some((key) => [key.handle_in, key.handle_out].some((handle) => handle && (handle.influence <= 0 || handle.influence > 1)))) return `keyframe handle influence must be in (0, 1]`;
-    }
+    const problem = clipProblem(project, tracks, clip);
+    if (problem) return problem;
     const clips = byTrack.get(clip.track) ?? [];
     clips.push(clip);
     byTrack.set(clip.track, clips);
   }
+  const overlap = overlapProblem(project, tracks, byTrack);
+  if (overlap) return overlap;
+  return options.people === false ? null : peopleProblem(project);
+}
+
+/**
+ * The problems `validateProject` would find in `ids`' clips and on their
+ * tracks alone, the rest of the project taken as checked: a drag's step is
+ * checked by what moved, not by every number of a 2.4 MB edit each move.
+ */
+export function validateClips(project: Project, ids: string[]): string | null {
+  const tracks = new Map(project.tracks.map((track) => [track.id, track]));
+  const changed = new Set(ids);
+  const affected = new Set<string>();
+  const seen = new Set<string>();
+  const byTrack = new Map<string, Clip[]>();
+  for (const clip of project.clips) {
+    if (clip.id.length === 0 || seen.has(clip.id)) return `IDs must be nonempty and unique within each collection`;
+    seen.add(clip.id);
+    if (!changed.has(clip.id)) continue;
+    if (!finite(clip)) return `project numbers must be finite`;
+    const problem = clipProblem(project, tracks, clip);
+    if (problem) return problem;
+    affected.add(clip.track);
+  }
+  for (const clip of project.clips) {
+    if (!affected.has(clip.track)) continue;
+    const clips = byTrack.get(clip.track) ?? [];
+    clips.push(clip);
+    byTrack.set(clip.track, clips);
+  }
+  return overlapProblem(project, tracks, byTrack);
+}
+
+/** What's wrong with one clip on its own (its track, times, media, keyframes). */
+function clipProblem(project: Project, tracks: Map<string, Track>, clip: Clip): string | null {
+  const track = tracks.get(clip.track);
+  if (!track) return `a clip is on a track that no longer exists`;
+  if (clip.duration <= 0) return `a clip would have no length`;
+  if (![clip.start, clip.duration, clipEnd(clip)].every(Number.isSafeInteger)) return `clip times must be safe integer frames`;
+  if (clip.start < 0) return `a clip would start before the beginning`;
+  if ((clip.type === "audio") !== (track.kind === "audio")) return `a clip is on the wrong kind of track`;
+  if ((clip.type === "video" || clip.type === "audio") && !mediaOf(project, clip.media)) return `a clip's media is missing`;
+  if ((clip.type === "video" || clip.type === "audio") && (clip.source_in < 0 || clip.speed < 0.05 || clip.speed > 20)) return `source timing or speed is invalid`;
+  if (clip.type === "video" && clip.crop) {
+    const { left = 0, right = 0, top = 0, bottom = 0 } = clip.crop;
+    if ([left, right, top, bottom].some((side) => !(side >= 0 && side < 1)) || left + right >= 0.99 || top + bottom >= 0.99) return `a crop must leave some of the picture`;
+  }
+  if (clip.type === "audio" && clip.mutes?.some((mute) => !(Number.isFinite(mute.from) && Number.isFinite(mute.to) && mute.from < mute.to))) return `a mute must run from before it ends`;
+  if (clip.type === "solid" && clip.gradient && Math.abs(clip.gradient.from - clip.gradient.to) < 1e-3) return `a gradient's from and to must differ`;
+  if (clip.fade_in < 0 || clip.fade_out < 0 || !Number.isSafeInteger(clip.fade_in) || !Number.isSafeInteger(clip.fade_out)) return `fades must be nonnegative integer frames`;
+  for (const [param, keys] of Object.entries(clip.keyframes ?? {})) {
+    if (!animatableParams(clip).includes(param)) return `a clip cannot animate ${param}`;
+    if (!keys.length || keys.some((key, index) => index > 0 && key.frame <= keys[index - 1].frame)) return `keyframes must be in strictly increasing order`;
+    if (keys.some((key) => [key.handle_in, key.handle_out].some((handle) => handle && (handle.influence <= 0 || handle.influence > 1)))) return `keyframe handle influence must be in (0, 1]`;
+  }
+  return null;
+}
+
+/** Two clips sharing frames on one track. */
+function overlapProblem(project: Project, tracks: Map<string, Track>, byTrack: Map<string, Clip[]>): string | null {
   for (const [track, clips] of byTrack) {
     const sorted = [...clips].sort((a, b) => a.start - b.start);
     for (let i = 1; i < sorted.length; i++) {
       if (sorted[i].start < clipEnd(sorted[i - 1])) return `clips would overlap on ${trackLabel(project, tracks.get(track)!)}`;
     }
   }
-  return options.people === false ? null : peopleProblem(project);
+  return null;
 }
 
 /** Gives each clip a fade in and out of `frames` (0 removes them). */

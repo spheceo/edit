@@ -33,6 +33,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
     "@webgpu/types": "^0.1.74",
+    "happy-dom": "^21.0.4",
     "jose": "^6.2.13",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",

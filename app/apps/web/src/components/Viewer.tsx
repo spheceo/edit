@@ -1,5 +1,5 @@
 import { Maximize, MessageSquarePlus, Minimize, Pause, Play, SkipBack, SkipForward, StepBack, StepForward } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useAgent } from "../lib/agent";
 import { api, mediaHost } from "../lib/api";
@@ -9,6 +9,7 @@ import { clearInOut, inOutSpan, useInOut } from "../lib/inOut";
 import { viewerMenu } from "../lib/menus";
 import { playhead, preview } from "../lib/playback";
 import { nativePreview } from "../lib/nativePreview";
+import { mediaVersions } from "../lib/mediaVersions";
 import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
@@ -43,6 +44,9 @@ export function toggleFullscreen() {
   else void viewer?.requestFullscreen().catch(() => {});
 }
 
+/** Each media's picture version (mediaVersions.ts), the same object until one changes. */
+const selectVersions = mediaVersions(wantsLight);
+
 /** Edits settle this long before smooth playback is rendered again (the agent changes things many times a turn). */
 const SMOOTH_SETTLE_MS = 2500;
 
@@ -52,7 +56,6 @@ export function Viewer() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [wrap, setWrap] = useState<HTMLDivElement | null>(null);
   const project = useEditor((state) => state.project);
-  const media = useEditor((state) => state.media);
   const rev = useEditor((state) => state.rev);
   const dirty = useEditor((state) => state.dirty);
   const playback = useEditor((state) => state.playback);
@@ -72,19 +75,7 @@ export function Viewer() {
   };
   useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [fullscreen]);
 
-  const light = wantsLight;
-  // The picture each media streams: the light preview once it’s made (when
-  // wanted), else the preview, else the original. Each with its files' stamps
-  // ("light~<light>~<preview>"), so a version’s URL is only ever that version.
-  const versionKey = JSON.stringify(
-    Object.fromEntries(Object.entries(media).map(([id, status]) => {
-      const preview = status.stamps?.preview ?? "";
-      const version = light && status.light === "ready" ? `light~${status.stamps?.light ?? ""}~${preview}`
-        : status.proxy === "ready" ? `preview~${preview}` : "source";
-      return [id, version];
-    })),
-  );
-  const versions = useMemo(() => JSON.parse(versionKey) as Record<string, string>, [versionKey]);
+  const versions = useEditor(selectVersions);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -105,35 +96,37 @@ export function Viewer() {
   const streamed = playback?.stream === true && (playback.state === "ready" || playback.state === "rendering") && playback.rev === rev && !dirty;
   const smooth = streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? mediaHost(playback.url) : null;
   useEffect(() => { preview.setSmooth(smooth); }, [smooth]);
+  // Edit.app's window draws the edit live: no render to wait for, also while full screen hands the
+  // picture to the page for a while (a render took a place in the export line and the encoder, Nov 8 audit).
+  const drawnByWindow = native || preview.nativeHere;
   useEffect(() => {
-    if (projectId === null) return;
+    if (projectId === null || drawnByWindow) return;
     let live = true;
     api.playback(projectId).then((status) => { if (live && useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     return () => { live = false; };
-  }, [projectId]);
+  }, [projectId, drawnByWindow]);
   // While it renders, looked at now and then: a server started again meanwhile (an update, a crash) has
   // forgotten the render, says "none", and it's asked for again below, rather than waited on for ever.
   const renderingNow = playback?.state === "rendering" || playback?.state === "waiting";
   useEffect(() => {
-    if (projectId === null || !renderingNow) return;
+    if (projectId === null || !renderingNow || drawnByWindow) return;
     const timer = setInterval(() => {
       api.playback(projectId).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     }, 10_000);
     return () => clearInterval(timer);
-  }, [projectId, renderingNow]);
+  }, [projectId, renderingNow, drawnByWindow]);
   // Asked for once the edits settle, unless it's rendering (or failed on) this revision; never mid-turn
   // (the agent changes the edit many times a turn: each render would be stale before it landed).
   const hasClips = (project?.clips.length ?? 0) > 0;
   const agentBusy = useAgent((state) => state.project === projectId && state.running);
   useEffect(() => {
-    // Edit.app's window draws the edit live: no render to wait for.
-    if (projectId === null || dirty || !hasClips || agentBusy || native) return;
+    if (projectId === null || dirty || !hasClips || agentBusy || drawnByWindow) return;
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;
     const timer = setTimeout(() => {
       api.renderPlayback(projectId, Math.floor(playhead.frame)).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     }, SMOOTH_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [projectId, rev, dirty, hasClips, agentBusy, playback, native]);
+  }, [projectId, rev, dirty, hasClips, agentBusy, playback, drawnByWindow]);
 
   useEffect(() => {
     if (project) preview.setProject(project, versions);

@@ -51,6 +51,7 @@ import { jsonForSerde } from "./rust.ts";
 import * as exportExcerpts from "./export_excerpts.ts";
 import * as playbackStream from "./playback_stream.ts";
 import { playbackKey } from "./cloud_playback.ts";
+import * as player from "./player.ts";
 import * as seams from "./seams.ts";
 import { createHash } from "node:crypto";
 
@@ -290,6 +291,9 @@ function stop(current: Running): void {
 function requestQuietly(app: App, id: string): void {
   const live = app.store.get(id);
   if (live === null) return;
+  // Drawn by Edit.app's window: it plays the edit live on its own clock, and a render here would only take the
+  // encoder from the exports (the Nov 8 audit's finding 4).
+  if (player.isNative(id)) return;
   // A long edit is not auto-rendered on the team's Macs after every turn (a
   // 29-minute 1080p render encoding in the background on 16 GB made the Mac
   // laggy, nightly-50); the viewer's own ask still renders it when watched.

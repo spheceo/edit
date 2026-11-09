@@ -15,6 +15,8 @@ import { assetRef, FONTS, HEIGHT, WIDTH, type Design, type Layer, type Thumbnail
 import { thumbnailsGuide } from "../agent_text.ts";
 import { inlinePictures, pictureFile } from "../chat_pictures.ts";
 import * as diag from "../diag.ts";
+import * as jobs from "../jobs.ts";
+import * as runLease from "../run_lease.ts";
 import * as notices from "../notices.ts";
 import { native } from "../native/index.ts";
 import { join } from "../paths.ts";
@@ -37,6 +39,8 @@ export interface Context {
   origin: string;
   port: number;
   cacheDir: string;
+  /** Edit's data folder, for jobs.json (absent in tests: not listed). */
+  home?: string | null;
   holder: string;
   by: string;
 }
@@ -62,13 +66,13 @@ async function slot<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-type Running = { turn: live.Turn; abort: AbortController; step: string };
+type Running = { turn: live.Turn; abort: AbortController; step: string; startedAt: number; ending?: true };
 const runs = new Map<string, Running>();
 
 export function liveOf(id: string): Pick<ThumbRun, "said" | "tools" | "step" | "trace"> | null {
   const run = runs.get(id);
   if (run === undefined) return null;
-  return { said: run.turn.text, tools: toolsOf(run.turn), trace: traceOf(run.turn), step: run.step };
+  return { said: run.turn.text, tools: toolsOf(run.turn), trace: traceOf(run.turn), step: run.ending ? "Saving how it ended" : run.step };
 }
 
 export const isRunning = (id: string): boolean => runs.has(id);
@@ -343,7 +347,7 @@ async function drawn(session: Session, design: Design, grid: boolean): Promise<s
  * so one pinned while it works isn't left behind.
  */
 async function stillOpen(id: string): Promise<string> {
-  const found = await cloud.get(id).catch(() => null);
+  const found = await cloud.get(id).catch(diag.warned("thumbnails", `${id}: its open comments, for the turn's end`, null));
   if (found === null) return "";
   const left = openComments(found.thumb).filter((one) => !(one.replies ?? []).some((reply) => reply.by === "claude"));
   if (left.length === 0) return "";
@@ -758,14 +762,14 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
   const library = await assets.all().catch(() => assets.BUILT_IN);
   const images: string[] = [];
   for (const image of thumb.images.slice(-24)) {
-    const path = await fileOf(session, image).catch(() => null);
+    const path = await fileOf(session, image).catch(diag.warned("thumbnails", `${thumb.id}: image ${image.id}'s file for the prompt`, null));
     images.push(`- ${image.id} “${image.name}” (${image.from}${image.model ? `, ${image.model}` : ""}, ${image.width}×${image.height})${image.references !== undefined && image.references.length > 0 ? `, made from ${image.references.join(", ")}` : ""}${image.prompt !== undefined ? `, its OpenArt prompt is stored (picture_prompt ${image.id})` : ""}${given.includes(image.id) ? " — given with this message" : ""}${path !== null ? `: ${path}` : ""}`);
   }
   const current = thumb.render !== null ? await assets.localPath(session.context.cacheDir, thumb.render.key).then((path) => {
     const copy = join(session.folder, "current.png");
     fs.copyFileSync(path, copy);
     return copy;
-  }).catch(() => null) : null;
+  }).catch(diag.warned("thumbnails", `${thumb.id}: its current drawing for the prompt`, null)) : null;
   const recent = thumb.chat.slice(-SENT_TURNS - 1, -1).map((turn) => `${turn.role === "you" ? (turn.by ?? "Producer") : "You (Claude)"}: ${turn.text}`);
   return [
     `# The thumbnail: “${thumb.title || "New thumbnail"}”${thumb.brief ? `\nFor: ${thumb.brief}` : ""}`,
@@ -796,7 +800,7 @@ async function prompt(session: Session, thumb: Thumbnail, asked: string, given: 
 async function commentsBrief(session: Session, thumb: Thumbnail): Promise<string> {
   const listed = describeComments(thumb);
   if (listed === "") return "";
-  const pins = openComments(thumb).length > 0 ? await marked(session, thumb).catch(() => null) : null;
+  const pins = openComments(thumb).length > 0 ? await marked(session, thumb).catch(diag.warned("thumbnails", `${thumb.id}: its comments' pins for the prompt`, null)) : null;
   return [`# Comments the team pinned on it (open)\n${listed}`, pins !== null ? `With their pins, numbered (Read it): ${pins}` : ""].filter(Boolean).join("\n");
 }
 
@@ -834,22 +838,65 @@ export async function chat(context: Context, id: string, text: string, images: s
   if ([...asked].length > 4000) throw new Error("Keep the message under 4,000 characters.");
   if (runs.has(id)) throw new Error("Claude is already working on this thumbnail: wait for it, or stop it.");
   // Taken before the cloud is written, so a second message sent at once finds it taken.
-  runs.set(id, { turn: { text: "", trace: [], startedAt: Date.now() }, abort: new AbortController(), step: "Waiting for a turn" });
+  const startedAt = Date.now();
+  runs.set(id, { turn: { text: "", trace: [], startedAt }, abort: new AbortController(), step: "Waiting for a turn", startedAt });
+  const home = context.home ?? null;
   try {
+    // The last turn's ending first, if it hasn't landed: this one would take its place.
+    await runLease.land(home, jobOf(id), (ending) => saveEnding(id, ending), "thumbnails");
     await cloud.change(id, context.by, (thumb) => {
       const other = thumb.run;
-      if (other !== null && (other.state === "running" || other.state === "queued") && other.holder !== context.holder && Date.now() - other.startedAt < 20 * 60_000) {
-        throw new Error(`Claude is working on this thumbnail on ${other.holder}: wait for it there.`);
-      }
+      if (runLease.heldElsewhere(other, context.holder)) throw new Error(`Claude is working on this thumbnail on ${other!.holder}: wait for it there.`);
       if (version !== undefined && version !== thumb.activeVersion && (thumb.versions ?? []).some((one) => one.id === version)) switchVersion(thumb, version);
-      thumb.run = { state: "queued", holder: context.holder, by: context.by, startedAt: Date.now(), step: "Waiting for a turn" };
+      thumb.run = { state: "queued", holder: context.holder, by: context.by, startedAt, renewedAt: startedAt, step: "Waiting for a turn" };
       thumb.chat = [...thumb.chat, { role: "you" as const, text: asked, at: Date.now(), by: context.by, ...(images.length > 0 ? { images } : {}) }].slice(-KEPT_TURNS);
     });
   } catch (error) {
     runs.delete(id);
     throw error;
   }
+  jobs.begin(home, "thumbnail", id, { holder: context.holder, by: context.by, startedAt }, "", "queued");
   void work(context, id, asked || "Here are pictures for the thumbnail.", images);
+}
+
+/** A turn's job in jobs.json: its lease while it runs, then its ending until the cloud has it. */
+const jobOf = (id: string): string => jobs.keyOf("thumbnail", id);
+
+/** An ending as noted in jobs.json, and how it's saved on the thumbnail. */
+type Noted = { state: ThumbRun["state"]; error?: string; text: string; tools?: ThumbTool[]; workedMs?: number; holder: string; by: string; startedAt: number; endedAt: number; interrupted?: boolean };
+
+/** Saves a noted ending on its turn (false: the thumbnail's gone, or a newer turn took its place). */
+async function saveEnding(id: string, given: Record<string, unknown>, named?: (title: string) => void): Promise<boolean> {
+  const ending = given as unknown as Noted;
+  let saved = false;
+  try {
+    await cloud.change(id, ending.by, (thumb) => {
+      if (thumb.run !== null && (thumb.run.holder !== ending.holder || thumb.run.startedAt !== ending.startedAt)) return false;
+      named?.(thumb.title);
+      thumb.run = { state: ending.state, holder: ending.holder, by: ending.by, startedAt: ending.startedAt, endedAt: ending.endedAt, ...(ending.error ? { error: ending.error } : {}), ...(ending.tools && ending.tools.length > 0 ? { tools: ending.tools } : {}) };
+      if (ending.interrupted !== true) {
+        const turn: ThumbTurn = { role: "claude", text: ending.text, at: ending.endedAt, workedMs: ending.workedMs ?? 0, ...(ending.tools && ending.tools.length > 0 ? { tools: ending.tools } : {}), ...(ending.state === "failed" || ending.state === "stopped" ? { failed: true } : {}) };
+        thumb.chat = [...thumb.chat, turn].slice(-KEPT_TURNS);
+      }
+      saved = true;
+    });
+  } catch (error) {
+    if (error instanceof cloud.Missing) return false;
+    throw error;
+  }
+  return saved;
+}
+
+/** A turn a restart cut short (serve.ts's resumer for `thumbnail`): its noted ending saved, or, cut short before it ended, marked stopped. */
+export function resumeRun(home: string, job: jobs.Job): void {
+  const id = job.project;
+  if (runs.has(id)) return;
+  if (job.args.ending === undefined) {
+    const { holder, by, startedAt } = job.args as { holder: string; by: string; startedAt: number };
+    const text = "Edit restarted before Claude finished. Ask again.";
+    runLease.ended(home, job.key, { state: "stopped", error: text, text, holder, by, startedAt, endedAt: Date.now(), interrupted: true } satisfies Noted);
+  }
+  void runLease.land(home, job.key, (ending) => saveEnding(id, ending), "thumbnails");
 }
 
 async function work(context: Context, id: string, asked: string, given: string[]): Promise<void> {
@@ -857,6 +904,13 @@ async function work(context: Context, id: string, asked: string, given: string[]
   const signal = running.abort.signal;
   let ending: Ending;
   const folder = join(context.cacheDir, "thumbnails", `run-${id}-${Date.now()}`);
+  const home = context.home ?? null;
+  // This Mac's lease on the turn, renewed while it goes.
+  const stopRenewing = runLease.renewing(home, jobOf(id), () =>
+    cloud.change(id, context.by, (thumb) => {
+      if (thumb.run === null || thumb.run.holder !== context.holder || thumb.run.startedAt !== running.startedAt || (thumb.run.state !== "running" && thumb.run.state !== "queued")) return false;
+      thumb.run = { ...thumb.run, renewedAt: Date.now() };
+    }), "thumbnails");
   try {
     ending = await slot(async () => {
       if (signal.aborted) return { state: "stopped" as const, text: "Stopped." };
@@ -885,20 +939,18 @@ async function work(context: Context, id: string, asked: string, given: string[]
     if (!signal.aborted) diag.warn("thumbnails", `${id}: turn failed: ${message}`);
     ending = { state: signal.aborted ? "stopped" : "failed", error: message, text: message };
   }
+  stopRenewing();
   const tools = toolsOf(running.turn);
   const workedMs = Date.now() - running.turn.startedAt;
   fs.rmSync(folder, { recursive: true, force: true });
+  // Noted before the cloud is told, and saved until it lands (run_lease.ts); still running here until the first try's done.
+  const noted: Noted = { state: ending.state, text: ending.text, ...(ending.error ? { error: ending.error } : {}), ...(tools.length > 0 ? { tools } : {}), workedMs, holder: context.holder, by: context.by, startedAt: running.startedAt, endedAt: Date.now() };
+  runLease.ended(home, jobOf(id), noted);
+  running.ending = true;
   let name = "Thumbnail";
   try {
-    await cloud.change(id, context.by, (thumb) => {
-      if (thumb.run !== null && thumb.run.holder !== context.holder) return false;
-      name = thumb.title || name;
-      thumb.run = { state: ending.state, holder: context.holder, by: context.by, startedAt: thumb.run?.startedAt ?? Date.now(), endedAt: Date.now(), ...(ending.error ? { error: ending.error } : {}), ...(tools.length > 0 ? { tools } : {}) };
-      const turn: ThumbTurn = { role: "claude", text: ending.text, at: Date.now(), workedMs, ...(tools.length > 0 ? { tools } : {}), ...(ending.state === "failed" || ending.state === "stopped" ? { failed: true } : {}) };
-      thumb.chat = [...thumb.chat, turn].slice(-KEPT_TURNS);
-    });
-  } catch (error) {
-    diag.warn("thumbnails", `${id}: saving how the turn ended: ${diag.messageOf(error)}`);
+    if (home === null) await saveEnding(id, noted, (title) => (name = title || name)).catch((error: unknown) => diag.warn("thumbnails", `${id}: saving how the turn ended: ${diag.messageOf(error)}`));
+    else await runLease.land(home, jobOf(id), (given) => saveEnding(id, given, (title) => (name = title || name)), "thumbnails");
   } finally {
     runs.delete(id);
   }
@@ -909,13 +961,13 @@ async function work(context: Context, id: string, asked: string, given: string[]
   }
 }
 
-/** Turns this Mac had going when Edit stopped: marked stopped. */
-export async function markInterrupted(holder: string): Promise<void> {
+/** Turns this Mac had going when Edit stopped and has no job for (from before jobs.json listed them): marked stopped. */
+export async function markInterrupted(holder: string, home: string | null = null): Promise<void> {
   for (const row of await cloud.list()) {
     if (row.summary.run !== "running" && row.summary.run !== "queued") continue;
     await cloud
       .change(row.id, holder, (thumb) => {
-        if (thumb.run === null || thumb.run.holder !== holder || (thumb.run.state !== "running" && thumb.run.state !== "queued") || runs.has(thumb.id)) return false;
+        if (thumb.run === null || thumb.run.holder !== holder || (thumb.run.state !== "running" && thumb.run.state !== "queued") || runs.has(thumb.id) || jobs.get(home, jobOf(thumb.id)) !== undefined) return false;
         thumb.run = { ...thumb.run, state: "stopped", endedAt: Date.now(), error: "Edit restarted before Claude finished. Ask again." };
       })
       .catch((error: unknown) => diag.warn("thumbnails", `${row.id}: marking its turn stopped: ${diag.messageOf(error)}`));

@@ -291,8 +291,7 @@ test("Share again: with nothing to claim, it goes straight to exporting and shar
     // The fixture has no export on record, so the share itself stops there; it's said, and kept to try again.
     expect(said().at(-1)).toMatchObject({ state: "failed" });
     expect(String(said().at(-1)!.error)).toContain("The fixes are in, but sharing v2 failed");
-    const saved = JSON.parse(fs.readFileSync(`${home}/reviews.json`, "utf8")) as { unshared?: Record<string, true> };
-    expect(saved.unshared?.[id]).toBe(true);
+    expect(reviews.unshared(home, id)).toBe(true);
   } finally {
     cleanup();
   }
@@ -366,11 +365,14 @@ test("a fix goes up in place of the latest version unless it has a reviewer's co
     // Notes on v1, a reply and the agent's own words on v2: v2 is replaced.
     expect(reviews.onLatest(home, "p")).toEqual([]);
     expect(reviews.shareReplacesLatest(versions.length, reviews.onLatest(home, "p").length)).toBe(true);
+    expect(reviews.nextShare(home, "p")).toEqual({ version: 2, replace: true });
+    expect(reviews.nextShare(home, "nothing shared")).toEqual({ version: 1, replace: false });
     // A comment on v2: the fix is v3. Nothing shared yet is a first version, not a replace.
     expect(reviews.shareReplacesLatest(0, 0)).toBe(false);
     fs.writeFileSync(`${home}/reviews.json`, JSON.stringify({ cursor: 0, notes: { ...notes, d: note("d", 2) }, shared: { p: { reviewId: "r1", url: "u", versions } } }));
     expect(reviews.onLatest(home, "p").map((one) => one.id)).toEqual(["d"]);
     expect(reviews.shareReplacesLatest(versions.length, reviews.onLatest(home, "p").length)).toBe(false);
+    expect(reviews.nextShare(home, "p")).toEqual({ version: 3, replace: false });
   } finally {
     cleanup();
   }

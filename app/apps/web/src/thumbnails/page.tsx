@@ -10,7 +10,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { ArrowLeft, Check, ChevronDown, Copy, Download, Image as ImageIcon, MessageSquare, Trash2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { ChatShell, ChatTurns, Empty, useChatTurns, useSentNow } from "../components/AgentPanel";
+import { ChatShell, ChatTurns, Empty, useChatTurns } from "../components/AgentPanel";
+import { useSentNow } from "../lib/sentNow";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatDock } from "../components/ChatDock";
 import { attachFiles, picturesOnly, postFile, type Uploader } from "../lib/chatFiles";
@@ -1119,7 +1120,7 @@ function Chat({ id, thumb, upload, viewing, onSending, onAsked }: { id: string; 
   const running = working(thumb);
   const entries = conversationEntries(thumb.chat, thumb.createdAt, running ? thumb.run : null, (turn) => (turn.images ?? []).map((image) => ({ name: thumb.images.find((one) => one.id === image)?.name ?? "picture", kind: "image" as const, url: sourceUrl(thumb.id, image) })));
   // A message shows the moment it's sent.
-  const sent = useSentNow(entries);
+  const sent = useSentNow(`thumbnail:${id}`, entries);
   const { turns, known } = useChatTurns(id, sent.entries, running || sent.sending);
   const quiet = running && thumb.run !== null && thumb.run.trace === undefined && thumb.run.tools === undefined && thumb.run.said === undefined;
   return (

@@ -9,19 +9,45 @@ export's readers (the Mac's video decoder; a reader just behind a frame decodes
 forward, anything else seeks) and presents onto a Core Animation layer under the
 page (`crates/edit-window/src/preview.rs`). The page turns see-through over the
 viewer (`native-preview` on `<html>`), so everything it draws over the picture
-stays on top, and asks for each frame (`lib/nativePreview.ts`); it keeps the
-playhead, the sound and its engine (sections, checks), but decodes no video and
-asks for no smooth-playback render. Each picture comes from its preview file, a
-cloud one's whole copy, else its footage on the Mac, else the server's loopback
-stream while the whole file comes down (`apps/server/src/native_preview.ts`).
-Full screen, a browser, or five failed frames in a row: the page draws as below.
-Measured Nov 6 on the 16-Year-Old (local footage, M1): scrubbing drew every
-position, 6.7 ms each (p50), and playing drew every frame at 1.9 ms (p50).
+stays on top. At rest the page owns the playhead and asks for each frame
+(`lib/nativePreview.ts`); playing is the window's: the edit's sound is mixed
+there as the export mixes it (`crate::mix`, a quarter second at a time into a
+CoreAudio speaker, `mac_media::Speaker`), the frames the speaker has played are
+the one clock, the picture follows it, and the page asks where it is once an
+animation frame (`preview_position`) and moves its playhead there. Short of
+sound the clock holds, so picture and sound never drift. The cuts within the
+next three seconds have readers opened and seeked on two other threads
+(`PreviewPictures::warm`), so a cut reads on instead of seeking on the drawing
+path; a hover over the timeline's ruler tells the window where a click would
+land (`preview_hint`), and a resting playhead has its sound armed and its cuts
+warmed after a quarter second. The page decodes nothing and asks for no
+smooth-playback render, in full screen either (full screen plays on in the
+page, on its own clock). The edit goes to the window whole once, then as
+patches (`lib/patch.ts`, applied to the parsed clips: `edit_core::patch`), each
+answered with the revision the window draws or why it refused (a refused edit:
+the page draws); the page's own engine takes the same clips-only patches
+(`Engine::applyPatch`) instead of parsing the whole edit each change. Each
+frame's answer and each position says its time and where it went
+(`diagnostics.nativeFrames`: `played`, `playedSkipped`, `starved`; the
+`ui: preview: native …` timings). Each picture comes from its preview file,
+a cloud one's whole copy (a made proxy, or footage that's its own proxy), else
+its footage on the Mac, else the server's loopback stream while the whole file
+comes down; a pieced proxy's pieces on the Mac are read as files of their own;
+each sound from a made preview's `preview.m4a`, a cloud copy's own sound, else
+the footage or the stream (`apps/server/src/native_preview.ts`). A project the window
+draws is marked as its on the server (`apps/server/src/player.ts`): its whole
+copies come down in playhead order when it opens, and the page player's block
+prefetch, scrub pieces and after-turn smooth render stay off for it. Full screen, a
+browser, or five failed frames in a row: the page draws as below. Measured Nov
+8–9 on Cops Realize (M1, cloud footage) in docs/plans/2026-11-08-audit.md
+("A's stage 2, measured after").
 
 To see it without screen access: `EDIT_PREVIEW_TRACE=1` says each placement and
 draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,
 play and pause by itself, and `EDIT_PREVIEW_SHOT=<file.png>` then saves the
-window's own picture (an app may capture its own windows without permission).
+window's own picture (an app may capture its own windows without permission);
+`EDIT_PREVIEW_JS=<file>` runs a file's steps in the page instead (a line
+`--- wait <seconds>` between them), for scripted measurements.
 
 ## Smooth playback
 
@@ -39,7 +65,7 @@ last) with a `.json` saying which picture it shows. `lib/playback.ts` shows it i
 save: play follows the video's clock, a seek sets its time, and nothing is decoded live.
 An edit drops back to the live preview below until the next render lands (a smooth play
 that goes stale pauses there), and the page asks for none while the agent is mid-turn.
-Since Nov 2 (Sphe: Edit off Modal) it renders on this Mac whatever its footage, and plays
+It renders on this Mac whatever its footage, and plays
 a chunk at a time while it renders (`playback_stream.ts`, `lib/smoothStream.ts`): the
 render does the chunks from the viewer's playhead first (`Plan.focus`, the page sends its
 frame), the minute from it before the sound's mix and the rest after, and the page appends
@@ -50,16 +76,6 @@ chunks): with the render done, a seek anywhere shows it in 0.5–1.6 s and it pl
 with it under way, the first chunk showed 17 s after the render started (it had waited
 142 s for the whole sound's mix), and on a Mac with nothing cached and the machine loaded,
 138 s. The whole render took 16 min 49 s here (48 fps).
-Until Nov 2 an edit whose footage is all in the cloud rendered on Modal instead (`modal_exports.run`,
-the house export's pool, its sections and sound cached there so a render after an edit
-redoes only what it touched), kept in R2 as `edit/playback/<project>/<picture hash>.mp4`
-(any Mac opening the same picture uses it at once) and streamed to the viewer through
-`streamFromCloud`'s blocks; the one it replaces is removed. Measured Oct 31 on the
-16-Year-Old (26 min, cloud footage): 3 min 04 s on Modal against ~50 min here, then 6 s
-played in 6 s with no frame dropped and no stall while two imports loaded this Mac. Measured Oct 31: the 48 s Vanilla Extract short (cloud
-footage) rendered in 68 s and played 515 frames with none dropped; the first render of a
-long cloud edit reads all its footage once from R2 (about 13 frames/s from South Africa).
-
 
 `apps/web/src/lib/playback.ts` owns the playhead, Web Audio clock and complete-scene
 presentation. The WASM engine still evaluates and draws through the same renderer

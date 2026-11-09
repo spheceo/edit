@@ -363,12 +363,14 @@ async function bringIn(app: App, dir: string, given: string[], job: Job): Promis
   const keyterms = await caseNames(dir, script).catch(() => []);
   const words: Word[] = [];
   let captioned = false;
+  let rough = false;
   for (const [step, part] of parts.entries()) {
     checkStopped(job);
     const slot = Math.max((script.reuses ?? []).findIndex((known) => known.url === part.reuse), step);
     job.stage(`Transcribing the reused case${which(step)}`);
-    const [heard, fromCaptions] = await transcribeSpan(app, joined, [part.startMs, part.startMs + part.durationMs], part.url ?? null, join(dir, "transcript", `reuse-${String(slot).padStart(2, "0")}`), keyterms, `reuse${slot + 1}`, job.signal);
-    captioned ||= fromCaptions;
+    const [heard, from] = await transcribeSpan(app, joined, [part.startMs, part.startMs + part.durationMs], part.url ?? null, join(dir, "transcript", `reuse-${String(slot).padStart(2, "0")}`), keyterms, `reuse${slot + 1}`, job.signal);
+    captioned ||= from === "captions";
+    rough ||= from !== null;
     words.push(...heard);
   }
   // Into the script as it is now: only the footage, its words and sound are this job's to write.
@@ -384,7 +386,8 @@ async function bringIn(app: App, dir: string, given: string[], job: Job): Promis
   now.originalPath = base;
   now.overview = media.overview(peaks, 800);
   now.captions = (now.captions ?? false) || captioned;
-  if (captioned) {
+  now.rough = (now.rough ?? false) || rough;
+  if (rough) {
     // The speaker pass reads the whole compilation. Words, labels and suspects already saved stay; only the new captions are named.
     const prior = now.words.length - added;
     const prefix = now.words.slice(0, prior).map((word) => ({ ...word }));

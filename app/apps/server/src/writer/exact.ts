@@ -1,17 +1,22 @@
-// The footage a captioned script plays, heard exactly. YouTube's captions are
-// timed well on average, but a stretch can drift by seconds (a Devine
-// hearing's "investigating officer is trying to present" sat 3 s before it was
-// said, so the intro opened on a silent "The"), and they miss a third of the
-// changes of speaker. So once a build has chosen its clips, Scribe hears only
-// those stretches (each clip with 3 s either side, neighbours joined, in
-// pieces of one request each: about 25 minutes of a 9-hour hearing):
+// The footage a script with rough words plays, heard exactly. Rough words are
+// YouTube's captions or Apple's on-device recogniser (transcription.ts): free,
+// but captions can drift by seconds (a Devine hearing's "investigating officer
+// is trying to present" sat 3 s before it was said, so the intro opened on a
+// silent "The") and miss a third of the changes of speaker, and Apple drops
+// fillers and short replies, misses rare names and hears no voices at all. So
+// once a build has chosen its clips, Scribe hears only those stretches (each
+// clip with 3 s either side, neighbours joined, in pieces of one request each:
+// about 25 minutes of a 9-hour hearing, an hour of a 5.6-hour FOIA case):
 //
-// 1. Times. The captions' words are lined up with what Scribe heard: a word
-//    both heard takes Scribe's times and spelling; a short run each heard
-//    differently, word for word, takes Scribe's words; any other word sits
+// 1. Times. The rough words are lined up with what Scribe heard: a word both
+//    heard takes Scribe's times and spelling; a short run each heard
+//    differently takes Scribe's words, and words only Scribe heard between two
+//    both heard (Apple's dropped "yeah", "um") are added; any other word sits
 //    between its neighbours. Words keep their ids, so the plan still names them.
-// 2. Who speaks. Sonnet reads the stretches' lines, broken wherever Scribe
-//    heard the voice change, with the cast, and gives every line its person.
+// 2. Who speaks. pyannote hears each whole stretch once for its voices while
+//    the relay's flag is on (voices.ts; else Scribe's own, piece by piece).
+//    Sonnet reads the stretches' lines, broken wherever a voice changes, with
+//    the cast, and gives every line its person.
 //
 // The build then cuts the same plan again on these times and drops a piece
 // with no sound in it. What was heard is kept in the script's `exact` folder
@@ -21,8 +26,11 @@ import * as fs from "node:fs";
 
 import type { Clip, Script, Word } from "@edit/types/writer";
 
+import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
+import { ffmpeg, isUrl, protocols, urlArgs } from "../tools.ts";
 import * as transcribe from "../transcribe.ts";
+import * as diarize from "../voices.ts";
 import { isCutIn } from "./blocks.ts";
 import * as claude from "./claude.ts";
 import { hear, normal, type Heard } from "./hearing.ts";
@@ -44,19 +52,25 @@ const CONTEXT_S = 4;
 const AT_ONCE = 4;
 /** A run each side heard differently, word for word, this short is Scribe's. */
 const SWAP_RUN = 3;
+/** A run each side heard differently is Scribe's when ours is at most this long and Scribe's at most SWAP_RUN longer. */
+const REPLACE_RUN = 6;
 const LINES_AT_ONCE = 150;
 const PAUSE_MS = 1_500;
 
 export interface Report {
   stretches: number;
   heardMs: number;
+  /** The footage's whole length, against which `heardMs` is the paid part. */
+  footageMs: number;
   retimed: number;
+  /** Words only Scribe heard, added. */
+  added: number;
   respelled: number;
   relabelled: number;
 }
 
-/** Whether a script's words are captions, which its chosen footage needs heard. */
-export const wanted = (script: Script): boolean => script.captions === true;
+/** Whether a script's words are rough (captions or Apple's; `captions` on older scripts), so its chosen footage needs hearing. */
+export const wanted = (script: Script): boolean => script.rough === true || script.captions === true;
 
 /** The stretches `clips` play that weren't heard exactly yet, in ms. */
 export function stretches(script: Script, clips: Clip[]): [number, number][] {
@@ -93,50 +107,117 @@ export function stretches(script: Script, clips: Clip[]): [number, number][] {
 /** Hears the stretches `clips` play and corrects the script's words there: their times and spelling, then who says each line. */
 export async function run(script: Script, dir: string, footage: string, clips: Clip[], onStep: (text: string) => void, signal?: AbortSignal): Promise<Report> {
   const spans = stretches(script, clips);
-  const report: Report = { stretches: spans.length, heardMs: 0, retimed: 0, respelled: 0, relabelled: 0 };
+  const report: Report = { stretches: spans.length, heardMs: 0, footageMs: script.durationMs, retimed: 0, added: 0, respelled: 0, relabelled: 0 };
   if (spans.length === 0) return report;
   const keyterms = await caseNames(dir, script);
   report.heardMs = spans.reduce((sum, [from, to]) => sum + to - from, 0);
-  onStep(`Hearing the chosen footage exactly: ${clock(report.heardMs)}`);
+  onStep(`Hearing the chosen footage exactly: ${clock(report.heardMs)} of ${clock(report.footageMs)}`);
   const heard = await hearAll(dir, footage, spans, keyterms, signal);
-  const voices: (string | null)[] = script.words.map(() => null);
+  let heardVoices: (string | null)[] = script.words.map(() => null);
+  const inserts: Insert[] = [];
   spans.forEach(([from, to], index) => {
-    const [retimed, respelled] = retime(script.words, from, to, heard[index]!, voices);
+    const [retimed, respelled] = retime(script.words, from, to, heard[index]!, heardVoices, inserts);
     report.retimed += retimed;
     report.respelled += respelled;
   });
+  [script.words, heardVoices] = withInserts(script.words, heardVoices, inserts);
+  report.added = inserts.reduce((sum, insert) => sum + insert.words.length, 0);
   onStep("Reading who says each line of the chosen footage");
-  report.relabelled = await speakers(script, dir, spans, voices, signal);
+  report.relabelled = await speakers(script, dir, spans, heardVoices, signal);
   // Words that spilled across a change of speaker there go back to who said them.
   report.relabelled += await spills.fix(script, dir, spans);
   script.exact = [...(script.exact ?? []), ...spans].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return report;
 }
 
-/** Each stretch heard in pieces of one request each, four at once, joined; times are ms into the footage. */
+/** Each stretch heard in pieces of one request each, four at once, joined, its voices pyannote's for the whole stretch where the flag is on; times are ms into the footage. */
 async function hearAll(dir: string, footage: string, spans: [number, number][], keyterms: string[], signal?: AbortSignal): Promise<Heard[][]> {
+  const pyannote = await diarize.on();
   const jobs = spans.flatMap(([from, to], at) => pieces((to - from) / 1000).map((piece) => ({ at, piece })));
   const results: Heard[][] = new Array(jobs.length);
   let next = 0;
+  // A piece that fails stops the others taking more: the hearing is over, and what was heard is kept for the next.
+  let failed = false;
+  let first: unknown = null;
   const lane = async () => {
-    for (let index = next++; index < jobs.length; index = next++) {
+    for (let index = next++; index < jobs.length && !failed; index = next++) {
       const { at, piece } = jobs[index]!;
       const start = spans[at]![0] + Math.floor(piece.from * 1000);
       const end = spans[at]![0] + Math.floor(piece.to * 1000);
-      const found = await hear(footage, [start, end], join(dir, "exact", `${start}-${end}`), keyterms, signal);
+      const found = await hear(footage, [start, end], join(dir, "exact", `${start}-${end}`), keyterms, signal, !pyannote).catch((error: unknown) => {
+        if (!failed) first = error;
+        failed = true;
+        throw error;
+      });
       results[index] = found.words.map((word) => ({ ...word, start: word.start + piece.from, end: word.end + piece.from }));
     }
   };
-  await Promise.all(Array.from({ length: Math.min(AT_ONCE, jobs.length) }, lane));
-  return spans.map(([from], at) => {
+  // Every lane settled before the hearing ends either way: one still hearing would share its piece's folder with the next hearing.
+  await Promise.allSettled(Array.from({ length: Math.min(AT_ONCE, jobs.length) }, lane));
+  if (failed) throw first;
+  const out: Heard[][] = [];
+  for (const [at, span] of spans.entries()) {
     const own = jobs.flatMap((job, index) => (job.at === at ? [index] : []));
-    return transcribe
-      .join(
-        own.map((index) => jobs[index]!.piece),
-        own.map((index) => results[index]!),
-      )
-      .map((word) => ({ ...word, start: from + word.start * 1000, end: from + word.end * 1000 }));
+    const words = transcribe.join(
+      own.map((index) => jobs[index]!.piece),
+      own.map((index) => results[index]!),
+    );
+    // One set of voices for the whole stretch: a piece's own would start again at each piece.
+    const turns = pyannote ? await stretchVoices(dir, footage, span, signal) : null;
+    if (turns !== null) diarize.label(words, turns);
+    out.push(words.map((word) => ({ ...word, start: span[0] + word.start * 1000, end: span[0] + word.end * 1000 })));
+  }
+  return out;
+}
+
+/** pyannote's voices of one stretch (seconds into it), kept by its span; null when they can't be had (its words keep Scribe's). */
+async function stretchVoices(dir: string, footage: string, [from, to]: [number, number], signal?: AbortSignal): Promise<diarize.Turn[] | null> {
+  const folder = join(dir, "exact", "voices");
+  const cut = join(folder, `${from}-${to}.m4a`);
+  const keep = join(folder, `${from}-${to}.json`);
+  fs.mkdirSync(folder, { recursive: true });
+  try {
+    if (!fs.existsSync(keep) && !fs.existsSync(`${keep}.job`)) {
+      const child = Bun.spawn(
+        [ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...(isUrl(footage) ? ["-protocol_whitelist", protocols(footage), ...urlArgs(footage)] : []), "-ss", (from / 1000).toFixed(3), "-t", ((to - from) / 1000).toFixed(3), "-i", footage, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "96k", cut],
+        { stdout: "ignore", stderr: "pipe", ...(signal ? { signal } : {}) },
+      );
+      const stderr = await new Response(child.stderr).text();
+      if ((await child.exited) !== 0) throw new Error(`could not take the sound out of the footage: ${diag.gist(stderr)}`);
+    }
+    return await diarize.ofFile(cut, keep);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    diag.warn("writer", `exact hearing ${clock(from)}–${clock(to)}: pyannote's voices: ${diag.messageOf(error)}; its words keep Scribe's`);
+    return null;
+  } finally {
+    fs.rmSync(cut, { force: true });
+  }
+}
+
+/** Words only Scribe heard, to go in after the script's word at `after`. */
+export interface Insert {
+  after: number;
+  words: Word[];
+  voices: (string | null)[];
+}
+
+/** The words (and their voices) with each insert in place. */
+export function withInserts(words: Word[], heardVoices: (string | null)[], inserts: Insert[]): [Word[], (string | null)[]] {
+  if (inserts.length === 0) return [words, heardVoices];
+  const byAfter = new Map<number, Insert[]>();
+  for (const insert of inserts) byAfter.set(insert.after, [...(byAfter.get(insert.after) ?? []), insert]);
+  const outWords: Word[] = [];
+  const outVoices: (string | null)[] = [];
+  words.forEach((word, index) => {
+    outWords.push(word);
+    outVoices.push(heardVoices[index] ?? null);
+    for (const insert of byAfter.get(index) ?? []) {
+      outWords.push(...insert.words);
+      outVoices.push(...insert.voices);
+    }
   });
+  return [outWords, outVoices];
 }
 
 /** A stretch of `seconds` in even pieces of at most `PIECE_S`, with context. */
@@ -149,8 +230,13 @@ export function pieces(seconds: number): transcribe.Piece[] {
   });
 }
 
-/** The script's words between `from` and `to` given what Scribe heard there (ms): how many were retimed and respelled. Each word's voice goes in `voices`. */
-export function retime(words: Word[], from: number, to: number, heard: Heard[], voices: (string | null)[]): [number, number] {
+/**
+ * The script's words between `from` and `to` given what Scribe heard there
+ * (ms): how many were retimed and respelled. Each word's voice goes in
+ * `voices`; words only Scribe heard between two both heard go in `inserts`
+ * (when it's given), for `withInserts` to put in.
+ */
+export function retime(words: Word[], from: number, to: number, heard: Heard[], voices: (string | null)[], inserts?: Insert[]): [number, number] {
   let first = words.findIndex((word) => word.startMs >= from);
   if (first < 0) first = words.length;
   let last = words.findIndex((word) => word.startMs >= to);
@@ -159,14 +245,24 @@ export function retime(words: Word[], from: number, to: number, heard: Heard[], 
   const ours = words.slice(first, last).map((word) => normal(word.text));
   const theirs = heard.map((word) => normal(word.text));
   const pairs: [number, number][] = transcribe.aligned(ours, theirs);
-  // Short runs each side heard differently, word for word: Scribe's.
+  // Between two words both heard: a short run each side heard differently is Scribe's, word for word, and
+  // what Scribe heard beyond it (or alone: a filler or a short reply the rough words dropped) is added.
+  // Not at a stretch's ends, where a rough word may sit just outside it and would be heard twice.
   const swaps: [number, number][] = [];
+  const extra: [after: number, from: number, to: number][] = [];
   let previous: [number | null, number | null] = [null, null];
   for (const [a, b] of [...pairs, [ours.length, theirs.length] as [number, number]]) {
     const a0 = previous[0] === null ? 0 : previous[0] + 1;
     const b0 = previous[1] === null ? 0 : previous[1] + 1;
     const run = a - a0;
-    if (run > 0 && run <= SWAP_RUN && b - b0 === run && previous[0] !== null && a < ours.length) for (let k = 0; k < run; k++) swaps.push([a0 + k, b0 + k]);
+    const said = b - b0;
+    const inside = previous[0] !== null && a < ours.length;
+    const swap = run > 0 && run <= SWAP_RUN && said === run;
+    const replace = inserts !== undefined && run <= REPLACE_RUN && said > run && (run === 0 || said - run <= SWAP_RUN);
+    if (inside && (swap || replace)) {
+      for (let k = 0; k < run; k++) swaps.push([a0 + k, b0 + k]);
+      if (said > run) extra.push([first + a0 + run - 1, b0 + run, b]);
+    }
     previous = [a, b];
   }
   const respelled = swaps.length;
@@ -209,6 +305,14 @@ export function retime(words: Word[], from: number, to: number, heard: Heard[], 
     const next = words[index + 1]?.startMs;
     if (next !== undefined && word.endMs > next && next > word.startMs) word.endMs = next;
     word.endMs = Math.max(word.endMs, word.startMs + 1);
+  }
+  for (const [after, b0, b1] of extra) {
+    const near = words[after]!;
+    const added = heard.slice(b0, b1).map((said): Word => {
+      const start = Math.max(Math.round(said.start), near.startMs);
+      return { id: `w-${crypto.randomUUID()}`, text: said.text, startMs: start, endMs: Math.max(Math.round(said.end), start + 1), ...(near.speaker === undefined ? {} : { speaker: near.speaker }) };
+    });
+    inserts!.push({ after, words: added, voices: heard.slice(b0, b1).map((said) => said.speaker ?? null) });
   }
   return [retimed, respelled];
 }
@@ -328,16 +432,20 @@ async function askOnce(kept: string, prompt: string, signal?: AbortSignal): Prom
   return answer;
 }
 
-/** Clips cut on the words' earlier times, moved onto the same words' exact times: each clip's first and last whole word, with room to breathe. */
+/** Clips cut on the words' earlier times, moved onto the same words' exact times (found by id: words Scribe alone heard may sit between them now): each clip's first and last whole word, with room to breathe. */
 export function remapFrom(before: Word[], clips: Clip[], after: Word[], durationMs: number): Clip[] {
+  const at = new Map(after.map((word, index) => [word.id, index]));
   return clips.map((clip) => {
     if (isCutIn(clip)) return clip;
     let first = before.findIndex((word) => word.startMs >= clip.startMs);
     if (first < 0) first = before.length;
     let last = before.findIndex((word) => word.endMs > clip.endMs);
     if (last < 0) last = before.length;
-    if (first >= last || last > after.length) return clip;
-    const [startMs, endMs] = breathe(after, after[first]!.startMs, after[last - 1]!.endMs, durationMs);
+    if (first >= last) return clip;
+    const from = at.get(before[first]!.id);
+    const to = at.get(before[last - 1]!.id);
+    if (from === undefined || to === undefined || to < from) return clip;
+    const [startMs, endMs] = breathe(after, after[from]!.startMs, after[to]!.endMs, durationMs);
     return { ...clip, startMs, endMs };
   });
 }
@@ -379,9 +487,8 @@ export function planOf(script: Script): Plan {
 export function keepNotes(beforeWords: Word[], before: Clip[], afterWords: Word[], clips: Clip[]): void {
   for (const old of before) {
     if (isCutIn(old) || (old.notes ?? []).length === 0) continue;
-    let first = beforeWords.findIndex((word) => word.startMs >= old.startMs);
-    if (first < 0) first = beforeWords.length;
-    const at = afterWords[first]?.startMs;
+    const first = beforeWords.find((word) => word.startMs >= old.startMs);
+    const at = first === undefined ? undefined : afterWords.find((word) => word.id === first.id)?.startMs;
     if (at === undefined) continue;
     const clip = clips.find((one) => !isCutIn(one) && one.startMs <= at && at < one.endMs);
     if (clip === undefined) continue;
@@ -390,10 +497,13 @@ export function keepNotes(beforeWords: Word[], before: Clip[], afterWords: Word[
   }
 }
 
+/** How much of the footage was heard exactly, against its length: "58:12 of 5:37:51 (17%)". */
+export const share = (heardMs: number, footageMs: number): string => `${clock(heardMs)} of ${clock(footageMs)}${footageMs > 0 ? ` (${Math.max(1, Math.round((heardMs * 100) / footageMs))}%)` : ""}`;
+
 /** What hearing the chosen footage did, for the build's report. */
 export function said(report: Report, dropped: number): string {
   if (report.stretches === 0) return "The chosen footage was heard exactly before.";
-  let text = `Heard the chosen footage exactly (${clock(report.heardMs)} in ${report.stretches} ${report.stretches === 1 ? "stretch" : "stretches"}): ${report.retimed} words retimed, ${report.respelled} respelled, ${report.relabelled} given to another speaker.`;
+  let text = `Heard the chosen footage exactly (${share(report.heardMs, report.footageMs)} of the footage, in ${report.stretches} ${report.stretches === 1 ? "stretch" : "stretches"}): ${report.retimed} words retimed, ${report.respelled} respelled, ${report.added} added, ${report.relabelled} given to another speaker.`;
   if (dropped > 0) text += ` Dropped ${dropped} ${dropped === 1 ? "piece" : "pieces"} with no sound in ${dropped === 1 ? "it" : "them"}.`;
   return text;
 }

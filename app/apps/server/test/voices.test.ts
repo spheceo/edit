@@ -136,3 +136,21 @@ test("a whole recording pyannote can't hear: the excerpt takes its own audio's v
     cleanup();
   }
 });
+
+// Nov 9: one relay's "diarize" answer, cached for a minute, was taken for another's: a full test run's earlier
+// hearing on a relay with the flag on sent watch.test's captions (on a mock relay without it) to Scribe.
+test("the flag is the relay's asked now, not another relay's cached answer", async () => {
+  const other = MockServer.start();
+  try {
+    other.on("GET", "/health", () => Response.json({ ok: true, diarize: true }));
+    mock.on("GET", "/health", () => Response.json({ ok: true }));
+    voices.setOnForTests(null);
+    const back = other.useEnv({ EDIT_RELAY_TOKEN: "relay-token" });
+    expect(await voices.on()).toBe(true);
+    back();
+    expect(await voices.on()).toBe(false);
+  } finally {
+    voices.setOnForTests(null);
+    other.stop();
+  }
+});

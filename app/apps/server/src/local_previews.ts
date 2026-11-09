@@ -20,6 +20,7 @@ import * as diag from "./diag.ts";
 import { objectOf } from "./export_excerpts.ts";
 import type { Media, Project } from "./model.ts";
 import { isFile } from "./paths.ts";
+import * as pieces from "./proxy_pieces.ts";
 
 /** Whole previews fetched at once. */
 const AT_ONCE = 4;
@@ -62,11 +63,15 @@ export function fetchWhole(key: string, local: string): void {
   fetchNext();
 }
 
-/** A cloud media's preview key, when its whole file can be kept here (a made proxy, not a stream of its original). */
+/**
+ * A cloud media's preview key, when its whole file can be kept here: a made
+ * proxy, or footage that's its own proxy (256 MB at most); not a pieced
+ * proxy, which is no file (proxy_pieces.ts).
+ */
 function previewKey(media: Media): string | null {
   if (media.kind !== "video") return null;
   const key = cloudMedia.streamKey(media.cloud, "proxy");
-  return key !== null && key.startsWith("edit/proxies/") ? key : null;
+  return key !== null && pieces.baseOf(key) === null ? key : null;
 }
 
 /** Queues every cloud preview `project` reads that isn't here yet. */

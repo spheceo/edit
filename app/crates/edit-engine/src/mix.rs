@@ -474,6 +474,36 @@ pub fn mix(
     mix_with(Sources::new(native), parts, total, cancel, progress, sink)
 }
 
+/// The mix for playing (Edit.app's player, `crate::player`): `window` frames
+/// at a time to `sink`, which holds the mixer back while the speaker is full,
+/// nothing logged. A seek or a stop sets `cancel`, and the mix ends.
+pub fn mix_live(
+    parts: &[Part],
+    total: usize,
+    window: usize,
+    cancel: &AtomicBool,
+    sink: impl FnMut(&[f32]) -> Result<(), String>,
+) -> Result<(), String> {
+    let native = std::env::var_os("EDIT_FFMPEG_AUDIO").is_none();
+    mix_windows(
+        Sources::new(native),
+        parts,
+        total,
+        window.max(RATE / 100),
+        cancel,
+        |_| {},
+        sink,
+        false,
+    )
+    .map_err(|error| {
+        if cancel.load(Ordering::Acquire) {
+            "cancelled".to_owned()
+        } else {
+            error
+        }
+    })
+}
+
 /// A cancel kills the export's decoders, so a read that fails after it is
 /// the cancel's doing: said as "cancelled", not as a sound that couldn't be
 /// decoded (JJ's Mac, Nov 5: every smooth-playback render a newer edit
@@ -486,7 +516,7 @@ fn mix_with(
     progress: impl FnMut(f32),
     sink: impl FnMut(&[f32]) -> Result<(), String>,
 ) -> Result<(), String> {
-    mix_windows(sources, parts, total, cancel, progress, sink).map_err(|error| {
+    mix_windows(sources, parts, total, WINDOW, cancel, progress, sink, true).map_err(|error| {
         if cancel.load(Ordering::Acquire) {
             "cancelled".to_owned()
         } else {
@@ -495,13 +525,16 @@ fn mix_with(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn mix_windows(
     mut sources: Sources,
     parts: &[Part],
     total: usize,
+    window_frames: usize,
     cancel: &AtomicBool,
     mut progress: impl FnMut(f32),
     mut sink: impl FnMut(&[f32]) -> Result<(), String>,
+    log: bool,
 ) -> Result<(), String> {
     let frame_of = |seconds: f64| ((seconds * RATE as f64).round().max(0.0) as usize).min(total);
     let mut order: Vec<usize> = (0..parts.len()).collect();
@@ -511,15 +544,15 @@ fn mix_windows(
     });
     let mut waiting = order.into_iter().peekable();
     let mut active: Vec<Active> = Vec::new();
-    let mut window = vec![0.0_f32; WINDOW * 2];
-    let mut scratch = vec![0.0_f32; WINDOW * 2];
+    let mut window = vec![0.0_f32; window_frames * 2];
+    let mut scratch = vec![0.0_f32; window_frames * 2];
     let mut from = 0;
     let (mut opening, mut reading, mut opened) = (Duration::ZERO, Duration::ZERO, 0);
     while from < total {
         if cancel.load(Ordering::Acquire) {
             return Err("cancelled".to_owned());
         }
-        let to = (from + WINDOW).min(total);
+        let to = (from + window_frames).min(total);
         while let Some(&index) = waiting.peek() {
             let Some(part) = parts.get(index) else {
                 waiting.next();
@@ -599,14 +632,16 @@ fn mix_windows(
         from = to;
         progress(from as f32 / total.max(1) as f32);
     }
-    crate::log::info(
-        "export",
-        format!(
-            "mixed {opened} sounds: {} opening them, {} decoding",
-            crate::log::human(opening),
-            crate::log::human(reading)
-        ),
-    );
+    if log {
+        crate::log::info(
+            "export",
+            format!(
+                "mixed {opened} sounds: {} opening them, {} decoding",
+                crate::log::human(opening),
+                crate::log::human(reading)
+            ),
+        );
+    }
     Ok(())
 }
 

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api, type Review } from "../lib/api";
 import { projectDuration } from "../lib/edit";
-import { capitalize } from "../lib/export-face";
+import { shareStatus } from "../lib/export-face";
 import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "../lib/exporting";
 import { preview } from "../lib/playback";
 import { flushSave, useEditor } from "../lib/store";
@@ -61,8 +61,9 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const chapters = useMemo(() => (project ? scriptChapters(project, sections) : []), [project, sections]);
   const id = project?.id ?? "";
 
-  // The review as it stands, and while a share runs, how it's going.
+  // The review as it stands, and while a share runs, how it's going (the server's share job, the one answer Home and the Exports panel read too).
   const sharing = review?.sharing ?? null;
+  const lastShare = review?.share ?? null;
   useEffect(() => {
     if (!open || !id) return;
     let live = true;
@@ -70,6 +71,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       void api
         .review(id)
         .then((given) => live && setReview(given))
+        // Noted by api.ts; the next look asks again.
         .catch(() => {});
     look();
     const timer = setInterval(look, sharing !== null || starting ? 1500 : 10_000);
@@ -102,8 +104,12 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
     if (key !== said) {
       setSaid(key);
-      void navigator.clipboard?.writeText(review.review.url).catch(() => {});
-      toast(`Shared v${latest}: link copied`, "info");
+      // Said as it is: a copy refused (the window not focused) leaves the link in the dialog to copy by hand.
+      const shared = `Shared v${latest}`;
+      void (navigator.clipboard?.writeText(review.review.url) ?? Promise.reject(new Error("no clipboard"))).then(
+        () => toast(`${shared}: link copied`, "info"),
+        () => toast(shared, "info"),
+      );
     }
   }, [review, sharing, latest, said, toast]);
 
@@ -166,11 +172,11 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     }
   };
 
-  // A reviewer's comment on the latest version (not a reply) means the next share is a new version. The server decides the same way.
-  const commented = latest !== null && (review?.notes.some((note) => note.version === latest && note.reply_to === null && note.from_app !== true) ?? false);
+  // The server's answer: a reviewer's comment on the latest version makes the next share a new version, else it replaces it.
+  const next = review?.next ?? null;
   const exporting = exportState?.state === "queued" || exportState?.state === "running";
-  const progress = exportState?.state === "queued" ? (exportState.waiting ? `Export queued · ${exportState.waiting}` : "Export queued · you can keep editing") : exportState?.state === "running" ? (exportState.phase ? capitalize(exportState.phase) : `Exporting… ${Math.round(exportState.progress * 100)}%`) : sharing ? `${capitalize(sharing)}…` : null;
-  const ended = !busy && !exporting && (stopped || exportState?.state === "failed" || exportState?.state === "cancelled");
+  const status = shareStatus({ exportState, sharing, share: lastShare, linked: link !== null, stopped });
+  const ended = !busy && !exporting && (status.kind === "share-failed" || status.kind === "export-failed" || status.kind === "cancelled");
   const retry = async () => {
     if (busy || retrying) return;
     setRetrying(true);
@@ -301,13 +307,13 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
 
         <div className="mt-5 flex min-h-[34px] items-center gap-3">
           <div className="min-w-0 flex-1 text-[12px]">
-            {progress && <span className="text-muted tabular">{progress}</span>}
-            {!progress && problem && (
-              <ProblemView error={problem} doing="share it" />
-            )}
-            {!progress && !problem && exportState?.state === "failed" && (exportState.error ? <ProblemView error={exportState.error} doing="export it" /> : <span className="text-muted">Export failed</span>)}
-            {!progress && !problem && (stopped || exportState?.state === "cancelled") && exportState?.state !== "failed" && <span className="text-muted">Cancelled</span>}
-            {!progress && !problem && !stopped && exportState?.state === "done" && link && (
+            {status.kind === "progress" && <span className="text-muted tabular">{status.text}</span>}
+            {status.kind !== "progress" && problem && <ProblemView error={problem} doing="share it" />}
+            {!problem && status.kind === "share-failed" && <ProblemView error={status.error} doing="share it" />}
+            {!problem && status.kind === "export-failed" && (status.error ? <ProblemView error={status.error} doing="export it" /> : <span className="text-muted">Export failed</span>)}
+            {!problem && status.kind === "cancelled" && <span className="text-muted">Cancelled</span>}
+            {/* Only once the server says the version is published: the export finishing is not the share. */}
+            {!problem && status.kind === "up" && (
               <span className="flex items-center gap-1.5 text-success">
                 <Check size={13} /> Up on the link
               </span>
@@ -327,7 +333,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
             Close
           </Button>
           <Button variant="primary" disabled={busy || retrying || projectDuration(project) <= 0} onClick={() => void share()}>
-            {busy ? "Sharing…" : link && latest !== null ? (commented ? `Share v${latest + 1}` : `Replace v${latest}`) : "Share"}
+            {busy ? "Sharing…" : link && next !== null ? (next.replace ? `Replace v${next.version}` : `Share v${next.version}`) : "Share"}
           </Button>
         </div>
       </div>

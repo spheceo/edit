@@ -1,5 +1,5 @@
 // What can go wrong with any outside call (Scribe, Drive, R2, the relay,
-// Modal, the accounts site), and the one rule for what each failure is
+// the accounts site), and the one rule for what each failure is
 // (docs/plans/2026-11-01-effect.md, round 2):
 //
 // - temporary: a dropped connection, a timeout, 408, 425, 429, 5xx and

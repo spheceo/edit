@@ -4,15 +4,16 @@
 // its share's export failed, and nothing tried it again).
 //
 // The first time a build runs on this Mac (its tag differs from the one kept
-// in `<home>/last-build.json`, or none was kept), it queues
-// (`<home>/retry-after-update.json`):
-//   - each share that failed after its fixes went in (reviews' `unshared`):
-//     exported and shared as the next version, as Share again does, which
-//     ends the failed request on the review page;
-//   - each export that failed and hasn't succeeded since (exports.ts's
-//     `export-failures.json`), but a share's: exported again with the same
-//     settings, through the normal queue.
-// Then, while the Mac is idle (no export, import, agent turn or fix), one at a
+// in `<home>/last-build.json`, or none was kept), it queues, in jobs.json
+// (each failed job's `retry`, set to this build):
+//   - each share that failed after its fixes went in (a failed `share` job
+//     from Ready for changes, reviews' `unshared`): exported and shared as the
+//     next version, as Share again does, which ends the failed request on the
+//     review page;
+//   - each export that failed and hasn't been exported since (a failed
+//     `export` job), but a share's: exported again with the same settings,
+//     through the normal queue.
+// Then, while the Mac is idle (no export, import, share, agent turn or fix), one at a
 // time: each is taken off the queue before it starts, so it's tried once on
 // this build; failing again, it's a normal failure that waits for the next
 // build. Never on a project another computer holds, a share never on an
@@ -30,6 +31,7 @@ import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
 import { chunkFolder, failedExports, type ExportFailure } from "./exports.ts";
 import { writeAtomic } from "./files.ts";
+import * as jobs from "./jobs.ts";
 import { join } from "./paths.ts";
 import * as reviews from "./reviews.ts";
 import { BUILD } from "./version.ts";
@@ -37,7 +39,6 @@ import { THIS_MACHINE } from "./machine.ts";
 
 export const NOTE = "Trying again after the update";
 const LAST = "last-build.json";
-const PENDING = "retry-after-update.json";
 /** How often the queue is looked at; the first look waits for what a start resumes (fixes at 60 s). */
 const EVERY_MS = 60_000;
 const FIRST_MS = 90_000;
@@ -48,10 +49,25 @@ export interface Item {
   name: string;
 }
 
-interface Pending {
-  build: string;
-  from: string | null;
-  items: Item[];
+/** What's still to be tried again on this build: the failed jobs queued for it, oldest first. */
+export function pending(home: string): Item[] {
+  return queued(home, noted(home)).map(({ item }) => item);
+}
+
+/** The build last noted as running here. */
+function noted(home: string): string | null {
+  const build = (readJson(join(home, LAST)) as { build?: unknown } | null)?.build;
+  return typeof build === "string" ? build : null;
+}
+
+/** Shares first (a reviewer waits on them), then the exports, each oldest first. */
+function queued(home: string, build: string | null): { key: string; item: Item }[] {
+  if (build === null) return [];
+  return jobs
+    .list(home)
+    .filter((job) => job.state === "failed" && job.retry === build && (job.kind === "share" || job.kind === "export"))
+    .sort((a, b) => Number(a.kind !== "share") - Number(b.kind !== "share") || a.updated_ms - b.updated_ms)
+    .map((job) => ({ key: job.key, item: { kind: job.kind as Item["kind"], project: job.project, name: (job.args as { name?: string }).name ?? job.project } }));
 }
 
 function readJson(path: string): unknown {
@@ -60,17 +76,6 @@ function readJson(path: string): unknown {
   } catch {
     return null;
   }
-}
-
-/** What's still to be tried again on this build. */
-export function pending(home: string): Item[] {
-  const value = readJson(join(home, PENDING)) as Pending | null;
-  return Array.isArray(value?.items) ? value.items : [];
-}
-
-function writePending(home: string, value: Pending | null): void {
-  if (value === null || value.items.length === 0) fs.rmSync(join(home, PENDING), { force: true });
-  else writeAtomic(join(home, PENDING), JSON.stringify(value, null, 1));
 }
 
 /**
@@ -85,14 +90,20 @@ export function noteBuild(app: App, build = BUILD): Item[] {
   if (last === build) return [];
   const from = typeof last === "string" ? last : null;
   const nameOf = (project: string, given?: string) => app.store.get(project)?.project.name ?? given ?? project;
-  const shares: Item[] = Object.keys(reviews.read(home).unshared ?? {}).map((project) => ({ kind: "share", project, name: nameOf(project) }));
-  const exports: Item[] = Object.values(failedExports(home))
-    .filter((failure) => failure.share !== true && !shares.some((one) => one.project === failure.project))
-    .sort((a, b) => a.at - b.at)
-    .map((failure) => ({ kind: "export", project: failure.project, name: nameOf(failure.project, failure.name) }));
-  const items = [...shares, ...exports];
-  // A queue the build before left goes: this build's is what's tried.
-  writePending(home, { build, from, items });
+  // The fixes a share couldn't put up (reviews.json's old `unshared` taken into jobs.json as it's read), then the exports.
+  const shares = reviews.unsharedProjects(home);
+  const failures = failedExports(home);
+  const exports = Object.values(failures)
+    .filter((failure) => failure.share !== true && !shares.includes(failure.project))
+    .sort((a, b) => a.at - b.at);
+  // A queue a build before left goes: this build's is what's tried.
+  for (const job of jobs.list(home)) if (job.retry !== undefined) jobs.queueRetry(home, job.key, null);
+  for (const project of shares) jobs.queueRetry(home, reviews.shareKey(project), build);
+  for (const failure of exports) jobs.queueRetry(home, jobs.keyOf("export", failure.project), build);
+  const items: Item[] = [
+    ...shares.map((project): Item => ({ kind: "share", project, name: nameOf(project) })),
+    ...exports.map((failure): Item => ({ kind: "export", project: failure.project, name: nameOf(failure.project, failure.name) })),
+  ];
   if (items.length > 0) {
     diag.info("update", `${build}, after ${from ?? "an older build"}: ${items.length} thing(s) that failed will be tried again once ${THIS_MACHINE} is idle: ${items.map((one) => `${one.kind === "share" ? "sharing" : "exporting"} ${one.name}`).join("; ")}`);
   }
@@ -126,7 +137,7 @@ async function skipped(app: App, item: Item): Promise<string | null> {
   if (app.store.get(item.project) === null) return `the project isn't on ${THIS_MACHINE}`;
   if (item.kind === "share") {
     const state = reviews.read(home);
-    if (state.unshared?.[item.project] !== true) return "it has been shared since";
+    if (!reviews.unshared(home, item.project)) return "it has been shared since";
     const shared = state.shared[item.project];
     if (shared === undefined) return "it has no review";
     if (shared.approved) return `v${shared.approved.version} of its review was approved`;
@@ -154,13 +165,13 @@ let stepping = false;
 export async function step(app: App, actions: Actions = real): Promise<string | null> {
   if (stepping || !cloud.enabled()) return null;
   const home = app.store.home;
-  const items = pending(home);
+  const items = queued(home, noted(home));
   if (items.length === 0 || reviews.busyHere(app)) return null;
   stepping = true;
   try {
-    const item = items[0]!;
-    const queue = readJson(join(home, PENDING)) as Pending;
-    writePending(home, { ...queue, items: items.slice(1) });
+    const { key, item } = items[0]!;
+    // Off the queue before it starts: tried once on this build.
+    jobs.queueRetry(home, key, null);
     const why = await skipped(app, item);
     if (why !== null) {
       diag.info("update", `${item.name}: not tried again after the update: ${why}`);

@@ -33,7 +33,68 @@ env:
   NIGHTLY: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'nightly-') }}
 
 jobs:
+  # Nothing ships past a red Check (Nov 8 audit, item I): the tag's commit
+  # must have passed check.yml, the Mac's leg (its acceptance run included)
+  # and Linux's, in the run its push to main started. `just nightly` used to
+  # run `just check` only on the machine that tagged, lately Linux, which never
+  # touches the Mac's window or AVFoundation. This waits for that run rather
+  # than checking again (ten minutes, and the Mac runner is scarce). There is
+  # no override: fix Check, then tag again. A test build (run by hand) isn't
+  # gated.
+  checked:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      actions: read
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Check passed for ${{ github.sha }} on the Mac and Linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$RELEASE" != true ]; then echo "A test build: not gated on Check."; exit 0; fi
+          runs() { gh api "repos/$GH_REPO/actions/workflows/check.yml/runs?head_sha=$SHA&event=push&per_page=20" --jq '.workflow_runs | sort_by(.run_number) | last // empty | "\(.id) \(.status) \(.conclusion // "")"'; }
+          # `just nightly` pushes main and the tag together: give Check a few minutes to start.
+          run=""
+          for _ in $(seq 1 30); do
+            run="$(runs)"
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          if [ -z "$run" ]; then
+            echo "::error::No Check run for $SHA: a tag must be on a commit pushed to main (Check runs on pushes to main). Push it, let Check pass, then tag again."
+            exit 1
+          fi
+          read -r id status conclusion <<<"$run"
+          echo "Check run: https://github.com/$GH_REPO/actions/runs/$id"
+          # Check takes ~15 minutes; a rerun of a failed leg restarts the wait.
+          for _ in $(seq 1 420); do
+            [ "$status" = completed ] && break
+            sleep 10
+            read -r id status conclusion <<<"$(runs)"
+          done
+          if [ "$status" != completed ]; then echo "::error::Check for $SHA didn't finish in 70 minutes"; exit 1; fi
+          jobs="$(gh api "repos/$GH_REPO/actions/runs/$id/jobs?per_page=50" --jq '.jobs[] | "\(.conclusion)|\(.name)"')"
+          echo "$jobs"
+          # Both platforms' legs must be there and green; a job skipped by design (the self-hosted Mac's, until one is enrolled) is fine.
+          for leg in "check (macos" "check (ubuntu"; do
+            if ! grep -q "^success|$leg" <<<"$jobs"; then
+              echo "::error::Check's '$leg…' leg didn't pass for $SHA: https://github.com/$GH_REPO/actions/runs/$id (fix it on main and tag the fixed commit; there is no override)"
+              exit 1
+            fi
+          done
+          if grep -qvE "^(success|skipped)[|]" <<<"$jobs" || [ "$conclusion" != success ]; then
+            echo "::error::Check failed for $SHA: https://github.com/$GH_REPO/actions/runs/$id (fix it on main and tag the fixed commit; there is no override)"
+            exit 1
+          fi
+          echo "Check passed for $SHA on both platforms."
+
   prepare:
+    needs: checked
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -55,6 +116,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Edit $TAG" --generate-notes
+      - if: env.NIGHTLY == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+      # The team's two-line note on top (scripts/nightly-notes.ts, what `just
+      # nightly` printed before tagging), then each change by its plan item.
       - name: Create the draft nightly
         if: env.NIGHTLY == 'true'
         env:
@@ -64,10 +131,14 @@ jobs:
           gh release view "$TAG" >/dev/null 2>&1 && exit 0
           version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           previous="$(git tag --list 'nightly-*' 'v*' --sort=-creatordate --merged "$TAG^" | head -1)"
+          # The tag's own message (checkout can leave an annotated tag lightweight): why a nightly went out early.
+          git fetch -q --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          forced="$(git tag --list "$TAG" --format='%(contents)' | sed -n 's/^Forced: //p' | head -1)"
           {
-            echo "Nightly build of Edit $version: a pre-release. Installs on the Nightly channel (the default) offer it at the top of the editor; one click installs it and restarts."
+            bun scripts/nightly-notes.ts "$previous" "$TAG" "$forced"
             echo
-            git log --no-merges --format='- %s' ${previous:+$previous..}"$TAG"
+            echo "---"
+            echo "Nightly build of Edit $version: a pre-release. Installs on the Nightly channel (the default) offer it at the top of the editor; one click installs it and restarts."
           } > notes.md
           gh release create "$TAG" --draft --prerelease --title "Edit $TAG" --notes-file notes.md
 
@@ -204,7 +275,7 @@ jobs:
           curl -fsS http://127.0.0.1:7799/api/health | grep -q '"name":"edit"'
           curl -fsS -X POST http://127.0.0.1:7799/mcp -H 'content-type: application/json' \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q '"serverInfo"'
-      # FFmpeg and qjs (yt-dlp's JavaScript runtime) ship beside `edit`
+      # FFmpeg, qjs (yt-dlp's JavaScript runtime) and, on a Mac, edit-speech ship beside `edit`
       # (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh and
       # scripts/fetch-quickjs.sh; kept between runs so a build doesn't need
       # their hosts up (both scripts skip a matching copy).
@@ -225,7 +296,10 @@ jobs:
           scripts/fetch-quickjs.sh "${{ matrix.target }}" quickjs
           cp "quickjs/qjs-${{ matrix.target }}" package/
           "package/qjs-${{ matrix.target }}" --version
-          tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe "qjs-${{ matrix.target }}"
+          # The Mac's on-device word source (apps/server/src/mac_speech.ts), built from scripts/edit-speech.swift.
+          speech=()
+          if [ "${{ runner.os }}" = macOS ]; then scripts/build-speech.sh package/edit-speech; speech=(edit-speech); fi
+          tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe "qjs-${{ matrix.target }}" "${speech[@]}"
           (cd dist && sha256sum "$name" > "$name.sha256" 2>/dev/null || shasum -a 256 "$name" > "$name.sha256")
           echo "NAME=$name" >> "$GITHUB_ENV"
       # Edit.app, the zip installed apps update from, and the disk image (scripts/package-app.sh):

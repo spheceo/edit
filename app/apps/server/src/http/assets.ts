@@ -13,8 +13,8 @@ export interface Assets {
   get(path: string): Blob | Uint8Array | null;
 }
 
-/** The UI built on disk (`EDIT_WEB_DIST`, else apps/web/dist in this checkout). */
-export function diskAssets(dir = process.env.EDIT_WEB_DIST ?? nodePath.join(import.meta.dir, "../../../web/dist")): Assets {
+/** The UI built on disk (apps/web/dist in this checkout). */
+export function diskAssets(dir = nodePath.join(import.meta.dir, "../../../web/dist")): Assets {
   const root = nodePath.resolve(dir);
   return {
     get(path) {

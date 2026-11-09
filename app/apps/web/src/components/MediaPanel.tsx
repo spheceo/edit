@@ -2,7 +2,7 @@ import { AudioLines, Check, ChevronLeft, CircleAlert, Ellipsis, FileText, Folder
 import { motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { importProgress } from "../lib/import_progress";
+import { afterNeedsSaying, importProgress } from "../lib/import_progress";
 
 import { isLocal, mediaUrl, useMachine } from "../lib/api";
 import { folderOf, isUsed, MEDIA_FOLDERS, mediaUses, placeMedia, removeUnusedMedia, type MediaFolder, type MediaUse } from "../lib/edit";
@@ -38,7 +38,8 @@ export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onR
   const tab = useEditor((state) => state.mediaTab);
   const setTab = useEditor((state) => state.setMediaTab);
   const job = useEditor((state) => state.scriptJob);
-  const downloading = Boolean(job && job.state !== "done");
+  // Still going, or done with something after it to say (a voice-over that failed, words still coming).
+  const downloading = Boolean(job && (job.state !== "done" || afterNeedsSaying(job)));
   const [opened, setOpened] = useState<MediaFolder | null>(null);
   const [show, setShow] = useState<Show>("all");
   const uses = useMemo(() => mediaUses(project), [project]);
@@ -57,7 +58,7 @@ export function MediaPanel({ onImport, onResearch }: { onImport: () => void; onR
           tabs={[
             { value: "media", label: "Media" },
             { value: "script", label: "Script" },
-            ...(downloading && job ? [{ value: "downloads" as const, label: job.state === "failed" || job.state === "waiting" ? "Downloads ⚠" : `${Math.round(importProgress(job).fraction * 100)}%` }] : []),
+            ...(downloading && job ? [{ value: "downloads" as const, label: job.state === "failed" || job.state === "waiting" || afterNeedsSaying(job) ? "Downloads ⚠" : `${Math.round(importProgress(job).fraction * 100)}%` }] : []),
           ]}
         />
         {shown === "media" && (

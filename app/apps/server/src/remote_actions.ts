@@ -27,16 +27,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 
 import * as accounts from "./accounts.ts";
+import * as busy from "./busy.ts";
 import type { App } from "./app.ts";
 import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
-import { importing } from "./drive_import.ts";
 import * as cloudProjects from "./cloud_projects.ts";
 import * as diag from "./diag.ts";
 import { memorySummary } from "./export_capacity.ts";
 import { useNow as memoryUse } from "./memory.ts";
-import * as ideaRuns from "./ideas/run.ts";
 import * as jobs from "./jobs.ts";
-import * as thumbnailRuns from "./thumbnails/run.ts";
 import * as planUse from "./plan_use.ts";
 import * as editTime from "./edit_time.ts";
 import { join } from "./paths.ts";
@@ -44,7 +42,6 @@ import * as presence from "./presence.ts";
 import * as problemReports from "./problem_reports.ts";
 import * as relay from "./relay.ts";
 import * as script from "./script.ts";
-import * as seams from "./seams.ts";
 import { restartSelf } from "./update.ts";
 import { BUILD } from "./version.ts";
 import * as writerCloud from "./writer/cloud.ts";
@@ -130,6 +127,30 @@ export async function attention(app: App, setup: { id: string; ok: boolean; titl
   }
   for (const [project, quiet] of turns(app)) if (quiet > QUIET_MS) out.push(`Project ${project}: its agent turn has said nothing for ${Math.round(quiet / 60_000)} min (unstick stops it).`);
   for (const job of jobs.givenUp(app.store.home)) out.push(`Job ${job.key}: not started again (${job.given_up}) (unstick starts it again).`);
+  out.push(...waitingByItself(app.store.home));
+  // An idea's or thumbnail's ending that never reached the cloud: its page still says Claude is working.
+  for (const job of jobs.list(app.store.home)) if ((job.kind === "idea" || job.kind === "thumbnail") && job.state === "failed") out.push(`Job ${job.key}: ${job.error ?? "how it ended never reached the cloud"}.`);
+  return out;
+}
+
+/**
+ * Imports waiting by themselves on something the team shares, said once for
+ * all of them (Nov 8: the transcription plan ran out and four imports on two
+ * Macs stopped as errors; nobody heard until a teammate's screenshot). From
+ * the job table: an edit's import (`case`) or a script's (`script`) waiting on
+ * the plan's credit or the encoder.
+ */
+export function waitingByItself(home: string | null): string[] {
+  const waiting = jobs.list(home).filter((job) => job.state === "waiting" && (job.kind === "case" || job.kind === "script"));
+  const on = (what: string) => waiting.filter((job) => job.args.waiting_on === what);
+  const out: string[] = [];
+  const credit = on("quota");
+  if (credit.length > 0) {
+    const next = Math.min(...credit.map((job) => job.retry_at ?? Number.POSITIVE_INFINITY));
+    out.push(`The transcription plan is out of credit: ${credit.length} import${credit.length === 1 ? "" : "s"} waiting (top it up for the team; Edit tries again by itself${Number.isFinite(next) ? `, next at ${new Date(next).toISOString().slice(11, 16)} UTC` : ""}).`);
+  }
+  const encoder = on("encoder");
+  if (encoder.length > 0) out.push(`${encoder.length} import${encoder.length === 1 ? "" : "s"} waiting for the hardware encoder (an export holds it): they carry on when it's free.`);
   return out;
 }
 
@@ -182,11 +203,10 @@ export function work(app: App): string[] {
   for (const [project, quiet] of turns(app)) out.push(`agent turn on ${project}: last said something ${Math.round(quiet / 1000)} s ago`);
   for (const [id, title, job] of writerJobs.runningList()) out.push(`Claude on script ${id} "${title}": ${(job as { stage?: string }).stage ?? "working"}`);
   out.push(`scripts' cloud: ${JSON.stringify(writerCloud.statusNow())}`);
-  try {
-    const listed = JSON.parse(fs.readFileSync(join(app.store.home, "jobs.json"), "utf8")) as { kind?: string; project?: string; given_up?: string }[];
-    for (const job of listed) out.push(`background job: ${job.kind ?? "?"}${job.project ? ` on ${job.project}` : ""}${job.given_up ? ` (given up: ${job.given_up})` : ""}`);
-  } catch {
-    // None noted.
+  for (const job of jobs.list(app.store.home)) {
+    // A finished import is kept only to show its lines on the page: not work under way.
+    if (job.kind === "case" && job.state === "done") continue;
+    out.push(`background job: ${job.kind}${job.project ? ` on ${job.project}` : ""}: ${job.state}${job.step ? `, ${job.step}` : ""}${job.error ? ` (${job.error})` : ""}${job.given_up ? ` (given up: ${job.given_up})` : ""}`);
   }
   return out;
 }
@@ -353,13 +373,11 @@ export async function resume(app: App, projectId: string): Promise<string> {
     await cloudProjects.moveToCloud(app, projectId, true);
     done.push("moved to the cloud");
   }
-  if (script.unfinished(live.project)) {
-    const running = app.scripts.get(projectId);
-    if (running && ["downloading", "transcribing", "placing", "voicing"].includes(running.state)) done.push(`import already ${running.state}`);
-    else if (script.start(app, projectId, false) !== null) done.push("import started again");
-  } else {
-    done.push("its import had finished (laid out): open it and Resume edit to finish the rest");
-  }
+  // The one way an import carries on (script.carryOn), as the job table's resumer does.
+  const did = script.carryOn(app, projectId);
+  if (did === "working") done.push(`import already ${app.scripts.get(projectId)?.state ?? "working"}`);
+  else if (did === "started") done.push("import started again");
+  else if (did === "finished") done.push("its import had finished (laid out): open it and Resume edit to finish the rest");
   const status = (cloud?.status(projectId) ?? {}) as { sync?: string; message?: string | null };
   if (status.message) done.push(`cloud: ${status.message}`);
   diag.info("remote", `resume ${projectId}: ${done.join("; ")}`);
@@ -400,9 +418,10 @@ export async function unstick(app: App): Promise<string> {
   const scripts = writerCloud.tryAllAgain();
   if (scripts > 0) done.push(`${scripts} script${scripts === 1 ? "" : "s"} the cloud refused tried again`);
   for (const summary of app.store.list()) {
-    if (app.scripts.get(summary.id)?.state !== "failed") continue;
-    const live = app.store.get(summary.id);
-    if (live !== null && script.unfinished(live.project) && script.start(app, summary.id, false) !== null) done.push(`project "${summary.name}": import started again`);
+    // Stopped, or waiting by itself (credit, the encoder): tried now. One waiting on the person's answer stays.
+    const job = app.scripts.get(summary.id);
+    if (job === null || !(job.state === "failed" || (job.state === "waiting" && job.files.every((file) => file.state !== "failed")))) continue;
+    if (script.carryOn(app, summary.id) === "started") done.push(`project "${summary.name}": import started again`);
   }
   const data = writerStore.dataDir(app.store.home);
   for (const row of writerStore.list(data)) {
@@ -433,31 +452,8 @@ export async function unstick(app: App): Promise<string> {
   return said;
 }
 
-/**
- * What a restart would cut off now: an export, an import, Claude on a script,
- * an agent turn. One list for everything that restarts Edit from afar (a
- * restart, an update), so none of them cuts off what another waits for
- * (Nov 1: an update waited only for agent turns, and would have stopped an
- * export part-way).
- */
-export function busyWith(app: App, agentTurns = true): string[] {
-  let uploading = false;
-  try {
-    uploading = seams.drive.uploading();
-  } catch (error) {
-    if (!seams.isUnavailable(error)) throw error;
-  }
-  return [
-    app.exports.running() ? "an export" : "",
-    uploading ? "an upload to Drive" : "",
-    (app.scripts as { running?: () => boolean } | undefined)?.running?.() || importing() ? "a footage import" : "",
-    writerImports.anyImporting() ? "a script's import" : "",
-    writerJobs.runningList().length > 0 ? "Claude on a script" : "",
-    agentTurns && ((app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() ?? turns(app).length > 0) ? "an agent turn" : "",
-    agentTurns && thumbnailRuns.anyRunning() ? "Claude on a thumbnail" : "",
-    agentTurns && ideaRuns.anyRunning() ? "Claude on an idea" : "",
-  ].filter(Boolean);
-}
+/** What a restart would cut off now (busy.ts, the one answer). */
+export const busyWith = busy.busyWith;
 
 /** Starts Edit again in place once the answer has gone back, unless something's running (it would be cut off). */
 export function restart(app: App): string {

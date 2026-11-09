@@ -79,3 +79,38 @@ export function shareChip(stage: string): string {
   if (stage === "cancelling") return "Cancelling…";
   return capitalize(stage);
 }
+
+/** What the Share dialog says under its settings, from the export as the editor heard it and the server's share. */
+export type ShareStatus =
+  | { kind: "progress"; text: string }
+  | { kind: "share-failed"; error: string }
+  | { kind: "export-failed"; error: string | null }
+  | { kind: "cancelled" }
+  | { kind: "up" }
+  | { kind: "none" };
+
+/**
+ * The Share dialog's line: the export's progress while it runs, then the
+ * share's (`sharing`, the server's line); how the last share stands after.
+ * "Up on the link" only once the server says the version is published
+ * (`share.state === "done"`): the export finishing is not the share (the
+ * Nov 8 audit, 2c.1: it said "Up on the link" before the copy, the upload
+ * and the publish, whose failures then came only by polling).
+ */
+export function shareStatus(given: {
+  exportState: { state: string; progress: number; waiting?: string; phase?: string; error?: string } | null;
+  sharing: string | null;
+  share: { state: "running" | "done" | "failed"; error?: string } | null;
+  linked: boolean;
+  stopped: boolean;
+}): ShareStatus {
+  const { exportState, sharing, share } = given;
+  if (exportState?.state === "queued") return { kind: "progress", text: exportState.waiting ? `Export queued · ${exportState.waiting}` : "Export queued · you can keep editing" };
+  if (exportState?.state === "running") return { kind: "progress", text: exportState.phase ? capitalize(exportState.phase) : `Exporting… ${Math.round(exportState.progress * 100)}%` };
+  if (sharing) return { kind: "progress", text: `${capitalize(sharing)}…` };
+  if (share?.state === "failed") return { kind: "share-failed", error: share.error ?? "The share stopped" };
+  if (exportState?.state === "failed") return { kind: "export-failed", error: exportState.error ?? null };
+  if (given.stopped || exportState?.state === "cancelled") return { kind: "cancelled" };
+  if (share?.state === "done" && given.linked) return { kind: "up" };
+  return { kind: "none" };
+}

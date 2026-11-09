@@ -1,6 +1,7 @@
 // The C boundary owns its objects and drains temporary objects on every frame.
 // No decoded-frame array, raw-video pipe, or codec process lives behind it.
 #import <AVFoundation/AVFoundation.h>
+#include <stdatomic.h>
 #import <Accelerate/Accelerate.h>
 #import <CoreImage/CoreImage.h>
 #import <ImageIO/ImageIO.h>
@@ -600,6 +601,135 @@ int edit_sound_read(void *handle, float *out, size_t frames, size_t *written, ch
 
 void edit_sound_reader_close(void *handle) {
     @autoreleasepool { EditSoundReader *r = (__bridge_transfer EditSoundReader *)handle; (void)r; }
+}
+
+// ---------------------------------------------------------------------------
+// Speaker: the player's sound out (crates/edit-engine/src/player.rs). The
+// mixer writes 48 kHz stereo float into a ring; CoreAudio's thread pulls it
+// through an AVAudioSourceNode, and the frames it has played are the player's
+// clock: the picture follows them. Short of sound (the mixer behind), it
+// plays silence and the clock holds, so picture and sound never drift apart.
+
+typedef struct {
+    float *ring;              // interleaved stereo
+    size_t capacity;          // frames
+    _Atomic uint64_t written; // frames written in all
+    _Atomic uint64_t played;  // frames played in all
+    _Atomic uint64_t starved; // render calls that found less than they needed while running
+    _Atomic int running;      // off: silence, the clock held
+} EditRing;
+
+@interface EditSpeaker : NSObject
+@property AVAudioEngine *engine;
+@property AVAudioSourceNode *node;
+@property(nonatomic) EditRing *ring;
+@property id observer;
+@end
+
+@implementation EditSpeaker
+- (void)dealloc {
+    if (_observer) [[NSNotificationCenter defaultCenter] removeObserver:_observer];
+    [_engine stop];
+    if (_ring) { free(_ring->ring); free(_ring); }
+}
+@end
+
+void *edit_speaker_open(size_t capacity, char *error, size_t error_capacity) {
+    @autoreleasepool {
+        EditRing *ring = calloc(1, sizeof(EditRing));
+        if (!ring) { fail(error, error_capacity, @"No memory for the speaker"); return NULL; }
+        ring->capacity = capacity < 4800 ? 4800 : capacity;
+        ring->ring = calloc(ring->capacity * 2, sizeof(float));
+        if (!ring->ring) { free(ring); fail(error, error_capacity, @"No memory for the speaker"); return NULL; }
+        EditSpeaker *s = [EditSpeaker new];
+        s.ring = ring;
+        s.engine = [AVAudioEngine new];
+        AVAudioFormat *format = [[AVAudioFormat alloc] initStandardFormatWithSampleRate:48000 channels:2];
+        s.node = [[AVAudioSourceNode alloc] initWithFormat:format renderBlock:^OSStatus(BOOL *isSilence, const AudioTimeStamp *timestamp, AVAudioFrameCount frameCount, AudioBufferList *output) {
+            (void)timestamp;
+            float *left = output->mBuffers[0].mData;
+            float *right = output->mNumberBuffers > 1 ? output->mBuffers[1].mData : NULL;
+            uint64_t played = atomic_load(&ring->played);
+            uint64_t have = atomic_load(&ring->running) ? atomic_load(&ring->written) - played : 0;
+            size_t n = have < frameCount ? (size_t)have : frameCount;
+            for (size_t i = 0; i < n; i++) {
+                size_t at = (size_t)((played + i) % ring->capacity) * 2;
+                left[i] = ring->ring[at];
+                if (right) right[i] = ring->ring[at + 1];
+            }
+            for (size_t i = n; i < frameCount; i++) { left[i] = 0; if (right) right[i] = 0; }
+            if (n < frameCount && atomic_load(&ring->running)) atomic_fetch_add(&ring->starved, 1);
+            if (n) atomic_fetch_add(&ring->played, n);
+            *isSilence = n == 0;
+            return noErr;
+        }];
+        [s.engine attachNode:s.node];
+        [s.engine connect:s.node to:s.engine.mainMixerNode format:format];
+        NSError *problem = nil;
+        if (![s.engine startAndReturnError:&problem]) {
+            fail(error, error_capacity, problem.localizedDescription ?: @"The speaker would not start");
+            return NULL;
+        }
+        // The output device changed (headphones plugged in): the engine stops, and goes on by itself here.
+        __weak EditSpeaker *weak = s;
+        s.observer = [[NSNotificationCenter defaultCenter] addObserverForName:AVAudioEngineConfigurationChangeNotification object:s.engine queue:nil usingBlock:^(NSNotification *note) {
+            (void)note;
+            EditSpeaker *strong = weak;
+            if (strong) [strong.engine startAndReturnError:nil];
+        }];
+        return (__bridge_retained void *)s;
+    }
+}
+
+// Writes as many of `frames` (interleaved stereo) as fit; returns how many did.
+size_t edit_speaker_write(void *handle, const float *samples, size_t frames) {
+    EditSpeaker *s = (__bridge EditSpeaker *)handle;
+    EditRing *ring = s.ring;
+    uint64_t written = atomic_load(&ring->written);
+    uint64_t room = ring->capacity - (written - atomic_load(&ring->played));
+    size_t n = frames < room ? frames : (size_t)room;
+    for (size_t i = 0; i < n; i++) {
+        size_t at = (size_t)((written + i) % ring->capacity) * 2;
+        ring->ring[at] = samples[i * 2];
+        ring->ring[at + 1] = samples[i * 2 + 1];
+    }
+    atomic_fetch_add(&ring->written, n);
+    return n;
+}
+
+// Sound comes out (on) or silence while the clock holds (off).
+void edit_speaker_run(void *handle, int on) {
+    EditSpeaker *s = (__bridge EditSpeaker *)handle;
+    atomic_store(&s.ring->running, on ? 1 : 0);
+}
+
+// Drops what's buffered (a seek): stopped first, so the output isn't reading it.
+void edit_speaker_flush(void *handle) {
+    EditSpeaker *s = (__bridge EditSpeaker *)handle;
+    atomic_store(&s.ring->running, 0);
+    atomic_store(&s.ring->written, atomic_load(&s.ring->played));
+    atomic_store(&s.ring->starved, 0);
+}
+
+// Frames played in all, frames buffered and not yet played, and render calls that ran short.
+void edit_speaker_state(void *handle, uint64_t *played, uint64_t *buffered, uint64_t *starved) {
+    EditSpeaker *s = (__bridge EditSpeaker *)handle;
+    uint64_t done = atomic_load(&s.ring->played);
+    *played = done;
+    *buffered = atomic_load(&s.ring->written) - done;
+    *starved = atomic_load(&s.ring->starved);
+}
+
+// Seconds between a frame leaving the ring and the speaker.
+double edit_speaker_latency(void *handle) {
+    @autoreleasepool {
+        EditSpeaker *s = (__bridge EditSpeaker *)handle;
+        return s.engine.outputNode.presentationLatency;
+    }
+}
+
+void edit_speaker_close(void *handle) {
+    @autoreleasepool { EditSpeaker *s = (__bridge_transfer EditSpeaker *)handle; (void)s; }
 }
 
 // AAC in an .m4a through AudioToolbox, from 48 kHz stereo float.

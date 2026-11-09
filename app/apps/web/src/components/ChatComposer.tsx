@@ -37,6 +37,14 @@ interface Queued {
 
 /** Messages waiting for the turn to end, per chat. */
 const useQueue = create<{ chats: Record<string, Queued[]> }>(() => ({ chats: {} }));
+/**
+ * A queued message waits this long after the turn ends: Edit's own next turn
+ * (a follow-up, agent.ts followLater, a second on) goes first, and the queue
+ * waits for it rather than racing it ("the agent is still working").
+ */
+const AFTER_TURN_MS = 2000;
+/** And this long after it sent one: a chat that says it's running only once it's asked again (an idea, a thumbnail) has time to say so. */
+const AFTER_SEND_MS = 5000;
 let queuedId = 0;
 const NO_QUEUE: Queued[] = [];
 
@@ -113,28 +121,32 @@ export function ChatComposer({
   }, [quotes.length]);
 
   // The queue goes one message at a time, each once the turn before it has
-  // ended. A chat that says it's running only once it's asked again (an idea,
-  // a thumbnail) gets five seconds to say so before the next goes.
+  // ended and nothing of Edit's own follows it (AFTER_TURN_MS). Sent from a
+  // timer, never from the effect itself: a send in the commit that saw the
+  // turn end set the chat running again inside it.
   const sendNow = useRef(onSend);
   sendNow.current = onSend;
-  const sentAt = useRef<number | null>(null);
-  const [tick, setTick] = useState(0);
+  const wasRunning = useRef(running);
+  const nextAt = useRef(0);
   useEffect(() => {
     if (running) {
-      sentAt.current = null;
+      wasRunning.current = true;
       return;
     }
-    const first = queue[0];
-    if (first === undefined || disabled) return;
-    const since = sentAt.current === null ? Infinity : Date.now() - sentAt.current;
-    if (since < 5000) {
-      const timer = setTimeout(() => setTick((n) => n + 1), 5000 - since);
-      return () => clearTimeout(timer);
+    if (wasRunning.current) {
+      wasRunning.current = false;
+      nextAt.current = Math.max(nextAt.current, Date.now() + AFTER_TURN_MS);
     }
-    sentAt.current = Date.now();
-    useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: (chats[chat] ?? []).filter((one) => one.id !== first.id) } }));
-    sendNow.current(first.text, first.files, first.quotes);
-  }, [running, queue, disabled, chat, tick]);
+    if (queue.length === 0 || disabled) return;
+    const timer = setTimeout(() => {
+      const first = useQueue.getState().chats[chat]?.[0];
+      if (first === undefined) return;
+      nextAt.current = Date.now() + AFTER_SEND_MS;
+      useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: (chats[chat] ?? []).filter((one) => one.id !== first.id) } }));
+      sendNow.current(first.text, first.files, first.quotes);
+    }, Math.max(0, nextAt.current - Date.now()));
+    return () => clearTimeout(timer);
+  }, [running, queue, disabled, chat]);
 
   const attach = (list: File[]) => {
     if (files === undefined || list.length === 0) return;

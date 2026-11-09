@@ -372,12 +372,7 @@ test("other_forms_are_muted_and_starred_as_said", () => {
     word("shooting", 1950.0, 2300.0, "a"),
   ];
   let found = suggestions(words, true, 0.0, 10_000.0);
-  expect(found.map((s) => [s.term, s.starred])).toEqual([
-    ["punched", true],
-    ["hitting", true],
-    ["fucking", true],
-    ["shooting", false],
-  ]);
+  expect(found.map((s) => s.term)).toEqual(["punched", "hitting", "fucking", "shooting"]);
   expect([found[0]!.start_ms, found[0]!.end_ms]).toEqual([220.0, 625.0]);
   expect(star("He punched her and kept hitting, fucking", found)).toBe("He p****** her and kept h******, f******");
   // Outside a neglect case only the house words count.
@@ -428,8 +423,8 @@ test("every_text_on_screen_gets_house_words_starred", () => {
   expect(starText("Murdered in 1986", false, ["murdered"])).toBe("M******* in 1986");
   expect(starText("Shit, he punched him", false)).toBe("S**t, he punched him");
   expect(starText("Shit, he punched him", true)).toBe("S**t, he p****** him");
-  // Mute-only words stay readable; words are never removed.
-  expect(starText("Shots fired, he's dead", false)).toBe("Shots fired, he's dead");
+  // Words are starred, never removed.
+  expect(starText("Shots fired, he's dead", false)).toBe("S**** fired, he's d***");
   const project = projectWith([
     { id: "caption", track: "v2", start: 0, duration: 30, name: "Caption · Officer", type: "text", text: "Stop fucking moving", word_times: [0.0, 5.0, 10.0] },
     { id: "callout", track: "v2", start: 60, duration: 30, name: "Callout", type: "text", text: "Suspected of child abuse" },
@@ -455,25 +450,18 @@ test("mutes_house_words_and_stars_them", () => {
     word("hit", 2400.0, 2600.0, "a"),
   ];
   let found = suggestions(words, false, 0.0, 10_000.0);
-  expect(found.map((s) => [s.term, s.starred])).toEqual([
-    ["fuck", true],
-    ["dead", false],
-    ["motherfucker", true],
-    ["neglect", true],
-  ]);
+  expect(found.map((s) => s.term)).toEqual(["fuck", "dead", "motherfucker", "neglect"]);
   // 30 ms before, 25 ms after.
   expect([found[0]!.start_ms, found[0]!.end_ms]).toEqual([420.0, 725.0]);
-  expect(star("What the Fuck, he's dead.", found)).toBe("What the F***, he's dead.");
+  expect(star("What the Fuck, he's dead.", found)).toBe("What the F***, he's d***.");
   expect(star("Motherfucker neglect", found)).toBe("Motherf***** n******");
   // "fuck" inside another word is left alone.
   expect(star("fuckers", found)).toBe("fuckers");
-  // The neglect list adds "hit", starred.
+  // The neglect list adds "hit".
   found = suggestions(words, true, 0.0, 10_000.0);
-  expect(found.find((s) => s.term === "hit")?.starred).toBe(true);
-  // "kill" is mute-only in the house list but starred in a neglect case.
-  const kill = [word("kill", 0.0, 300.0, "a")];
-  expect(suggestions(kill, false, 0.0, 1000.0)[0]!.starred).toBe(false);
-  expect(suggestions(kill, true, 0.0, 1000.0)[0]!.starred).toBe(true);
+  expect(found.some((s) => s.term === "hit")).toBe(true);
+  // Marc: shooting, killed, deadly and drugs are starred too, not only muted.
+  expect(starText("Shooting him, they killed one: deadly drugs.", false)).toBe("S******* him, they k***** one: d***** d****.");
 });
 
 test("a_word_timed_as_an_instant_reaches_back", () => {

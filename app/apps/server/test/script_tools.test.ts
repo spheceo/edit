@@ -365,8 +365,10 @@ test.skipIf(ffmpeg === null || ffprobe === null)("an import stopped at its voice
     const id = app.store.create("Kent crash", { width: 1920, height: 1080, fps: 30 }).project.id;
     expect((await http("POST", `/api/projects/${id}/script`, { url: "https://docs.google.com/document/d/DOCvoiceResume1/edit" }))[0]).toBe(200);
     while (!["done", "failed"].includes(app.scripts.get(id)?.state ?? "")) await Bun.sleep(20);
-    expect(app.scripts.get(id)!.state).toBe("failed");
-    expect(app.scripts.get(id)!.error).toContain("quota");
+    // Laid out, so the import is done; its voice-over's own line says it failed (main's follow-on lines).
+    expect(app.scripts.get(id)!.state).toBe("done");
+    expect(app.scripts.get(id)!.after?.find((line) => line.step === "voiceover")).toMatchObject({ state: "failed" });
+    expect(app.scripts.get(id)!.after?.find((line) => line.step === "voiceover")?.note).toContain("quota");
     expect(mock.calls("/v1/speech").length - asked).toBe(1);
     const laid = app.store.get(id)!.project;
     expect(laid.script!.blocks.some((block) => block.kind === "narration" && block.voiceover)).toBe(false);

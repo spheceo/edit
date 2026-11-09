@@ -18,6 +18,7 @@ import { addComment, canonical, editComment, switchVersion, takeFinal } from "./
 import * as openart from "./openart.ts";
 import * as render from "./render.ts";
 import * as run from "./run.ts";
+import { stale } from "../run_lease.ts";
 import { sizeOf } from "./size.ts";
 
 type Context = RouteContext<App>;
@@ -31,7 +32,7 @@ function guard(): void {
 const by = (): string => creator()?.name || "Edit";
 const holderOf = (app: App): string => (process.env.EDIT_CLOUD_HOLDER ?? "").trim() || app.machine;
 
-export const contextOf = (app: App): run.Context => ({ origin: `http://127.0.0.1:${app.port}`, port: app.port, cacheDir: app.store.cacheDir(), holder: holderOf(app), by: by() });
+export const contextOf = (app: App): run.Context => ({ origin: `http://127.0.0.1:${app.port}`, port: app.port, cacheDir: app.store.cacheDir(), home: app.store.home, holder: holderOf(app), by: by() });
 
 async function openartState(): Promise<Response> {
   const accounts = await Promise.all(
@@ -44,7 +45,7 @@ async function openartState(): Promise<Response> {
     }),
   );
   if (accounts.every((one) => one.credits === null && one.plan === null)) throw new ApiError(502, "OpenArt didn't answer.");
-  const list = await openart.imageModels().catch(() => []);
+  const list = await openart.imageModels().catch(diag.warned("thumbnails", "OpenArt's image models (the picture's cost isn't shown)", []));
   const model = list.find((one) => one.id === run.pickModel(list, false));
   const state: OpenArtState = { accounts, current: openart.current().id, picture: model !== undefined && model.credits !== null ? { model: model.name, credits: model.credits } : null };
   return json(state);
@@ -85,7 +86,7 @@ export function routes(router: Router<App>): void {
       // A new one starts under a placeholder title ("Thumbnail 1", the next free number) until the person names it.
       let title = typeof body.title === "string" ? body.title.trim().slice(0, 120) : "";
       if (title === "") {
-        const taken = new Set((await cloud.list().catch(() => [])).map((row) => row.summary.title));
+        const taken = new Set((await cloud.list().catch(diag.warned("thumbnails", "the team's thumbnails, for a free placeholder title", []))).map((row) => row.summary.title));
         let next = 1;
         while (taken.has(`Thumbnail ${next}`)) next++;
         title = `Thumbnail ${next}`;
@@ -138,7 +139,8 @@ export function routes(router: Router<App>): void {
         const found = await cloud.get(params.id!);
         if (found === null) throw notFound("This thumbnail was deleted.");
         const live = run.liveOf(found.thumb.id);
-        const thumb = live !== null && found.thumb.run !== null ? { ...found.thumb, run: { ...found.thumb.run, ...live } } : found.thumb;
+        // Going on a Mac that stopped renewing its lease: stopped, not "running" for good.
+        const thumb = found.thumb.run === null ? found.thumb : live !== null ? { ...found.thumb, run: { ...found.thumb.run, ...live } } : { ...found.thumb, run: stale(found.thumb.run) };
         return json({ thumb, rev: found.rev });
       } catch (error) {
         failed(error);

@@ -5,6 +5,7 @@
 
 mod eval;
 mod model;
+pub mod patch;
 mod sections;
 mod timeline;
 

@@ -15,6 +15,7 @@ import * as build from "./build.ts";
 import * as can from "./can.ts";
 import * as chat from "./chat.ts";
 import * as cloud from "./cloud.ts";
+import * as locks from "./locks.ts";
 import * as commentary from "./commentary.ts";
 import { blocksOf } from "./blocks.ts";
 import * as activity from "./activity.ts";
@@ -142,6 +143,18 @@ export function routes(router: Router<App>): void {
         return { ok: true };
       }),
     )
+    // The script page has it open (it says so again every 30 s, sync_core TIMING.HEARTBEAT): its cloud lock is taken and kept meanwhile (locks.ts).
+    .post("/api/writer/scripts/{id}/open", async (context) => {
+      const given = await body<{ client?: string }>(context);
+      locks.viewing(id(context), typeof given.client === "string" ? given.client : "page");
+      return json(locks.status(id(context)));
+    })
+    .post("/api/writer/scripts/{id}/close", async (context) => {
+      const given = await body<{ client?: string }>(context);
+      locks.closed(id(context), typeof given.client === "string" ? given.client : "page");
+      return json({ ok: true });
+    })
+    .post("/api/writer/scripts/{id}/takeover", (context) => answer(() => locks.takeOver(id(context), cloud.lockHolderNow())))
     .put("/api/writer/scripts/{id}/title", async (context) => {
       const { title } = await body<{ title: string }>(context);
       return answer(() => {

@@ -87,6 +87,14 @@ export const agentCalls = new AsyncLocalStorage<{ active: boolean }>();
 export const agentView = {
   known: (_id: string): { rev: number; project: Project } | null => null,
   learned: (_id: string, _rev: number, _project: Project): void => {},
+  /**
+   * A change that is Edit's own work (`update` outside an agent's call: a
+   * file put in the cloud, a smoothed shot or a preview swapped in, voices
+   * named): no person made it and there is nothing in it for the agent to
+   * read, so what the agent knows takes it along. Only what a person saves
+   * from the page (`replace`) stays unread until the agent reads again.
+   */
+  background: (_id: string, _before: Project, _after: Project): void => {},
 };
 
 /**
@@ -551,17 +559,23 @@ export class Store {
     if (refused !== null) throw new Error(refused);
     // Made from what the caller read (an agent tool): refused when it changes what changed since, by hand or by another tool.
     const call = agentCalls.getStore();
-    const knew = read ?? (call?.active === true ? agentView.known(id) : null);
-    const mine = knew === null ? null : patches.diff(current.project, project);
-    if (knew !== null && mine !== null && knew.project !== current.project) {
-      const clash = patches.overlap(patches.diff(knew.project, current.project), mine);
+    const agents = call?.active === true;
+    const knew = read ?? (agents ? agentView.known(id) : null);
+    if (knew !== null && knew.project !== current.project) {
+      const clash = patches.overlap(patches.diff(knew.project, current.project), patches.diff(current.project, project));
       if (clash.length > 0) throw new Error(revisionConflict(knew.rev, current.rev, clash));
     }
     try {
       const live = this.commitUnguarded(id, current.rev, this.prepare(id, project), origin);
       cloud?.wrote(id);
-      // What the agent knows now: what it read, with its own change on top (not what changed by hand meanwhile, which it hasn't read).
-      if (call?.active === true && knew !== null && mine !== null) agentView.learned(id, live.rev, knew.project === current.project ? live.project : patches.apply(knew.project, mine));
+      // What the agent knows now: what it read, with its own change on top (not what changed by hand meanwhile, which
+      // it hasn't read). Its change as it was saved, not as the tool wrote it: saving rounds numbers and drops empty
+      // fields, and a view holding the tool's own spelling of a clip read as "changed since you read it" the next time
+      // the agent touched that clip, at the very revision it had just written (Nov 9, Marc's Mac: 14 such refusals in
+      // one turn, a batch of six update_clips and the same three sounds twice).
+      if (agents && knew !== null) agentView.learned(id, live.rev, knew.project === current.project ? live.project : patches.apply(knew.project, patches.diff(current.project, live.project)));
+      // Edit's own work, not a person's and not a call of the agent's: what the agent knows takes it along.
+      else if (!agents && read === undefined) agentView.background(id, current.project, live.project);
       return [live, value];
     } catch (error) {
       if (!(error instanceof UpdateError)) throw error;

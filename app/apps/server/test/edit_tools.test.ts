@@ -10,6 +10,7 @@ import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
 import type { Transcript } from "../src/transcribe.ts";
+import { native, useNative } from "../src/native/index.ts";
 import { clipOf, newProject } from "../src/project.ts";
 import * as progress from "../src/progress.ts";
 import { fixtureHome, write, type Fixture } from "./helpers/home.ts";
@@ -80,6 +81,14 @@ async function refused(app: App, name: string, args: Record<string, unknown> = {
 }
 
 const projectOf = (app: App, id: string): Project => app.store.get(id)!.project;
+
+/** A change a person makes on the page: saved as the page saves it (`PUT /api/projects/{id}`), not as Edit's own work. */
+async function byHand(app: App, id: string, edit: (project: Project) => void): Promise<void> {
+  const live = app.store.get(id)!;
+  const project = structuredClone(live.project) as Project;
+  edit(project);
+  await app.store.replace(id, live.rev, project, "ui");
+}
 
 test("closing_a_gap_moves_every_track_together", () => {
   const project = newProject("p", "t", { width: 1920, height: 1080, fps: 30 });
@@ -354,7 +363,7 @@ test("a plan on a revision the agent was shown still saves over background media
   // Someone changed that clip by hand meanwhile: a plan changing it too is refused, naming it.
   const again = JSON.parse(await said(app, "get_edit_context")) as { rev: number };
   const clipId = projectOf(app, id).clips[0]!.id;
-  await app.store.update(id, "ui", (project) => {
+  await byHand(app, id, (project) => {
     project.clips[0]!.duration = 20;
   });
   const update = [{ op: "update", select: { ids: [clipId] }, patch: { duration: 45 } }];
@@ -379,7 +388,7 @@ test("an agent tool changing what was edited by hand since the agent read it is 
   });
   await said(app, "get_edit_context");
   // The person moves t1 by hand while the agent works.
-  await app.store.update(id, "ui", (project) => {
+  await byHand(app, id, (project) => {
     project.clips.find((one) => one.id === "t1")!.start = 5;
   });
   // The agent deletes t1, which it read before the move: refused, nothing saved.
@@ -393,6 +402,65 @@ test("an agent tool changing what was edited by hand since the agent read it is 
   // Read again, it may change t1.
   await said(app, "get_edit_context");
   expect((await tool(app, "delete_clips", { clip_ids: ["t1"] })).isError).toBe(false);
+});
+
+// Nov 9, Marc's Mac: 14 agent writes in one turn refused as "revision conflict:
+// expected 130, current 130", each naming something no person had touched.
+test("the agent's own write, as it was saved, is what it knows: its next change to the same clip isn't a conflict with itself", async () => {
+  const { app, id } = setUp("tools-own-write");
+  await app.store.update(id, "test", (project) => {
+    project.clips.push(clip({ id: "t1", type: "text", track: project.tracks[0]!.id, start: 0, duration: 30, text: "first" }));
+    project.clips.push(clip({ id: "t2", type: "text", track: project.tracks[0]!.id, start: 60, duration: 30, text: "second" }));
+  });
+  await said(app, "get_edit_context");
+  // Someone changes t2 by hand, so what the agent knows is no longer the project as it is.
+  await byHand(app, id, (project) => {
+    project.clips.find((one) => one.id === "t2")!.start = 90;
+  });
+  // Saving rounds numbers, as the engine's f32 fields do.
+  const real = native();
+  const before = useNative({
+    ...real,
+    projectPrepare(project, json) {
+      const value = JSON.parse(json) as Project;
+      for (const one of value.clips) if ("opacity" in one) one.opacity = Math.round(one.opacity * 100) / 100;
+      return real.projectPrepare(project, JSON.stringify(value));
+    },
+  });
+  try {
+    expect((await tool(app, "update_clip", { clip_id: "t1", patch: { opacity: 0.123456 } })).isError).toBe(false);
+    expect(clipOf(projectOf(app, id), "t1")).toMatchObject({ opacity: 0.12 });
+    // The same clip again, with nothing read between: it's the agent's own, and it saves.
+    expect((await tool(app, "update_clip", { clip_id: "t1", patch: { opacity: 0.5 } })).isError).toBe(false);
+    expect(clipOf(projectOf(app, id), "t1")).toMatchObject({ opacity: 0.5 });
+    // The hand edit is still unread: a change to t2 is refused.
+    expect((await tool(app, "update_clip", { clip_id: "t2", patch: { opacity: 0.5 } })).content[0]!.text).toContain("clips t2 changed since you read it");
+  } finally {
+    useNative(before);
+  }
+});
+
+test("Edit's own work on something (a file put in the cloud) doesn't stop the agent's next change to it; a person's does", async () => {
+  const { app, id } = setUp("tools-background");
+  await app.store.update(id, "test", (project) => {
+    project.media.push(media({ id: "m1", name: "a.mp4", path: "/tmp/edit-test-a.mp4", kind: "video", duration: 10 }));
+    project.clips.push(clip({ id: "t1", type: "text", track: project.tracks[0]!.id, start: 0, duration: 30, text: "first" }));
+  });
+  await said(app, "get_edit_context");
+  // A cloud upload swaps the file in, and a background pass restyles the clip, while the agent works.
+  await app.store.update(id, "cloud", (project) => {
+    project.media[0]!.path = "/tmp/edit-test-b.mp4";
+    clipOf(project, "t1")!.name = "named in the background";
+  });
+  expect((await tool(app, "update_clip", { clip_id: "t1", patch: { start: 10 } })).isError).toBe(false);
+  expect(clipOf(projectOf(app, id), "t1")).toMatchObject({ start: 10, name: "named in the background" });
+  expect(projectOf(app, id).media[0]!.path).toBe("/tmp/edit-test-b.mp4");
+  // Moved by hand: the agent reads again before it changes it.
+  await byHand(app, id, (project) => {
+    clipOf(project, "t1")!.start = 20;
+  });
+  expect((await tool(app, "update_clip", { clip_id: "t1", patch: { start: 30 } })).content[0]!.text).toContain("clips t1 changed since you read it");
+  expect(clipOf(projectOf(app, id), "t1")).toMatchObject({ start: 20 });
 });
 
 // Nov 8 audit (2b): revisions began from a random base at every start, so a

@@ -300,6 +300,23 @@ const SEEN_KEPT = 3;
 // agentCalls): what the agent read, with its own changes on top.
 agentView.known = (id) => seen.get(id)?.at(-1) ?? null;
 agentView.learned = (_id, rev, project) => void showAgent({ rev, project });
+agentView.background = (id, before, after) => {
+  const kept = seen.get(id);
+  if (kept === undefined) return;
+  let change: patches.Patch | null = null;
+  seen.set(
+    id,
+    kept.map((one) => {
+      if (one.project === before) return { rev: one.rev, project: after };
+      try {
+        return { rev: one.rev, project: patches.apply(one.project, (change ??= patches.diff(before, after))) };
+      } catch {
+        // It doesn't fit what the agent read (a list reordered since): left as it was, and checked as before.
+        return one;
+      }
+    }),
+  );
+};
 
 /** `found`, noted as shown to the agent. */
 function showAgent(found: Live): Live {

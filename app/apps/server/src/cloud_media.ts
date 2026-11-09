@@ -59,6 +59,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as cloudBlocks from "./cloud_blocks.ts";
 import * as exportExcerpts from "./export_excerpts.ts";
+import * as player from "./player.ts";
 import { prepLine } from "./export_prep.ts";
 import * as pieces from "./proxy_pieces.ts";
 import * as cloud from "./cloud.ts";
@@ -1681,6 +1682,11 @@ export const PREFETCH = { seconds: 600, bytes: 600_000_000 };
 /** The newest prefetch per project: an older one stops. */
 const prefetches = new Map<string, number>();
 
+/** Stops project `id`'s block prefetch (Edit.app's window took the project: whole copies come instead). */
+export function stopPrefetch(id: string): void {
+  prefetches.set(id, (prefetches.get(id) ?? 0) + 1);
+}
+
 /**
  * Reads the proxies' stretches project `id`'s timeline plays, in timeline
  * order from frame `from`, into the block cache before the viewer asks
@@ -1692,7 +1698,8 @@ const prefetches = new Map<string, number>();
  * second), a block either side kept for the slack.
  */
 export async function prefetchProject(app: App, id: string, from = 0): Promise<number> {
-  if (playbackBlocks === null || !cloud.enabled()) return 0;
+  // Drawn by Edit.app's window: its whole copies come down instead (native_preview.ts), never blocks.
+  if (playbackBlocks === null || !cloud.enabled() || player.isNative(id)) return 0;
   const root = playbackBlocks;
   const live = app.store.get(id);
   if (live === null) return 0;

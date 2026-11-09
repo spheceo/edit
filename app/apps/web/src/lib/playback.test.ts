@@ -560,6 +560,23 @@ describe("preview seeks and lifetime", () => {
     expect(last.lists.clips.put[0].start).toBe(7);
   });
 
+  it("asks for no scrub pieces while the window draws: a drag is the window's whole copies, the scrub tier the page player's", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => { fetched.push(String(url)); return new Response("{}", { status: 200 }); }));
+    // The page player asks for the pieces around the playhead as a drag starts (its asks are a few seconds apart at most).
+    const asks = preview as unknown as { scrubAskedAt: number; scrubLookedAt: number };
+    asks.scrubAskedAt = -1e9; asks.scrubLookedAt = -1e9;
+    preview.setProject(fixture(), {}); draw();
+    preview.seek(10); preview.seek(12); draw();
+    expect(fetched.some((url) => url.includes("/scrub"))).toBe(true);
+    fetched.length = 0;
+    await inWindow();
+    asks.scrubAskedAt = -1e9; asks.scrubLookedAt = -1e9;
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle();
+    preview.seek(20); preview.seek(22); draw(); await settle();
+    expect(fetched.some((url) => url.includes("/scrub"))).toBe(false);
+  });
+
   it("in full screen while the window plays, the page plays on from where it was", async () => {
     await inWindow();
     preview.setProject(fixture(), {}); await settle(); draw(); await settle();

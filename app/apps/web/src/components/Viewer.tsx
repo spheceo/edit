@@ -96,29 +96,29 @@ export function Viewer() {
   const streamed = playback?.stream === true && (playback.state === "ready" || playback.state === "rendering") && playback.rev === rev && !dirty;
   const smooth = streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? mediaHost(playback.url) : null;
   useEffect(() => { preview.setSmooth(smooth); }, [smooth]);
+  // Edit.app's window draws the edit live: no render to wait for, also while full screen hands the
+  // picture to the page for a while (a render took a place in the export line and the encoder, Nov 8 audit).
+  const drawnByWindow = native || preview.nativeHere;
   useEffect(() => {
-    if (projectId === null) return;
+    if (projectId === null || drawnByWindow) return;
     let live = true;
     api.playback(projectId).then((status) => { if (live && useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     return () => { live = false; };
-  }, [projectId]);
+  }, [projectId, drawnByWindow]);
   // While it renders, looked at now and then: a server started again meanwhile (an update, a crash) has
   // forgotten the render, says "none", and it's asked for again below, rather than waited on for ever.
   const renderingNow = playback?.state === "rendering" || playback?.state === "waiting";
   useEffect(() => {
-    if (projectId === null || !renderingNow) return;
+    if (projectId === null || !renderingNow || drawnByWindow) return;
     const timer = setInterval(() => {
       api.playback(projectId).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
     }, 10_000);
     return () => clearInterval(timer);
-  }, [projectId, renderingNow]);
+  }, [projectId, renderingNow, drawnByWindow]);
   // Asked for once the edits settle, unless it's rendering (or failed on) this revision; never mid-turn
   // (the agent changes the edit many times a turn: each render would be stale before it landed).
   const hasClips = (project?.clips.length ?? 0) > 0;
   const agentBusy = useAgent((state) => state.project === projectId && state.running);
-  // Edit.app's window draws the edit live: no render to wait for, also while full screen hands the
-  // picture to the page for a while (a render took a place in the export line and the encoder, Nov 8 audit).
-  const drawnByWindow = native || preview.nativeHere;
   useEffect(() => {
     if (projectId === null || dirty || !hasClips || agentBusy || drawnByWindow) return;
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;

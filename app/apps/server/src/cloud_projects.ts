@@ -1558,6 +1558,9 @@ async function check(app: App, cloudProjects: Cloud, id: string): Promise<void> 
 // ---------------------------------------------------------------------------
 // Requests from the UI.
 
+/** How long after an open the page player's block prefetch starts: time for Edit.app's window to claim the project. */
+const PAGE_PREFETCH_DELAY_MS = 3_000;
+
 /**
  * Opens `id` in the editor for `client`: a project only in the cloud is
  * downloaded first; the lock is asked for (or who has it found out) before
@@ -1572,8 +1575,13 @@ export async function open(app: App, id: string, client: string): Promise<Record
   const why = app.store.unavailable(id);
   if (why !== null) throw new ApiError(403, why);
   cloudProjects.viewing(id, client);
-  // Its proxies read ahead from the start, behind the viewer's own reads (step 5); the page's playhead moves it on.
-  void cloudMedia.prefetchProject(app, id, 0).catch((error: unknown) => diag.warn("cloud", `reading ${id}'s proxies ahead: ${diag.messageOf(error)}`));
+  // The page player's proxies read ahead in blocks from the start, behind the viewer's own reads (step 5); the
+  // page's playhead moves it on. A moment later than the open: a page in Edit.app's window asks where the window
+  // reads from first (native_preview.ts), and the window's project takes whole copies instead, never blocks.
+  setTimeout(() => {
+    if (app.store.get(id) === null) return;
+    void cloudMedia.prefetchProject(app, id, 0).catch((error: unknown) => diag.warn("cloud", `reading ${id}'s proxies ahead: ${diag.messageOf(error)}`));
+  }, PAGE_PREFETCH_DELAY_MS).unref?.();
   const step = cloudProjects.with(id, (entry) => {
     // A new look: what was said last time has been seen.
     entry.note = null;

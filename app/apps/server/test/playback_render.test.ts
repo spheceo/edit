@@ -42,6 +42,30 @@ test("an agent's turn over, its edit is made smooth by itself, here; a turn star
   }
 });
 
+test("a project drawn by Edit.app's window is never rendered after a turn: it plays live, and the encoder stays the exports'", async () => {
+  const { fixtureHome } = await import("./helpers/home.ts");
+  const playback = await import("../src/playback_render.ts");
+  const player = await import("../src/player.ts");
+  const { app, store, cleanup } = fixtureHome("playback-native");
+  const trials = process.env.EDIT_TRIALS;
+  delete process.env.EDIT_TRIALS;
+  try {
+    Object.assign(app.exports, { localRunning: () => false, running: () => false });
+    playback.hooks.afterTurnMs = 30;
+    const id = store.create("native", { width: 1920, height: 1080, fps: 30 }).project.id;
+    player.markNative(id);
+    playback.start(app);
+    store.emit({ type: "agent", project: id, event: "status", running: true } as never);
+    store.emit({ type: "agent", project: id, event: "status", running: false } as never);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(playback.status(app, id).state).toBe("none");
+  } finally {
+    player.reset();
+    if (trials !== undefined) process.env.EDIT_TRIALS = trials;
+    cleanup();
+  }
+});
+
 test("while a changed edit renders, the old render is never offered as it", async () => {
   // JJ, Nov 2: "I've made changes to the window screen rather than the paper, but on the screen, it still shows the paper thing."
   const fs = await import("node:fs");

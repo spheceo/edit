@@ -34,7 +34,10 @@ a cloud one's whole copy (a made proxy, or footage that's its own proxy), else
 its footage on the Mac, else the server's loopback stream while the whole file
 comes down; a pieced proxy's pieces on the Mac are read as files of their own;
 each sound from a made preview's `preview.m4a`, a cloud copy's own sound, else
-the footage or the stream (`apps/server/src/native_preview.ts`). Full screen, a
+the footage or the stream (`apps/server/src/native_preview.ts`). A project the window
+draws is marked as its on the server (`apps/server/src/player.ts`): its whole
+copies come down in playhead order when it opens, and the page player's block
+prefetch, scrub pieces and after-turn smooth render stay off for it. Full screen, a
 browser, or five failed frames in a row: the page draws as below. Measured Nov
 8–9 on Cops Realize (M1, cloud footage) in docs/plans/2026-11-08-audit.md
 ("A's stage 2, measured after").

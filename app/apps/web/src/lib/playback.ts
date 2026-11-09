@@ -1055,7 +1055,8 @@ class Preview {
     // Seeks in quick succession are a drag (or a held key): rough pictures until it rests.
     const now = performance.now();
     this.dragging = now - this.lastSeekAt < DRAG_GAP_MS;
-    if (this.dragging) this.keepScrubbing(frame);
+    // The scrub tier is the page player's; the window reads its whole copies.
+    if (this.dragging && !this.native) this.keepScrubbing(frame);
     this.lastSeekAt = now;
     this.direction = frame < playhead.frame ? -1 : 1;
     this.seekSerial++;

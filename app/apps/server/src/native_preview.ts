@@ -10,7 +10,12 @@
 //   proxy (`edit/proxies/…`), and footage that's its own proxy (an original
 //   of 256 MB or less, `cloud_media.OWN_FILE_MAX`: maps, interview cuts,
 //   pictures). Until Nov 8 only made proxies did, so 147 of Cops Realize's
-//   242 pictures streamed for good.
+//   242 pictures streamed for good. They come down in playhead order (the
+//   media the timeline plays first, first), and they're the one footage form
+//   the window reads: asking here marks the project as the window's
+//   (player.ts), so the page player's block prefetch, scrub pieces and
+//   smooth-playback render stay off for it on this Mac (audit, Nov 8: the
+//   same proxy bytes were kept in four forms).
 // - A pieced proxy (proxy_pieces.ts, a video of 20 minutes or more) is no
 //   file to fetch: its pieces come down or are made behind the viewer
 //   (`cloud_media.prefetchProject`'s fill), and each piece here is cut into a
@@ -38,6 +43,7 @@ import { json } from "./http/errors.ts";
 import { fetchWhole } from "./local_previews.ts";
 import type { Project } from "./model.ts";
 import { isFile } from "./paths.ts";
+import * as player from "./player.ts";
 import * as pieces from "./proxy_pieces.ts";
 
 /** Seconds `from..to` of a streamed source in a file here: the window reads it instead of the stream. */
@@ -124,10 +130,19 @@ export async function nativeSources(app: App, project: Project): Promise<Respons
   const sources: Record<string, string> = {};
   const sounds: Record<string, string> = {};
   const excerpts: Record<string, NativeExcerpt[]> = {};
-  // Only what the timeline shows comes down (Cops Realize lists 169 own-file videos, 1.5 GB; its clips show 66, 0.7 GB).
+  player.markNative(project.id);
+  cloudMedia.stopPrefetch(project.id);
+  // Only what the timeline shows comes down (Cops Realize lists 169 own-file videos, 1.5 GB; its clips show 66, 0.7 GB),
+  // in playhead order: the media first played first.
   const shown = new Set(project.clips.flatMap((clip) => (clip.type === "video" ? [clip.media] : [])));
   const heard = new Set(project.clips.flatMap((clip) => (clip.type === "audio" ? [clip.media] : [])));
-  for (const media of project.media) {
+  const firstUse = new Map<string, number>();
+  for (const clip of project.clips) {
+    if (clip.type !== "video" && clip.type !== "audio") continue;
+    firstUse.set(clip.media, Math.min(firstUse.get(clip.media) ?? Infinity, clip.start));
+  }
+  const inPlayheadOrder = [...project.media].sort((a, b) => (firstUse.get(a.id) ?? Infinity) - (firstUse.get(b.id) ?? Infinity));
+  for (const media of inPlayheadOrder) {
     const sound = media.kind === "audio" || (media.kind === "video" && media.has_audio);
     if (media.kind !== "video" && media.kind !== "image" && !sound) continue;
     const key = cloudMedia.streamKey(media.cloud, "proxy");
@@ -178,6 +193,7 @@ export function evicted(app: App, path: string): void {
 
 /** For tests. */
 export function reset(): void {
+  player.reset();
   handed.clear();
   cutsWaiting.length = 0;
   cutting.clear();

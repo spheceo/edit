@@ -7,6 +7,7 @@ import { localPath } from "../src/cloud_media.ts";
 import { PLAYBACK_ROUTE } from "../src/cloud_playback.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
 import { hooks, nativeSources, reset } from "../src/native_preview.ts";
+import * as player from "../src/player.ts";
 import * as pieces from "../src/proxy_pieces.ts";
 import { spyOn } from "bun:test";
 import { fixtureHome } from "./helpers/home.ts";
@@ -26,6 +27,9 @@ test("the native preview reads a media's made preview, else its footage; a cloud
       p.media.push({ ...media({ id: "there", name: "there.mp4", path: "https://r2.example/b", kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/bb/there.mp4" } } as never);
       p.media.push({ ...media({ id: "footage", name: "made.mp4", path: `${dir}/made.mp4`, kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/cc/footage.mp4" } } as never);
       p.media.push({ ...media({ id: "unshown", name: "unshown.mp4", path: "https://r2.example/c", kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/dd/unshown.mp4" } } as never);
+      // Listed before "there" in the media, but played after it: fetched after it.
+      p.media.unshift({ ...media({ id: "later", name: "later.mp4", path: "https://r2.example/d", kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/ee/later.mp4" } } as never);
+      p.clips.push(clip({ id: "c0", type: "video", track: "v1", media: "later", start: 300, duration: 30, source_in: 0 }));
       p.clips.push(clip({ id: "c1", type: "video", track: "v1", media: "there", start: 0, duration: 30, source_in: 0 }));
     });
     // One preview made, the other on its way.
@@ -43,7 +47,9 @@ test("the native preview reads a media's made preview, else its footage; a cloud
     fs.writeFileSync(made.audio, "sound");
     const answer = (await (await nativeSources(app, store.get(id)!.project)).json()) as { cache: string; sources: Record<string, string>; sounds: Record<string, string> };
     fetch.mockRestore();
-    expect(fetched).toEqual(["edit/proxies/bb/there.mp4"]);
+    // Whole copies in playhead order: the footage the timeline plays first comes first; and the project is the window's now.
+    expect(fetched).toEqual(["edit/proxies/bb/there.mp4", "edit/proxies/ee/later.mp4"]);
+    expect(player.isNative(id)).toBe(true);
     // The sound the window mixes while it plays: a made preview's sound file, a cloud copy's own (the sound is in it), else the footage or the stream.
     expect(answer.sounds).toEqual({
       made: made.audio,
@@ -51,6 +57,7 @@ test("the native preview reads a media's made preview, else its footage; a cloud
       song: `${dir}/song.mp3`,
       here,
       there: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/bb/there.mp4")}`,
+      later: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/ee/later.mp4")}`,
       footage: `${dir}/made.mp4`,
       unshown: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/dd/unshown.mp4")}`,
     });
@@ -61,6 +68,7 @@ test("the native preview reads a media's made preview, else its footage; a cloud
       still: `${dir}/still.png`,
       here,
       there: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/bb/there.mp4")}`,
+      later: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/ee/later.mp4")}`,
       footage: `${dir}/made.mp4`,
       // In the project but on no clip: streamed if ever asked, never fetched.
       unshown: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/dd/unshown.mp4")}`,

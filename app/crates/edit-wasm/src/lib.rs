@@ -127,6 +127,26 @@ impl Engine {
         Ok(())
     }
 
+    /// What changed in the project (edit_core::patch, the page's lib/patch.ts)
+    /// into the one held, when it changes nothing but clips: setting the edit
+    /// whole parsed its 2.4 MB again on a drag's every move (63 ms a move in
+    /// Chrome on Cops Realize, Nov 8). Refused (not clips only, or the
+    /// project's rules), the project is as it was; the page sends it whole.
+    #[wasm_bindgen(js_name = applyPatch)]
+    pub fn apply_patch(&mut self, json: &str) -> Result<(), JsValue> {
+        let patch: serde_json::Value = serde_json::from_str(json).map_err(js_error)?;
+        if !edit_core::patch::only_clips(&patch) {
+            return Err(js_error("not a clips-only patch"));
+        }
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| js_error("no project to patch"))?;
+        edit_core::patch::patch_clips(project, &patch).map_err(js_error)?;
+        self.evaluated = None;
+        Ok(())
+    }
+
     /// JSON: the project's intro, B-roll spots, story and outro (edit_core::sections).
     pub fn sections(&self) -> String {
         self.project

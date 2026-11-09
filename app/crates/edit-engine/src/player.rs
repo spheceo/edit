@@ -9,8 +9,20 @@
 //! compositor, the same letterbox, black around it; the colours are the
 //! export's, as its pictures are decoded as the export decodes them.
 //!
-//! The page still owns the playhead, the sound and everything drawn over the
-//! picture; it asks for a frame and hears when it's drawn.
+//! At rest the page owns the playhead and asks for each frame. Playing, the
+//! player runs on one clock, the speaker's (`mac_media::Speaker`): the edit's
+//! sound is mixed here as the export mixes it (`crate::mix`, a quarter second
+//! at a time into the speaker's ring), the frames the speaker has played say
+//! where the playhead is, the picture follows them, and the page follows the
+//! player (`position`). Short of sound the clock holds, so the picture never
+//! runs ahead of the sound and sound never skips to catch up (the page's own
+//! clock did, and its sound was decoded in the page from the same footage).
+//!
+//! Cuts are decoded ahead: the clips starting within the next seconds have a
+//! reader opened and seeked to their first frame on other threads
+//! (`PreviewPictures::warm`), so the cut reads on from it instead of paying a
+//! 20-80 ms seek (and a 2-120 ms open) on the drawing path; a jump the page
+//! knows about ahead of time (`hint`) is warmed the same way.
 //!
 //! The page sends the edit whole once (`set_project`) and then only what
 //! changed (`apply_patch`, the page's lib/patch.ts): a drag on Cops Realize
@@ -22,13 +34,35 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use edit_core::{evaluate_seen, Project};
+use edit_core::{evaluate_seen, ClipContent, Layer, Project};
 use edit_render::{text::BUNDLED_FONTS, wgpu, Renderer};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::render::{decode_stats, feed_peaks, PreviewPictures};
+use crate::mac_media::Speaker;
+use crate::mix::{self, Part, RATE};
+use crate::render::{decode_stats, feed_peaks, heard_segments, PreviewPictures};
+
+/// Each call and draw said on stderr (`EDIT_PREVIEW_TRACE=1`), to see what the preview does without looking.
+pub fn trace(what: impl FnOnce() -> String) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("EDIT_PREVIEW_TRACE").is_some()) {
+        eprintln!("edit preview: {}", what());
+    }
+}
+
+/// How far ahead of the playhead the cuts' readers are opened and seeked (seconds).
+const AHEAD_SECONDS: f64 = 3.0;
+/// Sound mixed ahead of the speaker, and each window handed to it (seconds).
+const SOUND_AHEAD_SECONDS: f64 = 2.0;
+const SOUND_WINDOW_SECONDS: f64 = 0.25;
+/// A frame drawn slower than this is counted as slow (two frames at 60 fps).
+const SLOW_MS: f64 = 33.0;
 
 /// Where one drawn frame's time went, in milliseconds (the decoders' share by kind in `decoders`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -53,12 +87,102 @@ pub struct Player {
     revision: u64,
     /// What each media is decoded from: its preview file on this Mac, else a URL the server answers.
     sources: HashMap<String, PathBuf>,
+    /// What each media's sound is read from (its picture's file when the page named none).
+    sounds: HashMap<String, PathBuf>,
     /// The media cache: waveforms' sound levels.
     cache: PathBuf,
     /// The frame on screen, and whether the project or size changed since.
     drawn: Option<i64>,
     /// The last frame drawn's timings (None when the last ask needed no drawing).
     pub last: Option<DrawTimes>,
+    sound: Sound,
+    playing: Option<Playing>,
+    /// The frame the last decode-ahead pass ran from (None: run one).
+    warmed_from: Option<i64>,
+    /// How playing went since the page last asked (`position`).
+    report: Report,
+    /// The speaker's starved count when the page last asked.
+    starved_before: u64,
+}
+
+/// What's playing: the clock started at `from` seconds of the timeline with
+/// the speaker's count at `played_at_start`, and stops at frame `until`.
+struct Playing {
+    from: f64,
+    until: i64,
+    played_at_start: u64,
+}
+
+/// A mixer thread filling the speaker from `from` seconds of the timeline.
+struct Mixer {
+    from: f64,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Mixer {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+}
+
+/// The speaker shared with the mixer thread: a write names the mixer's
+/// generation, and a flush (a seek, a stop) moves the generation on, so a
+/// mixer cancelled mid-window can't write into the sound that follows.
+struct Feed {
+    speaker: Speaker,
+    generation: AtomicU64,
+    writing: Mutex<()>,
+}
+
+impl Feed {
+    /// Writes `samples` (interleaved stereo) for mixer `generation`, as much as fits; None when the mixer is stale.
+    fn write(&self, generation: u64, samples: &[f32]) -> Option<usize> {
+        let _guard = self.writing.lock();
+        if self.generation.load(Ordering::Acquire) != generation {
+            return None;
+        }
+        Some(self.speaker.write(samples))
+    }
+
+    fn flush(&self) -> u64 {
+        let _guard = self.writing.lock();
+        self.speaker.flush();
+        self.generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+}
+
+/// The player's sound: the speaker, opened on the first play, and the mixer feeding it.
+#[derive(Default)]
+struct Sound {
+    feed: Option<Arc<Feed>>,
+    /// The speaker couldn't open: playing runs on a clock of its own, silent.
+    refused: bool,
+    mixer: Option<Mixer>,
+    /// A clock with no speaker: when it started and from where.
+    silent: Option<Instant>,
+}
+
+/// How playing went since the page last asked: frames drawn, frames the clock
+/// passed before they were drawn, slow draws, the draws' times, and the
+/// speaker's output calls that ran short.
+#[derive(Default, Clone)]
+pub struct Report {
+    pub drawn: u64,
+    pub skipped: u64,
+    pub slow: u64,
+    pub draws: Vec<f64>,
+    pub starved: u64,
+    /// Playing reached its end (the edit's, or the out point) since the last ask.
+    pub ended: bool,
+}
+
+/// Where the player is: the playhead (a frame and a fraction), whether it's
+/// playing, and why it stopped (the end, or asked to).
+pub struct Position {
+    pub frame: f64,
+    pub playing: bool,
+    pub ended: bool,
+    pub report: Report,
 }
 
 impl Player {
@@ -125,21 +249,29 @@ impl Player {
             value: None,
             revision: 0,
             sources: HashMap::new(),
+            sounds: HashMap::new(),
             cache: PathBuf::new(),
             drawn: None,
             last: None,
+            sound: Sound::default(),
+            playing: None,
+            warmed_from: None,
+            report: Report::default(),
+            starved_before: 0,
         })
     }
 
     /// The edit to draw (the page's JSON, as its engine takes it) at the
-    /// page's `revision`, what each media is decoded from, the local
-    /// excerpts of streamed ones (`crate::excerpts`: a pieced proxy's pieces
-    /// on this Mac), and the media cache. Refused, the last edit stays.
+    /// page's `revision`, what each media is decoded from and what its sound
+    /// is read from, the local excerpts of streamed ones (`crate::excerpts`:
+    /// a pieced proxy's pieces on this Mac), and the media cache. Refused,
+    /// the last edit stays.
     pub fn set_project(
         &mut self,
         json: &str,
         revision: u64,
         sources: HashMap<String, String>,
+        sounds: HashMap<String, String>,
         excerpts: HashMap<String, Vec<crate::excerpts::Excerpt>>,
         cache: PathBuf,
     ) -> Result<u64, String> {
@@ -147,6 +279,10 @@ impl Player {
         let project = Project::deserialize(&value).map_err(|error| error.to_string())?;
         project.validate()?;
         let sources: HashMap<String, PathBuf> = sources
+            .into_iter()
+            .map(|(media, path)| (media, PathBuf::from(path)))
+            .collect();
+        let sounds: HashMap<String, PathBuf> = sounds
             .into_iter()
             .map(|(media, path)| (media, PathBuf::from(path)))
             .collect();
@@ -162,7 +298,11 @@ impl Player {
         if sources != self.sources {
             self.pictures.clear();
         }
+        if sounds != self.sounds {
+            self.sound.disarm();
+        }
         self.sources = sources;
+        self.sounds = sounds;
         self.cache = cache;
         self.take(project, value, revision);
         Ok(revision)
@@ -181,21 +321,18 @@ impl Player {
         let patch: Value = serde_json::from_str(patch).map_err(|error| error.to_string())?;
         // Applied in place; refused, the window has no edit to patch until the next whole one.
         let mut value = self.value.take().unwrap_or(Value::Null);
-        apply(&mut value, &patch)?;
-        if let Some(project) = self.project.as_mut().filter(|_| only_clips(&patch)) {
+        edit_core::patch::apply(&mut value, &patch)?;
+        if let Some(project) = self
+            .project
+            .as_mut()
+            .filter(|_| edit_core::patch::only_clips(&patch))
+        {
             // A drag, a trim, a title typed: the clips that changed, not the whole edit parsed again
             // (2.4 MB of Cops Realize took 22 ms a patch that way, Nov 8).
-            let clips = project.clips.clone();
-            if let Err(error) = patch_clips(project, &patch).and_then(|()| project.validate()) {
-                project.clips = clips;
-                return Err(error);
-            }
-            if let Some(next) = patch.pointer("/set/next_id").and_then(Value::as_u64) {
-                project.next_id = next;
-            }
+            edit_core::patch::patch_clips(project, &patch)?;
             self.value = Some(value);
             self.revision = revision;
-            self.drawn = None;
+            self.changed();
             return Ok(revision);
         }
         let project = Project::deserialize(&value).map_err(|error| error.to_string())?;
@@ -213,13 +350,25 @@ impl Player {
         if self.project.as_ref().map(|old| &old.id) != Some(&project.id) {
             self.renderer.clear_peaks();
             self.pictures.clear();
+            self.stop();
         }
         self.renderer
             .resize(project.settings.width, project.settings.height);
         self.project = Some(project);
         self.value = Some(value);
         self.revision = revision;
+        self.changed();
+    }
+
+    /// The edit changed: drawn again, the cuts ahead looked at again, and a
+    /// mix armed for an edit that's gone dropped (one playing plays on: the
+    /// picture is the new edit's, the sound catches up at the next play).
+    fn changed(&mut self) {
         self.drawn = None;
+        self.warmed_from = None;
+        if self.playing.is_none() {
+            self.sound.disarm();
+        }
     }
 
     /// The layer's size in pixels changed.
@@ -232,6 +381,22 @@ impl Player {
         self.config.height = height;
         self.surface.configure(self.renderer.device(), &self.config);
         self.drawn = None;
+        self.warmed_from = None;
+    }
+
+    /// Pictures are decoded no bigger than they're shown: the edit's size fitted into the layer.
+    fn shown(&self, project: &Project) -> (u32, u32) {
+        let (width, height) = (
+            project.settings.width.max(1),
+            project.settings.height.max(1),
+        );
+        let fit = (self.config.width as f32 / width as f32)
+            .min(self.config.height as f32 / height as f32)
+            .min(1.0);
+        (
+            ((width as f32 * fit).round() as u32).max(2),
+            ((height as f32 * fit).round() as u32).max(2),
+        )
     }
 
     /// Draws `frame`, unless it's on screen already (nothing changed since).
@@ -243,41 +408,30 @@ impl Player {
         let Some(project) = &self.project else {
             return Err("no edit to draw yet".to_owned());
         };
-        let ms = |since: std::time::Instant| since.elapsed().as_secs_f64() * 1000.0;
+        let ms = |since: Instant| since.elapsed().as_secs_f64() * 1000.0;
         let mut times = DrawTimes::default();
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         decode_stats::take();
         let scene = evaluate_seen(project, frame);
         times.evaluate = ms(started);
-        // Decoded no bigger than it's shown: the edit's size fitted into the layer.
-        let (width, height) = (
-            project.settings.width.max(1),
-            project.settings.height.max(1),
-        );
-        let fit = (self.config.width as f32 / width as f32)
-            .min(self.config.height as f32 / height as f32)
-            .min(1.0);
-        let shown = (
-            ((width as f32 * fit).round() as u32).max(2),
-            ((height as f32 * fit).round() as u32).max(2),
-        );
-        let started = std::time::Instant::now();
+        let shown = self.shown(project);
+        let started = Instant::now();
         let pictures = self.pictures.decode(project, &scene, shown, &self.sources);
         times.decoders = decode_stats::take();
         let pictures = pictures?;
         times.decode = ms(started);
         times.layers = pictures.len();
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         for (clip, width, height, pixels) in &pictures {
             self.renderer
                 .upload_video(clip, *width, *height, pixels, true);
         }
         feed_peaks(&mut self.renderer, project, &scene, &self.cache);
         times.upload = ms(started);
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         self.renderer.render(&scene);
         times.composite = ms(started);
-        let started = std::time::Instant::now();
+        let started = Instant::now();
         self.present()?;
         times.present = ms(started);
         self.drawn = Some(frame);
@@ -310,234 +464,416 @@ impl Player {
         Ok(())
     }
 
-    /// Lets go of the decoders (the preview is hidden); they open again on the next frame.
+    /// Lets go of the decoders and the sound (the preview is hidden); they open again on the next frame.
     pub fn rest(&mut self) {
+        self.stop();
+        self.sound.disarm();
         self.pictures.clear();
         self.drawn = None;
+        self.warmed_from = None;
     }
-}
 
-/// Whether `patch` changes nothing but clips (and the next id handed out).
-fn only_clips(patch: &Value) -> bool {
-    let set_ok = patch
-        .get("set")
-        .and_then(Value::as_object)
-        .is_none_or(|set| set.keys().all(|key| key == "next_id"));
-    let unset_ok = patch
-        .get("unset")
-        .and_then(Value::as_array)
-        .is_none_or(Vec::is_empty);
-    let lists_ok = patch
-        .get("lists")
-        .and_then(Value::as_object)
-        .is_none_or(|lists| lists.keys().all(|key| key == "clips"));
-    set_ok && unset_ok && lists_ok
-}
+    // ----------------------------------------------------------------------
+    // Decoding ahead
 
-/// A clips-only patch into the parsed project's clips, as `apply` does to the JSON.
-fn patch_clips(project: &mut Project, patch: &Value) -> Result<(), String> {
-    let Some(change) = patch.pointer("/lists/clips") else {
-        return Ok(());
-    };
-    let strings = |field: &str| -> Vec<String> {
-        change
-            .get(field)
-            .and_then(Value::as_array)
-            .map(|all| {
-                all.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let gone: std::collections::HashSet<String> = strings("remove").into_iter().collect();
-    project.clips.retain(|clip| !gone.contains(&clip.id));
-    let mut at: HashMap<String, usize> = project
-        .clips
-        .iter()
-        .enumerate()
-        .map(|(index, clip)| (clip.id.clone(), index))
-        .collect();
-    for item in change
-        .get("put")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let clip = edit_core::Clip::deserialize(item).map_err(|error| error.to_string())?;
-        match at.get(&clip.id) {
-            Some(&index) => {
-                if let Some(slot) = project.clips.get_mut(index) {
-                    *slot = clip;
-                }
-            }
-            None => {
-                at.insert(clip.id.clone(), project.clips.len());
-                project.clips.push(clip);
-            }
-        }
-    }
-    if change.get("order").is_some() {
-        let order = strings("order");
-        if order.len() != project.clips.len() || order.iter().any(|one| !at.contains_key(one)) {
-            return Err("clips' new order doesn't match its items".to_owned());
-        }
-        let mut clips: HashMap<String, edit_core::Clip> = project
-            .clips
-            .drain(..)
-            .map(|clip| (clip.id.clone(), clip))
-            .collect();
-        project.clips = order.iter().filter_map(|one| clips.remove(one)).collect();
-    }
-    Ok(())
-}
-
-/// `base` with `patch` applied, as the page's lib/patch.ts `apply`: fields
-/// set and removed, and for a list of things with ids the ones put (changed
-/// in place, new ones at the end), removed, and the new order when it moved.
-pub fn apply(base: &mut Value, patch: &Value) -> Result<(), String> {
-    let object = base.as_object_mut().ok_or("the project isn't an object")?;
-    if let Some(set) = patch.get("set").and_then(Value::as_object) {
-        for (key, value) in set {
-            object.insert(key.clone(), value.clone());
-        }
-    }
-    if let Some(unset) = patch.get("unset").and_then(Value::as_array) {
-        for key in unset.iter().filter_map(Value::as_str) {
-            object.remove(key);
-        }
-    }
-    let Some(lists) = patch.get("lists").and_then(Value::as_object) else {
-        return Ok(());
-    };
-    let id = |item: &Value| item.get("id").and_then(Value::as_str).map(str::to_owned);
-    for (key, change) in lists {
-        let list = object
-            .entry(key.clone())
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-            .ok_or_else(|| format!("{key} isn't a list of things with ids"))?;
-        let strings = |field: &str| -> Vec<String> {
-            change
-                .get(field)
-                .and_then(Value::as_array)
-                .map(|all| {
-                    all.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let gone: std::collections::HashSet<String> = strings("remove").into_iter().collect();
-        list.retain(|item| id(item).is_none_or(|one| !gone.contains(&one)));
-        let mut at: HashMap<String, usize> = HashMap::new();
-        for (index, item) in list.iter().enumerate() {
-            let one = id(item).ok_or_else(|| format!("a {key} item has no id"))?;
-            at.insert(one, index);
-        }
-        for item in change
-            .get("put")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
+    /// Opens and seeks readers for the cuts within the next seconds of `frame`
+    /// (and at `frame` itself, for a jump told ahead), on other threads. Run
+    /// once per half second of playhead, and again when the edit changes.
+    pub fn warm_ahead(&mut self, frame: i64, jump: bool) {
+        let Some(project) = &self.project else { return };
+        let fps = project.fps();
+        if !jump
+            && self
+                .warmed_from
+                .is_some_and(|from| frame >= from && (frame - from) as f64 <= fps / 2.0)
         {
-            let one = id(item).ok_or_else(|| format!("a changed {key} item has no id"))?;
-            match at.get(&one) {
-                Some(&index) => {
-                    if let Some(slot) = list.get_mut(index) {
-                        *slot = item.clone();
-                    }
-                }
-                None => {
-                    at.insert(one, list.len());
-                    list.push(item.clone());
-                }
-            }
+            return;
         }
-        if change.get("order").is_some() {
-            let order = strings("order");
-            if order.len() != list.len() || order.iter().any(|one| !at.contains_key(one)) {
-                return Err(format!("{key}'s new order doesn't match its items"));
+        self.warmed_from = Some(frame);
+        let shown = self.shown(project);
+        let hidden: std::collections::HashSet<&str> = project
+            .tracks
+            .iter()
+            .filter(|track| track.hidden)
+            .map(|track| track.id.as_str())
+            .collect();
+        let until = frame + (AHEAD_SECONDS * fps).ceil() as i64;
+        let mut cuts: Vec<i64> = project
+            .clips
+            .iter()
+            .filter(|clip| {
+                matches!(clip.content, ClipContent::Video { .. })
+                    && !hidden.contains(clip.track.as_str())
+                    && clip.start > frame
+                    && clip.start <= until
+            })
+            .map(|clip| clip.start)
+            .collect();
+        if jump {
+            cuts.push(frame);
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+        for cut in cuts {
+            let scene = evaluate_seen(project, cut);
+            for layer in &scene.layers {
+                if let Layer::Video {
+                    media, source_time, ..
+                } = layer
+                {
+                    self.pictures
+                        .warm(project, media, *source_time, shown, &self.sources);
+                }
             }
-            let mut items: HashMap<String, Value> = list
-                .drain(..)
-                .filter_map(|item| id(&item).map(|one| (one, item)))
-                .collect();
-            *list = order.iter().filter_map(|one| items.remove(one)).collect();
         }
     }
-    Ok(())
+
+    /// The page knows where the playhead will land: its pictures are made ready now.
+    pub fn hint(&mut self, frame: i64) {
+        self.warm_ahead(frame, true);
+    }
+
+    // ----------------------------------------------------------------------
+    // Playing
+
+    /// Where the clock stops for a play from `from`: the out point when the
+    /// play starts before it, else the edit's end (as the page's tick did).
+    fn until(project: &Project, from: i64) -> i64 {
+        let duration = project.duration();
+        match project.mark_out {
+            Some(out) if from < out && out < duration => out,
+            _ => duration,
+        }
+    }
+
+    /// Plays from `frame` on the speaker's clock. The sound is mixed from
+    /// there (or carries on, armed there by `settle`), the picture follows.
+    pub fn play(&mut self, frame: i64) -> Result<(), String> {
+        let Some(project) = &self.project else {
+            return Err("no edit to play yet".to_owned());
+        };
+        let fps = project.fps();
+        let until = Self::until(project, frame);
+        if frame >= until {
+            return Err("at the end".to_owned());
+        }
+        let from = frame as f64 / fps;
+        self.stop();
+        let started = Instant::now();
+        let from = self.arm(from, until);
+        let played_at_start = self
+            .sound
+            .feed
+            .as_ref()
+            .map_or(0, |feed| feed.speaker.state().played);
+        self.playing = Some(Playing {
+            from,
+            until,
+            played_at_start,
+        });
+        match &self.sound.feed {
+            Some(feed) => feed.speaker.run(true),
+            None => self.sound.silent = Some(Instant::now()),
+        }
+        self.warmed_from = None;
+        trace(|| {
+            format!(
+                "play from {frame} to {until}, sound {} in {:.1} ms",
+                if self.sound.feed.is_some() {
+                    "on the speaker"
+                } else {
+                    "silent (no speaker)"
+                },
+                started.elapsed().as_secs_f64() * 1000.0
+            )
+        });
+        Ok(())
+    }
+
+    /// Stops playing; the frame the playhead rests on. The sound stays armed
+    /// there, so playing on from it starts at once.
+    pub fn pause(&mut self) -> Option<i64> {
+        let at = self.playing.as_ref().map(|_| self.clock_frame());
+        if let Some(feed) = &self.sound.feed {
+            feed.speaker.run(false);
+        }
+        // The mix goes on from where the speaker's ring stopped (what's buffered is the sound from
+        // there), which is a speaker's latency ahead of what was heard.
+        let resumed = self.playing.take().map(|playing| {
+            let played = self.sound.feed.as_ref().map_or_else(
+                || self.played_seconds(&playing),
+                |feed| {
+                    feed.speaker
+                        .state()
+                        .played
+                        .saturating_sub(playing.played_at_start) as f64
+                        / RATE as f64
+                },
+            );
+            playing.from + played
+        });
+        self.sound.silent = None;
+        if let (Some(from), Some(mixer)) = (resumed, self.sound.mixer.as_mut()) {
+            mixer.from = from;
+        }
+        if let Some(at) = at {
+            trace(|| format!("paused at {at}"));
+        }
+        at
+    }
+
+    fn stop(&mut self) {
+        if self.playing.is_some() {
+            self.pause();
+        }
+    }
+
+    /// Seconds of sound played since the clock started.
+    fn played_seconds(&self, playing: &Playing) -> f64 {
+        match (&self.sound.feed, self.sound.silent) {
+            (Some(feed), _) => {
+                let state = feed.speaker.state();
+                let played =
+                    state.played.saturating_sub(playing.played_at_start) as f64 / RATE as f64;
+                // What's heard now left the ring a moment ago.
+                (played - feed.speaker.latency().clamp(0.0, 0.2)).max(0.0)
+            }
+            (None, Some(since)) => since.elapsed().as_secs_f64(),
+            (None, None) => 0.0,
+        }
+    }
+
+    /// The timeline position the clock says, in frames (a fraction too).
+    fn clock_position(&self) -> Option<f64> {
+        let (playing, project) = (self.playing.as_ref()?, self.project.as_ref()?);
+        Some((playing.from + self.played_seconds(playing)) * project.fps())
+    }
+
+    fn clock_frame(&self) -> i64 {
+        self.clock_position().map_or(0, |at| at.floor() as i64)
+    }
+
+    /// Playing: draws the clock's frame when it moved on, stops at the end;
+    /// how long until the next frame is due (None: not playing).
+    pub fn tick(&mut self) -> Option<Duration> {
+        let (at, until, fps) = {
+            let playing = self.playing.as_ref()?;
+            let fps = self.project.as_ref()?.fps();
+            (self.clock_position()?, playing.until, fps)
+        };
+        let frame = at.floor() as i64;
+        if frame >= until {
+            self.pause();
+            self.drawn = None;
+            let _ = self.draw(until.max(1) - 1);
+            self.report.ended = true;
+            return None;
+        }
+        if self.drawn != Some(frame) {
+            if let Some(drawn) = self.drawn.filter(|drawn| frame > *drawn + 1) {
+                self.report.skipped += (frame - drawn - 1) as u64;
+            }
+            let started = Instant::now();
+            let drawn = self.draw(frame);
+            let ms = started.elapsed().as_secs_f64() * 1000.0;
+            if drawn.is_ok() {
+                self.report.drawn += 1;
+                self.report.draws.push(ms);
+                if ms > SLOW_MS {
+                    self.report.slow += 1;
+                }
+            }
+            trace(|| describe_draw(frame, ms, &drawn, self.last));
+            self.warm_ahead(frame, false);
+        }
+        // Until the next frame boundary (a touch after it, so the clock has moved on).
+        let next = ((frame + 1) as f64 / fps - at / fps) * 1000.0 + 0.5;
+        Some(Duration::from_secs_f64(next.clamp(1.0, 50.0) / 1000.0))
+    }
+
+    /// Where the player is, and how playing went since the last ask.
+    pub fn position(&mut self) -> Position {
+        let frame = self
+            .clock_position()
+            .unwrap_or_else(|| self.drawn.unwrap_or(0) as f64);
+        let mut report = std::mem::take(&mut self.report);
+        if let Some(feed) = &self.sound.feed {
+            let starved = feed.speaker.state().starved;
+            report.starved = starved.saturating_sub(self.starved_before);
+            self.starved_before = starved;
+        }
+        Position {
+            frame,
+            playing: self.playing.is_some(),
+            ended: report.ended,
+            report,
+        }
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.playing.is_some()
+    }
+
+    /// The playhead has rested on the frame drawn: its sound is armed so Play
+    /// starts at once, and the cuts ahead of it are decoded.
+    pub fn settle(&mut self) {
+        if self.playing.is_some() {
+            return;
+        }
+        let Some((frame, (fps, until))) = self.drawn.zip(
+            self.project
+                .as_ref()
+                .map(|project| (project.fps(), Self::until(project, self.drawn.unwrap_or(0)))),
+        ) else {
+            return;
+        };
+        if frame < until {
+            self.arm(frame as f64 / fps, until);
+        }
+        self.warm_ahead(frame, false);
+    }
+
+    /// Has the sound mixed from `from` seconds of the timeline to frame
+    /// `until` into the speaker, unless a mixer is there (within a frame)
+    /// already; where the sound is armed from.
+    fn arm(&mut self, from: f64, until: i64) -> f64 {
+        let Some(project) = &self.project else {
+            return from;
+        };
+        if self.sound.refused {
+            return from;
+        }
+        let fps = project.fps();
+        if let Some(armed) = self
+            .sound
+            .mixer
+            .as_ref()
+            .map(|mixer| mixer.from)
+            .filter(|armed| (armed - from).abs() < 1.5 / fps)
+        {
+            return armed;
+        }
+        if self.sound.feed.is_none() {
+            match Speaker::open((SOUND_AHEAD_SECONDS * RATE as f64) as usize) {
+                Ok(speaker) => {
+                    self.sound.feed = Some(Arc::new(Feed {
+                        speaker,
+                        generation: AtomicU64::new(0),
+                        writing: Mutex::new(()),
+                    }));
+                }
+                Err(error) => {
+                    crate::log::warn("preview", format!("no speaker for the player: {error}"));
+                    self.sound.refused = true;
+                    return from;
+                }
+            }
+        }
+        let Some(feed) = self.sound.feed.clone() else {
+            return from;
+        };
+        self.sound.mixer = None;
+        let generation = feed.flush();
+        let from_frame = (from * fps).floor() as i64;
+        let seconds = (until as f64 / fps - from).max(0.0);
+        let total = (seconds * RATE as f64).round() as usize;
+        let paths: HashMap<String, PathBuf> = project
+            .media
+            .iter()
+            .map(|media| {
+                let path = self
+                    .sounds
+                    .get(&media.id)
+                    .or_else(|| self.sources.get(&media.id))
+                    .cloned()
+                    .unwrap_or_else(|| PathBuf::from(&media.path));
+                (media.id.clone(), path)
+            })
+            .collect();
+        let parts: Vec<Part> = mix::parts(
+            &heard_segments(project, from_frame, until),
+            |media| paths.get(media).cloned(),
+            from,
+            seconds,
+        );
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&cancel);
+        let count = parts.len();
+        let _ = std::thread::Builder::new()
+            .name("edit preview sound".to_owned())
+            .spawn(move || {
+                crate::util::utility_thread();
+                mix_into(&feed, generation, parts, total, &stop);
+            });
+        self.sound.mixer = Some(Mixer { from, cancel });
+        trace(|| format!("sound armed from {from:.3} s, {count} parts, {seconds:.1} s"));
+        from
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+/// A draw's trace line: "Ok" first (the acceptance check, scripts/acceptance.ts,
+/// reads success from it), then where its time went.
+pub fn describe_draw(
+    frame: i64,
+    ms: f64,
+    drawn: &Result<(), String>,
+    times: Option<DrawTimes>,
+) -> String {
+    match (drawn, times) {
+        (Ok(()), Some(t)) => format!(
+            "frame {frame} in {ms:.1} ms: Ok, eval {:.1} decode {:.1} (layers {}, open {}×{:.1} seek {}×{:.1} fwd {}×{:.1} ffmpeg {}×{:.1} ahead {}×{:.1}) upload {:.1} composite {:.1} present {:.1}",
+            t.evaluate, t.decode, t.layers, t.decoders.opens, t.decoders.open_ms, t.decoders.seeks, t.decoders.seek_ms,
+            t.decoders.forward, t.decoders.forward_ms, t.decoders.ffmpeg, t.decoders.ffmpeg_ms, t.decoders.ahead, t.decoders.ahead_ms,
+            t.upload, t.composite, t.present
+        ),
+        _ => format!("frame {frame} in {ms:.1} ms: {drawn:?}"),
+    }
+}
 
-    #[test]
-    fn a_patch_applies_as_the_pages_does() {
-        let mut project = json!({
-            "name": "a", "next_id": 3, "gone": true,
-            "clips": [{"id": "c1", "start": 0}, {"id": "c2", "start": 5}, {"id": "c3", "start": 9}],
-        });
-        apply(
-            &mut project,
-            &json!({
-                "set": {"name": "b"}, "unset": ["gone"],
-                "lists": {"clips": {"put": [{"id": "c2", "start": 6}, {"id": "c4", "start": 1}], "remove": ["c3"]}},
-            }),
-        )
-        .unwrap();
-        assert_eq!(
-            project,
-            json!({"name": "b", "next_id": 3,
-                "clips": [{"id": "c1", "start": 0}, {"id": "c2", "start": 6}, {"id": "c4", "start": 1}]})
-        );
-        apply(
-            &mut project,
-            &json!({"set": {}, "unset": [], "lists": {"clips": {"put": [], "remove": [], "order": ["c4", "c1", "c2"]}}}),
-        )
-        .unwrap();
-        let ids: Vec<&str> = project["clips"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|clip| clip["id"].as_str().unwrap())
-            .collect();
-        assert_eq!(ids, ["c4", "c1", "c2"]);
-        // A clips-only patch into the parsed project lands where the JSON's does.
-        let base = json!({
-            "version": 1, "id": "p", "name": "t", "settings": {"width": 320, "height": 180, "fps": 30},
-            "tracks": [{"id": "v", "kind": "video"}],
-            "clips": [
-                {"id": "a", "track": "v", "type": "solid", "start": 0, "duration": 10, "fill": [1, 0, 0, 1]},
-                {"id": "b", "track": "v", "type": "solid", "start": 10, "duration": 10, "fill": [0, 1, 0, 1]},
-            ],
-        });
-        let change = json!({"set": {"next_id": 9}, "unset": [], "lists": {"clips": {
-            "put": [{"id": "b", "track": "v", "type": "solid", "start": 12, "duration": 8, "fill": [0, 1, 0, 1]},
-                    {"id": "c", "track": "v", "type": "solid", "start": 30, "duration": 5, "fill": [0, 0, 1, 1]}],
-            "remove": ["a"], "order": ["c", "b"]}}});
-        assert!(only_clips(&change));
-        let mut parsed = Project::deserialize(&base).unwrap();
-        patch_clips(&mut parsed, &change).unwrap();
-        let mut value = base.clone();
-        apply(&mut value, &change).unwrap();
-        let whole = Project::deserialize(&value).unwrap();
-        assert_eq!(
-            serde_json::to_value(&parsed.clips).unwrap(),
-            serde_json::to_value(&whole.clips).unwrap()
-        );
-        assert!(!only_clips(
-            &json!({"set": {"name": "x"}, "unset": [], "lists": {}})
-        ));
-        // An order naming what isn't there doesn't fit.
-        assert!(apply(
-            &mut project,
-            &json!({"set": {}, "unset": [], "lists": {"clips": {"put": [], "remove": [], "order": ["c1"]}}}),
-        )
-        .is_err());
+impl Sound {
+    fn disarm(&mut self) {
+        self.mixer = None;
+    }
+}
+
+/// The mixer's thread: `parts` mixed as the export mixes them, a window at a
+/// time into the speaker, held back while it's full. A part that won't
+/// decode is logged and the rest of its window is silence, so the clock
+/// never holds on a broken file.
+fn mix_into(feed: &Feed, generation: u64, parts: Vec<Part>, total: usize, cancel: &AtomicBool) {
+    let window = (SOUND_WINDOW_SECONDS * RATE as f64) as usize;
+    let written = std::cell::Cell::new(0_usize);
+    let mut push = |samples: &[f32]| -> Result<(), String> {
+        let mut rest = samples;
+        while !rest.is_empty() {
+            if cancel.load(Ordering::Acquire) {
+                return Err("cancelled".to_owned());
+            }
+            match feed.write(generation, rest) {
+                None => return Err("cancelled".to_owned()),
+                Some(0) => std::thread::sleep(Duration::from_millis(5)),
+                Some(frames) => rest = rest.get(frames * 2..).unwrap_or_default(),
+            }
+        }
+        written.set(written.get() + samples.len() / 2);
+        Ok(())
+    };
+    let mixed = mix::mix_live(&parts, total, window, cancel, &mut push);
+    match mixed {
+        Ok(()) => {}
+        Err(error) if error == "cancelled" => {}
+        Err(error) => {
+            crate::log::warn(
+                "preview",
+                format!("the player's sound: {error}; silent from there"),
+            );
+            let silence = vec![0.0_f32; window * 2];
+            while written.get() < total {
+                let frames = (total - written.get()).min(window);
+                if push(silence.get(..frames * 2).unwrap_or_default()).is_err() {
+                    return;
+                }
+            }
+        }
     }
 }

@@ -18,14 +18,14 @@ test("the native preview reads a media's made preview, else its footage; a cloud
     const id = store.create("p", { width: 1920, height: 1080, fps: 30 }).project.id;
     for (const name of ["made.mp4", "making.mp4", "still.png"]) fs.writeFileSync(`${dir}/${name}`, "x");
     await store.update(id, "test", (p) => {
-      p.media.push(media({ id: "made", name: "made.mp4", path: `${dir}/made.mp4`, kind: "video", duration: 1 }));
-      p.media.push(media({ id: "making", name: "making.mp4", path: `${dir}/making.mp4`, kind: "video", duration: 1 }));
+      p.media.push(media({ id: "made", name: "made.mp4", path: `${dir}/made.mp4`, kind: "video", duration: 1, has_audio: true }));
+      p.media.push(media({ id: "making", name: "making.mp4", path: `${dir}/making.mp4`, kind: "video", duration: 1, has_audio: true }));
       p.media.push(media({ id: "still", name: "still.png", path: `${dir}/still.png`, kind: "image", duration: 1 }));
       p.media.push(media({ id: "song", name: "song.mp3", path: `${dir}/song.mp3`, kind: "audio", duration: 1 }));
-      p.media.push({ ...media({ id: "here", name: "here.mp4", path: "https://r2.example/a", kind: "video", duration: 1 }), cloud: { proxy: "edit/proxies/aa/here.mp4" } } as never);
-      p.media.push({ ...media({ id: "there", name: "there.mp4", path: "https://r2.example/b", kind: "video", duration: 1 }), cloud: { proxy: "edit/proxies/bb/there.mp4" } } as never);
-      p.media.push({ ...media({ id: "footage", name: "made.mp4", path: `${dir}/made.mp4`, kind: "video", duration: 1 }), cloud: { proxy: "edit/proxies/cc/footage.mp4" } } as never);
-      p.media.push({ ...media({ id: "unshown", name: "unshown.mp4", path: "https://r2.example/c", kind: "video", duration: 1 }), cloud: { proxy: "edit/proxies/dd/unshown.mp4" } } as never);
+      p.media.push({ ...media({ id: "here", name: "here.mp4", path: "https://r2.example/a", kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/aa/here.mp4" } } as never);
+      p.media.push({ ...media({ id: "there", name: "there.mp4", path: "https://r2.example/b", kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/bb/there.mp4" } } as never);
+      p.media.push({ ...media({ id: "footage", name: "made.mp4", path: `${dir}/made.mp4`, kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/cc/footage.mp4" } } as never);
+      p.media.push({ ...media({ id: "unshown", name: "unshown.mp4", path: "https://r2.example/c", kind: "video", duration: 1, has_audio: true }), cloud: { proxy: "edit/proxies/dd/unshown.mp4" } } as never);
       p.clips.push(clip({ id: "c1", type: "video", track: "v1", media: "there", start: 0, duration: 30, source_in: 0 }));
     });
     // One preview made, the other on its way.
@@ -40,9 +40,20 @@ test("the native preview reads a media's made preview, else its footage; a cloud
     // A streamed one's whole preview comes down behind it.
     const fetched: string[] = [];
     const fetch = spyOn(cloudMedia, "fetchKey").mockImplementation(async (key) => { fetched.push(key); });
-    const answer = (await (await nativeSources(app, store.get(id)!.project)).json()) as { cache: string; sources: Record<string, string> };
+    fs.writeFileSync(made.audio, "sound");
+    const answer = (await (await nativeSources(app, store.get(id)!.project)).json()) as { cache: string; sources: Record<string, string>; sounds: Record<string, string> };
     fetch.mockRestore();
     expect(fetched).toEqual(["edit/proxies/bb/there.mp4"]);
+    // The sound the window mixes while it plays: a made preview's sound file, a cloud copy's own (the sound is in it), else the footage or the stream.
+    expect(answer.sounds).toEqual({
+      made: made.audio,
+      making: `${dir}/making.mp4`,
+      song: `${dir}/song.mp3`,
+      here,
+      there: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/bb/there.mp4")}`,
+      footage: `${dir}/made.mp4`,
+      unshown: `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent("edit/proxies/dd/unshown.mp4")}`,
+    });
     expect(answer.cache).toBe(store.cacheDir());
     expect(answer.sources).toEqual({
       made: made.proxy,

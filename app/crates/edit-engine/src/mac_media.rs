@@ -122,6 +122,19 @@ unsafe extern "C" {
         capacity: usize,
     ) -> i32;
     fn edit_sound_reader_close(handle: *mut c_void);
+    fn edit_speaker_open(capacity: usize, error: *mut c_char, error_capacity: usize)
+        -> *mut c_void;
+    fn edit_speaker_write(handle: *mut c_void, samples: *const f32, frames: usize) -> usize;
+    fn edit_speaker_run(handle: *mut c_void, on: i32);
+    fn edit_speaker_flush(handle: *mut c_void);
+    fn edit_speaker_state(
+        handle: *mut c_void,
+        played: *mut u64,
+        buffered: *mut u64,
+        starved: *mut u64,
+    );
+    fn edit_speaker_latency(handle: *mut c_void) -> f64;
+    fn edit_speaker_close(handle: *mut c_void);
     fn edit_sound_writer_open(
         path: *const c_char,
         bitrate: u32,
@@ -612,6 +625,86 @@ impl Drop for SoundReader {
     fn drop(&mut self) {
         // One retained handle, released exactly once.
         unsafe { edit_sound_reader_close(self.handle.as_ptr()) };
+    }
+}
+
+/// The player's sound out: a ring of 48 kHz stereo float the mixer writes,
+/// played by CoreAudio; the frames played are the player's clock
+/// (`crate::player`). Short of sound it plays silence and the clock holds.
+pub struct Speaker {
+    handle: NonNull<c_void>,
+}
+
+// The ring's ends are atomics and AVAudioEngine's calls are thread-safe; one
+// thread writes (the mixer's), the others only start, stop, flush and read the state.
+unsafe impl Send for Speaker {}
+unsafe impl Sync for Speaker {}
+
+/// What the speaker has played and holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpeakerState {
+    /// Frames played in all.
+    pub played: u64,
+    /// Frames written and not yet played.
+    pub buffered: u64,
+    /// Output calls that ran short of sound while running.
+    pub starved: u64,
+}
+
+impl Speaker {
+    /// A speaker holding up to `capacity` frames ahead.
+    pub fn open(capacity: usize) -> Result<Self, String> {
+        let mut error = [0; 1024];
+        // Retained until Drop.
+        let handle = unsafe { edit_speaker_open(capacity, error.as_mut_ptr(), error.len()) };
+        Ok(Self {
+            handle: NonNull::new(handle).ok_or_else(|| message(&error))?,
+        })
+    }
+
+    /// Writes as many frames of `samples` (interleaved stereo) as fit; how many did.
+    pub fn write(&self, samples: &[f32]) -> usize {
+        // The bridge reads at most samples.len() / 2 frames.
+        unsafe { edit_speaker_write(self.handle.as_ptr(), samples.as_ptr(), samples.len() / 2) }
+    }
+
+    /// Sound comes out (true), or silence while the clock holds (false).
+    pub fn run(&self, on: bool) {
+        // A flag on the handle this speaker owns.
+        unsafe { edit_speaker_run(self.handle.as_ptr(), i32::from(on)) };
+    }
+
+    /// Drops what's buffered (stopping first).
+    pub fn flush(&self) {
+        // A flag and two counters on the handle this speaker owns.
+        unsafe { edit_speaker_flush(self.handle.as_ptr()) };
+    }
+
+    pub fn state(&self) -> SpeakerState {
+        let mut state = SpeakerState::default();
+        // Reads three counters of the handle this speaker owns.
+        unsafe {
+            edit_speaker_state(
+                self.handle.as_ptr(),
+                &mut state.played,
+                &mut state.buffered,
+                &mut state.starved,
+            );
+        }
+        state
+    }
+
+    /// Seconds between a frame leaving the ring and the speaker.
+    pub fn latency(&self) -> f64 {
+        // Reads the engine's output node.
+        unsafe { edit_speaker_latency(self.handle.as_ptr()) }
+    }
+}
+
+impl Drop for Speaker {
+    fn drop(&mut self) {
+        // One retained handle, released exactly once.
+        unsafe { edit_speaker_close(self.handle.as_ptr()) };
     }
 }
 

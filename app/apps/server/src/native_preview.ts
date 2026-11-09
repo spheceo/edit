@@ -18,6 +18,12 @@
 //   window reads instead of the stream where it reaches (the engine's
 //   excerpts, crates/edit-engine/src/excerpts.rs).
 //
+// Playing, the window mixes the edit's sound itself (crates/edit-engine/src/player.rs),
+// so each heard media's sound file is named too: a made preview's sound
+// (`preview.m4a`), a cloud preview's whole copy here (its sound is in it; a
+// sound file's own copy, fetched whole like a picture's), else the footage or
+// the loopback stream, which FFmpeg reads.
+//
 // Until then a picture is the server's loopback stream; the page asks again
 // every 15 s while any is. And when the cache's cleaner takes a copy handed
 // out here (cache_cleanup.ts), the project's pages hear it (`native-sources`)
@@ -116,35 +122,44 @@ async function pieceExcerpts(cache: string, base: string, url: string): Promise<
 export async function nativeSources(app: App, project: Project): Promise<Response> {
   const cache = app.store.cacheDir();
   const sources: Record<string, string> = {};
+  const sounds: Record<string, string> = {};
   const excerpts: Record<string, NativeExcerpt[]> = {};
   // Only what the timeline shows comes down (Cops Realize lists 169 own-file videos, 1.5 GB; its clips show 66, 0.7 GB).
   const shown = new Set(project.clips.flatMap((clip) => (clip.type === "video" ? [clip.media] : [])));
+  const heard = new Set(project.clips.flatMap((clip) => (clip.type === "audio" ? [clip.media] : [])));
   for (const media of project.media) {
-    if (media.kind !== "video" && media.kind !== "image") continue;
+    const sound = media.kind === "audio" || (media.kind === "video" && media.has_audio);
+    if (media.kind !== "video" && media.kind !== "image" && !sound) continue;
     const key = cloudMedia.streamKey(media.cloud, "proxy");
     if (key !== null) {
       const local = cloudMedia.localPath(cache, key);
       const base = pieces.baseOf(key);
-      if (base === null && isFile(local)) sources[media.id] = local;
-      else if (isFile(media.path)) sources[media.id] = media.path;
+      let source: string;
+      if (base === null && isFile(local)) source = local;
+      else if (isFile(media.path)) source = media.path;
       else {
         const url = `http://127.0.0.1:${app.port}${PLAYBACK_ROUTE}?key=${encodeURIComponent(key)}`;
-        sources[media.id] = url;
-        if (!shown.has(media.id)) continue;
-        if (base === null) fetchWhole(key, local);
-        else {
-          const here = await pieceExcerpts(cache, base, url);
-          if (here.length > 0) excerpts[media.id] = here;
+        source = url;
+        if (shown.has(media.id) || heard.has(media.id)) {
+          if (base === null) fetchWhole(key, local);
+          else if (shown.has(media.id)) {
+            const here = await pieceExcerpts(cache, base, url);
+            if (here.length > 0) excerpts[media.id] = here;
+          }
         }
       }
+      if (media.kind !== "audio") sources[media.id] = source;
+      if (sound) sounds[media.id] = source;
       continue;
     }
     const paths = app.media.paths(media.path);
-    sources[media.id] = media.kind === "video" && isFile(paths.proxyDone) && isFile(paths.proxy) ? paths.proxy : media.path;
+    const made = isFile(paths.proxyDone);
+    if (media.kind !== "audio") sources[media.id] = media.kind === "video" && made && isFile(paths.proxy) ? paths.proxy : media.path;
+    if (sound) sounds[media.id] = made && isFile(paths.audio) ? paths.audio : media.path;
   }
-  const files = new Set<string>([...Object.values(sources).filter((source) => !source.startsWith("http")), ...Object.values(excerpts).flatMap((list) => list.map((one) => one.path))]);
+  const files = new Set<string>([...Object.values(sources), ...Object.values(sounds)].filter((source) => !source.startsWith("http")).concat(Object.values(excerpts).flatMap((list) => list.map((one) => one.path))));
   handed.set(project.id, files);
-  return json({ cache, sources, excerpts });
+  return json({ cache, sources, sounds, excerpts });
 }
 
 /**

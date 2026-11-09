@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "./types";
 
 const engine = vi.hoisted(() => ({
-  free: vi.fn(), addFont: vi.fn(), setProject: vi.fn(), forgetVideo: vi.fn(),
+  free: vi.fn(), addFont: vi.fn(), setProject: vi.fn(), applyPatch: vi.fn(), forgetVideo: vi.fn(),
   resize: vi.fn(), render: vi.fn(), uploadFrame: vi.fn(), isLost: vi.fn(() => false), sections: vi.fn(() => "null"), setPeaks: vi.fn(), clearPeaks: vi.fn(),
   sources: vi.fn((_frame: number) => "[]"),
 }));
@@ -276,12 +276,16 @@ describe("preview seeks and lifetime", () => {
     const p = fixture(); p.clips.push({ ...p.clips[0], id: "overlap" });
     preview.setProject(p, {}); draw();
     expect(engine.setProject).toHaveBeenCalledTimes(calls);
+    expect(engine.applyPatch).not.toHaveBeenCalled();
     expect(preview.error).toBeNull();
-    preview.setProject(fixture(), {}); draw();
-    expect(engine.setProject).toHaveBeenCalledTimes(calls + 1);
+    // The next valid step reaches the engine (as a patch of the clip that moved).
+    const next = fixture(); next.clips[0].start = 3;
+    preview.setProject(next, {}); draw();
+    expect(engine.applyPatch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(engine.applyPatch.mock.calls[0]![0])).lists.clips.put[0].start).toBe(3);
   });
 
-  it("sends a drag's changes to the engine once per frame, as the whole project", async () => {
+  it("sends a drag's changes to the engine once per frame, as one patch of what changed", async () => {
     const { produce } = await import("immer");
     let p = fixture();
     preview.setProject(p, {}); draw();
@@ -291,11 +295,14 @@ describe("preview seeks and lifetime", () => {
       preview.setProject(p, {});
     }
     expect(engine.setProject).toHaveBeenCalledTimes(calls);
+    expect(engine.applyPatch).not.toHaveBeenCalled();
     draw();
-    expect(engine.setProject).toHaveBeenCalledTimes(calls + 1);
-    expect(JSON.parse(engine.setProject.mock.calls.at(-1)![0])).toEqual(JSON.parse(JSON.stringify(p)));
+    expect(engine.setProject).toHaveBeenCalledTimes(calls);
+    expect(engine.applyPatch).toHaveBeenCalledTimes(1);
+    const patch = JSON.parse(String(engine.applyPatch.mock.calls[0]![0]));
+    expect(patch.lists.clips.put).toEqual([JSON.parse(JSON.stringify(p.clips[0]))]);
     draw();
-    expect(engine.setProject).toHaveBeenCalledTimes(calls + 1);
+    expect(engine.applyPatch).toHaveBeenCalledTimes(1);
   });
 
   const withSound = () => {
@@ -433,8 +440,11 @@ describe("preview seeks and lifetime", () => {
 
   // Edit.app's window (lib/nativePreview.ts): its calls answered as crates/edit-window/src/preview.rs does.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  // The window's clock, as the page sees it: `preview_position` says this frame while playing.
+  const windowClock = { frame: 0, playing: false, ended: false };
   const inWindow = async (refuse: (command: string) => string | null = () => null) => {
     const calls: [string, Record<string, unknown>][] = [];
+    windowClock.frame = 0; windowClock.playing = false; windowClock.ended = false;
     const invoke = vi.fn(async (command: string, args: Record<string, unknown> = {}) => {
       calls.push([command, args]);
       const refused = refuse(command);
@@ -442,6 +452,9 @@ describe("preview seeks and lifetime", () => {
       if (command === "preview_open") return true;
       if (command === "preview_project" || command === "preview_patch") return args.revision;
       if (command === "preview_frame") return { revision: 0, drawn: true, skipped: false, ms: 4, decode: 3, composite: 0.5, present: 0.3, opens: 0, seeks: 0, ffmpeg: 0 };
+      if (command === "preview_play") { windowClock.frame = Number(args.frame); windowClock.playing = true; return null; }
+      if (command === "preview_pause") { windowClock.playing = false; return Math.floor(windowClock.frame); }
+      if (command === "preview_position") return { frame: windowClock.frame, playing: windowClock.playing, ended: windowClock.ended, drawn: 1, skipped: 0, slow: 0, draws: [2.5], starved: 0 };
       return null;
     });
     (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = { invoke };
@@ -496,16 +509,67 @@ describe("preview seeks and lifetime", () => {
     expect(report.decodeMs.p50).toBe(3);
   });
 
-  it("asks for the sound while the window draws and plays, so a native play isn't silent", async () => {
-    await inWindow();
+  it("plays on the window's clock: the sound is the window's, the playhead follows its position, and its end pauses here", async () => {
+    const sent = await inWindow();
     preview.setProject(withSound(), {}); await settle(); draw(); await settle();
     decoding.requestAudio.mockClear();
-    preview.play(); draw(); await settle();
-    expect(decoding.requestAudio).toHaveBeenCalled();
-    clock.currentTime = 0.3; draw(); await settle();
-    expect(playhead.frame).toBeGreaterThan(0);
-    expect(clock.nodes.length).toBeGreaterThan(0);
-    expect(preview.diagnostics.audioUnderruns).toBe(0);
+    preview.seek(10); draw(); await settle();
+    preview.play(); await settle();
+    expect(sent("preview_play")).toEqual([{ frame: 10 }]);
+    expect(playhead.playing).toBe(true);
+    // Nothing decoded in the page: no sound asked for, no frame asked of the window while it plays.
+    expect(decoding.requestAudio).not.toHaveBeenCalled();
+    const framesAsked = sent("preview_frame").length;
+    windowClock.frame = 12.5; draw(); await settle();
+    expect(playhead.frame).toBe(12.5);
+    expect(sent("preview_frame")).toHaveLength(framesAsked);
+    expect(preview.diagnostics.nativeFrames.played).toBe(1);
+    // A seek while playing plays on from there.
+    preview.seek(40); await settle();
+    expect(sent("preview_play").at(-1)).toEqual({ frame: 40 });
+    // The end: the window says so, the page pauses on that frame.
+    windowClock.frame = 89; windowClock.ended = true; windowClock.playing = false; draw(); await settle();
+    expect(playhead.playing).toBe(false);
+    expect(playhead.frame).toBe(89);
+    expect(sent("preview_pause").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("patches the page's engine with a clips-only change instead of sending the edit whole", async () => {
+    const { produce } = await import("immer");
+    let p = fixture();
+    preview.setProject(p, {}); draw();
+    expect(engine.setProject).toHaveBeenCalledTimes(1);
+    p = produce(p, (draft) => { draft.clips[0].start = 5; });
+    preview.setProject(p, {}); draw();
+    expect(engine.setProject).toHaveBeenCalledTimes(1);
+    expect(engine.applyPatch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(engine.applyPatch.mock.calls[0]![0])).lists.clips.put[0].start).toBe(5);
+    // A change beyond the clips (a setting) goes whole.
+    p = produce(p, (draft) => { draft.name = "Renamed"; });
+    preview.setProject(p, {}); draw();
+    expect(engine.setProject).toHaveBeenCalledTimes(2);
+    // A step the engine's rules refuse keeps the last picture and no error shows.
+    engine.applyPatch.mockImplementationOnce(() => { throw new Error("clips a and b overlap"); });
+    p = produce(p, (draft) => { draft.clips[0].start = 6; });
+    preview.setProject(p, {}); draw();
+    expect(preview.error).toBeNull();
+    // The next step is cut from what the engine holds, not from the refused one.
+    p = produce(p, (draft) => { draft.clips[0].start = 7; });
+    preview.setProject(p, {}); draw();
+    const last = JSON.parse(String(engine.applyPatch.mock.calls.at(-1)![0]));
+    expect(last.lists.clips.put[0].start).toBe(7);
+  });
+
+  it("in full screen while the window plays, the page plays on from where it was", async () => {
+    await inWindow();
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle();
+    preview.play(); await settle();
+    windowClock.frame = 20; draw(); await settle();
+    preview.setNativeAllowed(false); await settle();
+    expect(preview.native).toBe(false);
+    expect(playhead.playing).toBe(true);
+    draw(); await settle(); draw();
+    expect(decoding.requestVideo).toHaveBeenCalled();
   });
 
   it("asks where the window reads from again when the server's cleaner took a copy, or a frame failed", async () => {

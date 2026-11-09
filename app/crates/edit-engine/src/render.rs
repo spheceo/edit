@@ -251,8 +251,21 @@ pub mod decode_stats {
     pub(crate) static FORWARD_NS: AtomicU64 = AtomicU64::new(0);
     pub(crate) static FFMPEG: AtomicU64 = AtomicU64::new(0);
     pub(crate) static FFMPEG_NS: AtomicU64 = AtomicU64::new(0);
+    /// Decoders opened and seeked ahead of the playhead (`PreviewPictures::warm`), on their own threads.
+    pub(crate) static AHEAD: AtomicU64 = AtomicU64::new(0);
+    pub(crate) static AHEAD_NS: AtomicU64 = AtomicU64::new(0);
+
+    std::thread_local! {
+        /// Set on a decode-ahead thread: its opens and seeks count as `AHEAD`, not as a frame's.
+        pub(crate) static AHEAD_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
 
     pub(crate) fn add(count: &AtomicU64, time: &AtomicU64, since: std::time::Instant) {
+        if AHEAD_THREAD.with(std::cell::Cell::get) {
+            AHEAD.fetch_add(1, Ordering::Relaxed);
+            AHEAD_NS.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            return;
+        }
         count.fetch_add(1, Ordering::Relaxed);
         time.fetch_add(since.elapsed().as_nanos() as u64, Ordering::Relaxed);
     }
@@ -268,11 +281,16 @@ pub mod decode_stats {
         pub forward_ms: f64,
         pub ffmpeg: u64,
         pub ffmpeg_ms: f64,
+        /// Opens and seeks done ahead of the playhead since the last call, and their time.
+        pub ahead: u64,
+        pub ahead_ms: f64,
     }
 
     pub fn take() -> Taken {
         let ms = |time: &AtomicU64| time.swap(0, Ordering::Relaxed) as f64 / 1e6;
         Taken {
+            ahead: AHEAD.swap(0, Ordering::Relaxed),
+            ahead_ms: ms(&AHEAD_NS),
             opens: OPENS.swap(0, Ordering::Relaxed),
             open_ms: ms(&OPEN_NS),
             seeks: SEEKS.swap(0, Ordering::Relaxed),
@@ -805,6 +823,16 @@ impl ReaderPool {
         }
     }
 
+    /// Whether a pooled reader of `source` would read on to `time` (it's just behind it) rather than seek.
+    fn ready(&self, source: &Source, time: f64) -> bool {
+        self.readers.iter().any(|(reader, _)| {
+            reader.source.key == source.key
+                && reader
+                    .position
+                    .is_some_and(|position| position <= time + 1e-6 && time - position <= FORWARD)
+        })
+    }
+
     fn put(&mut self, reader: VideoReader) {
         self.clock += 1;
         let key = reader.source.key.clone();
@@ -1146,8 +1174,15 @@ impl FrameRenderer {
 /// through `pool` so playing on decodes forward and a jump seeks.
 #[cfg(target_os = "macos")]
 pub(crate) struct PreviewPictures {
-    pool: ReaderPool,
+    /// Shared with the decode-ahead threads, which put the readers they opened and seeked here.
+    pool: Arc<Mutex<ReaderPool>>,
+    ahead: mpsc::Sender<(Source, f64)>,
 }
+
+/// Threads opening and seeking readers ahead of the playhead (a cut to a new
+/// file cost its seek, 20-80 ms, on the drawing path: Cops Realize, Nov 9).
+#[cfg(target_os = "macos")]
+const AHEAD_THREADS: usize = 1;
 
 /// A clip's decoded picture: its clip, width, height and BGRA pixels.
 #[cfg(target_os = "macos")]
@@ -1156,14 +1191,81 @@ pub(crate) type Picture = (String, u32, u32, Vec<u8>);
 #[cfg(target_os = "macos")]
 impl PreviewPictures {
     pub(crate) fn new() -> Self {
-        // A few readers per file: two layers of one source, and the way back after a jump.
-        Self {
-            pool: ReaderPool::new(12, 3),
+        // A few readers per file: two layers of one source, the way back after a jump, and the next cut's.
+        let pool = Arc::new(Mutex::new(ReaderPool::new(12, 3)));
+        // What the ahead threads are opening now (file, size and the time in ms): a cut asked for every frame is opened once.
+        let opening: Arc<Mutex<HashSet<(DecodeKey, i64)>>> = Arc::new(Mutex::new(HashSet::new()));
+        let (ahead, requests) = mpsc::channel::<(Source, f64)>();
+        let requests = Arc::new(Mutex::new(requests));
+        for _ in 0..AHEAD_THREADS {
+            let (pool, opening, requests) = (
+                Arc::clone(&pool),
+                Arc::clone(&opening),
+                Arc::clone(&requests),
+            );
+            let _ = std::thread::Builder::new()
+                .name("edit preview ahead".to_owned())
+                .spawn(move || {
+                    // Behind the frame being drawn: utility work, never ahead of the player's thread.
+                    crate::util::utility_thread();
+                    decode_stats::AHEAD_THREAD.with(|ahead| ahead.set(true));
+                    loop {
+                        // One receiver shared: whichever thread is free takes the next request.
+                        let next = requests.lock().recv();
+                        let Ok((source, time)) = next else { return };
+                        let key = (source.key.clone(), (time * 1000.0).round() as i64);
+                        if pool.lock().ready(&source, time) || !opening.lock().insert(key.clone()) {
+                            continue;
+                        }
+                        let mut reader = VideoReader::open(source.clone());
+                        let mut scratch = vec![0_u8; source.bytes()];
+                        // The frame decoded here is dropped: the reader now stands on it, and the frame's own
+                        // read is a copy out of what it holds.
+                        if reader.frame_into(time, &mut scratch, false).is_ok() {
+                            pool.lock().put(reader);
+                        }
+                        opening.lock().remove(&key);
+                    }
+                });
         }
+        Self { pool, ahead }
     }
 
     pub(crate) fn clear(&mut self) {
-        self.pool.clear();
+        self.pool.lock().clear();
+    }
+
+    /// Has a reader of `media` opened and seeked to `source_time` on another
+    /// thread, unless one is there (or on its way), so a cut to it reads on
+    /// instead of seeking on the drawing path.
+    pub(crate) fn warm(
+        &self,
+        project: &Project,
+        media: &str,
+        source_time: f64,
+        shown: (u32, u32),
+        sources: &std::collections::HashMap<String, PathBuf>,
+    ) {
+        let Some(found) = project.media(media) else {
+            return;
+        };
+        if found.kind == edit_core::MediaKind::Image {
+            return;
+        }
+        let path = sources
+            .get(media)
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from(&found.path));
+        let source = Source::new(
+            found,
+            path,
+            decode_size(found, shown.0, shown.1),
+            Order::Bgra,
+        );
+        if self.pool.lock().ready(&source, source_time) {
+            return;
+        }
+        let _ = self.ahead.send((source, source_time));
     }
 
     /// `(clip, width, height, BGRA pixels)` for each video layer of `scene`.
@@ -1204,7 +1306,7 @@ impl PreviewPictures {
             }
         }
         let threads = if requests.len() > 2 { 4 } else { 1 };
-        let decoded = decode_all(&mut self.pool, &requests, threads)?;
+        let decoded = decode_all(&mut self.pool.lock(), &requests, threads)?;
         Ok(clips
             .into_iter()
             .zip(&requests)

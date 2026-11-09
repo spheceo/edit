@@ -9,20 +9,35 @@ export's readers (the Mac's video decoder; a reader just behind a frame decodes
 forward, anything else seeks) and presents onto a Core Animation layer under the
 page (`crates/edit-window/src/preview.rs`). The page turns see-through over the
 viewer (`native-preview` on `<html>`), so everything it draws over the picture
-stays on top, and asks for each frame (`lib/nativePreview.ts`); it keeps the
-playhead, the sound and its engine (sections, checks), but decodes no video and
-asks for no smooth-playback render, in full screen either. The edit goes to the
-window whole once, then as patches (`lib/patch.ts`), each answered with the
-revision the window draws or why it refused (a refused edit: the page draws).
-Each frame's answer says its time and where it went (`diagnostics.nativeFrames`,
-the `ui: preview: native …` timings). Each picture comes from its preview file,
+stays on top. At rest the page owns the playhead and asks for each frame
+(`lib/nativePreview.ts`); playing is the window's: the edit's sound is mixed
+there as the export mixes it (`crate::mix`, a quarter second at a time into a
+CoreAudio speaker, `mac_media::Speaker`), the frames the speaker has played are
+the one clock, the picture follows it, and the page asks where it is once an
+animation frame (`preview_position`) and moves its playhead there. Short of
+sound the clock holds, so picture and sound never drift. The cuts within the
+next three seconds have readers opened and seeked on two other threads
+(`PreviewPictures::warm`), so a cut reads on instead of seeking on the drawing
+path; a hover over the timeline's ruler tells the window where a click would
+land (`preview_hint`), and a resting playhead has its sound armed and its cuts
+warmed after a quarter second. The page decodes nothing and asks for no
+smooth-playback render, in full screen either (full screen plays on in the
+page, on its own clock). The edit goes to the window whole once, then as
+patches (`lib/patch.ts`, applied to the parsed clips: `edit_core::patch`), each
+answered with the revision the window draws or why it refused (a refused edit:
+the page draws); the page's own engine takes the same clips-only patches
+(`Engine::applyPatch`) instead of parsing the whole edit each change. Each
+frame's answer and each position says its time and where it went
+(`diagnostics.nativeFrames`: `played`, `playedSkipped`, `starved`; the
+`ui: preview: native …` timings). Each picture comes from its preview file,
 a cloud one's whole copy (a made proxy, or footage that's its own proxy), else
 its footage on the Mac, else the server's loopback stream while the whole file
-comes down; a pieced proxy's pieces on the Mac are read as files of their own
-(`apps/server/src/native_preview.ts`). Full screen, a browser, or five failed
-frames in a row: the page draws as below. Measured Nov 8 on Cops Realize (M1,
-cloud footage): 160 s with 30 cuts drew 4,816 of 4,823 frames, 2.1 ms p50 and
-3.8 ms p90, the cuts' seeks the slow ones (docs/plans/2026-11-08-audit.md).
+comes down; a pieced proxy's pieces on the Mac are read as files of their own;
+each sound from a made preview's `preview.m4a`, a cloud copy's own sound, else
+the footage or the stream (`apps/server/src/native_preview.ts`). Full screen, a
+browser, or five failed frames in a row: the page draws as below. Measured Nov
+8–9 on Cops Realize (M1, cloud footage) in docs/plans/2026-11-08-audit.md
+("A's stage 2, measured after").
 
 To see it without screen access: `EDIT_PREVIEW_TRACE=1` says each placement and
 draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,

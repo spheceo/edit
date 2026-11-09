@@ -466,6 +466,8 @@ export function Timeline() {
               : hit
                 ? "grab"
                 : "default";
+      // Over the ruler, a click would land the playhead here: Edit.app's window makes the frame ready.
+      if (y < RULER) preview.hint(Math.round(xToFrame(x)));
       if (useEditor.getState().tool === "razor") requestDraw();
       return;
     }

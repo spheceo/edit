@@ -5,9 +5,14 @@
 //! The page asks for it (`preview_open`), says where its viewer is
 //! (`preview_place`, in the page's points), sends the edit as its engine took
 //! it (`preview_project`, then only what changed: `preview_patch`), each
-//! answered with the revision now drawn or why it was refused, and asks for
-//! each frame (`preview_frame`, answered once it's on screen with how long it
-//! took and where the time went). The page turns see-through over its viewer while the
+//! answered with the revision now drawn or why it was refused, and at rest
+//! asks for each frame (`preview_frame`, answered once it's on screen with how
+//! long it took and where the time went). Playing is the player's
+//! (`preview_play`, `preview_pause`): it runs on the speaker's clock, draws
+//! the frames as they come due and says where it is when the page asks
+//! (`preview_position`, once an animation frame); `preview_hint` names a
+//! frame the playhead is about to land on, so its pictures are made ready.
+//! The page turns see-through over its viewer while the
 //! layer shows (the webview stops drawing its own background), so everything
 //! the page draws over the picture (notes, menus, dialogs, loaders) stays on
 //! top of it, and the window looks as it did. One player thread owns the GPU
@@ -20,6 +25,7 @@
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -32,7 +38,10 @@ use objc2_quartz_core::{CACornerMask, CALayer, CAMetalLayer, CATransaction};
 use tauri::{State, WebviewWindow};
 
 use edit_engine::excerpts::Excerpt;
-use edit_engine::player::{DrawTimes, Player};
+use edit_engine::player::{describe_draw, trace, DrawTimes, Player};
+
+/// The playhead resting this long is settled: its sound armed, the cuts ahead decoded.
+const SETTLE: Duration = Duration::from_millis(250);
 
 /// An update's answer: the revision the window now draws, or why it refused (the last one stays).
 type Accepted = mpsc::Sender<Result<u64, String>>;
@@ -42,6 +51,7 @@ enum Command {
         json: String,
         revision: u64,
         sources: HashMap<String, String>,
+        sounds: HashMap<String, String>,
         excerpts: HashMap<String, Vec<Excerpt>>,
         cache: String,
         reply: Accepted,
@@ -60,14 +70,36 @@ enum Command {
         frame: i64,
         reply: mpsc::Sender<Result<Drawn, String>>,
     },
+    Play {
+        frame: i64,
+        reply: mpsc::Sender<Result<(), String>>,
+    },
+    Pause {
+        reply: mpsc::Sender<Result<Option<i64>, String>>,
+    },
+    Position {
+        reply: mpsc::Sender<Result<Where, String>>,
+    },
+    Hint {
+        frame: i64,
+    },
     Rest,
 }
 
-/// Each call and draw said on stderr (`EDIT_PREVIEW_TRACE=1`), to see what the preview does without looking.
-fn trace(what: impl FnOnce() -> String) {
-    if std::env::var_os("EDIT_PREVIEW_TRACE").is_some() {
-        eprintln!("edit preview: {}", what());
-    }
+/// Where the player is: the playhead (a frame and a fraction), whether it's
+/// playing and whether it reached the end since the last ask, and how playing
+/// went since then: frames drawn, frames the clock passed undrawn, slow draws
+/// (over 33 ms), their times, and the speaker's output calls that ran short.
+#[derive(serde::Serialize, Clone, Default)]
+pub struct Where {
+    frame: f64,
+    playing: bool,
+    ended: bool,
+    drawn: u64,
+    skipped: u64,
+    slow: u64,
+    draws: Vec<f64>,
+    starved: u64,
 }
 
 /// A frame's answer to the page: the revision it shows, whether it was drawn
@@ -124,7 +156,9 @@ struct Open {
 pub struct Previews(Mutex<Option<Open>>);
 
 /// The player's thread: commands in order, a frame asked for while others
-/// wait drawn only if it's the newest.
+/// wait drawn only if it's the newest. Playing, it draws the clock's frames
+/// as they come due between commands; at rest, a playhead left alone for a
+/// moment is settled (its sound armed, the cuts ahead decoded).
 fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
     // SAFETY: the layer is retained by its view until `preview_close` has
     // stopped this thread (its sender dropped, then the view removed).
@@ -140,15 +174,34 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                     Command::Project { reply, .. } | Command::Patch { reply, .. } => {
                         let _ = reply.send(Err(error.clone()));
                     }
-                    Command::Resize { .. } | Command::Rest => {}
+                    Command::Play { reply, .. } => {
+                        let _ = reply.send(Err(error.clone()));
+                    }
+                    Command::Pause { reply } => {
+                        let _ = reply.send(Err(error.clone()));
+                    }
+                    Command::Position { reply } => {
+                        let _ = reply.send(Err(error.clone()));
+                    }
+                    Command::Resize { .. } | Command::Rest | Command::Hint { .. } => {}
                 }
             }
             return;
         }
     };
-    while let Ok(first) = commands.recv() {
-        let mut waiting = vec![first];
+    let mut wait = SETTLE;
+    let mut settled = false;
+    loop {
+        let first = match commands.recv_timeout(wait) {
+            Ok(command) => Some(command),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        let mut waiting: Vec<Command> = first.into_iter().collect();
         waiting.extend(commands.try_iter());
+        if !waiting.is_empty() {
+            settled = false;
+        }
         let newest = waiting
             .iter()
             .rposition(|command| matches!(command, Command::Draw { .. }));
@@ -158,6 +211,7 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                     json,
                     revision,
                     sources,
+                    sounds,
                     excerpts,
                     cache,
                     reply,
@@ -165,7 +219,14 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                     let started = std::time::Instant::now();
                     let bytes = json.len();
                     let count = sources.len();
-                    let set = player.set_project(&json, revision, sources, excerpts, cache.into());
+                    let set = player.set_project(
+                        &json,
+                        revision,
+                        sources,
+                        sounds,
+                        excerpts,
+                        cache.into(),
+                    );
                     trace(|| {
                         format!(
                             "project of {bytes} bytes, {count} sources, revision {revision}, set in {:.1} ms",
@@ -197,13 +258,36 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                 }
                 Command::Resize { width, height } => player.resize(width, height),
                 Command::Rest => player.rest(),
+                Command::Hint { frame } => player.hint(frame),
+                Command::Play { frame, reply } => {
+                    let _ = reply.send(player.play(frame));
+                }
+                Command::Pause { reply } => {
+                    let _ = reply.send(Ok(player.pause()));
+                }
+                Command::Position { reply } => {
+                    let at = player.position();
+                    let _ = reply.send(Ok(Where {
+                        frame: at.frame,
+                        playing: at.playing,
+                        ended: at.ended,
+                        drawn: at.report.drawn,
+                        skipped: at.report.skipped,
+                        slow: at.report.slow,
+                        draws: at.report.draws,
+                        starved: at.report.starved,
+                    }));
+                }
                 Command::Draw { frame, reply } => {
                     // An older ask: the newer one is drawn instead (the page asks for the frame it's on).
-                    if Some(index) != newest {
-                        trace(|| format!("frame {frame} skipped: a newer one was asked"));
+                    // Playing, the clock draws: the ask is answered as is.
+                    if Some(index) != newest || player.is_playing() {
+                        if !player.is_playing() {
+                            trace(|| format!("frame {frame} skipped: a newer one was asked"));
+                        }
                         let _ = reply.send(Ok(Drawn {
                             revision: player.revision(),
-                            skipped: true,
+                            skipped: Some(index) != newest,
                             ..Drawn::default()
                         }));
                         continue;
@@ -211,21 +295,21 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                     let started = std::time::Instant::now();
                     let drawn = player.draw(frame);
                     let ms = started.elapsed().as_secs_f64() * 1000.0;
-                    trace(|| {
-                        match (&drawn, player.last) {
-                        // "Ok" first: the acceptance check (scripts/acceptance.ts) reads success from it.
-                        (Ok(()), Some(t)) => format!(
-                            "frame {frame} in {ms:.1} ms: Ok, eval {:.1} decode {:.1} (layers {}, open {}×{:.1} seek {}×{:.1} fwd {}×{:.1} ffmpeg {}×{:.1}) upload {:.1} composite {:.1} present {:.1}",
-                            t.evaluate, t.decode, t.layers, t.decoders.opens, t.decoders.open_ms, t.decoders.seeks, t.decoders.seek_ms,
-                            t.decoders.forward, t.decoders.forward_ms, t.decoders.ffmpeg, t.decoders.ffmpeg_ms, t.upload, t.composite, t.present
-                        ),
-                        _ => format!("frame {frame} in {ms:.1} ms: {drawn:?}"),
-                    }
-                    });
+                    trace(|| describe_draw(frame, ms, &drawn, player.last));
                     let _ =
                         reply.send(drawn.map(|()| Drawn::of(player.revision(), ms, player.last)));
                 }
             }
+        }
+        if player.is_playing() {
+            wait = player.tick().unwrap_or(SETTLE);
+        } else {
+            if !settled {
+                // A moment with no command: the playhead rests here.
+                player.settle();
+                settled = true;
+            }
+            wait = SETTLE;
         }
     }
 }
@@ -425,11 +509,13 @@ async fn ask<T: Send + 'static>(
 /// what each media is decoded from and the local excerpts of streamed ones.
 /// Answers the revision now drawn, or why it was refused.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn preview_project(
     previews: State<'_, Previews>,
     json: String,
     revision: u64,
     sources: HashMap<String, String>,
+    sounds: Option<HashMap<String, String>>,
     excerpts: Option<HashMap<String, Vec<Excerpt>>>,
     cache: String,
 ) -> Result<u64, String> {
@@ -437,6 +523,7 @@ pub async fn preview_project(
         json,
         revision,
         sources,
+        sounds: sounds.unwrap_or_default(),
         excerpts: excerpts.unwrap_or_default(),
         cache,
         reply,
@@ -467,6 +554,32 @@ pub async fn preview_patch(
 #[tauri::command]
 pub async fn preview_frame(previews: State<'_, Previews>, frame: i64) -> Result<Drawn, String> {
     ask(&previews, |reply| Command::Draw { frame, reply }).await
+}
+
+/// Plays from `frame` on the player's clock (the speaker's), the picture following.
+#[tauri::command]
+pub async fn preview_play(previews: State<'_, Previews>, frame: i64) -> Result<(), String> {
+    ask(&previews, |reply| Command::Play { frame, reply }).await
+}
+
+/// Stops playing; the frame the playhead rests on (None: it wasn't playing).
+#[tauri::command]
+pub async fn preview_pause(previews: State<'_, Previews>) -> Result<Option<i64>, String> {
+    ask(&previews, |reply| Command::Pause { reply }).await
+}
+
+/// Where the player is, and how playing went since the last ask.
+#[tauri::command]
+pub async fn preview_position(previews: State<'_, Previews>) -> Result<Where, String> {
+    ask(&previews, |reply| Command::Position { reply }).await
+}
+
+/// The playhead is about to land on `frame`: its pictures are made ready.
+#[tauri::command]
+pub fn preview_hint(previews: State<'_, Previews>, frame: i64) -> Result<(), String> {
+    commands(&previews)?
+        .send(Command::Hint { frame })
+        .map_err(|_| "the preview stopped".to_owned())
 }
 
 /// Takes the layer away and gives the page its background back.

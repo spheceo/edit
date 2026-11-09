@@ -385,11 +385,12 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   timeProfileLines(app, project, operations);
   hearWords(app, project, operations);
   const [assets, house] = await planAssets(app, project, operations);
+  const before = clipSpans(project);
   const applied = diag.timeOn("agent", "plan: apply and validate", projectId, () =>
     editPlan.applyWith(project, operations, assets),
   );
   const dryRun = bool(args.dry_run) ?? false;
-  const audit = audited(app, project, null);
+  const audit = scopedAudit(audited(app, project, null), changedSpan(before, clipSpans(project)), fpsOf(project));
   let saved: { rev: number; project: Project };
   if (dryRun) {
     saved = { rev: current.rev, project };
@@ -429,6 +430,53 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
   };
   const input: ProjectInput = dryRun ? { json: jsonForSerde(saved.project) } : { ref: { id: projectId, rev: saved.rev } };
   return withReview(app, saved.project, input, frames, report);
+}
+
+/** Each clip's place and contents, to see what a plan changed. */
+function clipSpans(project: Project): Map<string, [number, number, string]> {
+  return new Map(project.clips.map((clip) => [clip.id, [clip.start, clip.start + clip.duration, JSON.stringify(clip)]]));
+}
+
+/** The frames a plan touched: every clip added, removed or changed, where it was and where it is. */
+export function changedSpan(before: Map<string, [number, number, string]>, after: Map<string, [number, number, string]>): [number, number] | null {
+  let from = Infinity;
+  let to = -Infinity;
+  const take = (span: [number, number, string] | undefined) => {
+    if (span === undefined) return;
+    from = Math.min(from, span[0]);
+    to = Math.max(to, span[1]);
+  };
+  for (const [id, was] of before) if (after.get(id)?.[2] !== was[2]) { take(was); take(after.get(id)); }
+  for (const [id, now] of after) if (!before.has(id)) take(now);
+  return from === Infinity ? null : [from, to];
+}
+
+/**
+ * A plan's audit: the issues where it worked in full, the rest counted by
+ * kind. The whole audit after every plan (44 KB on the horror run of Nov 9:
+ * 26 unused note links, 19 uncovered stretches, 18 strips…) filled the
+ * agent's context: it was compacted 40 times in two hours, every minute by
+ * the end, and stopped with the edit half done. review_edit has them all.
+ */
+export function scopedAudit(audit: Args, span: [number, number] | null, fps: number): Args {
+  const issues = Array.isArray(audit.issues) ? (audit.issues as Args[]) : [];
+  const margin = Math.round(fps * 2);
+  const near = (issue: Args): boolean => {
+    if (span === null) return false;
+    const points = ["at", "start", "end", "frame"].map((key) => issue[key]).filter((one): one is number => typeof one === "number");
+    if (points.length === 0) return false;
+    const from = Math.min(...points);
+    const to = Math.max(...points);
+    return from <= span[1] + margin && to >= span[0] - margin;
+  };
+  const here = issues.filter(near);
+  const elsewhere: Record<string, number> = {};
+  for (const issue of issues) if (!near(issue)) elsewhere[String(issue.kind)] = (elsewhere[String(issue.kind)] ?? 0) + 1;
+  return {
+    ...audit,
+    issues: here,
+    ...(Object.keys(elsewhere).length > 0 ? { elsewhere, elsewhere_note: "issues away from what this plan changed, counted by kind: review_edit lists each" } : {}),
+  };
 }
 
 async function reviewEdit({ app, args, projectId }: ToolCall): Promise<Content[]> {

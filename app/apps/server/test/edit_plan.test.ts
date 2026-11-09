@@ -1031,6 +1031,12 @@ test("horror's desktop shows what the story's people saw: a page in Internet Exp
   applyWith(q, [scrolling], { shutter: null, screen: { wallpaper: "wall", frames: qFrames } });
   const scrolled = q.clips.find((own) => own.name === "Desktop · Internet Explorer · Scroll · page.mp4") as VideoClip;
   expect(scrolled.speed).toBeCloseTo(0.5, 2);
+  // A first window a few frames in opens with the desktop: no bare wallpaper flashing (Nov 9, 21:21: at start + 3).
+  const r = project("plan");
+  r.style = "horror";
+  r.media.push(...q.media);
+  applyWith(r, [{ ...scrolling, start: 100, end: 1000, windows: [{ app: "browser", media: "scroll", scroll: true, at: 103 }] }], { shutter: null, screen: { wallpaper: "wall", frames: qFrames } });
+  expect(r.clips.find((own) => own.name === "Desktop · Internet Explorer · Scroll · page.mp4")!.start).toBe(100);
   // A dialog takes one or two lines; an email at most eight.
   expect(() => needs([{ ...op, windows: [{ app: "dialog", lines: [] }] }], p)).not.toThrow();
   expect(() => applyWith(project("plan"), [{ op: "desktop", start: 0, end: 300, windows: [{ app: "dialog", lines: ["a", "b", "c"] }] }], { shutter: null, screen: { wallpaper: "wall", frames } })).toThrow(/1 or 2 lines/);

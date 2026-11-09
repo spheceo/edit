@@ -245,6 +245,9 @@ export function readSpec(project: Project, given: Args, start: number, end: numb
     // Kept inside the desktop (a guessed frame past its end opens near the end).
     if (read.at >= end) read.at = Math.max(end - Math.round(fps), start);
     if (read.at < start) throw new Error(`${where}window ${index + 1} opens at ${read.at}, before the desktop starts (${start})`);
+    // The first window a few frames in showed the bare wallpaper as a flash (the horror run of Nov 9, 21:21 and 21:28:
+    // windows at 2 and 3 frames): within half a second, it's there from the start.
+    if (index === 0 && read.at - start < Math.round(fps / 2)) read.at = start;
     windows.push(read);
   });
   // The same footage or picture twice in one desktop reads as a mistake.

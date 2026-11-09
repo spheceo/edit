@@ -695,3 +695,18 @@ test("wait waits once for background work and says what's left", async () => {
   expect(await said(app, "review_edit", {})).toContain('"background":"the watcher: done in about');
   progress.end("watch", id, "watch", false);
 });
+
+test("a plan's audit gives the issues where it worked and counts the rest, so a long edit's context isn't filled by the whole audit after every plan", async () => {
+  const { changedSpan, scopedAudit } = await import("../src/edit_tools.ts");
+  const before = new Map<string, [number, number, string]>([["a", [0, 100, "a"]], ["b", [1000, 1100, "b"]], ["gone", [2000, 2050, "g"]]]);
+  const after = new Map<string, [number, number, string]>([["a", [0, 100, "a"]], ["b", [1000, 1200, "b2"]], ["new", [1150, 1300, "n"]]]);
+  expect(changedSpan(before, after)).toEqual([1000, 2050]);
+  expect(changedSpan(before, before)).toBeNull();
+  const audit = { clips: 3, issues: [{ kind: "cut_mid_word", at: 1040 }, { kind: "note_link_unused", start: 10 }, { kind: "note_link_unused", start: 5000 }, { kind: "horror_look_missing" }, { kind: "picture_gap", start: 2060, end: 2090 }] };
+  const scoped = scopedAudit(audit, [1000, 2050], 30);
+  expect((scoped.issues as { kind: string }[]).map((issue) => issue.kind)).toEqual(["cut_mid_word", "picture_gap"]);
+  expect(scoped.elsewhere).toEqual({ note_link_unused: 2, horror_look_missing: 1 });
+  expect(scoped.clips).toBe(3);
+  // Nothing changed (a plan of no-ops): all counted.
+  expect((scopedAudit(audit, null, 30).issues as unknown[]).length).toBe(0);
+});

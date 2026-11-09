@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import * as jobs from "../../src/jobs.ts";
+import * as macSpeech from "../../src/mac_speech.ts";
 import { waitingByItself } from "../../src/remote_actions.ts";
 import * as tools from "../../src/tools.ts";
 import * as captionTurns from "../../src/writer/caption_turns.ts";
@@ -23,12 +24,16 @@ beforeAll(() => {
   restore = mock.useEnv({ EDIT_RELAY_TOKEN: "relay-token" });
   timing.instant = true;
   tools.forget();
+  // The words come from Scribe (the mock relay) whatever Mac runs this: on one that hears on device (macOS 26 with
+  // edit-speech built), Apple heard the 8 minutes first, the preview was made meanwhile, and the first test failed.
+  macSpeech.timing.helper = null;
   // Who says each line asks Claude: not here (it waited on the real one, 10–16 s, and the wait below ran out).
   captionTurns.asking.ask = () => async () => {
     throw new Error("no Claude in tests");
   };
 });
 afterAll(() => {
+  macSpeech.timing.helper = undefined;
   restore();
   mock.stop();
 });

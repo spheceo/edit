@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test";
+import { afterAll, expect, mock, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
@@ -8,11 +8,20 @@ import type { Clip, Script, Word } from "@edit/types/writer";
 import * as real from "../../src/writer/exact.ts";
 
 // Hearing is Scribe and Claude: here it moves every word it hears 1 s later, as exact times would.
+// Only while this file's tests run: a module stood in for stays so for every test file after it in the same run
+// (rough.test.ts's two tests of the real hearing failed in every full run, and so every Check, from Nov 9).
 const heard: string[] = [];
 let hearing: Promise<void> = Promise.resolve();
+const hears = real.run;
+const standIn = { on: true };
+afterAll(() => {
+  standIn.on = false;
+});
 void mock.module("../../src/writer/exact.ts", () => ({
   ...real,
-  run: async (script: Script, _dir: string, footage: string, clips: Clip[]) => {
+  run: async (...args: Parameters<typeof real.run>) => {
+    if (!standIn.on) return hears(...args);
+    const [script, , footage, clips]: [Script, string, string, Clip[]] = [args[0], args[1], args[2], args[3]];
     heard.push(footage);
     await hearing;
     const spans = real.stretches(script, clips);

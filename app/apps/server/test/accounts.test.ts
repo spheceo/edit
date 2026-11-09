@@ -17,6 +17,15 @@ import { baseRouter, respond } from "../src/http/server.ts";
 import * as windowFocus from "../src/window_focus.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
+// The relay every test file asks unless it brings its own: the closed port test/setup.ts names. Put back, never
+// unset: unset, each later file in the same run asked the live relay (its pyannote flag sent a captions test to
+// Scribe on Linux, where this file runs before that one: Check red from Nov 9).
+const RELAY_BEFORE = process.env.EDIT_RELAY_URL;
+function relayBack(): void {
+  if (RELAY_BEFORE === undefined) delete process.env.EDIT_RELAY_URL;
+  else process.env.EDIT_RELAY_URL = RELAY_BEFORE;
+}
+
 const dir = fs.mkdtempSync(join(os.tmpdir(), "edit-accounts-"));
 // The store's events as the server's: what the pages are told (an `account` event when a sign-in lands).
 const listeners = new Set<(event: Record<string, unknown>) => void>();
@@ -221,7 +230,7 @@ test("the map page's tiles go through Edit's server to the relay with the person
     expect(answer.headers.get("cache-control")).toBe("max-age=60");
     expect(await answer.json()).toEqual({ bearer: `Bearer ${accounts.accessToken()}`, query: "?session=s1" });
   } finally {
-    delete process.env.EDIT_RELAY_URL;
+    relayBack();
   }
 });
 
@@ -331,7 +340,7 @@ test("a token the relay refuses (a cut-off made after it) is renewed once and th
     await expect(relay.json("GET", "/v1/test/cut-off", null, "the test", 5)).rejects.toThrow(/401/u);
     expect(refreshes).toBe(renewals);
   } finally {
-    delete process.env.EDIT_RELAY_URL;
+    relayBack();
   }
 });
 
@@ -398,7 +407,7 @@ test("a cloud call made while the kept sign-in is restored at start waits for it
     await starting;
     expect(answer.bearer).toBe(`Bearer ${accounts.accessToken()}`);
   } finally {
-    delete process.env.EDIT_RELAY_URL;
+    relayBack();
     delete process.env.EDIT_TRIALS;
   }
 });

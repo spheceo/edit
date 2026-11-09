@@ -106,3 +106,7 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 ### 20. A plan after a highlight was refused for its revision
 **Broke.** Three of turn 3's plans in 20 minutes were refused "revision conflict … refresh get_edit_context": the agent planned, highlighted the card it had just placed (highlight_evidence saves the project), and planned again on the first plan's revision, then re-read the context to try again.
 **Fix.** highlight_evidence answers with the revision it saved, and a plan holds over highlight marks added since its revision (new marker clips on tracks of their own), as it already did over sounds, starring and smoothing. Test: `plan_rebase.test.ts`.
+
+### 21. look_at_media past a file's end said only "failed to fill whole buffer"
+**Broke.** The agent looked at 55–160 s of the FBI most-wanted clip, a 53 s range imported from 0:27–1:20 of its video, timed by the video's own clock: twice "could not decode … failed to fill whole buffer".
+**Fix.** look_at_media refuses a start past the file's end saying how long it is and that an imported range starts at 0, and ends a look at the file's end. Test: `edit_tools.test.ts`.

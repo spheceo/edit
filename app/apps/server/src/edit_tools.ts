@@ -1118,7 +1118,13 @@ async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[
   const media = found.project.media.find((own) => own.id === mediaId);
   if (media === undefined) throw new Error(`no media ${mediaId}`);
   const start = Math.max(num(args.start) ?? 0, 0);
-  const end = num(args.end) ?? media.duration;
+  // Past the file's end, the decoder only said "failed to fill whole buffer" (Nov 9: 55–160 s asked of a
+  // 53 s range imported from 0:27–1:20 of its video, timed by the video's own clock).
+  const long = media.kind === "image" ? 0 : media.duration;
+  if (long > 0 && start >= long) {
+    throw new Error(`${mediaId} is ${fixed(long, 2)} s long: start inside it (its seconds count from this file's own start; an imported range starts at 0, not at its place in the source video)`);
+  }
+  const end = long > 0 ? Math.min(num(args.end) ?? long, long) : num(args.end) ?? media.duration;
   const count = clamp(uint(args.count) ?? 12, 1, 24);
   const { budget, columns } = sheetSpec(args, [], count);
   // pick "auto": a frame each time the picture settles into a new state, at most count (frame_picks.ts).

@@ -200,9 +200,9 @@ test("horror's titles take the guide's looks: a chapter over a blur, a date at t
 });
 
 test("Animation 11's icons are drawn by Edit; the CC Lens swells in and out; a censor region is a mosaic", async () => {
-  const { iconPng, lens } = await import("../src/horror_graphics.ts");
+  const { ICONS, iconPng, lens } = await import("../src/horror_graphics.ts");
   const { mosaicCensors } = await import("../src/horror_look.ts");
-  for (const icon of ["person", "phone", "folder", "document", "camera"] as const) expect(iconPng(icon, [0.86, 0, 0], 64).length).toBeGreaterThan(100);
+  for (const icon of ICONS) expect(iconPng(icon, [0.86, 0, 0], 64).length).toBeGreaterThan(100);
   const p = horror();
   const made = lens(p, { start: 0, end: 90, strength: 0.7 });
   const keys = (p.clips.find((c) => c.id === made.clip)!.keyframes as Record<string, { value: number }[]>).lens!;
@@ -214,6 +214,29 @@ test("Animation 11's icons are drawn by Edit; the CC Lens swells in and out; a c
   mosaicCensors(p);
   expect((p.clips.find((c) => c.id === "face") as { blur: { mosaic: number } }).blur.mosaic).toBe(30);
   expect((p.clips.find((c) => c.id === "whole") as { blur: { mosaic?: number } }).blur.mosaic).toBeUndefined();
+});
+
+test("an icon takes its label, a line under it, a row of them one by one and a way off screen; anything else is refused", async () => {
+  const { icon } = await import("../src/horror_graphics.ts");
+  const p = horror();
+  p.media.push(media({ id: "ic", name: "icon-person-red-v1.png", path: "/icon.png", kind: "image", width: 512, height: 512, duration: 0 }));
+  // The horror Doc of Nov 9: "eight retro person icons, label '8 arrested, December 2004'"; "Bakky Visual Planning" / "Tokyo, April 2002".
+  const eight = icon(p, { op: "commentary_icon", start: 100, end: 300, media: "ic", label: "8 arrested, December 2004", sub: "Tokyo, April 2002", count: 8 });
+  const made = p.clips.filter((c) => (eight.clips as string[]).includes(c.id)) as unknown as { name: string; start: number; text?: string; transform: { x: number } }[];
+  const people = made.filter((c) => c.name === "Horror · icon");
+  expect(people.length).toBe(8);
+  expect(new Set(people.map((c) => c.start)).size).toBe(8);
+  expect(new Set(people.map((c) => Math.round(c.transform.x))).size).toBe(8);
+  expect(made.find((c) => c.name === "Horror · icon word")!.text).toBe("8 ARRESTED, DECEMBER 2004");
+  expect(made.find((c) => c.name === "Horror · icon line")!.text).toBe("Tokyo, April 2002");
+  // "a plane icon flying off screen".
+  const flying = icon(p, { start: 400, end: 490, media: "ic", exit: "right" });
+  const plane = p.clips.find((c) => c.id === (flying.clips as string[])[0]) as unknown as { keyframes: { x: { value: number }[] } };
+  expect(plane.keyframes.x.at(-1)!.value).toBeGreaterThan(p.settings.width / 2);
+  // name still names it; a key it doesn't know is refused, never dropped.
+  const named = icon(p, { start: 500, end: 600, media: "ic", name: "Eric Jover" });
+  expect(p.clips.some((c) => (named.clips as string[]).includes(c.id) && (c as { text?: string }).text === "ERIC JOVER")).toBe(true);
+  expect(() => icon(p, { start: 500, end: 600, media: "ic", caption: "x" })).toThrow("doesn't take caption");
 });
 
 test("horror's marker is red with torn edges and a glow, inside the screenshot", async () => {

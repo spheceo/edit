@@ -256,7 +256,9 @@ export function profile(p: Project, a: Args): Args {
 
 // --- Animation 11's icons, drawn by Edit -----------------------------------
 
-export const ICONS = ["person", "phone", "folder", "document", "camera"] as const;
+// The horror Doc of Nov 9 asked for "a Windows XP style company icon", "a retro sword icon", "three image-file icons",
+// "a plane-ticket icon", "a plane icon flying off screen", "an email icon", "a hotel door icon", "a glass icon".
+export const ICONS = ["person", "phone", "folder", "document", "camera", "building", "sword", "image", "ticket", "plane", "envelope", "door", "glass"] as const;
 export type Icon = (typeof ICONS)[number];
 
 const smooth = (edge0: number, edge1: number, v: number) => { const t = Math.min(1, Math.max(0, (v - edge0) / (edge1 - edge0))); return t * t * (3 - 2 * t); };
@@ -267,6 +269,24 @@ function box(x: number, y: number, cx: number, cy: number, hx: number, hy: numbe
 }
 
 type Part = { d: (x: number, y: number) => number; fill: [number, number, number] };
+
+/** Signed distance to a segment from (ax, ay) to (bx, by), `r` thick on each side. */
+function segment(x: number, y: number, ax: number, ay: number, bx: number, by: number, r: number): number {
+  const px = x - ax; const py = y - ay; const dx = bx - ax; const dy = by - ay;
+  const t = Math.min(1, Math.max(0, (px * dx + py * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(px - dx * t, py - dy * t) - r;
+}
+
+/** Signed distance to a polygon (its points in order). */
+function polygon(x: number, y: number, points: [number, number][]): number {
+  let d = Infinity; let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const [ax, ay] = points[i]!; const [bx, by] = points[j]!;
+    d = Math.min(d, segment(x, y, ax, ay, bx, by, 0));
+    if ((ay > y) !== (by > y) && x < ((bx - ax) * (y - ay)) / (by - ay) + ax) inside = !inside;
+  }
+  return inside ? -d : d;
+}
 
 /** Each icon as filled parts (unit square, y down), drawn in order with a dark, slightly rough outline round the whole. */
 function partsOf(icon: Icon, color: [number, number, number]): Part[] {
@@ -298,6 +318,59 @@ function partsOf(icon: Icon, color: [number, number, number]): Part[] {
         { d: (x, y) => Math.min(box(x, y, 0.5, 0.57, 0.4, 0.25, 0.06), box(x, y, 0.5, 0.3, 0.14, 0.06, 0.03)), fill: [0.18, 0.19, 0.21] },
         { d: (x, y) => Math.hypot(x - 0.5, y - 0.57) - 0.16, fill: [0.55, 0.6, 0.68] },
         { d: (x, y) => Math.hypot(x - 0.5, y - 0.57) - 0.09, fill: [0.12, 0.14, 0.2] },
+      ];
+    case "building":
+      return [
+        { d: (x, y) => box(x, y, 0.5, 0.54, 0.3, 0.4, 0.02), fill: [0.5, 0.56, 0.66] },
+        ...[0, 1, 2, 3, 4].flatMap((row) => [0, 1, 2].map((col): Part => ({ d: (x, y) => box(x, y, 0.36 + col * 0.14, 0.26 + row * 0.13, 0.045, 0.04, 0.01), fill: [0.98, 0.86, 0.45] }))),
+        { d: (x, y) => box(x, y, 0.5, 0.88, 0.06, 0.06, 0.01), fill: [0.22, 0.2, 0.2] },
+      ];
+    case "sword":
+      return [
+        { d: (x, y) => polygon(x, y, [[0.86, 0.14], [0.8, 0.3], [0.38, 0.72], [0.28, 0.62], [0.7, 0.2]]), fill: [0.84, 0.86, 0.9] },
+        { d: (x, y) => segment(x, y, 0.2, 0.58, 0.42, 0.8, 0.035), fill: [0.8, 0.62, 0.2] },
+        { d: (x, y) => segment(x, y, 0.3, 0.7, 0.14, 0.86, 0.045), fill: [0.35, 0.2, 0.12] },
+      ];
+    case "image":
+      return [
+        { d: (x, y) => box(x, y, 0.5, 0.5, 0.4, 0.33, 0.03), fill: [0.97, 0.97, 0.95] },
+        { d: (x, y) => box(x, y, 0.5, 0.5, 0.33, 0.26, 0.01), fill: [0.55, 0.75, 0.95] },
+        { d: (x, y) => Math.hypot(x - 0.66, y - 0.38) - 0.06, fill: [0.99, 0.85, 0.3] },
+        { d: (x, y) => Math.max(polygon(x, y, [[0.17, 0.76], [0.4, 0.44], [0.58, 0.68], [0.68, 0.56], [0.83, 0.76]]), box(x, y, 0.5, 0.5, 0.33, 0.26, 0.01)), fill: [0.25, 0.55, 0.3] },
+      ];
+    case "ticket":
+      return [
+        { d: (x, y) => Math.max(box(x, y, 0.5, 0.5, 0.44, 0.24, 0.04), -(Math.hypot(x - 0.06, y - 0.5) - 0.07), -(Math.hypot(x - 0.94, y - 0.5) - 0.07)), fill: color },
+        { d: (x, y) => box(x, y, 0.5, 0.5, 0.33, 0.15, 0.02), fill: [0.97, 0.96, 0.92] },
+        { d: (x, y) => Math.min(segment(x, y, 0.34, 0.5, 0.6, 0.5, 0.025), segment(x, y, 0.46, 0.5, 0.4, 0.4, 0.02), segment(x, y, 0.46, 0.5, 0.4, 0.6, 0.02), segment(x, y, 0.36, 0.5, 0.33, 0.45, 0.015), segment(x, y, 0.36, 0.5, 0.33, 0.55, 0.015)), fill: [0.15, 0.17, 0.22] },
+        { d: (x, y) => Math.min(...[0, 1, 2].map((i) => box(x, y, 0.71, 0.42 + i * 0.08, 0.06, 0.012, 0.005))), fill: [0.45, 0.47, 0.52] },
+      ];
+    case "plane":
+      return [
+        { d: (x, y) => polygon(x, y, [[0.46, 0.46], [0.12, 0.3], [0.08, 0.36], [0.36, 0.58]]), fill: [0.78, 0.8, 0.84] },
+        { d: (x, y) => polygon(x, y, [[0.22, 0.74], [0.1, 0.72], [0.1, 0.78], [0.26, 0.84]]), fill: [0.78, 0.8, 0.84] },
+        { d: (x, y) => segment(x, y, 0.16, 0.84, 0.84, 0.16, 0.065), fill: [0.95, 0.95, 0.96] },
+        { d: (x, y) => polygon(x, y, [[0.54, 0.46], [0.72, 0.9], [0.66, 0.94], [0.42, 0.64]]), fill: [0.86, 0.88, 0.9] },
+        { d: (x, y) => segment(x, y, 0.7, 0.3, 0.76, 0.24, 0.02), fill: [0.35, 0.55, 0.8] },
+      ];
+    case "envelope":
+      return [
+        { d: (x, y) => box(x, y, 0.5, 0.52, 0.42, 0.28, 0.03), fill: [0.97, 0.96, 0.92] },
+        { d: (x, y) => Math.min(segment(x, y, 0.1, 0.27, 0.5, 0.56, 0.02), segment(x, y, 0.9, 0.27, 0.5, 0.56, 0.02)), fill: [0.45, 0.47, 0.52] },
+      ];
+    case "door":
+      return [
+        { d: (x, y) => box(x, y, 0.5, 0.52, 0.3, 0.44, 0.02), fill: [0.4, 0.26, 0.16] },
+        { d: (x, y) => box(x, y, 0.5, 0.52, 0.25, 0.39, 0.01), fill: [0.6, 0.4, 0.24] },
+        { d: (x, y) => Math.min(box(x, y, 0.5, 0.32, 0.17, 0.13, 0.02), box(x, y, 0.5, 0.71, 0.17, 0.15, 0.02)), fill: [0.52, 0.34, 0.2] },
+        { d: (x, y) => Math.hypot(x - 0.66, y - 0.53) - 0.035, fill: [0.92, 0.78, 0.3] },
+      ];
+    case "glass":
+      return [
+        { d: (x, y) => Math.max(Math.hypot(x - 0.5, y - 0.28) - 0.26, y - 0.48, 0.12 - y), fill: [0.82, 0.88, 0.94] },
+        { d: (x, y) => Math.max(Math.hypot(x - 0.5, y - 0.28) - 0.22, y - 0.45, 0.3 - y), fill: [0.62, 0.05, 0.1] },
+        { d: (x, y) => segment(x, y, 0.5, 0.5, 0.5, 0.82, 0.03), fill: [0.82, 0.88, 0.94] },
+        { d: (x, y) => box(x, y, 0.5, 0.86, 0.17, 0.035, 0.03), fill: [0.82, 0.88, 0.94] },
       ];
   }
 }
@@ -336,27 +409,65 @@ export function iconFile(home: string, op: Args): string | null {
   return path;
 }
 
-/** Animation 11: the icon popping up on the guide's curve, the word under it (Sirius' "STALKER"). */
+/** What a horror commentary_icon takes: anything else is refused, never dropped (Nov 9: the agent's `label`, `count` and `sub` were). */
+const ICON_KEYS = ["op", "as", "start", "end", "media", "icon", "color", "name", "label", "sub", "role", "count", "exit", "x", "y", "size", "label_size", "blur"];
+
+/**
+ * Animation 11: the icon popping up on the guide's curve, the word under it
+ * (Sirius' "STALKER") and a smaller line under that (`sub`: "Tokyo, April
+ * 2002"). `count` lays that many in a row, appearing one by one ("eight retro
+ * person icons", "22 simple person icons appearing one by one"); `exit` left,
+ * right or up takes it off screen over its last frames ("a plane icon flying
+ * off screen", "the Pratt icon slides off screen").
+ */
 export function icon(p: Project, a: Args): Args {
   const [start, end] = span(a, "commentary_icon"); const d = end - start;
   const w = p.settings.width; const h = p.settings.height; const k = h / 1080;
+  const unknown = Object.keys(a).filter((key) => !ICON_KEYS.includes(key));
+  if (unknown.length > 0) throw new Error(`commentary_icon doesn't take ${unknown.join(", ")}: it takes icon (${ICONS.join(", ")}) or media, color, label (the word under it), sub (a smaller line under that), count (that many in a row, one by one), exit (left, right or up: off screen at the end), x, y, size, blur`);
   const m = typeof a.media === "string" ? mediaOf(p, a.media) : undefined;
   if (m === undefined || m.kind !== "image") throw new Error(`commentary_icon needs icon (${ICONS.join(", ")}; color red, white, yellow, blue, green or grey) or media: a picture`);
+  const exit = a.exit === undefined ? null : typeof a.exit === "string" ? a.exit : "";
+  if (exit !== null && !["left", "right", "up"].includes(exit)) throw new Error("commentary_icon's exit is left, right or up");
+  const count = Math.round(number(a, "count", 1));
+  if (count < 1 || count > 30) throw new Error("commentary_icon's count is 1 to 30");
   const made: string[] = [];
   if (a.blur === true) made.push(backdropBlur(p, start, d));
-  const size = number(a, "size", 330) * k; const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
+  // A row of them, in up to three rows, each smaller as there are more.
+  const cols = count <= 8 ? count : Math.ceil(count / Math.ceil(count / 11)); const rows = Math.ceil(count / cols);
+  const size = Math.min(number(a, "size", 330) * k, (w * 0.84) / cols / 1.15, (h * 0.5) / rows / 1.15);
+  const fit = Math.min(w / Math.max(m.width, 1), h / Math.max(m.height, 1));
   const scale = size / (Math.max(m.width, m.height) * fit);
-  const label = typeof a.name === "string" && a.name.trim() ? a.name.trim().toUpperCase() : null;
+  const words = typeof a.label === "string" ? a.label : typeof a.name === "string" ? a.name : typeof a.role === "string" ? a.role : "";
+  const label = words.trim() ? words.trim().toUpperCase() : null;
+  const sub = typeof a.sub === "string" && a.sub.trim() ? a.sub.trim() : null;
   const x = number(a, "x", 0); const y = number(a, "y", label ? -60 * k : 0);
-  const settle = Math.min(14, Math.floor(d / 3));
-  made.push(push(p, { type: "video", media: m.id, source_in: 0, start, duration: d, name: "Horror · icon", fade_in: 3, fade_out: 7,
-    transform: { x, y, scale },
-    keyframes: { scale: [...arrival(scale * 0.3, scale, settle), key(d - 1, scale * 1.03)] } }));
+  const step = size * 1.15; const blockH = rows * step - (step - size);
+  // One by one: the row comes in over at most half the span, a few frames apart.
+  const stagger = count === 1 ? 0 : Math.max(1, Math.min(8, Math.floor((d * 0.45) / count)));
+  const out = exit === null ? 0 : Math.min(18, Math.floor(d / 3));
+  for (let i = 0; i < count; i++) {
+    const row = Math.floor(i / cols); const col = i % cols; const inRow = Math.min(cols, count - row * cols);
+    const ix = x + (col - (inRow - 1) / 2) * step; const iy = y - blockH / 2 + size / 2 + row * step;
+    const from = start + i * stagger; const dd = end - from;
+    const settle = Math.min(14, Math.floor(dd / 3));
+    const away = exit === "left" ? -(w / 2 + size) - ix : exit === "right" ? w / 2 + size - ix : 0;
+    const keyframes: Args = { scale: [...arrival(scale * 0.3, scale, settle), key(dd - 1, scale * 1.03)] };
+    if (exit === "left" || exit === "right") keyframes.x = [key(dd - 1 - out, ix), { ...key(dd - 1, ix + away), handle_in: { speed: 0, influence: 0.6 } }];
+    if (exit === "up") keyframes.y = [key(dd - 1 - out, iy), { ...key(dd - 1, -(h / 2 + size)), handle_in: { speed: 0, influence: 0.6 } }];
+    made.push(push(p, { type: "video", media: m.id, source_in: 0, start: from, duration: dd, name: "Horror · icon", fade_in: 3, fade_out: exit === null ? 7 : 0,
+      transform: { x: ix, y: iy, scale }, keyframes }));
+  }
+  const style = { font: "Arimo", weight: 700, size: number(a, "label_size", count > 8 ? 56 : 68) * k, color: WHITE, tracking: 1 * k, line_height: 1.1, glow: { enabled: false },
+    shadow: { color: [0, 0, 0, 1], opacity: 0.95, distance: 3 * k, angle: 135, size: 3 * k, blur: 4 * k } };
+  const under = y + blockH / 2 + 70 * k;
   if (label) {
-    const style = { font: "Arimo", weight: 700, size: number(a, "label_size", 68) * k, color: WHITE, tracking: 1 * k, line_height: 1.1, glow: { enabled: false },
-      shadow: { color: [0, 0, 0, 1], opacity: 0.95, distance: 3 * k, angle: 135, size: 3 * k, blur: 4 * k } };
     made.push(push(p, { type: "text", name: "Horror · icon word", text: label, start: start + 5, duration: d - 5, fade_in: 6, fade_out: 7, style,
-      transform: { x, y: y + size / 2 + 70 * k } }));
+      transform: { x, y: under } }));
+  }
+  if (sub) {
+    made.push(push(p, { type: "text", name: "Horror · icon line", text: sub, start: start + 9, duration: d - 9, fade_in: 6, fade_out: 7,
+      style: { ...style, weight: 400, size: (style.size as number) * 0.62 }, transform: { x, y: under + (label ? (style.size as number) * 0.95 : 0) } }));
   }
   return { clips: made };
 }

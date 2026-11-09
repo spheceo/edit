@@ -1037,6 +1037,10 @@ test("horror's desktop shows what the story's people saw: a page in Internet Exp
   r.media.push(...q.media);
   applyWith(r, [{ ...scrolling, start: 100, end: 1000, windows: [{ app: "browser", media: "scroll", scroll: true, at: 103 }] }], { shutter: null, screen: { wallpaper: "wall", frames: qFrames } });
   expect(r.clips.find((own) => own.name === "Desktop · Internet Explorer · Scroll · page.mp4")!.start).toBe(100);
+  // A window the plan got wrong says so, not that the desktop's pictures weren't prepared (its sizes never asked for).
+  const wide = { ...op, windows: [{ app: "forum", at: 0, lines: ["a: b"], width: 0.7 }] };
+  expect(needs([wide], p).screens).toBeUndefined();
+  expect(() => applyWith(project("plan"), [wide], { shutter: null })).toThrow(/width is a share of the frame's width/);
   // A dialog takes one or two lines; an email at most eight.
   expect(() => needs([{ ...op, windows: [{ app: "dialog", lines: [] }] }], p)).not.toThrow();
   expect(() => applyWith(project("plan"), [{ op: "desktop", start: 0, end: 300, windows: [{ app: "dialog", lines: ["a", "b", "c"] }] }], { shutter: null, screen: { wallpaper: "wall", frames } })).toThrow(/1 or 2 lines/);

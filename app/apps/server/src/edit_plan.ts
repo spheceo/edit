@@ -459,12 +459,14 @@ function operationOn(project: Project, args: Args, smooth: string[], assets: Ass
     case "evidence_board":
       return evidenceBoard(project, args, assets.shutter);
     case "desktop": {
-      if (assets.screen === undefined || assets.screen === null) throw new Error("desktop's pictures weren't prepared (run it through apply_edit_plan)");
       const start = int(args.start);
       if (start === null) throw new Error("desktop needs start (frames)");
       const end = int(args.end) ?? (int(args.duration) === null ? null : start + int(args.duration)!);
       if (end === null) throw new Error("desktop needs end or duration (frames)");
+      // Read first: a window the plan got wrong (a width over 0.6, Nov 9) leaves its pictures unprepared, and its
+      // own error is what to say, not "weren't prepared".
       let spec = screen.readSpec(project, args, start, end, "Desktop · ");
+      if (assets.screen === undefined || assets.screen === null) throw new Error("desktop's pictures weren't prepared (run it through apply_edit_plan)");
       const skip = (name: string) => name.startsWith("Desktop · ");
       if (args.open !== false) spec = screen.openFrom(spec, screen.footageBefore(project, start, skip), screen.footageAt(project, end, false, skip));
       const built = screen.build(project, spec, assets.screen);

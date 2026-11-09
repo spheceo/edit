@@ -355,9 +355,10 @@ export function cover(project: Project, given: Record<string, unknown>, art: scr
       return;
     }
     if (isScreen[index]) {
-      if (art === null) throw new Error(`shot ${index + 1}: the desktop's pictures weren't prepared (run it through apply_edit_plan)`);
       const asked = shot.desktop ?? { windows: [{ app: "photo_viewer", media: shot.media, label: shot.label }] };
+      // Read first, so a window the plan got wrong says what's wrong with it (Nov 9).
       let spec = screen.readSpec(project, asked, start, end, `${prefix}Desktop · `, `shot ${index + 1}: `);
+      if (art === null) throw new Error(`shot ${index + 1}: the desktop's pictures weren't prepared (run it through apply_edit_plan)`);
       if (asked.open !== false) {
         // What plays after it: the next shot, else the footage after the cut-in.
         const after = args.shots[index + 1];

@@ -89,3 +89,12 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 ### 16. A desktop flashed its bare wallpaper as it opened
 **Broke.** At 21:21 and 21:28 the agent's desktops showed the wallpaper alone for 2 and 3 frames: its first window opened at start + 2 or 3 (open: false, no zoom from a player to cover it), and it spent a plan butting them up.
 **Fix.** `desktop_screen.readSpec`: a first window within half a second of the desktop's start opens at the start. Test: `edit_plan.test.ts`.
+
+### 17. Japanese came out as blank boxes
+**Broke.** "Animation 10: … typewriter on the right: 'Ryu Kuriyama' / '栗山龍'": the agent's text showed three boxes for the kanji, so it took the name out.
+**Why.** None of Edit's bundled faces has a kanji or kana, and a text was laid out and drawn in its one face.
+**Fix.** `edit-render/src/text.rs`: a letter its face has none of is measured and drawn from the fallback face, Noto Sans JP Bold (SIL OFL), cut to kana, full-width forms and the 6,355 JIS X 0208 kanji (2.2 MB); kerning only between letters of one face. Bundled with the others for export and fetched by the browser's preview (`playback.ts`). Test: `text.rs`'s fallback test.
+
+### 18. Every highlight was captured as a strip the horror audit refused
+**Broke.** The second turn ended with 22 `horror_screenshot_strip`s "need full-page recaptures": capture_evidence with a phrase crops to the phrase's paragraph (LAist's 696x174, a court paper's two lines), and horror's audit refuses a picture under 220 px tall as "a line cut out of a page". The agent then had to recapture the page and read the words' boxes for highlight_evidence off the picture by eye.
+**Fix.** In a horror project, a phrase's capture is the page round it (`aroundCrop`: at least 1,000 px wide round the text's column, 1,000 tall, the phrase in the middle), web pages and PDFs alike, and comes with `phrase_rects`: the phrase's lines' exact boxes in the picture (the words' range in the page; a PDF's text runs cut to the phrase's share of their letters), the rects highlight_evidence takes, and a focus. Checked on LAist's standoff article and the Statement of Decision's page 3. Test: `evidence_capture.test.ts`.

@@ -5,7 +5,33 @@ import * as os from "node:os";
 import { join } from "./paths.ts";
 import * as seams from "./seams.ts";
 
-export interface Capture { url: string; title: string; width: number; height: number; path: string; }
+export interface Rect { x: number; y: number; width: number; height: number; }
+/** A capture; `lines`: each line of the phrase's words, in the picture's pixels (what highlight_evidence takes). */
+export interface Capture { url: string; title: string; width: number; height: number; path: string; lines?: Rect[]; }
+
+/**
+ * The page around a phrase (horror's highlights, Nov 9): a page "shown whole
+ * and close", never a line cut out of it (22 of the horror run's captures were
+ * such strips, which its audit refuses). At least 1,000 px wide round the
+ * text's column and 1,000 tall, the phrase's lines in the middle, inside the
+ * page.
+ */
+export function aroundCrop(lines: Rect[], page: { width: number; height: number }, column: { left: number; right: number }): Rect {
+  const width = Math.min(page.width, Math.max(1000, column.right - column.left + 80));
+  const height = Math.min(page.height, 1000);
+  const middleX = (column.left + column.right) / 2;
+  const top = Math.min(...lines.map((line) => line.y)); const bottom = Math.max(...lines.map((line) => line.y + line.height));
+  const x = Math.min(Math.max(0, middleX - width / 2), page.width - width);
+  const y = Math.min(Math.max(0, (top + bottom) / 2 - height / 2), page.height - height);
+  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
+}
+
+/** Lines in the page's pixels as they sit in a crop of it. */
+export function linesIn(lines: Rect[], crop: Rect): Rect[] {
+  return lines
+    .map((line) => ({ x: Math.round(line.x - crop.x), y: Math.round(line.y - crop.y), width: Math.round(line.width), height: Math.round(line.height) }))
+    .filter((line) => line.x + line.width > 0 && line.y + line.height > 0 && line.x < crop.width && line.y < crop.height);
+}
 /**
  * Takes a sign-in or cookie wall off the page as loaded (a dialog, or a fixed
  * panel over most of it, saying "Log in", "Sign up", "See photos…") and lets
@@ -166,7 +192,7 @@ export function pdfScript(base64: string, phrase: string, page: number | null): 
     document.body.style.margin = '0'; document.body.innerHTML = ''; document.body.appendChild(canvas);
     await one.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
     const box = (item) => { const t = lib.Util.transform(vp.transform, item.transform); const h = Math.hypot(t[2], t[3]); return { x: t[4], y: t[5] - h, w: item.width * scale, h }; };
-    let rect = null;
+    let rect = null; const lines = []; let column = null;
     if (needle) {
       const hit = spans.filter(([from, to]) => to > at && from < at + needle.length).map(([, , item]) => box(item));
       const all = spans.map(([, , item]) => box(item));
@@ -181,14 +207,26 @@ export function pdfScript(base64: string, phrase: string, page: number | null): 
       const air = Math.max(...hit.map((b) => b.h)) * 0.6;
       const top = Math.max(0, topOf - air), bottom = Math.min(canvas.height, bottomOf + air);
       rect = { x: Math.round(left), y: Math.round(top), width: Math.round(right - left), height: Math.round(bottom - top) };
+      // The phrase's own lines: each text run it touches, cut to the share of its letters the phrase takes, joined by line.
+      const runs = spans.filter(([from, to]) => to > at && from < at + needle.length).map(([from, to, item]) => {
+        const b = box(item); const n = Math.max(1, to - from);
+        const a = Math.max(0, at - from) / n, z = Math.min(n, at + needle.length - from) / n;
+        return { x: b.x + b.w * a, y: b.y, width: b.w * (z - a), height: b.h };
+      });
+      for (const run of runs) {
+        const same = lines.find((line) => Math.abs(line.y - run.y) < run.height * 0.5);
+        if (same) { const r = Math.max(same.x + same.width, run.x + run.width); same.x = Math.min(same.x, run.x); same.width = r - same.x; same.height = Math.max(same.height, run.height); }
+        else lines.push({ ...run });
+      }
+      column = { left, right };
     }
-    return { page: n, width: canvas.width, height: canvas.height, rect };
+    return { page: n, width: canvas.width, height: canvas.height, rect, lines, column };
   }
   return { error: needle ? 'The phrase is not in the PDF' + (asked !== null ? ' on page ' + asked : '') + '; do not fabricate it (a phrase split by a line break or a hyphen: give a shorter part of it)' : 'The PDF has no pages' };
 })()`;
 }
 
-export async function capture(url: string, path: string, phrase = "", selector = "", fullPage = false, page: number | null = null): Promise<Capture> {
+export async function capture(url: string, path: string, phrase = "", selector = "", fullPage = false, page: number | null = null, around = false): Promise<Capture> {
   const open = waybackOpen(url);
   if (open !== null) url = await waybackCapture(open);
   const parsed = new URL(url);
@@ -252,14 +290,17 @@ export async function capture(url: string, path: string, phrase = "", selector =
       }
       if (bytes.length > 80_000_000) throw new Error("the PDF is over 80 MB: give the page as a screenshot instead");
       const drawn = await call("Runtime.evaluate", { expression: pdfScript(Buffer.from(bytes).toString("base64"), phrase, page), awaitPromise: true, returnByValue: true }, 180_000);
-      const pdf = (drawn.result as { value?: { error?: string; page?: number; width?: number; height?: number; rect?: { x: number; y: number; width: number; height: number } | null } } | undefined)?.value;
+      const pdf = (drawn.result as { value?: { error?: string; page?: number; width?: number; height?: number; rect?: Rect | null; lines?: Rect[]; column?: { left: number; right: number } | null } } | undefined)?.value;
       if (pdf === undefined) throw new Error(`the PDF could not be drawn${drawn.exceptionDetails ? `: ${JSON.stringify(drawn.exceptionDetails).slice(0, 200)}` : ""}`);
       if (pdf.error !== undefined) throw new Error(pdf.error);
-      const clip = pdf.rect ?? { x: 0, y: 0, width: pdf.width!, height: pdf.height! };
+      const found = pdf.lines ?? [];
+      const clip = around && found.length > 0 && pdf.column
+        ? aroundCrop(found, { width: pdf.width!, height: pdf.height! }, pdf.column)
+        : (pdf.rect ?? { x: 0, y: 0, width: pdf.width!, height: pdf.height! });
       const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: true, clip: { ...clip, scale: 1 } });
       if (typeof shot.data !== "string") throw new Error("Chrome returned no screenshot");
       fs.writeFileSync(path, Buffer.from(shot.data, "base64"));
-      return { path, url, title: `${parsed.pathname.split("/").pop() ?? "PDF"}, page ${pdf.page}`, width: clip.width, height: clip.height };
+      return { path, url, title: `${parsed.pathname.split("/").pop() ?? "PDF"}, page ${pdf.page}`, width: clip.width, height: clip.height, ...(found.length > 0 ? { lines: linesIn(found, clip) } : {}) };
     }
     let readyTimer: ReturnType<typeof setTimeout> | null = null;
     // The Wayback Machine serves an old page slowly, its scripts and pictures one by one through the archive (the
@@ -305,10 +346,37 @@ export async function capture(url: string, path: string, phrase = "", selector =
       if (own.length < 20) return {error: 'The page drew nothing to capture' + (location.hostname === 'web.archive.org' ? ' (the Wayback Machine is slow or refusing just now): try again in a few minutes, or use a screenshot of it the script gives' : '')};
       if (/^(Just a moment|Access denied|Sign in to X|Sign in to confirm)/i.test(body.trim())) return {error:'The site showed a login or bot check'};
       const r = element?.getBoundingClientRect();
+      // The phrase's own lines, in the page's pixels: its words' range in the element, one box per line.
+      const lines = [];
+      if (element && phrase) {
+        const needle = phrase.toLowerCase().replace(/\s+/g, ' ').trim();
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT); const map = []; let flat = '';
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const said = node.textContent.toLowerCase();
+          for (let i = 0; i < said.length; i++) {
+            const space = /\s/.test(said[i]);
+            if (space && (flat.endsWith(' ') || flat === '')) continue;
+            flat += space ? ' ' : said[i]; map.push([node, i]);
+          }
+        }
+        const at = flat.indexOf(needle);
+        if (at >= 0) {
+          const range = document.createRange();
+          range.setStart(map[at][0], map[at][1]); const last = map[at + needle.length - 1]; range.setEnd(last[0], last[1] + 1);
+          for (const box of range.getClientRects()) {
+            if (box.width < 2 || box.height < 2) continue;
+            const same = lines.find((line) => Math.abs(line.y - (box.y + scrollY)) < box.height * 0.5);
+            if (same) { const right = Math.max(same.x + same.width, box.x + scrollX + box.width); same.x = Math.min(same.x, box.x + scrollX); same.width = right - same.x; same.height = Math.max(same.height, box.height); }
+            else lines.push({ x: box.x + scrollX, y: box.y + scrollY, width: box.width, height: box.height });
+          }
+        }
+      }
+      const column = r ? { left: r.x + scrollX, right: r.x + scrollX + r.width } : null;
+      const pageHeight = Math.max(document.documentElement.scrollHeight, innerHeight);
       // The crop in the page's own coordinates (what captureScreenshot's clip takes): the element's place in the
       // window plus how far the page is scrolled. Without the scroll, a phrase scrolled to the middle of a long
       // article was cropped from a part of the page never drawn: a white picture (LAist, Nov 8).
-      return {title:document.title,url:location.href,selection:element?.innerText?.slice(0,500),rect:r?{x:Math.max(0,r.x-12)+scrollX,y:Math.max(0,r.y-12)+scrollY,width:Math.min(innerWidth-Math.max(0,r.x-12),r.width+24),height:Math.min(innerHeight-Math.max(0,r.y-12),r.height+24)}:null};
+      return {lines,column,pageHeight,title:document.title,url:location.href,selection:element?.innerText?.slice(0,500),rect:r?{x:Math.max(0,r.x-12)+scrollX,y:Math.max(0,r.y-12)+scrollY,width:Math.min(innerWidth-Math.max(0,r.x-12),r.width+24),height:Math.min(innerHeight-Math.max(0,r.y-12),r.height+24)}:null};
     })()`, returnByValue: true }, 120_000);
     const data = (result.result as { value?: Record<string, unknown> } | undefined)?.value;
     if (data === undefined || data.error) throw new Error(String(data?.error ?? "the source page could not be read"));
@@ -324,10 +392,16 @@ export async function capture(url: string, path: string, phrase = "", selector =
       const height = Number((size.result as { value?: number } | undefined)?.value ?? 1400);
       whole = { x: 0, y: 0, width: 1920, height: Math.max(1400, Math.round(height)) };
     }
-    const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: whole !== null, ...(whole ? { clip: { ...whole, scale: 1 } } : rect ? { clip: { ...rect, scale: 1 } } : {}) });
+    const found = Array.isArray(data.lines) ? (data.lines as Rect[]) : [];
+    const column = data.column as { left: number; right: number } | null;
+    // In a horror project, the page round the phrase, not its paragraph alone.
+    const pageCrop = around && found.length > 0 && column !== null ? aroundCrop(found, { width: 1920, height: Number(data.pageHeight) || 1400 }, column) : null;
+    const clip = whole ?? pageCrop ?? rect;
+    const shot = await call("Page.captureScreenshot", { format: "png", captureBeyondViewport: whole !== null || pageCrop !== null, ...(clip ? { clip: { ...clip, scale: 1 } } : {}) });
     if (typeof shot.data !== "string") throw new Error("Chrome returned no screenshot");
     fs.writeFileSync(path, Buffer.from(shot.data, "base64"));
-    return { path, url: typeof data.url === "string" ? data.url : url, title: typeof data.title === "string" ? data.title : "", width: whole?.width ?? rect?.width ?? 1920, height: whole?.height ?? rect?.height ?? 1400 };
+    return { path, url: typeof data.url === "string" ? data.url : url, title: typeof data.title === "string" ? data.title : "", width: clip?.width ?? 1920, height: clip?.height ?? 1400,
+      ...(found.length > 0 && clip ? { lines: linesIn(found, clip) } : {}) };
   } finally {
     for (const item of pending.values()) { clearTimeout(item.timer); item.reject(new Error("capture closed")); }
     socket?.close(); child.kill();

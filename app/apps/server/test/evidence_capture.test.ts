@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { DRAWN, isPdfLink, pdfScript, pickCapture, UNWALL, waybackOpen } from "../src/evidence_capture.ts";
+import { aroundCrop, DRAWN, isPdfLink, linesIn, pdfScript, pickCapture, UNWALL, waybackOpen } from "../src/evidence_capture.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("a Wayback link that leaves the date open stands for a real capture of the page, never a parked one", () => {
@@ -124,3 +124,16 @@ test.skipIf(chrome === null || process.env.EDIT_OFFLINE === "1")("a PDF's phrase
     cleanup();
   }
 }, 90_000);
+
+test("a horror highlight's capture is the page round the phrase, its lines given where they are in it", () => {
+  // LAist's "his wish to be an actor" (Nov 9): a 696x174 strip before, the audit's horror_screenshot_strip.
+  const lines = [{ x: 952, y: 2140, width: 148, height: 19 }];
+  const crop = aroundCrop(lines, { width: 1920, height: 4800 }, { left: 624, right: 1296 });
+  expect(crop).toEqual({ x: 460, y: 1650, width: 1000, height: 1000 });
+  expect(linesIn(lines, crop)).toEqual([{ x: 492, y: 490, width: 148, height: 19 }]);
+  // Near the top of a short page: kept inside it.
+  const top = aroundCrop([{ x: 100, y: 30, width: 50, height: 20 }], { width: 1600, height: 700 }, { left: 60, right: 1540 });
+  expect(top).toEqual({ x: 20, y: 0, width: 1560, height: 700 });
+  // A line outside the crop isn't given.
+  expect(linesIn([{ x: 10, y: 5000, width: 40, height: 20 }], crop)).toEqual([]);
+});

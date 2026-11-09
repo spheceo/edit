@@ -28,11 +28,16 @@ registerTool("capture_evidence", async ({ app, args, projectId }) => {
   const dir = join(app.store.home, "research", projectId, "captures"); fs.mkdirSync(dir, { recursive: true });
   const path = join(dir, `source-${Date.now()}.png`);
   const page = typeof args.page === "number" && Number.isInteger(args.page) ? args.page : null;
-  const result = await capture(args.url, path, typeof args.phrase === "string" ? args.phrase : "", typeof args.selector === "string" ? args.selector : "", args.full_page === true, page);
+  // Horror shows a page whole and close, never a line of it: a phrase comes with the page round it.
+  const around = app.store.get(projectId)?.project.style === "horror";
+  const result = await capture(args.url, path, typeof args.phrase === "string" ? args.phrase : "", typeof args.selector === "string" ? args.selector : "", args.full_page === true, page, around);
   const [, ids, errors] = await importPaths(app, projectId, [path], false, "agent");
   const media = ids[0]; if (media === undefined) throw new Error(errors.join("; "));
   keep(app, projectId, `capture:${media}`, { ...result, asked: args.url, media, captured: Date.now() });
-  return text(stableStringify({ media, url: result.url, title: result.title, width: result.width, height: result.height, note: "Real page capture, not reconstructed content. Inspect it before use: a site may show a consent/login page or irrelevant UI. Add a commentary_card, then highlight_evidence on its returned photo clip." }));
+  const lines = result.lines ?? [];
+  return text(stableStringify({ media, url: result.url, title: result.title, width: result.width, height: result.height,
+    ...(lines.length > 0 ? { phrase_rects: lines, focus: [Math.round(lines[0]!.x + lines[0]!.width / 2), Math.round(lines[0]!.y + lines[0]!.height / 2)] } : {}),
+    note: `Real page capture, not reconstructed content. Inspect it before use: a site may show a consent/login page or irrelevant UI. Add a commentary_card, then highlight_evidence on its returned photo clip${lines.length > 0 ? " with rects: phrase_rects (the phrase's lines, exact), and the card's focus on them" : ""}.` }));
 });
 export interface BrollRange { url: string; start: number; end: number; purpose: string; }
 /**

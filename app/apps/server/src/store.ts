@@ -573,7 +573,15 @@ export class Store {
       // fields, and a view holding the tool's own spelling of a clip read as "changed since you read it" the next time
       // the agent touched that clip, at the very revision it had just written (Nov 9, Marc's Mac: 14 such refusals in
       // one turn, a batch of six update_clips and the same three sounds twice).
-      if (agents && knew !== null) agentView.learned(id, live.rev, knew.project === current.project ? live.project : patches.apply(knew.project, patches.diff(current.project, live.project)));
+      if (agents && knew !== null) {
+        try {
+          agentView.learned(id, live.rev, knew.project === current.project ? live.project : patches.apply(knew.project, patches.diff(current.project, live.project)));
+        } catch (error) {
+          // The change is saved; it only doesn't fit over what the agent read (a list reordered by hand since). What
+          // it knows stays as it was, so it reads again before it changes those things: never a failed call for a saved change.
+          diag.warn("store", `${id}: noting the agent's own change: ${diag.messageOf(error)}`);
+        }
+      }
       // Edit's own work, not a person's and not a call of the agent's: what the agent knows takes it along.
       else if (!agents && read === undefined) agentView.background(id, current.project, live.project);
       return [live, value];

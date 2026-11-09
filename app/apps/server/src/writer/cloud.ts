@@ -971,7 +971,8 @@ async function savedSince(id: string, row: Record<string, unknown>): Promise<Rec
   if (listed?.ok !== true || listed.value === null || typeof listed.value !== "object") return null;
   const now = listed.value as Record<string, unknown>;
   if (Number(now.rev ?? 0) <= Number(row.rev ?? 0) && now.deletedAt == null) return null;
-  return { ...now, scriptId: id };
+  // Over the listed row: what the one-script answer doesn't say (who made it, its archive state) stays as listed.
+  return { ...row, ...now, scriptId: id };
 }
 
 /** Brings one script from the cloud when it's newer than this Mac's, as `decidePull` says. */

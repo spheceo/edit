@@ -435,7 +435,13 @@ async function applyEditPlan({ app, args, projectId }: ToolCall): Promise<Conten
     try {
       const landed = await app.store.replace(projectId, current.rev, project, ORIGIN);
       saved = landed;
-      showAgent(unread === null || before === null ? landed : { rev: landed.rev, project: patches.apply(unread, patches.diff(before, landed.project)) });
+      try {
+        showAgent(unread === null || before === null ? landed : { rev: landed.rev, project: patches.apply(unread, patches.diff(before, landed.project)) });
+      } catch (error) {
+        // The plan is saved; it only doesn't fit over what the agent read (tracks or clips reordered by hand since):
+        // never a failed plan for a saved one, which the agent would send again.
+        diag.warn("agent", `${projectId}: noting the plan over what the agent read: ${diag.messageOf(error)}`);
+      }
     } catch (error) {
       if (!(error instanceof UpdateError)) throw error;
       switch (error.kind) {

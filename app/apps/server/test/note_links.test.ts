@@ -51,6 +51,22 @@ test("a directing note's link with no clip showing its source is flagged; a bare
     p.clips.push({ id: "c1", type: "video", track: p.tracks[0]!.id, media: "m1", start: 0, duration: 90, source_in: 0 } as never);
     flags = unusedNoteLinks(app, p);
     expect(flags.map((flag) => flag.link)).toEqual(["https://www.laweekly.com/herbert-wong"]);
+    // Captured and shown as its retro copy (horror's screenshots, Nov 9: 26 placed links still listed): it's on screen.
+    p.media.push({ id: "m7", name: "source-1.png", path: "/m7.png", kind: "image", duration: 0, width: 1000, height: 1000, fps: 30, has_audio: false });
+    p.media.push({ id: "m8", name: "retro-m7-1000x1000.png", path: "/m8.png", kind: "image", duration: 0, width: 1000, height: 1000, fps: 30, has_audio: false });
+    fs.writeFileSync(`${research}/broll.json`, JSON.stringify({
+      "range:fyBRZzYWpBA:8:20": { url: "https://www.youtube.com/watch?v=fyBRZzYWpBA", media: "m1", start: 8, end: 20 },
+      "capture:m7": { url: "https://www.laweekly.com/herbert-wong", asked: "https://www.laweekly.com/herbert-wong", media: "m7" },
+    }));
+    p.clips.push({ id: "c2", type: "video", track: p.tracks[0]!.id, media: "m8", start: 90, duration: 90, source_in: 0, name: "Horror · screenshot" } as never);
+    expect(unusedNoteLinks(app, p)).toEqual([]);
+    // A link that opens another address (an amp page): a capture asked at that address and shown is it.
+    p.script.blocks[0]!.notes = ["Animation 4: AP/NBC article, highlight it: https://www.nbcnews.com/news/amp/wbna37519916"];
+    fs.writeFileSync(`${research}/broll.json`, JSON.stringify({
+      "capture:m7": { url: "https://www.nbcnews.com/id/wbna37519916", asked: "https://www.nbcnews.com/news/amp/wbna37519916", media: "m1" },
+      "capture:m9": { url: "https://www.nbcnews.com/id/wbna37519916", asked: "https://www.nbcnews.com/id/wbna37519916", media: "m7" },
+    }));
+    expect(unusedNoteLinks(app, p)).toEqual([]);
   } finally {
     cleanup();
   }

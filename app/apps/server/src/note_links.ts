@@ -122,6 +122,14 @@ function usedMedia(project: Project): Set<string> {
     else if (value !== null && typeof value === "object") Object.values(value).forEach(walk);
   };
   walk(project.clips);
+  // Horror shows a screenshot as its retro copy and a page to scroll as a video of it scrolling, each named for its
+  // original (retro-m177-1664x1390.png, "Scroll · m190-1920x4200-30.mp4"): the original is what's on screen (Nov 9:
+  // 26 links placed that way still listed as unused).
+  for (const media of project.media) {
+    if (!used.has(media.id)) continue;
+    const original = /^(?:retro-|Scroll · )([A-Za-z0-9_]+)-\d+x\d+/u.exec(media.name)?.[1];
+    if (original !== undefined && ids.has(original)) used.add(original);
+  }
   return used;
 }
 
@@ -153,7 +161,10 @@ export function unusedNoteLinks(app: App, project: Project): Record<string, unkn
     for (const note of block.notes ?? []) {
       if (bare(note)) continue;
       for (const link of linksIn(note)) {
-        const sources = found.filter(([key, one]) => matches(link, key, one));
+        const asked = found.filter(([key, one]) => matches(link, key, one));
+        // The page a link ended up at (NBC's amp link opens id/wbna37519916, Nov 9): a capture of that page is it too.
+        const landed = new Set(asked.map(([, one]) => (typeof one.url === "string" ? pageKey(one.url) : null)).filter((key): key is string => key !== null));
+        const sources = [...asked, ...found.filter(([, one]) => !asked.some(([, own]) => own === one) && typeof one.url === "string" && landed.has(pageKey(one.url) ?? ""))];
         if (sources.some(([, one]) => shown(one))) continue;
         out.push({
           kind: "note_link_unused",

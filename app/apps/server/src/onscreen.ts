@@ -243,7 +243,10 @@ export function issues(project: Project): { issues: unknown[]; pending: string[]
       }
     }
     close();
-    const burned = ours.has(media.id) ? null : burnedSubtitles(project, clip, media, text, from, to);
+    // A page scrolling in a horror browser window (horror_look.scrollingPages) is a web page's own words, never
+    // subtitles (Nov 9: three flagged).
+    const page = media.name.startsWith("Scroll · ");
+    const burned = ours.has(media.id) || page ? null : burnedSubtitles(project, clip, media, text, from, to);
     if (burned !== null) {
       const seen = subtitled.get(media.id);
       if (seen === undefined) subtitled.set(media.id, { kind: "burned_subtitles", media: media.name, ...burned, clips: [clip.id] });

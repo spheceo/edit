@@ -747,6 +747,24 @@ test("unresolved_reference_and_bad_final_state_fail", () => {
   );
 });
 
+// Nov 9, Marc's edit: ten plans refused in 75 seconds, each naming one more pair of subtitles overlapping on V19.
+test("a plan refused for overlapping clips names every overlap at once", () => {
+  const p = project("plan");
+  // The subtitles' track: clips left overlapping anywhere else go onto a track of their own.
+  const subtitles = p.tracks.find((one) => one.kind === "video")!;
+  subtitles.subtitles = true;
+  const track = subtitles.id;
+  for (let index = 0; index < 4; index++) p.clips.push(clip({ id: `s${index}`, type: "text", track, start: index * 30, duration: 30, text: `line ${index}` }));
+  valid(p);
+  // Every subtitle made ten frames longer: three overlaps, all said.
+  const longer = [{ op: "update", select: { ids: ["s0", "s1", "s2", "s3"] }, patch: { duration: 40 } }];
+  expect(() => apply(structuredClone(p), longer)).toThrow(
+    "final plan is invalid: clips s0 and s1 overlap on track V1 (3 overlaps in all, as [start,end) frames: s0 [0,40) and s1 [30,70) on V1; s1 [30,70) and s2 [60,100) on V1; s2 [60,100) and s3 [90,130) on V1. Fix every one in the next plan); nothing saved",
+  );
+  // One overlap is said as it always was.
+  expect(() => apply(structuredClone(p), [{ op: "update", select: { ids: ["s0"] }, patch: { duration: 40 } }])).toThrow("final plan is invalid: clips s0 and s1 overlap on track V1; nothing saved");
+});
+
 test("rejected_plan_leaves_disk_revision_and_events_untouched", async () => {
   const { store, home, cleanup } = fixtureHome("plan-rejected");
   try {

@@ -40,6 +40,7 @@ import {
   separateOverlaps,
   tidyTracks,
   touchesPeople,
+  trackLabel,
   trackOf,
 } from "./project.ts";
 import { isBug } from "./guard.ts";
@@ -242,10 +243,31 @@ export function applyWith(project: Project, operations: Json[], assets: Assets):
   // once needs (the interrogation intro's plans left 69 video tracks where 9 do).
   tidyTracks(project);
   const invalid = native().projectValidate(jsonForSerde(project));
-  if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}; nothing saved`);
+  if (invalid !== null) throw new Error(`final plan is invalid: ${invalid}${/ overlap on track /u.test(invalid) ? everyOverlap(project) : ""}; nothing saved`);
   const short = runsOut(project, played);
   if (short !== null) throw new Error(`final plan is invalid: ${short}; nothing saved`);
   return { results, smooth, separated, bound };
+}
+
+/**
+ * Every pair of clips overlapping on a track, to go with the first one the
+ * check names: told one pair at a time, the agent fixed that pair and sent
+ * the plan again for the next (Nov 9, Marc's edit: ten plans refused in 75
+ * seconds, each for another pair of subtitles on V19).
+ */
+function everyOverlap(project: Project): string {
+  const pairs: string[] = [];
+  const span = (clip: Clip) => `${clip.id} [${clip.start},${clipEnd(clip)})`;
+  for (const track of project.tracks) {
+    const on = project.clips.filter((clip) => clip.track === track.id).sort((a, b) => a.start - b.start);
+    for (let index = 1; index < on.length; index++) {
+      const [before, clip] = [on[index - 1]!, on[index]!];
+      if (clip.start < clipEnd(before)) pairs.push(`${span(before)} and ${span(clip)} on ${trackLabel(project, track.id) ?? track.id}`);
+    }
+  }
+  if (pairs.length < 2) return "";
+  const shown = pairs.slice(0, 24);
+  return ` (${pairs.length} overlaps in all, as [start,end) frames: ${shown.join("; ")}${pairs.length > shown.length ? `; and ${pairs.length - shown.length} more` : ""}. Fix every one in the next plan)`;
 }
 
 /** What a clip plays of its media (which, from where, how fast, how long). */

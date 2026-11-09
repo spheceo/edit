@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
+import * as vm from "node:vm";
 
 import { aroundCrop, DRAWN, isPdfLink, linesIn, pageScript, PARKED, pdfScript, pickCapture, UNWALL, waybackNear, waybackOpen } from "../src/evidence_capture.ts";
 import { scratch } from "./helpers/home.ts";
@@ -165,8 +166,8 @@ test("a parked domain's page is told from the site", () => {
 test("the script a capture runs in the page parses, whatever the phrase", () => {
   // Nov 9: "can't" in a message inside it broke every web capture ("Unexpected identifier 't'").
   for (const phrase of ["", "his wish to be an actor", "it's \"quoted\" `ticked` and ${not} interpolated"]) {
-    expect(() => new Function(`return ${pageScript(phrase, "", false)}`)).not.toThrow();
-    expect(() => new Function(`return ${pageScript(phrase, "p.lead", true)}`)).not.toThrow();
+    expect(() => new vm.Script(pageScript(phrase, "", false))).not.toThrow();
+    expect(() => new vm.Script(pageScript(phrase, "p.lead", true))).not.toThrow();
   }
-  expect(() => new Function(`return ${pdfScript("", "phrase", 3)}`)).not.toThrow();
+  expect(() => new vm.Script(pdfScript("", "phrase", 3))).not.toThrow();
 });

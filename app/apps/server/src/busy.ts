@@ -70,6 +70,7 @@ export function busyWith(app: App, agentTurns = true): string[] {
   const turns = agents?.hasRunningTurns?.() ?? (agents?.runningProjects?.().length ?? 0) > 0;
   const said = [
     app.exports.running() ? "an export" : "",
+    app.exports.archiving?.() ? "an export going up to the cloud" : "",
     shares > 0 ? (shares === 1 ? "a share" : `${shares} shares`) : "",
     uploading ? "an upload to Drive" : "",
     (app.scripts as ScriptJobs | undefined)?.running?.() || importing() ? "a footage import" : "",

@@ -109,6 +109,10 @@ export interface Exports {
   replay?(id: string): { options: ExportOptions; output: string; extra: StartExtra } | null;
   /** Whether any export is running (an update waits for it). */
   running(): boolean;
+  /** Whether a finished export is going up to the cloud (an update and the Mac's sleep wait for it; its project is free meanwhile). */
+  archiving?(): boolean;
+  /** Sends a finished export's file to the cloud, as its `archive` job after a restart does. */
+  sendUp?(home: string, id: string, output: string, key: string, record: import("./exports.ts").ExportRecord): Promise<void>;
   /** Project `id`'s export under way, if any: what it writes, its timeline hash and options key. */
   runningFor?(id: string): { output: string; timeline: string; options: string } | null;
   /** Whether an export is rendering on this Mac (smooth playback's render isn't one). */

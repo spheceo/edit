@@ -169,7 +169,7 @@ export function exportCloudKey(project: string, name: string): string {
 /** Injectable cloud IO for `archiveExportFile` (tests stand in for R2). */
 export const exportCloud = {
   enabled: (): boolean => cloud.enabled(),
-  upload: (path: string, key: string): Promise<void> => cloud.uploadFile(path, key),
+  upload: (path: string, key: string, signal?: AbortSignal): Promise<void> => cloud.uploadFile(path, key, undefined, signal),
   head: (key: string): Promise<{ size: number } | null> => cloud.head(key),
 };
 
@@ -207,9 +207,12 @@ export function holdExport(path: string): () => void {
   };
 }
 
-/** Whether something is reading the export at `path` now (a share making its copies). */
+/** Finished exports going up to the cloud now, by their file: how each is stopped, and when it has. */
+const archiving = new Map<string, { stop: AbortController; done: Promise<void> }>();
+
+/** Whether something is reading the export at `path` now (a share making its copies, its own upload to the cloud). */
 export function beingRead(path: string): boolean {
-  return reading.has(path);
+  return reading.has(path) || archiving.has(path);
 }
 
 /**
@@ -257,14 +260,17 @@ export async function archiveExportFile(
   key: string,
   io: typeof exportCloud = exportCloud,
   room: (path: string) => number = freeBytes,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   let size: number;
   try { size = fs.statSync(output).size; } catch { return false; }
   try {
-    await io.upload(output, key);
+    await io.upload(output, key, signal);
     const found = await io.head(key);
     if (found === null || found.size !== size) return false;
   } catch { return false; }
+  // Stopped for a newer export of this file: that one is written here now, and goes up itself.
+  if (signal?.aborted) return false;
   // Archived; while the disk keeps its room it stays here too: it's the project's newest.
   if (room(output) > KEEP_NEWEST_FREE) return true;
   // A copy being read stays until the reading's done.
@@ -281,17 +287,36 @@ export async function archiveExportFile(
  * there: after the export, or after a restart cut the upload short (the
  * `archive` job). A file gone meanwhile is said, never exported again here.
  */
-export async function archiveFinished(home: string, id: string, output: string, key: string, record: ExportRecord): Promise<void> {
+export async function archiveFinished(home: string, id: string, output: string, key: string, record: ExportRecord, signal?: AbortSignal): Promise<void> {
   if (!fs.existsSync(output)) throw new Error(`${output} is gone`);
   // Short of room: the older copies kept while there was some go first, so this one may stay.
   dropKept(home, output);
-  if (await archiveExportFile(output, key)) {
+  if (await archiveExportFile(output, key, exportCloud, freeBytes, signal)) {
     try {
       remember(home, id, record);
     } catch { /* the list keeps the local-only record */ }
     diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy kept: being read, or the newest with room for it)" : " and deleted the local copy"}`);
+  } else if (signal?.aborted) {
+    diag.info("export", `${id}: the upload of ${output} to the cloud stopped: a newer export of it is being made`);
   } else {
     diag.warn("export", `${id}: cloud archive of ${output} unverified; local copy kept`);
+  }
+}
+
+/**
+ * `archiveFinished`, noted as going up while it does: a newer export of the
+ * same file stops it (`ExportRegistry.start`) rather than writing the file
+ * under it, and the cleaners leave the file alone (`beingRead`).
+ */
+export async function archiveGoing(home: string, id: string, output: string, key: string, record: ExportRecord): Promise<void> {
+  const stop = new AbortController();
+  const sent = archiveFinished(home, id, output, key, record, stop.signal);
+  const entry = { stop, done: sent.then(() => undefined, () => undefined) };
+  archiving.set(output, entry);
+  try {
+    await sent;
+  } finally {
+    if (archiving.get(output) === entry) archiving.delete(output);
   }
 }
 
@@ -552,6 +577,9 @@ export class ExportRegistry implements seams.Exports {
   /** Files exported since the server started, newest last: the only ones it hands out or reveals. */
   private finished: string[] = [];
 
+  /** Finished exports of this registry's going up to the cloud now. */
+  private sending = 0;
+
   /** The data folder whose exports list this keeps (`<home>/exports.json`); none in some tests. */
   constructor(private readonly home: string | null = null) {}
 
@@ -563,6 +591,21 @@ export class ExportRegistry implements seams.Exports {
   /** Whether an export someone asked for is under way (one made ahead isn't). */
   running(): boolean {
     return [...this.jobs.values()].some((job) => job.ahead !== true);
+  }
+
+  /** Whether a finished export is going up to the cloud (its project is free to export or share again meanwhile). */
+  archiving(): boolean {
+    return this.sending > 0;
+  }
+
+  /** Sends a finished export to the cloud (`archiveGoing`), counted as this Mac's work while it goes: after its export, or as the `archive` job a restart carries on. */
+  async sendUp(home: string, id: string, output: string, key: string, record: ExportRecord): Promise<void> {
+    this.sending += 1;
+    try {
+      await archiveGoing(home, id, output, key, record);
+    } finally {
+      this.sending -= 1;
+    }
   }
 
   /** Project `id`'s export under way: what it writes, its timeline (`timelineHash`) and options (`optionsKey`). One made ahead isn't one to follow. */
@@ -817,9 +860,20 @@ export class ExportRegistry implements seams.Exports {
     if (short !== null) throw new Error(short);
     const whole = ["h264", "hevc", "prores"].includes(options.format) && plan.start === 0 && plan.end >= duration(project) && plan.end > 0;
     if (extra.drive === true && !whole) throw new Error("only a whole video export (MP4 or MOV) uploads to Drive");
-    const already = this.jobs.get(project.id);
-    if (already !== undefined) throw new Error(`this project already has an export running (into ${already.output.split("/").pop()}): wait for it (wait {for: ["export"]}) or cancel it`);
-    if ([...this.jobs.values()].some(job => job.output === path)) throw new Error("another export is writing this output path");
+    const refuse = () => {
+      const already = this.jobs.get(project.id);
+      if (already !== undefined) throw new Error(`this project already has an export running (into ${already.output.split("/").pop()}): wait for it (wait {for: ["export"]}) or cancel it`);
+      if ([...this.jobs.values()].some(job => job.output === path)) throw new Error("another export is writing this output path");
+    };
+    refuse();
+    // The last export of this file still going up to the cloud: this one writes the file again, so that upload stops
+    // (this one goes up in its place). Looked at again after: another export may have begun while it stopped.
+    const going = archiving.get(path);
+    if (going !== undefined) {
+      going.stop.abort();
+      await going.done;
+      refuse();
+    }
     let snapshot: string | null = null;
     if (this.home !== null) {
       snapshot = snapshotFile(this.home, project.id);
@@ -1041,6 +1095,8 @@ export class ExportRegistry implements seams.Exports {
     }
     const frames = Math.max(plan.end - plan.start, 0);
     const took = performance.now() - started;
+    /** The finished file's upload to the cloud, started once the project is free again. */
+    let upFromHere: (() => Promise<void>) | null = null;
     if (quiet) {
       // Made ahead: its chunks wait in the project's chunk folder (its manifest names this file) for the export someone asks for.
       if (result.ok) {
@@ -1105,14 +1161,11 @@ export class ExportRegistry implements seams.Exports {
         // meanwhile sends the file again instead of exporting it again (Nov 3: Kroger, 77 minutes, started
         // over from nothing by a restart during its upload); handed over in one write, so no crash falls between.
         const archive = jobs.handOff(this.home, running.key, { kind: "archive", project: id, args: { output, key, record }, step: "uploading" });
-        try {
-          await archiveFinished(this.home ?? store.home, id, output, key, record);
-        } catch (error) {
-          // The export itself is done; a failed archive must never leave the project "exporting" until a restart.
-          diag.warn("export", `${id}: archiving ${output}: ${diag.messageOf(error)}`);
-        } finally {
-          jobs.end(this.home, archive);
-        }
+        // It goes up once the project is free again (below): while it was awaited here the project stayed
+        // "exporting" for the whole upload, so a share of it waited (or, before nightly-69, was refused: JJ's Mac,
+        // Nov 9, "this project already has an export running" 15 times in the 17 minutes one took), other work
+        // took the encoder for busy, and background work stayed paused.
+        upFromHere = () => this.archive(store.home, id, output, key, record, archive);
       }
     } else if (running.cancelled) {
       diag.info("export", `${project.name} export cancelled`);
@@ -1132,6 +1185,18 @@ export class ExportRegistry implements seams.Exports {
       } catch (error) {
         diag.warn("drive", `${project.name}: ${diag.messageOf(error)}`);
       }
+    }
+    await upFromHere?.();
+  }
+
+  /** Sends a finished export to the cloud as its `archive` job, which ends however the upload does. */
+  private async archive(home: string, id: string, output: string, key: string, record: ExportRecord, job: string): Promise<void> {
+    try {
+      await this.sendUp(this.home ?? home, id, output, key, record);
+    } catch (error) {
+      diag.warn("export", `${id}: archiving ${output}: ${diag.messageOf(error)}`);
+    } finally {
+      jobs.end(this.home, job);
     }
   }
 }

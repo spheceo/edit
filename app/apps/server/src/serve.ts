@@ -21,7 +21,7 @@ import * as modelChoice from "./model_choice.ts";
 import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
-import { archiveFinished, ExportRegistry, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
+import { archiveGoing, ExportRegistry, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
 import * as encoder from "./encoder.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
@@ -330,6 +330,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   if (RELEASE && NIGHTLY !== null && !process.env.CI && process.env.EDIT_CLAUDE_MAINTENANCE !== "0") seams.agentPanel(app).claudeSupport?.afterNightly(BUILD);
   keepAwakeWhile(() => {
     if (app.exports.running()) return "an export";
+    if (app.exports.archiving?.()) return "an export going up to the cloud";
     if (app.scripts.running() || importing()) return "a footage import";
     try {
       if (seams.drive.uploading()) return "a Drive upload";
@@ -406,7 +407,7 @@ function resumeJobs(app: App): void {
     archive: async (job) => {
       // The export finished before the restart: only its upload is done again.
       const { output, key, record } = job.args as { output: string; key: string; record: ExportRecord };
-      await archiveFinished(app.store.home, job.project, output, key, record);
+      await (app.exports.sendUp?.(app.store.home, job.project, output, key, record) ?? archiveGoing(app.store.home, job.project, output, key, record));
     },
     drive: (job) => {
       const { path } = job.args as { path: string };

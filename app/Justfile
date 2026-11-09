@@ -99,11 +99,13 @@ bundle: web ffmpeg quickjs speech (native "release")
     bun build apps/server/src/embedded.gen.ts --compile --outfile target/bundle-edit/edit
     codesign -s - -f target/bundle-edit/edit
     edit="$PWD/target/bundle-edit/edit"
+    # Taken before the cd below: $PWD there is crates/edit-window (Nov 9: "resource path … doesn't exist").
+    speech="$PWD/target/speech/edit-speech"
     app="${CARGO_TARGET_DIR:-$PWD/target}/release/bundle/macos/Edit.app"
     # FFmpeg, qjs (yt-dlp's JavaScript runtime) and edit-speech go into
     # Edit.app/Contents/Resources beside edit (apps/server/src/tools.ts).
     (cd crates/edit-window && bunx @tauri-apps/cli@2 build --bundles app \
-        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\",\"$qjs\":\"qjs-$host\",\"$PWD/target/speech/edit-speech\":\"edit-speech\",\"$edit\":\"edit\"}}}")
+        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\",\"$qjs\":\"qjs-$host\",\"$speech\":\"edit-speech\",\"$edit\":\"edit\"}}}")
     # Signed as a whole, as package-app.sh does: unsigned, the window keeps the
     # linker's signature (edit_window-<hash>), and macOS refuses notifications
     # from a program whose signature isn't the bundle's com.spheceo.edit.

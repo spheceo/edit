@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { aroundCrop, DRAWN, isPdfLink, linesIn, PARKED, pdfScript, pickCapture, UNWALL, waybackNear, waybackOpen } from "../src/evidence_capture.ts";
+import { aroundCrop, DRAWN, isPdfLink, linesIn, pageScript, PARKED, pdfScript, pickCapture, UNWALL, waybackNear, waybackOpen } from "../src/evidence_capture.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("a Wayback link that leaves the date open stands for a real capture of the page, never a parked one", () => {
@@ -160,4 +160,13 @@ test("a parked domain's page is told from the site", () => {
   expect(PARKED.test("modelingworks.com\nRelated Searches:\nAbout Us | Privacy Policy")).toBe(true);
   expect(PARKED.test("This domain may be for sale!")).toBe(true);
   expect(PARKED.test("Become a model today: submit your photos and our scouts will call you")).toBe(false);
+});
+
+test("the script a capture runs in the page parses, whatever the phrase", () => {
+  // Nov 9: "can't" in a message inside it broke every web capture ("Unexpected identifier 't'").
+  for (const phrase of ["", "his wish to be an actor", "it's \"quoted\" `ticked` and ${not} interpolated"]) {
+    expect(() => new Function(`return ${pageScript(phrase, "", false)}`)).not.toThrow();
+    expect(() => new Function(`return ${pageScript(phrase, "p.lead", true)}`)).not.toThrow();
+  }
+  expect(() => new Function(`return ${pdfScript("", "phrase", 3)}`)).not.toThrow();
 });

@@ -103,6 +103,82 @@ export const DRAWN = `(() => {
   return own.trim();
 })()`;
 
+/**
+ * In-page script for a web page: finds the phrase or selector, takes walls off,
+ * refuses a page that drew nothing, a login or a parked domain, and returns
+ * {title, url, rect, lines, column, pageHeight} or {error}. Its own function so
+ * a test parses it (Nov 9: an apostrophe in a message broke every web capture).
+ */
+export function pageScript(phrase: string, selector: string, archived: boolean): string {
+  return `(async () => {
+      const phrase = ${JSON.stringify(phrase)}; const selector = ${JSON.stringify(selector)};
+      // Chrome's own error page (the site refused or dropped the connection) is never the source.
+      if (location.protocol === 'chrome-error:') return {error: 'The page did not load (the site refused the connection): try again in a few minutes'};
+      for (let waited = 0; document.readyState === 'loading' && waited < ${archived ? 60_000 : 10_000}; waited += 500) await new Promise(resolve => setTimeout(resolve, 500));
+      let element = null;
+      for(let attempt=0;attempt<10;attempt++) {
+        element = selector ? document.querySelector(selector) : null;
+        if (!element && phrase) {
+        const needle = phrase.toLowerCase().replace(/\\s+/g, ' ').trim();
+        element = [...document.querySelectorAll('p, h1, h2, h3, blockquote, article, [data-testid="tweetText"], ytd-rich-item-renderer')]
+          .filter(e => e.textContent.toLowerCase().replace(/\\s+/g, ' ').includes(needle))
+          .sort((a,b) => a.textContent.length-b.textContent.length)[0];
+        }
+        if (element || (!phrase && !selector)) break;
+        await new Promise(resolve=>setTimeout(resolve,750));
+      }
+      if ((phrase || selector) && !element) return {error: 'The requested text/element is not on the loaded page; do not fabricate it.'};
+      if (element) {
+        element.scrollIntoView({block:'center',behavior:'instant'});
+        // A wall that comes in as the page is scrolled (LAist's, Nov 8) is taken off too, and the place measured after.
+        await new Promise(resolve=>setTimeout(resolve,1500));
+        ${UNWALL};
+        await new Promise(resolve=>setTimeout(resolve,300));
+        element.scrollIntoView({block:'center',behavior:'instant'});
+      }
+      const body = document.body.innerText;
+      // A page that drew nothing (an archived page the Wayback Machine served too slowly or refused, Nov 8):
+      // no words but the archive's own bar, no picture or video of any size. Said, never captured as a white card.
+      const own = ${DRAWN};
+      if (own.length < 20) return {error: 'The page drew nothing to capture' + (location.hostname === 'web.archive.org' ? ' (the Wayback Machine is slow or refusing just now): try again in a few minutes, or use a screenshot of it the script gives' : '')};
+      if (/^(Just a moment|Access denied|Sign in to X|Sign in to confirm)/i.test(body.trim())) return {error:'The site showed a login or bot check'};
+      // A parked domain's page ("Related Searches" and stock pictures: ModelingWorks.com's 2013 capture, Nov 9) is never the site.
+      if (${PARKED}.test(body)) return {error: 'The page is a parked domain' + (location.hostname === 'web.archive.org' ? ' (captured ' + (location.pathname.split('/')[2] || '') + '), not the site: the archive holds no capture of the site itself then; give a date the site was up (web/<year>/…), or say it cannot be had' : ', not the site')};
+      const r = element?.getBoundingClientRect();
+      // The phrase's own lines, in the page's pixels: its words' range in the element, one box per line.
+      const lines = [];
+      if (element && phrase) {
+        const needle = phrase.toLowerCase().replace(/\s+/g, ' ').trim();
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT); const map = []; let flat = '';
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const said = node.textContent.toLowerCase();
+          for (let i = 0; i < said.length; i++) {
+            const space = /\s/.test(said[i]);
+            if (space && (flat.endsWith(' ') || flat === '')) continue;
+            flat += space ? ' ' : said[i]; map.push([node, i]);
+          }
+        }
+        const at = flat.indexOf(needle);
+        if (at >= 0) {
+          const range = document.createRange();
+          range.setStart(map[at][0], map[at][1]); const last = map[at + needle.length - 1]; range.setEnd(last[0], last[1] + 1);
+          for (const box of range.getClientRects()) {
+            if (box.width < 2 || box.height < 2) continue;
+            const same = lines.find((line) => Math.abs(line.y - (box.y + scrollY)) < box.height * 0.5);
+            if (same) { const right = Math.max(same.x + same.width, box.x + scrollX + box.width); same.x = Math.min(same.x, box.x + scrollX); same.width = right - same.x; same.height = Math.max(same.height, box.height); }
+            else lines.push({ x: box.x + scrollX, y: box.y + scrollY, width: box.width, height: box.height });
+          }
+        }
+      }
+      const column = r ? { left: r.x + scrollX, right: r.x + scrollX + r.width } : null;
+      const pageHeight = Math.max(document.documentElement.scrollHeight, innerHeight);
+      // The crop in the page's own coordinates (what captureScreenshot's clip takes): the element's place in the
+      // window plus how far the page is scrolled. Without the scroll, a phrase scrolled to the middle of a long
+      // article was cropped from a part of the page never drawn: a white picture (LAist, Nov 8).
+      return {lines,column,pageHeight,title:document.title,url:location.href,selection:element?.innerText?.slice(0,500),rect:r?{x:Math.max(0,r.x-12)+scrollX,y:Math.max(0,r.y-12)+scrollY,width:Math.min(innerWidth-Math.max(0,r.x-12),r.width+24),height:Math.min(innerHeight-Math.max(0,r.y-12),r.height+24)}:null};
+    })()`;
+}
+
 /** A parked domain's page: "Related Searches" over stock pictures, "this domain may be for sale" (never the site). */
 export const PARKED = /related searches|(domain|this site) (is|may be) for sale|buy this domain|domain (is )?parked|parked free/i;
 
@@ -332,74 +408,11 @@ export async function capture(url: string, path: string, phrase = "", selector =
     await Bun.sleep(1500);
     await call("Runtime.evaluate", { expression: UNWALL, returnByValue: true });
     await Bun.sleep(300);
-    const result = await call("Runtime.evaluate", { awaitPromise: true, expression: `(async () => {
-      const phrase = ${JSON.stringify(phrase)}; const selector = ${JSON.stringify(selector)};
-      // Chrome's own error page (the site refused or dropped the connection) is never the source.
-      if (location.protocol === 'chrome-error:') return {error: 'The page did not load (the site refused the connection): try again in a few minutes'};
-      for (let waited = 0; document.readyState === 'loading' && waited < ${archived ? 60_000 : 10_000}; waited += 500) await new Promise(resolve => setTimeout(resolve, 500));
-      let element = null;
-      for(let attempt=0;attempt<10;attempt++) {
-        element = selector ? document.querySelector(selector) : null;
-        if (!element && phrase) {
-        const needle = phrase.toLowerCase().replace(/\\s+/g, ' ').trim();
-        element = [...document.querySelectorAll('p, h1, h2, h3, blockquote, article, [data-testid="tweetText"], ytd-rich-item-renderer')]
-          .filter(e => e.textContent.toLowerCase().replace(/\\s+/g, ' ').includes(needle))
-          .sort((a,b) => a.textContent.length-b.textContent.length)[0];
-        }
-        if (element || (!phrase && !selector)) break;
-        await new Promise(resolve=>setTimeout(resolve,750));
-      }
-      if ((phrase || selector) && !element) return {error: 'The requested text/element is not on the loaded page; do not fabricate it.'};
-      if (element) {
-        element.scrollIntoView({block:'center',behavior:'instant'});
-        // A wall that comes in as the page is scrolled (LAist's, Nov 8) is taken off too, and the place measured after.
-        await new Promise(resolve=>setTimeout(resolve,1500));
-        ${UNWALL};
-        await new Promise(resolve=>setTimeout(resolve,300));
-        element.scrollIntoView({block:'center',behavior:'instant'});
-      }
-      const body = document.body.innerText;
-      // A page that drew nothing (an archived page the Wayback Machine served too slowly or refused, Nov 8):
-      // no words but the archive's own bar, no picture or video of any size. Said, never captured as a white card.
-      const own = ${DRAWN};
-      if (own.length < 20) return {error: 'The page drew nothing to capture' + (location.hostname === 'web.archive.org' ? ' (the Wayback Machine is slow or refusing just now): try again in a few minutes, or use a screenshot of it the script gives' : '')};
-      if (/^(Just a moment|Access denied|Sign in to X|Sign in to confirm)/i.test(body.trim())) return {error:'The site showed a login or bot check'};
-      // A parked domain's page ("Related Searches" and stock pictures: ModelingWorks.com's 2013 capture, Nov 9) is never the site.
-      if (${PARKED}.test(body)) return {error: 'The page is a parked domain' + (location.hostname === 'web.archive.org' ? ' (captured ' + (location.pathname.split('/')[2] || '') + '), not the site: the archive holds no capture of the site itself then; give a date the site was up (web/<year>/…), or say it can\'t be had' : ', not the site')};
-      const r = element?.getBoundingClientRect();
-      // The phrase's own lines, in the page's pixels: its words' range in the element, one box per line.
-      const lines = [];
-      if (element && phrase) {
-        const needle = phrase.toLowerCase().replace(/\s+/g, ' ').trim();
-        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT); const map = []; let flat = '';
-        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-          const said = node.textContent.toLowerCase();
-          for (let i = 0; i < said.length; i++) {
-            const space = /\s/.test(said[i]);
-            if (space && (flat.endsWith(' ') || flat === '')) continue;
-            flat += space ? ' ' : said[i]; map.push([node, i]);
-          }
-        }
-        const at = flat.indexOf(needle);
-        if (at >= 0) {
-          const range = document.createRange();
-          range.setStart(map[at][0], map[at][1]); const last = map[at + needle.length - 1]; range.setEnd(last[0], last[1] + 1);
-          for (const box of range.getClientRects()) {
-            if (box.width < 2 || box.height < 2) continue;
-            const same = lines.find((line) => Math.abs(line.y - (box.y + scrollY)) < box.height * 0.5);
-            if (same) { const right = Math.max(same.x + same.width, box.x + scrollX + box.width); same.x = Math.min(same.x, box.x + scrollX); same.width = right - same.x; same.height = Math.max(same.height, box.height); }
-            else lines.push({ x: box.x + scrollX, y: box.y + scrollY, width: box.width, height: box.height });
-          }
-        }
-      }
-      const column = r ? { left: r.x + scrollX, right: r.x + scrollX + r.width } : null;
-      const pageHeight = Math.max(document.documentElement.scrollHeight, innerHeight);
-      // The crop in the page's own coordinates (what captureScreenshot's clip takes): the element's place in the
-      // window plus how far the page is scrolled. Without the scroll, a phrase scrolled to the middle of a long
-      // article was cropped from a part of the page never drawn: a white picture (LAist, Nov 8).
-      return {lines,column,pageHeight,title:document.title,url:location.href,selection:element?.innerText?.slice(0,500),rect:r?{x:Math.max(0,r.x-12)+scrollX,y:Math.max(0,r.y-12)+scrollY,width:Math.min(innerWidth-Math.max(0,r.x-12),r.width+24),height:Math.min(innerHeight-Math.max(0,r.y-12),r.height+24)}:null};
-    })()`, returnByValue: true }, 120_000);
+    const result = await call("Runtime.evaluate", { awaitPromise: true, expression: pageScript(phrase, selector, archived), returnByValue: true }, 120_000);
     const data = (result.result as { value?: Record<string, unknown> } | undefined)?.value;
+    // The page's script failing is said with its message, not as "could not be read" (Nov 9).
+    const thrown = (result.exceptionDetails as { exception?: { description?: string }; text?: string } | undefined);
+    if (data === undefined && thrown !== undefined) throw new Error(`the source page could not be read: ${(thrown.exception?.description ?? thrown.text ?? "").split("\n")[0]}`);
     if (data === undefined || data.error) throw new Error(String(data?.error ?? "the source page could not be read"));
     await Bun.sleep(500);
     const rect = data.rect as { x: number; y: number; width: number; height: number } | null;

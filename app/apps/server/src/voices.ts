@@ -44,25 +44,27 @@ export interface Turn {
 /** How long between looks at a job, and how long one may take (tests make them short). */
 export const timing = { pollMs: 10_000, deadlineMs: 3 * 3600_000, healthMs: 60_000 };
 
-let health: { at: number; on: boolean } | null = null;
+/** The last answer, and the relay that gave it (`relay` null: a test's, for any relay). */
+let health: { at: number; on: boolean; relay: string | null } | null = null;
 
-/** Whether the relay gives pyannote's voices now (its /health `diarize`, asked once a minute). */
+/** Whether the relay gives pyannote's voices now (its /health `diarize`, asked once a minute of the relay asked now: another relay's answer isn't its). */
 export async function on(): Promise<boolean> {
-  if (health !== null && Date.now() - health.at < timing.healthMs) return health.on;
+  const asked = relay.url();
+  if (health !== null && (health.relay === null || health.relay === asked) && Date.now() - health.at < timing.healthMs) return health.on;
   let found = false;
   try {
-    const answer = await fetch(`${relay.url()}/health`, { signal: AbortSignal.timeout(20_000) });
+    const answer = await fetch(`${asked}/health`, { signal: AbortSignal.timeout(20_000) });
     found = answer.ok && ((await answer.json()) as { diarize?: unknown }).diarize === true;
   } catch {
     // Unreachable: Scribe's voices, as before.
   }
-  health = { at: Date.now(), on: found };
+  health = { at: Date.now(), on: found, relay: asked };
   return found;
 }
 
 /** Tests: the flag as given, or asked of the relay again (null). */
 export function setOnForTests(value: boolean | null): void {
-  health = value === null ? null : { at: Number.MAX_SAFE_INTEGER / 2, on: value };
+  health = value === null ? null : { at: Number.MAX_SAFE_INTEGER / 2, on: value, relay: null };
 }
 
 /** pyannote's "SPEAKER_01" as Edit's "speaker_1". */

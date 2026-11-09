@@ -127,3 +127,8 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 ### 25. Edit's follow-up sent back a line saying what stops it
 **Broke.** Turn 5 ended with one item: "Not done: block 17, ModelingWorks. The Wayback Machine only has a parked-domain placeholder… nothing of the site itself". Edit's automatic follow-up sent it back to be done, though its own words ask for exactly that line ("Leave one only when it can't be done… say in a line what stops it"): "Not done" read as put off.
 **Fix.** `put_off.cantBeHad`: a line saying a thing can't be had and what stops it (only a placeholder, nothing of it, private, deleted, no such footage…) is never sent back. Test: `put_off.test.ts`.
+
+### 26. The review link from the trial server opened nothing
+**Broke.** "This link opens nothing." The trial server shares through the dev relay, so the review was stored in dev, but dev's backend answers with a feedback.spheceo.com link and that site only reads prod. The agent (and I) handed it over as the review link; I had only checked the page's HTML loaded.
+**Fix.** share_for_review through any relay but the live one says, with the link, that it's in dev, opens nothing on feedback.spheceo.com, and has to be shared from a prod Edit. Test: `reviews_dev_share.test.ts`.
+**Then.** The project was put in prod as a new project (its 556 files and 494 footage rows that prod lacked copied in, nothing in prod changed or removed; the body committed as revision 1), opened in a prod Edit run from this branch (its own home and port, signed in as Sphe), exported and shared there.

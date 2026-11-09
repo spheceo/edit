@@ -32,6 +32,7 @@ import { inArea, runPromise } from "./effect/runtime.ts";
 import * as machine from "./machine.ts";
 import * as notices from "./notices.ts";
 import * as reviewGuard from "./review_guard.ts";
+import { DEFAULT_RELAY, url as relayUrl } from "./relay.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as remote from "./remote_actions.ts";
@@ -2382,8 +2383,20 @@ registerTool("pull_feedback", async ({ app, args, projectId }: ToolCall) => text
 
 registerTool("share_for_review", async ({ app, args, projectId }: ToolCall) => {
   const shared = await share(app, projectId, str(args.path));
-  return text(`shared v${shared.version}: ${shared.url}`);
+  return text(`shared v${shared.version}: ${shared.url}${devShareNote()}`);
 });
+
+/**
+ * A share through any relay but the live one is stored in dev, which the
+ * review site (feedback.spheceo.com) never reads: its link opens nothing
+ * (Nov 9, the horror run's trial server: "This link opens nothing."). Said
+ * with the link, so it's never handed over as ready.
+ */
+export function devShareNote(relay: string = relayUrl()): string {
+  return relay === DEFAULT_RELAY
+    ? ""
+    : `\n\nThis Edit shares through a dev relay (${relay}), so this review is in dev and the link opens nothing on feedback.spheceo.com. Don't give it as the review link: say it has to be shared from a prod Edit.`;
+}
 
 // ---------------------------------------------------------------------------
 // Routes

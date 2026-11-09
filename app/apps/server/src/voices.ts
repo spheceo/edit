@@ -267,7 +267,7 @@ async function recordingOf(source: string): Promise<{ key: string; start: number
  * Its old names go (speakers.ts names the new voices), bodycams split again.
  * True when it changed. Never throws: without them, its voices stay.
  */
-export async function revoice(cacheDir: string, source: string, target: string, cloudSource: string | null, force = false): Promise<boolean> {
+export async function revoice(cacheDir: string | null, source: string, target: string, cloudSource: string | null, force = false): Promise<boolean> {
   if (!(await on())) return false;
   let transcript: Transcript;
   try {
@@ -281,7 +281,7 @@ export async function revoice(cacheDir: string, source: string, target: string, 
     const began = Date.now();
     const recording = cloudSource === null ? null : await recordingOf(cloudSource);
     let turns: Turn[];
-    const whole = recording === null ? null : await wholeRecording(cacheDir, recording.key);
+    const whole = recording === null || cacheDir === null ? null : await wholeRecording(cacheDir, recording.key);
     let from = "its whole recording";
     if (recording !== null && whole !== null) {
       turns = whole

@@ -2,6 +2,12 @@
 // transcription system (transcribe.ts), kept in `work/transcript.json`: one
 // already there that listened for these names is used as it is.
 //
+// Who speaks comes from pyannote while the relay's flag is on (voices.ts), as
+// a project's footage has since Nov 8, so Scribe isn't paid to hear the whole
+// recording a second time for its voices: Writer's recordings are the long
+// ones (JJ's Mac, Nov 4 to 8: 56 hours heard whole on top of the pieces, one
+// part 5 h 33 min), and until Nov 9 this path still asked for both.
+//
 // In Effect since Nov 1 (docs/plans/2026-11-01-effect.md, round 2, area 1):
 // the stretch is cut by an FFmpeg and into a file the hearing's scope owns,
 // so a stop, a failure or a deadline ends the FFmpeg and removes the file,
@@ -18,6 +24,7 @@ import { covers } from "../names.ts";
 import { join } from "../paths.ts";
 import { ffmpeg, isUrl, protocols, urlArgs } from "../tools.ts";
 import * as transcribe from "../transcribe.ts";
+import * as voices from "../voices.ts";
 import { runProgram, STOPPED } from "./proc.ts";
 
 export type Heard = transcribe.Word;
@@ -57,7 +64,11 @@ export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [
       ).pipe(Effect.mapError((error) => new StretchUncut({ message: `Could not take the sound out of the footage: ${error.message}` })));
       source = cut;
     }
-    yield* transcribe.transcribeFile(source, join(work, "transcript.json"), keyterms);
+    // With pyannote's voices, Scribe hears the words only (no whole hearing); pyannote hears the cut while it's still here.
+    const pyannote = yield* Effect.promise(() => voices.on());
+    const target = join(work, "transcript.json");
+    yield* transcribe.transcribeFile(source, target, keyterms, false, !pyannote);
+    if (pyannote) yield* Effect.promise(() => voices.revoice(null, source, target, null));
   }).pipe(Effect.scoped);
   const heard = cached(work);
   if (heard === null) return yield* new transcribe.AnswerUnreadable({ message: "Scribe's answer couldn't be read." });

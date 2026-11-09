@@ -239,8 +239,22 @@ class Preview {
   });
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /**
+   * The frame on screen: the canvas's, or the rendered video's own while that
+   * shows (none while it's still seeking there). The canvas's alone went stale
+   * the moment a smooth render took over, so acceptance read every scrub after
+   * it as stuck (Nov 10, a real Mac: "frame 23 drawn (269 asked)" with the
+   * right picture on screen; put down to slow decoding on GitHub's Mac).
+   */
+  private shownFrame(): number | null {
+    if (!this.smoothShown) return this.renderedFrame;
+    const video = this.video;
+    if (!video || !this.project || video.seeking || video.readyState < 2) return null;
+    return Math.floor(video.currentTime * rate(this.project.settings));
+  }
+
   get diagnostics() {
-    return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.renderedFrame, nativeFrames: this.nativeReport(),
+    return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.shownFrame(), nativeFrames: this.nativeReport(),
       videoCacheBytes: this.decoder.pictures.bytes, videoCacheFrames: this.decoder.pictures.size,
       audioCacheBytes: this.decoder.sound.bytes, scheduledAudio: this.scheduled.size, mediaReads: this.decoder.network,
       // Whether sound can come out at all: a context that never started (or was suspended) plays nothing.

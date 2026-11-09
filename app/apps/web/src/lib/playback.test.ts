@@ -379,6 +379,11 @@ describe("preview seeks and lifetime", () => {
     expect(video.currentTime).toBeCloseTo(30.25 / 30, 6);
     expect(engine.render).not.toHaveBeenCalled();
     expect(decoding.requestVideo).not.toHaveBeenCalled();
+    // What's on screen is the video's frame: none while it seeks there, then the one asked for.
+    Object.assign(video, { seeking: true, readyState: 1 });
+    expect(preview.diagnostics.renderedFrame).toBeNull();
+    Object.assign(video, { seeking: false, readyState: 4 });
+    expect(preview.diagnostics.renderedFrame).toBe(30);
     // Play runs the video; its clock moves the playhead.
     preview.play();
     expect(video.play).toHaveBeenCalled();

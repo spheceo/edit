@@ -37,6 +37,21 @@ export function soundSync(drift: number): { seek: boolean; rate: number } {
   return { seek: false, rate: drift < 0 ? 1.06 : 0.94 };
 }
 
+/**
+ * How far into a chunk's own time its first picture sits (s), from where an
+ * append at `at` landed in `ranges`. An encoder that reorders frames (a Mac's:
+ * two) writes each chunk's pictures that many frames in, and a MediaSource
+ * takes those times as they are (a file's edit list, which says "start at the
+ * first picture", isn't read): appended at the chunk's own start, every
+ * picture showed two frames late. Nov 10, measured on the acceptance edit:
+ * the cut at frame 90 showed at 92, the sound 67 ms ahead of the picture, and
+ * the edit's last frames never drew.
+ */
+export function leadOf(ranges: [number, number][], at: number): number {
+  const landed = ranges.map(([start]) => start - at).filter((lead) => lead > -0.001 && lead < 0.5);
+  return landed.length === 0 ? 0 : Math.max(0, Math.min(...landed));
+}
+
 export class SmoothStream {
   readonly url: string;
   private media = new MediaSource();
@@ -48,6 +63,8 @@ export class SmoothStream {
   private working = false;
   private closed = false;
   private soundSource: string | null = null;
+  /** `leadOf` for this render's chunks, measured at the first append (null until then): each is appended that much early. */
+  private lead: number | null = null;
 
   constructor(
     private project: string,
@@ -132,19 +149,40 @@ export class SmoothStream {
           if (!answer.ok) break;
           const bytes = await answer.arrayBuffer();
           if (this.closed) return;
-          buffer.timestampOffset = next.start / this.fps;
-          try {
-            await this.wait(buffer, () => buffer.appendBuffer(bytes));
-          } catch (error) {
-            // Full: what's far goes, then it's tried once more.
-            if (!(error instanceof DOMException && error.name === "QuotaExceededError")) throw error;
-            await this.trim(buffer);
-            await this.wait(buffer, () => buffer.appendBuffer(bytes));
+          const at = next.start / this.fps;
+          const append = async () => {
+            buffer.timestampOffset = at - (this.lead ?? 0);
+            try {
+              await this.wait(buffer, () => buffer.appendBuffer(bytes));
+            } catch (error) {
+              // Full: what's far goes, then it's tried once more.
+              if (!(error instanceof DOMException && error.name === "QuotaExceededError")) throw error;
+              await this.trim(buffer);
+              await this.wait(buffer, () => buffer.appendBuffer(bytes));
+            }
+          };
+          await append();
+          if (this.lead === null) {
+            // The first chunk in says where a chunk's pictures land: put where they belong, as every chunk after is.
+            const ranges: [number, number][] = [];
+            for (let index = 0; index < buffer.buffered.length; index++) ranges.push([buffer.buffered.start(index), buffer.buffered.end(index)]);
+            this.lead = leadOf(ranges, at);
+            if (this.lead > 0.25 / this.fps) {
+              await this.wait(buffer, () => buffer.remove(0, Number.POSITIVE_INFINITY));
+              await append();
+            }
           }
           this.appended.set(next.start, next.key);
           this.changed();
         }
         await this.trim(buffer);
+        // Everything made and the edit's end appended: said, so the decoder gives up the last frames it holds back
+        // for reordering (the end of the edit never drew) and playing to the end ends instead of waiting for more.
+        // A chunk appended later opens it again.
+        const last = this.info.segments.at(-1);
+        if (last !== undefined && this.info.segments.every((one) => one.ready) && this.appended.get(last.start) === last.key && this.media.readyState === "open" && !buffer.updating) {
+          this.media.endOfStream();
+        }
       }
     } catch {
       // A missed look: the next one tries again.

@@ -86,9 +86,9 @@ window profile="debug":
     if [ "{{profile}}" = release ]; then cargo build -p edit-window --release; else cargo build -p edit-window; fi
 
 # Edit.app (target/release/bundle/macos): the window helper (crates/edit-window)
-# is the app, with the Bun `edit`, FFmpeg and qjs in its Resources; opened, it
+# is the app, with the Bun `edit`, FFmpeg, qjs and edit-speech in its Resources; opened, it
 # runs `Resources/edit serve`. Like `release`, it doesn't update itself.
-bundle: web ffmpeg quickjs (native "release")
+bundle: web ffmpeg quickjs speech (native "release")
     #!/usr/bin/env bash
     set -euo pipefail
     host="$(rustc -vV | sed -n 's/^host: //p')"
@@ -100,10 +100,10 @@ bundle: web ffmpeg quickjs (native "release")
     codesign -s - -f target/bundle-edit/edit
     edit="$PWD/target/bundle-edit/edit"
     app="${CARGO_TARGET_DIR:-$PWD/target}/release/bundle/macos/Edit.app"
-    # FFmpeg and qjs (yt-dlp's JavaScript runtime) go into
+    # FFmpeg, qjs (yt-dlp's JavaScript runtime) and edit-speech go into
     # Edit.app/Contents/Resources beside edit (apps/server/src/tools.ts).
     (cd crates/edit-window && bunx @tauri-apps/cli@2 build --bundles app \
-        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\",\"$qjs\":\"qjs-$host\",\"$edit\":\"edit\"}}}")
+        --config "{\"bundle\":{\"resources\":{\"$dir/ffmpeg\":\"edit-ffmpeg\",\"$dir/ffprobe\":\"edit-ffprobe\",\"$qjs\":\"qjs-$host\",\"$PWD/target/speech/edit-speech\":\"edit-speech\",\"$edit\":\"edit\"}}}")
     # Signed as a whole, as package-app.sh does: unsigned, the window keeps the
     # linker's signature (edit_window-<hash>), and macOS refuses notifications
     # from a program whose signature isn't the bundle's com.spheceo.edit.
@@ -114,6 +114,12 @@ ffmpeg:
     #!/usr/bin/env bash
     host="$(rustc -vV | sed -n 's/^host: //p')"
     scripts/ffmpeg.sh "$host" "target/ffmpeg/$host"
+
+# edit-speech, the on-device word source (scripts/edit-speech.swift,
+# apps/server/src/mac_speech.ts), for this Mac (target/speech/edit-speech);
+# a dev run builds it on demand
+speech:
+    scripts/build-speech.sh target/speech/edit-speech
 
 # The qjs (QuickJS-ng) Edit ships with as yt-dlp's JavaScript runtime, for
 # this Mac (target/quickjs/<target>/qjs-<target>)

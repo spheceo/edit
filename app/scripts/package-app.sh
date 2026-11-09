@@ -5,7 +5,7 @@
 #
 #   scripts/package-app.sh <target> <package dir> <out dir>
 #
-# <package dir> holds edit, edit-ffmpeg, edit-ffprobe and qjs-<target> (the
+# <package dir> holds edit, edit-ffmpeg, edit-ffprobe, qjs-<target> and edit-speech (the
 # release workflow's package/). Writes <out>/Edit-<target>.zip (+ .sha256) and
 # <out>/Edit-Apple-Silicon.dmg.
 #
@@ -33,7 +33,7 @@ trap 'rm -rf "$work"; if [[ -n "${keychain:-}" ]]; then security list-keychains 
 
 echo "==> Edit.app ($target)"
 (cd "$root/crates/edit-window" && bunx @tauri-apps/cli@2.12.4 build --target "$target" --bundles app --config \
-  "{\"bundle\":{\"resources\":{\"$pkg/edit-ffmpeg\":\"edit-ffmpeg\",\"$pkg/edit-ffprobe\":\"edit-ffprobe\",\"$pkg/qjs-$target\":\"qjs-$target\",\"$pkg/edit\":\"edit\"}}}")
+  "{\"bundle\":{\"resources\":{\"$pkg/edit-ffmpeg\":\"edit-ffmpeg\",\"$pkg/edit-ffprobe\":\"edit-ffprobe\",\"$pkg/qjs-$target\":\"qjs-$target\",\"$pkg/edit-speech\":\"edit-speech\",\"$pkg/edit\":\"edit\"}}}")
 built="${CARGO_TARGET_DIR:-$root/target}/$target/release/bundle/macos/Edit.app"
 app="$work/Edit.app"
 ditto "$built" "$app"
@@ -58,7 +58,7 @@ if [[ -n "${MACOS_CERTIFICATE:-}" ]]; then
 fi
 # Inside out: the programs in Resources, then the app (its own executable and seal).
 codesign --force "${runtime[@]}" -s "$identity" --entitlements "$here/dmg/edit.entitlements" "$app/Contents/Resources/edit"
-codesign --force "${runtime[@]}" -s "$identity" "$app/Contents/Resources/edit-ffmpeg" "$app/Contents/Resources/edit-ffprobe" "$app/Contents/Resources/qjs-$target"
+codesign --force "${runtime[@]}" -s "$identity" "$app/Contents/Resources/edit-ffmpeg" "$app/Contents/Resources/edit-ffprobe" "$app/Contents/Resources/qjs-$target" "$app/Contents/Resources/edit-speech"
 codesign --force "${runtime[@]}" -s "$identity" "$app"
 codesign --verify --deep --strict "$app"
 # qjs must start as signed too: it is yt-dlp's JavaScript runtime, and a copy

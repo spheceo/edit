@@ -275,7 +275,7 @@ jobs:
           curl -fsS http://127.0.0.1:7799/api/health | grep -q '"name":"edit"'
           curl -fsS -X POST http://127.0.0.1:7799/mcp -H 'content-type: application/json' \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | grep -q '"serverInfo"'
-      # FFmpeg and qjs (yt-dlp's JavaScript runtime) ship beside `edit`
+      # FFmpeg, qjs (yt-dlp's JavaScript runtime) and, on a Mac, edit-speech ship beside `edit`
       # (apps/server/src/tools.ts), pinned in scripts/ffmpeg.sh and
       # scripts/fetch-quickjs.sh; kept between runs so a build doesn't need
       # their hosts up (both scripts skip a matching copy).
@@ -296,7 +296,10 @@ jobs:
           scripts/fetch-quickjs.sh "${{ matrix.target }}" quickjs
           cp "quickjs/qjs-${{ matrix.target }}" package/
           "package/qjs-${{ matrix.target }}" --version
-          tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe "qjs-${{ matrix.target }}"
+          # The Mac's on-device word source (apps/server/src/mac_speech.ts), built from scripts/edit-speech.swift.
+          speech=()
+          if [ "${{ runner.os }}" = macOS ]; then scripts/build-speech.sh package/edit-speech; speech=(edit-speech); fi
+          tar -czf "dist/$name" -C package edit edit-ffmpeg edit-ffprobe "qjs-${{ matrix.target }}" "${speech[@]}"
           (cd dist && sha256sum "$name" > "$name.sha256" 2>/dev/null || shasum -a 256 "$name" > "$name.sha256")
           echo "NAME=$name" >> "$GITHUB_ENV"
       # Edit.app, the zip installed apps update from, and the disk image (scripts/package-app.sh):

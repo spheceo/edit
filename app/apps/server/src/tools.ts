@@ -55,6 +55,36 @@ export function qjs(): string | null {
   return null;
 }
 
+/**
+ * edit-speech, the on-device word source (`mac_speech.ts`, macOS only): a
+ * release's beside `edit` or in Edit.app's Resources; in a dev run, the
+ * checkout's `target/speech/edit-speech`, with how to build it from
+ * `scripts/edit-speech.swift` (`scripts/build-speech.sh`, as `just
+ * speech` does) when it's missing or older than its source. Null off a Mac
+ * and where there's neither.
+ */
+export function speech(): { path: string; build: string[] | null } | null {
+  if (process.platform !== "darwin") return null;
+  let beside: string | null = null;
+  try {
+    beside = parent(fs.realpathSync(process.execPath));
+  } catch {
+    beside = null;
+  }
+  if (beside !== null) {
+    for (const candidate of [join(beside, "edit-speech"), join(beside, "../Resources", "edit-speech")]) {
+      if (isFile(candidate)) return { path: candidate, build: null };
+    }
+  }
+  // A dev run: this file is the checkout's, so the source is beside it.
+  const app = join(import.meta.dir, "../../..");
+  const source = join(app, "scripts/edit-speech.swift");
+  if (!isFile(source)) return null;
+  const path = join(app, "target/speech/edit-speech");
+  const stale = !isFile(path) || fs.statSync(path).mtimeMs < fs.statSync(source).mtimeMs;
+  return { path, build: stale ? [join(app, "scripts/build-speech.sh"), path] : null };
+}
+
 /** The video hardware FFmpeg encodes H.264 on here. */
 export type VideoHardware = "videotoolbox" | "nvenc";
 let hardware: VideoHardware | null | undefined;

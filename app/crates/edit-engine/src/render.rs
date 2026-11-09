@@ -824,6 +824,8 @@ impl ReaderPool {
     }
 
     /// Whether a pooled reader of `source` would read on to `time` (it's just behind it) rather than seek.
+    /// Asked by the window's decode-ahead (PreviewPictures), which only Edit.app has.
+    #[cfg(target_os = "macos")]
     fn ready(&self, source: &Source, time: f64) -> bool {
         self.readers.iter().any(|(reader, _)| {
             reader.source.key == source.key

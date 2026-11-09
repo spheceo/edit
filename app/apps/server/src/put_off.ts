@@ -9,6 +9,17 @@ export function putOff(reason: string): boolean {
 }
 
 /**
+ * Words that say a thing can't be had, with what stops it: the line the
+ * follow-up asks for ("say in a line what stops it"), never sent back. Nov 9,
+ * the horror run: "Not done: block 17, ModelingWorks. The Wayback Machine
+ * only has a parked-domain placeholder… nothing of the site itself" was sent
+ * back as put off, after Edit had told the agent to say it can't be had.
+ */
+export function cantBeHad(reason: string): boolean {
+  return /\b(can['’]?t|cannot|couldn['’]?t) be (had|done|shown|found|got)\b|\bonly (has|holds|keeps) (a|an|the)\b|\bnothing of (the|it|its)\b|\bno (such|capture|copy|footage|video|recording|archive)\b|\b(doesn['’]?t|does not|no longer) exists?\b|\b(is|are|was|were) (private|deleted|removed|taken down|unavailable|parked)\b|\bparked[- ]domain\b|\bnot in the archive\b/i.test(reason);
+}
+
+/**
  * The items a turn's last message lists as not got to: each line under a
  * heading that says so ("**Still open:**", "**Not done or not working**"), up
  * to the next heading, and any other item that says so itself. Nov 6, the
@@ -34,7 +45,7 @@ export function leftOver(text: string): string[] {
       if (putOff(line)) loose.push(line);
       continue;
     }
-    if (under || putOff(line)) left.push(line.replace(/^([-*•]|\d+[.)])\s+/, ""));
+    if ((under || putOff(line)) && !cantBeHad(line)) left.push(line.replace(/^([-*•]|\d+[.)])\s+/, ""));
   }
   return left.length > 0 ? left : loose;
 }

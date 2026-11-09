@@ -123,3 +123,7 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 ### 24. Fix 22 broke every web capture
 **Broke.** After the restart for fixes 19–23, turn 4's first captures (the note.com post) failed in 4 s: "the source page could not be read". Fix 22's parked-domain message said "can't" inside a single-quoted string of the script a capture runs in the page: a syntax error, so every web page capture failed, and the error hid why.
 **Fix.** The message says "cannot"; the in-page script is its own function (`pageScript`), and a test parses it (and the PDF one) with awkward phrases; a script that throws in the page is said with its message. Caught on the agent's first capture; its turn was stopped, the server restarted, and the same request sent again.
+
+### 25. Edit's follow-up sent back a line saying what stops it
+**Broke.** Turn 5 ended with one item: "Not done: block 17, ModelingWorks. The Wayback Machine only has a parked-domain placeholder… nothing of the site itself". Edit's automatic follow-up sent it back to be done, though its own words ask for exactly that line ("Leave one only when it can't be done… say in a line what stops it"): "Not done" read as put off.
+**Fix.** `put_off.cantBeHad`: a line saying a thing can't be had and what stops it (only a placeholder, nothing of it, private, deleted, no such footage…) is never sent back. Test: `put_off.test.ts`.

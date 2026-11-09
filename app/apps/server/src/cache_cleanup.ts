@@ -759,6 +759,19 @@ export function cleanExports(app: App, dryRun: boolean, now = Date.now()): { fil
 }
 
 /** Cleans now and then: a few minutes after the start, then hourly (a day of imports and exports filled the disk). */
+/**
+ * Room for work that needs `wanted` bytes free on the cache's disk and hasn't
+ * them (an export about to be refused): the cache's least recently used
+ * copies go, as when the disk is nearly full, and exports kept here that are
+ * in the cloud. What was freed (bytes).
+ */
+export function makeRoom(app: App, wanted: number): number {
+  const cache = app.store.cacheDir();
+  const report = cleanCache(app, false, Date.now(), { cacheBytes: localBudgetBytes({ freeBytes: freeSpace(cache), cacheBytes: size(cache) }), freeBytes: wanted });
+  if (report.bytes > 0) diag.info("cache", `freed ${(report.bytes / 1e9).toFixed(2)} GB for an export that needs ${(wanted / 1e9).toFixed(1)} GB free`);
+  return report.bytes;
+}
+
 export function startCleaning(app: App): () => void {
   let running = false;
   const run = async () => {

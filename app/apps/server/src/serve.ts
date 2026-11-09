@@ -13,7 +13,7 @@ import { keepAwakeWhile } from "./awake.ts";
 import { importing } from "./drive_import.ts";
 import { createApp, hostname, type App } from "./app.ts";
 import { pauseForExports, setListening, smoothsFast } from "./broll.ts";
-import { startCleaning } from "./cache_cleanup.ts";
+import { makeRoom, startCleaning } from "./cache_cleanup.ts";
 import * as cloud from "./cloud.ts";
 import { setSmoothByDefault } from "./cutin.ts";
 import * as diag from "./diag.ts";
@@ -21,7 +21,7 @@ import * as modelChoice from "./model_choice.ts";
 import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
-import { archiveGoing, ExportRegistry, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
+import { archiveGoing, ExportRegistry, room as exportRoom, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
 import * as encoder from "./encoder.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
@@ -234,6 +234,7 @@ export function start(home: string, host: string | null, port: number): { app: A
   if (process.platform === "linux") setTimeout(() => setSmoothByDefault(smoothsFast(app)), 2_000).unref();
   // The cache kept to what's used.
   startCleaning(app);
+  exportRoom.make = (wanted) => void makeRoom(app, wanted);
   seams.broll.stopLeftoverMaps?.();
   // Tools register here; the subtitles' and captions' register as their modules load (through seams).
   registerEditingTools();

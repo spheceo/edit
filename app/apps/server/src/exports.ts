@@ -856,7 +856,19 @@ export class ExportRegistry implements seams.Exports {
     }
     // Rendered here: refused up front when the disks can't hold it, never halfway (TODO, Oct 18: a 2h35m export
     // needed ~8 GB with 2.8 GB free).
-    const short = roomFor(exportBytes(options, plan, options.fps ?? fps), store.cacheDir(), folder);
+    const size = exportBytes(options, plan, options.fps ?? fps);
+    let short = roomFor(size, store.cacheDir(), folder);
+    // Short of room: what Edit's own cache holds can be fetched again, so its least recently used copies go
+    // first, and it's refused only if that isn't enough (JJ's Mac, Nov 10: a share refused twice for 3 GB,
+    // until he cleared the disk by hand).
+    if (short !== null && room.make !== null) {
+      try {
+        room.make(roomWanted(size, store.cacheDir(), folder));
+      } catch (error) {
+        diag.warn("export", `making room for ${project.name}'s export: ${diag.messageOf(error)}`);
+      }
+      short = roomFor(size, store.cacheDir(), folder);
+    }
     if (short !== null) throw new Error(short);
     const whole = ["h264", "hevc", "prores"].includes(options.format) && plan.start === 0 && plan.end >= duration(project) && plan.end > 0;
     if (extra.drive === true && !whole) throw new Error("only a whole video export (MP4 or MOV) uploads to Drive");
@@ -1220,6 +1232,14 @@ export function exportBytes(options: ExportOptions, plan: Plan, fps: number): nu
 }
 
 const GB = 1e9;
+
+/** Frees room on the cache's disk until `wanted` bytes are free, as far as the cache can give (cache_cleanup.ts `makeRoom`, set by serve.ts; none in tests). */
+export const room = { make: null as ((wanted: number) => void) | null };
+
+/** The free bytes an export of `bytes` needs on the cache's disk (`roomFor`'s sum for it). */
+export function roomWanted(bytes: number, cacheDir: string, outputDir: string, device: (path: string) => number = deviceOf): number {
+  return Math.max(bytes * 0.1, GB) + bytes * (device(cacheDir) === device(outputDir) ? 2 : 1);
+}
 
 /**
  * Why the disks can't hold an export of `bytes`, or null: its chunks go in

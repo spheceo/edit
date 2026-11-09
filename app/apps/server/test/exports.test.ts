@@ -2,7 +2,7 @@ import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-import { archiveExportFile, archiveFinished, beingRead, deleteExport, dropKept, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, stall, withExport } from "../src/exports.ts";
+import { archiveExportFile, archiveFinished, beingRead, deleteExport, dropKept, exportCloud, ExportRegistry, holdExport, listExports, restorePrevious, resumeSnapshot, room, roomWanted, stall, withExport } from "../src/exports.ts";
 import type { Project } from "../src/model.ts";
 import * as capacity from "../src/export_capacity.ts";
 import * as seams from "../src/seams.ts";
@@ -375,6 +375,29 @@ test("a local export the disks can't hold is refused up front, saying what it ne
   expect(roomFor(bytes, "/cache", "/out", () => 3e9, oneDisk)).toContain("needs about 4.5 GB");
   // Two disks: each holds one of them.
   expect(roomFor(bytes, "/cache", "/out", () => 3e9, (path) => (path === "/cache" ? 1 : 2))).toBeNull();
+});
+
+// JJ's Mac, Nov 10: a share refused twice for want of 3 GB while Edit's own cache held copies it could fetch again.
+test("an export short of room asks the cache to make some before it's refused", async () => {
+  const { dir, home, store, app, native, cleanup } = fixtureHome("export-room");
+  const registry = new ExportRegistry(home);
+  app.exports = registry;
+  const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
+  const asked: number[] = [];
+  const before = room.make;
+  room.make = (wanted) => void asked.push(wanted);
+  try {
+    const id = store.create("big", { width: 64, height: 36, fps: 30 }).project.id;
+    await store.update(id, "test", (p) => p.clips.push(clip({ id: "solid", track: p.tracks[0]!.id, start: 0, duration: 30, type: "solid" })));
+    // Ten terabytes: more than any disk here has, whatever the cache gives up.
+    const options = { ...native.exportDefaults(), target_mb: 10_000_000 };
+    await expect(registry.start(store, app.library, store.get(id)!.project, options, `${dir}/big.mp4`, { drive: false })).rejects.toThrow("not enough disk space for this export");
+    expect(asked).toEqual([roomWanted(10_000_000 * 1e6, store.cacheDir(), dir)]);
+    expect(registry.runningFor(id)).toBeNull();
+  } finally {
+    room.make = before;
+    plan.mockRestore(); cleanup();
+  }
 });
 
 test("a Mac with room exports several at once, and the rest wait for room", async () => {

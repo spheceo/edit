@@ -31,6 +31,22 @@ test("with no helper, on-device speech isn't available and hearing says why", as
   }
 });
 
+// A stand-in helper that says what the real one says while the model comes down, then answers two words.
+test.skipIf(!mac26)("what the helper says as it goes reaches the caller line by line, the model's download first", async () => {
+  const fake = `${dir.dir}/fake-edit-speech`;
+  fs.writeFileSync(fake, '#!/bin/sh\necho "speech: downloading the en-US model" >&2\nsleep 0.1\necho "speech: model 40%" >&2\necho "speech: model installed" >&2\necho "speech: read 50%" >&2\nprintf \'{"words":[{"text":"Hello","start":0,"end":0.4},{"text":"there.","start":0.5,"end":0.9}],"language":"en-US","ms":120,"model":"apple-speech","seconds":1}\'\n');
+  fs.chmodSync(fake, 0o755);
+  macSpeech.timing.helper = fake;
+  try {
+    const said: string[] = [];
+    const heard = await macSpeech.hear(`${dir.dir}/any.wav`, `${dir.dir}/fake.json`, undefined, (line) => said.push(line));
+    expect(said).toEqual(["downloading the en-US model", "model 40%", "model installed", "read 50%"]);
+    expect(heard.words.map((word) => word.text)).toEqual(["Hello", "there."]);
+  } finally {
+    macSpeech.timing.helper = undefined;
+  }
+});
+
 test.skipIf(!here)("a spoken clip is heard on this Mac as timed words, written as Edit's transcript", async () => {
   const clip = `${dir.dir}/spoken.aiff`;
   const said = Bun.spawnSync(["say", "-o", clip, "The officer knocked on the door and asked the man to step outside."]);

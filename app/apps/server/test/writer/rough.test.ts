@@ -177,6 +177,14 @@ test.skipIf(ffmpeg === null)("the exact stage sends Scribe only the chosen stret
   }
 }, 30_000);
 
+test("the import's stage names Apple's model coming down, once a Mac, and nothing else the helper says", () => {
+  expect(transcription.appleStage("downloading the en-US model")).toBe("Downloading Apple's speech model, once for this Mac.");
+  expect(transcription.appleStage("model 40%")).toBe("Downloading Apple's speech model, once for this Mac: 40%.");
+  expect(transcription.appleStage("model installed")).toBe("Transcribing.");
+  expect(transcription.appleStage("read 50%")).toBeNull();
+  expect(transcription.appleStage("113 words in 32 s of sound, 8673 ms")).toBeNull();
+});
+
 test.skipIf(ffmpeg === null)("with the plan out of credit the build keeps the rough cut and says so plainly, the wait is in the job table and its waking hears the footage; Hear exactly completes it too", async () => {
   // The wait is kept in `<home>/jobs.json`, beside the script's `writer/` data.
   const { dir: home, cleanup } = scratch("rough-quota");

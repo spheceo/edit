@@ -35,12 +35,15 @@ export async function available(): Promise<boolean> {
  * Hears `file` (audio or video) on this Mac and writes its transcript to
  * `target` (atomically, transcribe.ts's `serialize`). Rejects with the
  * helper's reason (unsupported Mac, no model, unreadable file), or when
- * `signal` aborts, killing the helper.
+ * `signal` aborts, killing the helper. `onProgress` gets what the helper
+ * says as it goes ("downloading the en-US model", "model 40%", "read 50%"):
+ * the model comes down once a Mac (and once a signing identity), a minute
+ * the person should see named rather than wait through.
  */
-export async function hear(file: string, target: string, signal?: AbortSignal): Promise<Transcript> {
+export async function hear(file: string, target: string, signal?: AbortSignal, onProgress?: (said: string) => void): Promise<Transcript> {
   const path = await helper();
   if (path === null) throw new Error("on-device speech needs macOS 26 or later and edit-speech");
-  const turn = queue.then(() => run(path, file, target, signal));
+  const turn = queue.then(() => run(path, file, target, signal, onProgress));
   queue = turn.then(
     () => undefined,
     () => undefined,
@@ -64,13 +67,19 @@ interface Heard {
   seconds?: number;
 }
 
-async function run(path: string, file: string, target: string, signal?: AbortSignal): Promise<Transcript> {
+async function run(path: string, file: string, target: string, signal?: AbortSignal, onProgress?: (said: string) => void): Promise<Transcript> {
   signal?.throwIfAborted();
   const child = Bun.spawn([path, file, "--ffmpeg", tools.ffmpeg()], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const abort = () => child.kill();
   signal?.addEventListener("abort", abort, { once: true });
   try {
-    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    const [out, err, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      lines(child.stderr, (line) => {
+        if (onProgress !== undefined && line.startsWith("speech: ")) onProgress(line.slice("speech: ".length));
+      }),
+      child.exited,
+    ]);
     signal?.throwIfAborted();
     if (code !== 0) throw new Error(reason(err) ?? `edit-speech exited ${code}`);
     let heard: Heard;
@@ -93,6 +102,28 @@ async function run(path: string, file: string, target: string, signal?: AbortSig
   } finally {
     signal?.removeEventListener("abort", abort);
   }
+}
+
+/** The whole of `stream` as text, each line given to `onLine` as it arrives. */
+async function lines(stream: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<string> {
+  const decoder = new TextDecoder();
+  let all = "";
+  let rest = "";
+  const take = (text: string) => {
+    all += text;
+    rest += text;
+    let at = rest.indexOf("\n");
+    while (at >= 0) {
+      const line = rest.slice(0, at).trim();
+      rest = rest.slice(at + 1);
+      if (line !== "") onLine(line);
+      at = rest.indexOf("\n");
+    }
+  };
+  for await (const chunk of stream) take(decoder.decode(chunk, { stream: true }));
+  take(decoder.decode());
+  if (rest.trim() !== "") onLine(rest.trim());
+  return all;
 }
 
 /** The helper's one-line reason: its last line that isn't progress. */

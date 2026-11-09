@@ -93,8 +93,22 @@ export function roughOnly(work: string): boolean {
   return hearing.cached(work) === null && (captions.cached(work) !== null || appleCached(work) !== null);
 }
 
-/** A recording (or its `span` of the footage, in ms) heard by Apple on this Mac, kept in `work`; null where there's no Apple recogniser or it heard nothing (then Scribe hears it). */
-export async function appleHear(file: string, span: [number, number] | null, work: string, signal?: AbortSignal): Promise<Transcript | null> {
+/**
+ * The import's stage line for what Apple's recogniser says it's doing
+ * (mac_speech.ts `hear`'s progress), or null for what needs no line. Its
+ * en-US model is downloaded once a Mac on first use, about a minute: said
+ * as such, so the first import on a Mac isn't a transcription that looks stuck.
+ */
+export function appleStage(said: string): string | null {
+  if (said === "downloading the en-US model") return "Downloading Apple's speech model, once for this Mac.";
+  const percent = /^model (\d+)%$/u.exec(said);
+  if (percent !== null) return `Downloading Apple's speech model, once for this Mac: ${percent[1]}%.`;
+  if (said === "model installed") return "Transcribing.";
+  return null;
+}
+
+/** A recording (or its `span` of the footage, in ms) heard by Apple on this Mac, kept in `work`; null where there's no Apple recogniser or it heard nothing (then Scribe hears it). `onStage` is told what the person should see meanwhile (`appleStage`). */
+export async function appleHear(file: string, span: [number, number] | null, work: string, signal?: AbortSignal, onStage?: (text: string) => void): Promise<Transcript | null> {
   const kept = appleCached(work);
   if (kept !== null) return kept;
   if (!(await macSpeech.available()) || !isFile(file)) return null;
@@ -108,7 +122,10 @@ export async function appleHear(file: string, span: [number, number] | null, wor
       if ((await child.exited) !== 0) throw new Error(`could not take the sound out of the footage: ${diag.gist(stderr)}`);
       source = cut;
     }
-    const heard = await macSpeech.hear(source, join(work, APPLE), signal);
+    const heard = await macSpeech.hear(source, join(work, APPLE), signal, (said) => {
+      const text = appleStage(said);
+      if (text !== null) onStage?.(text);
+    });
     if (heard.words.length === 0) return null;
     writeAtomic(join(work, APPLE), JSON.stringify({ ...heard, model: macSpeech.MODEL }));
     return appleCached(work);
@@ -146,7 +163,7 @@ export function onClock(transcript: Transcript, offsetMs: number, lengthMs: numb
  * script that had words keeps them (their ids, text and corrections), and
  * gains only what was missing.
  */
-export async function transcribe(app: App, script: Script, dir: string, onProgress: (done: number, total: number) => void = () => {}, signal?: AbortSignal): Promise<void> {
+export async function transcribe(app: App, script: Script, dir: string, onProgress: (done: number, total: number) => void = () => {}, signal?: AbortSignal, onStage?: (text: string) => void): Promise<void> {
   // The waveform and quiet cut points are a help, not a need.
   if (isFile(script.originalPath)) {
     try {
@@ -181,7 +198,7 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
     transcript ??= url === null ? null : await captions.transcript(app, url, work, signal);
     transcript ??= script.status === "ready" ? kept : null;
     // Free rough words before paid ones: Scribe hears only what the build chooses (exact.ts).
-    transcript ??= await appleHear(recording.file, recording.span, work, signal);
+    transcript ??= await appleHear(recording.file, recording.span, work, signal, onStage);
     if (transcript === null) {
       if (!isFile(recording.file)) throw new Error("The original video is missing, so it can't be transcribed.");
       transcript = await hearing.hear(recording.file, recording.span, work, await keyterms(), signal);

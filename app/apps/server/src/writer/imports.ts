@@ -773,7 +773,15 @@ async function words(app: App, dir: string, script: Script, waitOn: (words: stri
   const began = Date.now();
   diag.info("writer", `${jobs.named(script.id, script.title)}: transcribing ${clock(script.durationMs)} of footage`);
   try {
-    await transcription.transcribe(app, script, dir, (done, count) => say(script, `Transcribing: ${Math.floor((done * 100) / Math.max(count, 1))}%.`, "transcribing", 60 + Math.floor((done * 30) / Math.max(count, 1))));
+    await transcription.transcribe(
+      app,
+      script,
+      dir,
+      (done, count) => say(script, `Transcribing: ${Math.floor((done * 100) / Math.max(count, 1))}%.`, "transcribing", 60 + Math.floor((done * 30) / Math.max(count, 1))),
+      undefined,
+      // Apple's model coming down on a Mac's first import, named rather than waited through.
+      (text) => say(script, text, "transcribing"),
+    );
     diag.info("writer", `${jobs.named(script.id, script.title)}: transcribed in ${Math.round((Date.now() - began) / 1000)} s: ${script.words.length} words`);
   } catch (error) {
     if (diag.messageOf(error) === transcription.NO_WORDS) return pause(dir, script, { kind: "no_speech", summary: "Speech to text heard no words in this footage. Open it without a transcript to cut it by time, or cancel.", reason: "no_words" });

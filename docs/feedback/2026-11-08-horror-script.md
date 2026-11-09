@@ -102,3 +102,7 @@ The voice-over's credit came in on Nov 9: Retry voiced and transcribed the 26 cu
 ### 19. A desktop with a window too wide said its pictures "weren't prepared"
 **Broke.** Turn 3's redone email/dialog/forum desktop was refused with "desktop's pictures weren't prepared (run it through apply_edit_plan)", though it was. Its forum window asked for width 0.7 (the limit is 0.6): working out the frames to draw, that error was swallowed, so no frames were drawn, and the op said the wrong thing.
 **Fix.** The desktop op (and a cover_cut_in desktop shot) reads its windows before looking for its frames, so a window the plan got wrong gives its own error. Test: `edit_plan.test.ts`.
+
+### 20. A plan after a highlight was refused for its revision
+**Broke.** Three of turn 3's plans in 20 minutes were refused "revision conflict … refresh get_edit_context": the agent planned, highlighted the card it had just placed (highlight_evidence saves the project), and planned again on the first plan's revision, then re-read the context to try again.
+**Fix.** highlight_evidence answers with the revision it saved, and a plan holds over highlight marks added since its revision (new marker clips on tracks of their own), as it already did over sounds, starring and smoothing. Test: `plan_rebase.test.ts`.

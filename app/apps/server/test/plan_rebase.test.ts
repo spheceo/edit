@@ -23,6 +23,16 @@ test("a_plan_holds_over_the_agents_own_sounds_and_starring", () => {
   const shot = { id: "v1", type: "video", track: "v1", start: 0, duration: 60, media: "m1", source_in: 12, speed: 0.5 };
   expect(onlySoundChanged(withClips([shot]), withClips([{ ...shot, media: "m9", source_in: 0, speed: 1 }]))).toBe(true);
   expect(onlySoundChanged(withClips([shot]), withClips([{ ...shot, media: "m9", source_in: 0, speed: 1, start: 4 }]))).toBe(false);
+  // highlight_evidence's marks on a card, on a track of their own (Nov 9: a plan, a highlight, a plan on the old revision).
+  const card = { id: "k1", type: "video", track: "v1", start: 0, duration: 90, media: "m1", source_in: 0, speed: 1, name: "Horror · screenshot" };
+  const was = withClips([card]);
+  const marked = withClips([card, { id: "k2", type: "video", track: "v9", start: 10, duration: 80, media: "m2", source_in: 0, speed: 1, name: "Horror · marker" }]);
+  marked.tracks = [...was.tracks, { id: "v9", kind: "video", name: "V9", hidden: false, muted: false, locked: false } as unknown as Project["tracks"][number]];
+  expect(onlySoundChanged(was, marked)).toBe(true);
+  // A mark on a track that already held other clips, or any other new picture, is a real change.
+  const shared = withClips([card, { id: "k2", type: "video", track: "v1", start: 95, duration: 20, media: "m2", source_in: 0, speed: 1, name: "Horror · marker" }]);
+  expect(onlySoundChanged(was, shared)).toBe(false);
+  expect(onlySoundChanged(was, withClips([card, { ...card, id: "k3", name: "Horror · screenshot", start: 100 }]))).toBe(false);
 });
 
 import { capIssues, ISSUES_PER_KIND } from "../src/edit_tools.ts";

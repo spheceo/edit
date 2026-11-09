@@ -183,7 +183,7 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
   const paths = rects.map((r, i) => { const path = join(dir, `ink-${Date.now()}-${i}.png`); fs.writeFileSync(path, (horror ? roughMarkerPng : markerPng)(media.width, media.height, r)); return path; });
   const [, ids, errors] = await importPaths(app, projectId, paths, false, "agent"); if (ids.length !== paths.length) throw new Error(errors.join("; "));
   let dropped = 0;
-  const [, made] = await app.store.update(projectId, "agent", (project) => {
+  const [saved, made] = await app.store.update(projectId, "agent", (project) => {
     const original = on(project, args.on as string); const made: string[] = [];
     for (let i = 0; i < rects.length; i++) {
       const r = rects[i]!; const at = start + i * draw; if (at >= end) { dropped = rects.length - i; break; }
@@ -203,6 +203,8 @@ registerTool("highlight_evidence", async ({ app, args, projectId }) => {
     return made;
   });
   return text(stableStringify({
+    // The revision to plan on next.
+    rev: saved.rev,
     clips: made,
     on: args.on,
     ...(rects.length > given.length ? { per_line: `the ${given.length} rectangle(s) given cover ${rects.length} lines of text: one mark per line` } : {}),

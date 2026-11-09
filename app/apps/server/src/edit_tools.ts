@@ -324,7 +324,10 @@ export function onlyMediaChanged(before: Project, now: Project): boolean {
  * get_edit_context and its plan: sounds placed, moved or muted
  * (add_sound_effect, add_from_library, mute_house_words), audio tracks
  * added, words starred in a text, a slowed shot swapped for its smoothed
- * render, markers, media. The plan still holds on the newer version.
+ * render, markers, media, and highlight_evidence's marks on a card, each on a
+ * track of its own (the horror run of Nov 9: a plan, a highlight, then the
+ * next plan on the first's revision, refused three times in 20 minutes).
+ * The plan still holds on the newer version.
  */
 export function onlySoundChanged(before: Project, now: Project): boolean {
   const ignored = new Set(["media", "drive", "clips", "tracks", "markers", "next_id"]);
@@ -335,16 +338,21 @@ export function onlySoundChanged(before: Project, now: Project): boolean {
     const b = (now as unknown as Record<string, unknown>)[key];
     if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) return false;
   }
-  const videoTracks = (project: Project) =>
-    JSON.stringify(project.tracks.filter((track) => track.kind === "video"));
-  if (videoTracks(before) !== videoTracks(now)) return false;
   const was = new Map(before.clips.map((clip) => [clip.id, clip]));
   const is = new Map(now.clips.map((clip) => [clip.id, clip]));
+  const marker = (clip: Clip | undefined) => clip !== undefined && /^(Horror · marker|Janitor · evidence marker)$/u.test(clip.name ?? "");
+  // A highlight's own tracks: new, holding only its new marks.
+  const marks = new Set(now.clips.filter((clip) => !was.has(clip.id) && marker(clip)).map((clip) => clip.track));
+  for (const clip of now.clips) if (marks.has(clip.track) && !(marker(clip) && !was.has(clip.id))) marks.delete(clip.track);
+  const videoTracks = (project: Project) =>
+    JSON.stringify(project.tracks.filter((track) => track.kind === "video" && !(marks.has(track.id) && !before.tracks.some((own) => own.id === track.id))));
+  if (videoTracks(before) !== videoTracks(now)) return false;
   for (const id of new Set([...was.keys(), ...is.keys()])) {
     const a = was.get(id);
     const b = is.get(id);
     if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) continue;
     if ((a === undefined || a.type === "audio") && (b === undefined || b.type === "audio")) continue;
+    if (a === undefined && marker(b) && marks.has(b!.track)) continue;
     // Background smoothing swapping a slowed shot for its smoothed render.
     if (a !== undefined && b !== undefined && a.type === "video" && b.type === "video" && a.speed < 1 && b.speed === 1) {
       const { media: _ma, source_in: _sa, speed: _pa, ...restA } = a;

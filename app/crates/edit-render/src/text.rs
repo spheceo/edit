@@ -34,6 +34,58 @@ impl FontBook {
         self.faces.is_empty()
     }
 
+    /// The face that draws `ch`: `primary` when it has it, else the fallback
+    /// family's (Japanese: no face of ours has a kanji, and 栗山龍 came out
+    /// as blank boxes in the horror run of Nov 9), else any face that has it.
+    fn face_for(&self, primary: usize, ch: char) -> usize {
+        let has = |index: usize| {
+            self.faces
+                .get(index)
+                .is_some_and(|face| face.font.lookup_glyph_index(ch) != 0)
+        };
+        if ch.is_whitespace() || ch.is_control() || has(primary) {
+            return primary;
+        }
+        let weight = self.faces.get(primary).map_or(400, |face| face.weight);
+        let distance = |face: &Face| (i32::from(face.weight) - i32::from(weight)).abs();
+        let fallback = self
+            .faces
+            .iter()
+            .enumerate()
+            .filter(|(index, face)| {
+                face.family.eq_ignore_ascii_case(FALLBACK_FAMILY) && has(*index)
+            })
+            .min_by_key(|(_, face)| distance(face))
+            .map(|(index, _)| index);
+        fallback
+            .or_else(|| (0..self.faces.len()).find(|index| has(*index)))
+            .unwrap_or(primary)
+    }
+
+    fn font(&self, index: usize) -> Option<&Font> {
+        self.faces.get(index).map(|face| &face.font)
+    }
+
+    /// How far `ch` moves the pen after `previous` (its kerning only between
+    /// letters of the same face), and the face drawing it.
+    fn step(
+        &self,
+        primary: usize,
+        previous: Option<(char, usize)>,
+        ch: char,
+        px: f32,
+    ) -> (f32, usize) {
+        let face = self.face_for(primary, ch);
+        let Some(font) = self.font(face) else {
+            return (0.0, face);
+        };
+        let kern = previous
+            .filter(|(_, before)| *before == face)
+            .and_then(|(prev, _)| font.horizontal_kern(prev, ch, px))
+            .unwrap_or(0.0);
+        (kern + font.metrics(ch, px).advance_width, face)
+    }
+
     /// Closest weight in the requested family, else the closest weight overall.
     fn pick(&self, family: &str, weight: u16) -> Option<usize> {
         let distance = |face: &Face| (i32::from(face.weight) - i32::from(weight)).abs();
@@ -59,6 +111,10 @@ impl FontBook {
 /// static weights cut from the variable font) are SIL OFL 1.1.
 /// Akwe Pro is the team's commentary reference face; see assets/commentary/README.md
 /// for the review-build source and its separate distribution licence requirement.
+/// Drawn from where a text's own face has no glyph: Noto Sans JP (SIL OFL
+/// 1.1), Bold, kept to kana, full-width forms and the JIS X 0208 kanji.
+pub const FALLBACK_FAMILY: &str = "Noto Sans JP";
+
 pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Montserrat", 600, "Montserrat-SemiBold.ttf"),
     ("Geist", 400, "Geist-Regular.ttf"),
@@ -75,6 +131,7 @@ pub const BUNDLED_FONTS: &[(&str, u16, &str)] = &[
     ("Tinos", 700, "Tinos-Bold.ttf"),
     ("Arimo", 400, "Arimo-Regular.ttf"),
     ("Arimo", 700, "Arimo-Bold.ttf"),
+    ("Noto Sans JP", 700, "NotoSansJP-Bold.ttf"),
 ];
 
 #[cfg(feature = "bundled-fonts")]
@@ -95,6 +152,7 @@ pub fn bundled_font_bytes(file: &str) -> Option<&'static [u8]> {
         "Tinos-Bold.ttf" => include_bytes!("../fonts/Tinos-Bold.ttf"),
         "Arimo-Regular.ttf" => include_bytes!("../fonts/Arimo-Regular.ttf"),
         "Arimo-Bold.ttf" => include_bytes!("../fonts/Arimo-Bold.ttf"),
+        "NotoSansJP-Bold.ttf" => include_bytes!("../fonts/NotoSansJP-Bold.ttf"),
         _ => return None,
     })
 }
@@ -174,23 +232,15 @@ pub const MAX_TEXT_DIMENSION: u32 = 8192;
 /// Wraps `text` as `rasterize` lays it out (greedy, by words; an overlong word
 /// breaks by letters; newlines always break): its lines, measured with the
 /// font's advances and kerning at `px` with `tracking` between letters.
-fn wrap(font: &Font, px: f32, tracking: f32, max_width: Option<f32>, text: &str) -> Vec<String> {
-    let advance = |text: &str| -> f32 {
-        let mut pen = 0.0_f32;
-        let mut previous: Option<char> = None;
-        for ch in text.chars() {
-            if let Some(prev) = previous {
-                pen += font.horizontal_kern(prev, ch, px).unwrap_or(0.0);
-            }
-            pen += font.metrics(ch, px).advance_width + tracking;
-            previous = Some(ch);
-        }
-        if previous.is_some() {
-            pen - tracking
-        } else {
-            0.0
-        }
-    };
+fn wrap(
+    book: &FontBook,
+    face: usize,
+    px: f32,
+    tracking: f32,
+    max_width: Option<f32>,
+    text: &str,
+) -> Vec<String> {
+    let advance = |text: &str| -> f32 { measured(book, face, text, px, tracking) };
     let mut wrapped: Vec<String> = Vec::new();
     for paragraph in text.split('\n') {
         let Some(max) = max_width.filter(|max| *max > px) else {
@@ -242,8 +292,31 @@ pub fn wrap_lines(
     max_width: Option<f32>,
     text: &str,
 ) -> Option<Vec<String>> {
-    let font = &book.faces.get(book.pick(family, weight)?)?.font;
-    Some(wrap(font, px.clamp(1.0, 2000.0), tracking, max_width, text))
+    let face = book.pick(family, weight)?;
+    Some(wrap(
+        book,
+        face,
+        px.clamp(1.0, 2000.0),
+        tracking,
+        max_width,
+        text,
+    ))
+}
+
+/// A line's width: each letter from the face that has it, `tracking` between.
+fn measured(book: &FontBook, face: usize, text: &str, px: f32, tracking: f32) -> f32 {
+    let mut pen = 0.0_f32;
+    let mut previous: Option<(char, usize)> = None;
+    for ch in text.chars() {
+        let (step, own) = book.step(face, previous, ch, px);
+        pen += step + tracking;
+        previous = Some((ch, own));
+    }
+    if previous.is_some() {
+        pen - tracking
+    } else {
+        0.0
+    }
 }
 
 pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Option<TextImage> {
@@ -253,38 +326,26 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
     let line_metrics = font.horizontal_line_metrics(px)?;
     let line_advance = px * spec.line_height.max(0.1);
 
-    let measure = |text: &str, px: f32| -> f32 {
-        let mut pen = 0.0_f32;
-        let mut previous: Option<char> = None;
-        for ch in text.chars() {
-            if let Some(prev) = previous {
-                pen += font.horizontal_kern(prev, ch, px).unwrap_or(0.0);
-            }
-            pen += font.metrics(ch, px).advance_width + spec.tracking;
-            previous = Some(ch);
-        }
-        if previous.is_some() {
-            pen - spec.tracking
-        } else {
-            0.0
-        }
-    };
+    let measure = |text: &str, px: f32| -> f32 { measured(book, face, text, px, spec.tracking) };
     // Wrap to the width (greedy, by words; an overlong word breaks by letters).
-    let wrapped = wrap(font, px, spec.tracking, spec.max_width, spec.text);
+    let wrapped = wrap(book, face, px, spec.tracking, spec.max_width, spec.text);
 
     // Lay out each line, then centre lines on the widest.
     let mut lines: Vec<(Vec<(char, f32)>, f32)> = Vec::new();
     for line in wrapped.iter().map(String::as_str) {
         let mut pen = 0.0_f32;
         let mut glyphs = Vec::new();
-        let mut previous: Option<char> = None;
+        let mut previous: Option<(char, usize)> = None;
         for ch in line.chars() {
-            if let Some(prev) = previous {
-                pen += font.horizontal_kern(prev, ch, px).unwrap_or(0.0);
-            }
-            glyphs.push((ch, pen));
-            pen += font.metrics(ch, px).advance_width + spec.tracking;
-            previous = Some(ch);
+            let (step, own) = book.step(face, previous, ch, px);
+            // The kerning moves this letter; its own advance moves the next.
+            let kern = previous
+                .filter(|(_, before)| *before == own)
+                .and_then(|(prev, _)| book.font(own)?.horizontal_kern(prev, ch, px))
+                .unwrap_or(0.0);
+            glyphs.push((ch, pen + kern));
+            pen += step + spec.tracking;
+            previous = Some((ch, own));
         }
         let width = if glyphs.is_empty() {
             0.0
@@ -356,7 +417,11 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
         if alpha <= 0.0 || scale <= 0.0 {
             continue;
         }
-        let (metrics, bitmap) = cache.glyph(font, face, glyph.ch, px);
+        let own = book.face_for(face, glyph.ch);
+        let Some(own_font) = book.font(own) else {
+            continue;
+        };
+        let (metrics, bitmap) = cache.glyph(own_font, own, glyph.ch, px);
         if metrics.width == 0 || metrics.height == 0 {
             continue;
         }
@@ -381,13 +446,20 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
         let centre = pad + inset_y + half_height - offset;
         let baseline = centre + (metrics.ascent + metrics.descent) / 2.0;
         let mut pen = pad + inset_x + (content_width - label_width) / 2.0;
-        let mut previous: Option<char> = None;
+        let mut previous: Option<(char, usize)> = None;
         let [r, g, b, a] = label_spec.color.0;
         for ch in label_spec.text.chars() {
-            if let Some(prev) = previous {
-                pen += font.horizontal_kern(prev, ch, *px).unwrap_or(0.0);
+            let own = book.face_for(face, ch);
+            if let Some((prev, _)) = previous.filter(|(_, before)| *before == own) {
+                pen += book
+                    .font(own)
+                    .and_then(|f| f.horizontal_kern(prev, ch, *px))
+                    .unwrap_or(0.0);
             }
-            let (glyph, bitmap) = cache.glyph(font, face, ch, *px);
+            let Some(own_font) = book.font(own) else {
+                continue;
+            };
+            let (glyph, bitmap) = cache.glyph(own_font, own, ch, *px);
             let advance = glyph.advance_width;
             if !ch.is_whitespace() && glyph.width > 0 && glyph.height > 0 {
                 let left = pen + glyph.xmin as f32;
@@ -407,7 +479,7 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
                 );
             }
             pen += advance + tracking;
-            previous = Some(ch);
+            previous = Some((ch, own));
         }
     }
     let block = [block_width, line_advance * lines.len() as f32];
@@ -447,7 +519,11 @@ pub fn rasterize(book: &FontBook, cache: &mut GlyphCache, spec: &TextSpec) -> Op
                         break;
                     }
                     index += 1;
-                    end = Some(x + font.metrics(ch, px).advance_width);
+                    end = Some(
+                        x + book
+                            .font(book.face_for(face, ch))
+                            .map_or(0.0, |own| own.metrics(ch, px).advance_width),
+                    );
                 }
                 if let Some(end) = end {
                     let end = if whole {
@@ -585,6 +661,49 @@ mod tests {
             max_width: None,
             label: None,
         }
+    }
+
+    #[test]
+    fn a_letter_its_face_has_none_of_is_drawn_from_the_japanese_face() {
+        // The horror run of Nov 9: "Ryu Kuriyama" / "栗山龍" typed on, the kanji blank boxes in Geist.
+        let still = TextAnimation {
+            preset: edit_core::TextPreset::None,
+            duration: 0.0,
+            stagger: 0.0,
+        };
+        let ink = |book: &FontBook| {
+            let image = rasterize(
+                book,
+                &mut GlyphCache::default(),
+                &spec("栗山龍", &still, 0.0),
+            )
+            .unwrap();
+            // The kanji's own strokes: many columns inked, not three outlines.
+            let inked = (0..image.width as usize)
+                .filter(|x| {
+                    (0..image.height as usize)
+                        .any(|y| image.pixels[(y * image.width as usize + x) * 4 + 3] > 128)
+                })
+                .count();
+            (image.width, inked)
+        };
+        let alone = geist();
+        let mut with = geist();
+        with.add(
+            FALLBACK_FAMILY,
+            700,
+            include_bytes!("../fonts/NotoSansJP-Bold.ttf"),
+        )
+        .unwrap();
+        let (width, inked) = ink(&with);
+        // Three full-width kanji at 44 px: about 132 px of letters, most columns with ink.
+        assert!(width > 120, "{width}");
+        assert!(inked > 80, "{inked} of {width}");
+        assert_ne!(ink(&alone), (width, inked));
+        // Latin stays in its own face, the kanji beside it in the fallback.
+        assert_eq!(with.face_for(0, 'R'), 0);
+        assert_eq!(with.face_for(0, '栗'), 1);
+        assert_eq!(with.face_for(0, ' '), 0);
     }
 
     #[test]

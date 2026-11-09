@@ -45,6 +45,8 @@ export const FONTS: [string, number, string][] = [
   ["Tinos", 700, "Tinos-Bold.ttf"],
   ["Arimo", 400, "Arimo-Regular.ttf"],
   ["Arimo", 700, "Arimo-Bold.ttf"],
+  // Drawn where a face has no glyph (Japanese): edit-render's FALLBACK_FAMILY.
+  ["Noto Sans JP", 700, "NotoSansJP-Bold.ttf"],
 ];
 
 let wasmReady: Promise<unknown> | null = null;

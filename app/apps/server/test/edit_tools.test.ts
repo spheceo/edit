@@ -765,10 +765,9 @@ test("a plan's audit gives the issues where it worked and counts the rest, so a 
 test("a look past a file's end says how long the file is, not that it couldn't decode", async () => {
   // Nov 9: 55–160 s asked of a 53 s range imported from 0:27–1:20 of its video ("failed to fill whole buffer").
   const { app, id } = setUp("look-past-end");
-  app.store.update(id, "test", (project) => {
+  await app.store.update(id, "test", (project) => {
     project.media.push(media({ id: "m10", name: "range.mp4", path: "/nowhere/range.mp4", kind: "video", duration: 53.05 }));
   });
-  await new Promise((resolve) => setTimeout(resolve, 0));
   const said = await refused(app, "look_at_media", { media_id: "m10", start: 55, end: 160 });
   expect(said).toContain("m10 is 53.05 s long");
   expect(said).toContain("an imported range starts at 0");

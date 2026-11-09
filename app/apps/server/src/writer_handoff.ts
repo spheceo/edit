@@ -365,7 +365,11 @@ export function carryResearch(app: App, scriptId: string, projectId: string): vo
 export async function importScript(app: App, id: string): Promise<{ project: string }> {
   const data = writerStore.dataDir(app.store.home);
   // Footage a revision brought in and still being heard exactly (writer/exact_after.ts): the edit is made from its exact times, not the captions'.
-  if (writerStore.idOk(id)) await exactAfter.settle(data, id);
+  if (writerStore.idOk(id)) {
+    await exactAfter.settle(data, id);
+    // Out of credit, the script stays as it is (its cut, its clips) rather than an edit laid out from rough times that then waits for the same credit.
+    if (exactAfter.waitsForCredit(data, id) && exactAfter.pending(data, id)) throw new Error("The chosen footage hasn't been heard exactly yet: the transcription plan is out of credit. The script keeps its cut and Edit tries again every 30 minutes by itself; start the edit once it says the footage was heard.");
+  }
   let given = await fetchScript(id, app.store.home);
   // A Drive folder case not yet in Edit's originals: sent up now (or the send under way joined), so Start the edit goes on rather than stopping on it.
   if (writerShare.unsharedFolder(given) && writerStore.idOk(id) && fs.existsSync(join(writerStore.scriptDir(data, id), "script.json"))) {

@@ -43,6 +43,7 @@ import * as seams from "./seams.ts";
 import { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as update from "./update.ts";
+import * as exactAfter from "./writer/exact_after.ts";
 import * as writer from "./writer/index.ts";
 import * as writerImports from "./writer/imports.ts";
 import * as writerStore from "./writer/store.ts";
@@ -436,10 +437,15 @@ function resumeJobs(app: App): void {
       if (app.agents.resumeTurn === undefined) throw new jobs.Gone("no agent panel here");
       app.agents.resumeTurn(job);
     },
-    // A Writer script's import that waited on the transcription plan's credit: tried again (it waits again if there's still none).
+    // A Writer script's import, or its chosen footage's exact hearing (writer/exact_after.ts), that waited on the transcription plan's credit: tried again (it waits again if there's still none).
     script: async (job) => {
       const data = writerStore.dataDir(app.store.home);
       if (!writerStore.ids(data).includes(job.project)) throw new jobs.Gone("the script is gone");
+      if (job.args.waiting_on === "exact") {
+        jobs.end(app.store.home, job.key);
+        exactAfter.soon(data, job.project);
+        return;
+      }
       if (writerImports.importing(job.project)) return;
       jobs.end(app.store.home, job.key);
       void writerImports.resume(app, data, job.project, { kind: "retry" }).catch((error: unknown) => diag.warn("writer", `trying ${job.project}'s import again: ${diag.messageOf(error)}`));

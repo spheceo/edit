@@ -15,7 +15,7 @@ import * as house from "./house.ts";
 import * as commentary from "./commentary.ts";
 import { checkClips } from "./edits.ts";
 import * as exact from "./exact.ts";
-import { afterCredit, footageFor, footagePath, soon as hearSoon, unsigned } from "./exact_after.ts";
+import { afterCredit, creditBack, footageFor, footagePath, soon as hearSoon, unsigned } from "./exact_after.ts";
 import { checkStopped, type Job, type Outcome, named } from "./jobs.ts";
 import * as lessonNote from "./lesson_note.ts";
 import { lessonsText } from "./lessons.ts";
@@ -289,6 +289,7 @@ async function cutExactly(app: App, data: string, dir: string, script: Script, p
     diag.warn("writer", `${name}: the chosen footage couldn't be heard exactly: ${why}`);
     return [clips, `The chosen footage couldn't be heard exactly (${why}), so its cuts follow the rough words. Build again to try once more.`];
   }
+  creditBack(data, script.id);
   diag.info("writer", `${named(script.id, script.title)}: heard exactly ${exact.share(heard.heardMs, heard.footageMs)} of the footage in ${heard.stretches} stretches (${heard.retimed} retimed, ${heard.added} added, ${heard.respelled} respelled, ${heard.relabelled} relabelled)`);
   let cut: Clip[];
   try {

@@ -19,7 +19,9 @@ import type { Clip, Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
-import { QUOTA_RETRY_MS, whyOf } from "../import_steps.ts";
+import { QUOTA_RETRY_MS, retryAt, whyOf } from "../import_steps.ts";
+import * as table from "../jobs.ts";
+import { parent } from "../paths.ts";
 import { isFile } from "../paths.ts";
 import * as chat from "./chat.ts";
 import * as cloud from "./cloud.ts";
@@ -37,26 +39,33 @@ const WAIT_MS = 2 * 3_600_000;
 
 const going = new Map<string, Promise<void>>();
 const again = new Set<string>();
-const waiting = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Edit's data folder, whose job table a script's wait is kept in (`store.dataDir` is its `writer/`). */
+const homeOf = (data: string): string => parent(data) ?? data;
+/** The job table's key for a script's exact hearing waiting on the plan's credit (apart from its import's wait under the same kind). */
+const creditKey = (id: string): string => table.keyOf("script", id, "exact");
 
 /**
  * A hearing the transcription plan's credit refused, tried again by itself
  * every 30 minutes (import_steps.ts `QUOTA_RETRY_MS`, as an import's files
- * wait) until it's heard or nothing is left to hear. Kept only while Edit
- * runs: after a restart, the next revision, Start the edit or Hear exactly asks.
+ * wait) until it's heard or nothing is left to hear. Kept in the job table
+ * (`<home>/jobs.json`, `script:<id>:exact`), so a quit or an update in between
+ * loses nothing: the script keeps its rough cut and its chosen clips, and the
+ * next run's job table wakes the hearing when its time comes (serve.ts).
  */
 export function afterCredit(data: string, id: string): void {
-  if (waiting.has(id)) return;
-  const timer = setTimeout(() => {
-    waiting.delete(id);
-    soon(data, id);
-  }, QUOTA_RETRY_MS.value);
-  timer.unref?.();
-  waiting.set(id, timer);
+  const home = homeOf(data);
+  const key = table.begin(home, "script", id, { waiting_on: "exact" }, "exact", "waiting for credit");
+  table.settle(home, key, "waiting", { step: "waiting for credit", retry_at: retryAt("quota", Date.now()) ?? Date.now() + QUOTA_RETRY_MS.value, args: { waiting_on: "exact" } });
 }
 
-/** Whether a script's hearing waits for credit (tests). */
-export const waitsForCredit = (id: string): boolean => waiting.has(id);
+/** The wait is over: the chosen footage was heard (nothing when there was none). */
+export function creditBack(data: string, id: string): void {
+  table.end(homeOf(data), creditKey(id));
+}
+
+/** Whether a script's exact hearing waits for the plan's credit. */
+export const waitsForCredit = (data: string, id: string): boolean => table.get(homeOf(data), creditKey(id))?.state === "waiting";
 
 /** The footage a script plays: its original where it's still on this Mac, else its preview. */
 export const footagePath = (dir: string, script: Script): string => (script.originalPath !== "" && isFile(script.originalPath) ? script.originalPath : store.proxyPath(dir));
@@ -151,6 +160,7 @@ async function once(data: string, id: string): Promise<void> {
     if (whyOf(error) === "quota") afterCredit(data, id);
     throw error;
   }
+  creditBack(data, id);
   // A job or an import on the script writes it when it ends: the pass lands after it.
   const until = Date.now() + WAIT_MS;
   while (jobs.running(id) || importing(id)) {

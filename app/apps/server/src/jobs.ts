@@ -53,7 +53,7 @@ export type Kind =
   | "thumbnail"
   /** A smooth playback render (playback_render.ts): listed so `busyWith` sees it; not resumed. */
   | "playback"
-  /** A Writer script's import waiting on the transcription plan's credit (writer/imports.ts): woken to try again. */
+  /** A Writer script's import (writer/imports.ts), or its chosen footage's exact hearing (`script:<id>:exact`, writer/exact_after.ts), waiting on the transcription plan's credit: woken to try again. */
   | "script";
 
 export type State = "queued" | "running" | "waiting" | "done" | "failed" | "given_up";

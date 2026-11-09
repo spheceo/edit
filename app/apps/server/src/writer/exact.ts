@@ -136,16 +136,25 @@ async function hearAll(dir: string, footage: string, spans: [number, number][], 
   const jobs = spans.flatMap(([from, to], at) => pieces((to - from) / 1000).map((piece) => ({ at, piece })));
   const results: Heard[][] = new Array(jobs.length);
   let next = 0;
+  // A piece that fails stops the others taking more: the hearing is over, and what was heard is kept for the next.
+  let failed = false;
+  let first: unknown = null;
   const lane = async () => {
-    for (let index = next++; index < jobs.length; index = next++) {
+    for (let index = next++; index < jobs.length && !failed; index = next++) {
       const { at, piece } = jobs[index]!;
       const start = spans[at]![0] + Math.floor(piece.from * 1000);
       const end = spans[at]![0] + Math.floor(piece.to * 1000);
-      const found = await hear(footage, [start, end], join(dir, "exact", `${start}-${end}`), keyterms, signal, !pyannote);
+      const found = await hear(footage, [start, end], join(dir, "exact", `${start}-${end}`), keyterms, signal, !pyannote).catch((error: unknown) => {
+        if (!failed) first = error;
+        failed = true;
+        throw error;
+      });
       results[index] = found.words.map((word) => ({ ...word, start: word.start + piece.from, end: word.end + piece.from }));
     }
   };
-  await Promise.all(Array.from({ length: Math.min(AT_ONCE, jobs.length) }, lane));
+  // Every lane settled before the hearing ends either way: one still hearing would share its piece's folder with the next hearing.
+  await Promise.allSettled(Array.from({ length: Math.min(AT_ONCE, jobs.length) }, lane));
+  if (failed) throw first;
   const out: Heard[][] = [];
   for (const [at, span] of spans.entries()) {
     const own = jobs.flatMap((job, index) => (job.at === at ? [index] : []));

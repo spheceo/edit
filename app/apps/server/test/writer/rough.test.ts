@@ -181,13 +181,19 @@ test.skipIf(ffmpeg === null)("with the plan out of credit the build keeps the ro
   const quota = () => Response.json({ error: 'ElevenLabs transcription failed (401): {"detail":{"status":"quota_exceeded","message":"This request exceeds your quota of 0. You have 0 credits remaining."}}' }, { status: 401 });
   try {
     const one = built("");
+    // Six stretches: once the plan refuses, no lane asks for more than the one it had in hand.
+    one.clips.splice(2, 0, ...[150, 180, 210, 240, 270].map((at): Clip => ({ id: `c${at}`, startMs: at * 1000, endMs: at * 1000 + 2_400 })));
+    const spans = exact.stretches(one, one.clips);
+    expect(spans).toHaveLength(6);
     const dir = store.scriptDir(data, one.id);
     fs.mkdirSync(dir, { recursive: true });
     const file = tone(dir, 300);
     store.write(dir, { ...one, originalPath: file, sourceUrl: file });
     const job = { stage: () => {}, signal: new AbortController().signal } as unknown as Parameters<typeof scripting.exactOnce>[3];
     server.on("POST", "/v1/transcribe", quota, 10);
+    const asked = scribePosts();
     const [said] = await scripting.exactOnce(app, data, one.id, job);
+    expect(scribePosts() - asked).toBeLessThanOrEqual(4);
     expect(said).toContain("Heard roughly; the exact hearing waits for the transcription plan's credit");
     const waited = store.read(dir);
     expect(waited.exact).toBeUndefined();
@@ -199,7 +205,7 @@ test.skipIf(ffmpeg === null)("with the plan out of credit the build keeps the ro
     server.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Hello", "there."])));
     const [again] = await scripting.exactOnce(app, data, one.id, job);
     expect(again).toContain("Heard the chosen footage exactly");
-    expect(store.read(dir).exact).toEqual([[97_000, 108_400]]);
+    expect(store.read(dir).exact).toEqual(spans);
     expect(exactAfter.pending(data, one.id)).toBe(false);
   } finally {
     sonnet.standIn = false;

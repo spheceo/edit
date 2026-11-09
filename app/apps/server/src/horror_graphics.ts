@@ -427,8 +427,9 @@ export function icon(p: Project, a: Args): Args {
   if (unknown.length > 0) throw new Error(`commentary_icon doesn't take ${unknown.join(", ")}: it takes icon (${ICONS.join(", ")}) or media, color, label (the word under it), sub (a smaller line under that), count (that many in a row, one by one), exit (left, right or up: off screen at the end), x, y, size, blur`);
   const m = typeof a.media === "string" ? mediaOf(p, a.media) : undefined;
   if (m === undefined || m.kind !== "image") throw new Error(`commentary_icon needs icon (${ICONS.join(", ")}; color red, white, yellow, blue, green or grey) or media: a picture`);
-  const exit = a.exit === undefined ? null : typeof a.exit === "string" ? a.exit : "";
-  if (exit !== null && !["left", "right", "up"].includes(exit)) throw new Error("commentary_icon's exit is left, right or up");
+  // "The eight icons fade out" (Nov 9: the agent sent exit: true): every icon fades out at its end, so that's no exit.
+  const exit = a.exit === undefined || a.exit === true || a.exit === false || a.exit === "fade" ? null : typeof a.exit === "string" ? a.exit : "";
+  if (exit !== null && !["left", "right", "up"].includes(exit)) throw new Error("commentary_icon's exit is left, right or up (off screen); every icon fades out at its end without one");
   const count = Math.round(number(a, "count", 1));
   if (count < 1 || count > 30) throw new Error("commentary_icon's count is 1 to 30");
   const made: string[] = [];

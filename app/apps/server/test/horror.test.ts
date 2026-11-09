@@ -237,6 +237,8 @@ test("an icon takes its label, a line under it, a row of them one by one and a w
   const named = icon(p, { start: 500, end: 600, media: "ic", name: "Eric Jover" });
   expect(p.clips.some((c) => (named.clips as string[]).includes(c.id) && (c as { text?: string }).text === "ERIC JOVER")).toBe(true);
   expect(() => icon(p, { start: 500, end: 600, media: "ic", caption: "x" })).toThrow("doesn't take caption");
+  // "the eight icons fade out": they do at their end, with or without exit: true.
+  expect(() => icon(p, { start: 500, end: 600, media: "ic", exit: true })).not.toThrow();
 });
 
 test("horror's marker is red with torn edges and a glow, inside the screenshot", async () => {

@@ -1,4 +1,4 @@
-import { Check, Copy, Download, ExternalLink, FolderSearch, Link2, Trash2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FolderSearch, HardDriveDownload, Link2, MessageSquareText, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api, type Review } from "../lib/api";
@@ -29,6 +29,9 @@ import { Button, cx, Modal, Select } from "./ui";
  * same file, in the exports folder of the computer running Edit and nowhere
  * else. No review copy, no upload, no link, so it's there when the encode
  * ends (his Mac, Nov 9: an export of 24 s, and a link 19 min 35 s later).
+ * The dialog is Export, and its two ways are side by side, each saying where
+ * the video goes (Sphe, Nov 10: "the distinction between share and export
+ * needs to be made more clear"): saved on this Mac, or sent for feedback.
  */
 const HOUSE: Omit<ExportOptions, "range" | "chapters"> = { ...DEFAULTS, size: null, fps: null, preset: "youtube" };
 
@@ -56,13 +59,13 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [stopped, setStopped] = useState(false);
   // The export asked for here was an Export (this computer only), not a share's.
   const [only, setOnly] = useState(false);
-  // This computer's home folder, so where an Export went reads as `~/…`.
-  const [home, setHome] = useState<string | null>(null);
+  // The exports folder as shown ("~/Movies/Edit") and this computer's home, so where an Export went reads as `~/…`.
+  const [folder, setFolder] = useState<{ shown: string; home: string } | null>(null);
   useEffect(() => {
     if (!open) return;
     setMarkTouched(false);
     void api.exportFolder().then(
-      (given) => setHome(given.home),
+      (given) => setFolder({ shown: given.shown, home: given.home }),
       // Shown whole, then.
       () => {},
     );
@@ -139,6 +142,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const busy = starting || sharing !== null;
   const exporting = exportState?.state === "queued" || exportState?.state === "running";
   const link = review?.review ?? null;
+  // One at a time: either way makes the same file.
+  const unable = busy || exporting || retrying || projectDuration(project) <= 0;
 
   // Share and Export make the same file: the edit as saved, whole, the house export.
   const start = async (go: (options: ExportOptions, watermark: string | null) => Promise<void>) => {
@@ -247,12 +252,26 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   return (
     <Modal open={open} onClose={onClose} width={500}>
       <div className="p-6">
-        <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Share</h2>
-        <p className="mt-1 text-[13px] leading-relaxed text-muted">
-          {link
-            ? "Each share exports the edit as it is now. When the latest version has no comments, this replaces it. When someone has commented, it is added as the next version. Only people signed in can open the link, watch it and leave notes at a moment; the notes come back to the agent."
-            : "Exports the whole edit and makes a review link. Only people signed in can open it, watch and leave notes at a moment; the notes come back to the agent. Later shares replace the latest version until someone comments, then they add the next one."}
-        </p>
+        <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Export</h2>
+
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <Choice
+            icon={<HardDriveDownload size={16} />}
+            title={`Save to ${THIS_MACHINE}`}
+            detail={`The video file, in ${folder?.shown ?? "your exports folder"}. Nothing is uploaded.`}
+            disabled={unable}
+            onClick={() => void exportHere()}
+          />
+          <Choice
+            icon={<MessageSquareText size={16} />}
+            title="Send for feedback"
+            detail="Uploads it to the review link, where the team watches it and leaves notes for the agent."
+            note={link && next !== null ? (next.replace ? `Replaces v${next.version}: no one has commented on it` : `Adds v${next.version} to the link`) : link ? null : "Makes the link"}
+            primary
+            disabled={unable}
+            onClick={() => void share()}
+          />
+        </div>
 
         {link && (
           <div className="mt-4 flex flex-col rounded-[10px] border border-line bg-panel">
@@ -342,7 +361,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
           <div className="mt-4 flex items-center gap-2.5 rounded-[10px] border border-line bg-panel px-3 py-2.5 text-[13px]">
             <Check size={14} className="shrink-0 text-success" />
             <span className="min-w-0 flex-1 truncate text-fg" title={status.path}>
-              Saved to {shownPath(status.path, home)}
+              Saved to {shownPath(status.path, folder?.home ?? null)}
             </span>
             {onThisMac() ? (
               <Button size="sm" variant="subtle" className="shrink-0" onClick={() => showInFinder(status.path)}>
@@ -383,19 +402,30 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button
-            variant="subtle"
-            disabled={busy || exporting || retrying || projectDuration(project) <= 0}
-            title={`The video file, saved on ${THIS_MACHINE} only: nothing goes on the link`}
-            onClick={() => void exportHere()}
-          >
-            Export
-          </Button>
-          <Button variant="primary" disabled={busy || exporting || retrying || projectDuration(project) <= 0} onClick={() => void share()}>
-            {busy ? "Sharing…" : link && next !== null ? (next.replace ? `Replace v${next.version}` : `Share v${next.version}`) : "Share"}
-          </Button>
         </div>
       </div>
     </Modal>
+  );
+}
+
+/** One way out of the dialog: where the video goes, said on the button itself. */
+function Choice({ icon, title, detail, note, primary = false, disabled, onClick }: { icon: React.ReactNode; title: string; detail: string; note?: string | null; primary?: boolean; disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cx(
+        "flex min-w-0 flex-col items-start gap-1.5 rounded-[10px] border p-3.5 text-left transition-colors disabled:cursor-default disabled:opacity-50",
+        primary ? "border-primary/60 bg-primary/10 enabled:hover:bg-primary/15" : "border-line bg-panel enabled:hover:bg-hover",
+      )}
+    >
+      <span className="flex items-center gap-2 text-[14px] font-semibold text-fg">
+        <span className={primary ? "text-primary" : "text-muted"}>{icon}</span>
+        {title}
+      </span>
+      <span className="text-[12px] leading-snug text-muted">{detail}</span>
+      {note && <span className="text-[12px] leading-snug text-secondary">{note}</span>}
+    </button>
   );
 }

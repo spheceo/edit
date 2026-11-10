@@ -73,7 +73,7 @@ export function TopBar({ onShare }: { onShare: () => void }) {
           ) : (
             <Share size={14} strokeWidth={2.2} />
           )}
-          Share
+          Export
         </Button>
         <AppMenu />
       </div>

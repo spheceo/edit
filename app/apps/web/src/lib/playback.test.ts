@@ -217,6 +217,43 @@ describe("preview seeks and lifetime", () => {
     expect(playhead.playing).toBe(false);
   });
 
+  it("plays at 2× on the page's clock: twice the frames a second, the sound asked for and placed at twice the speed", () => {
+    // JJ, Nov 10: "a button where we can speed up when watching the video. like in premiere".
+    const p = fixture(); p.media[0].has_audio = true;
+    p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
+    p.clips.push({ id: "a", type: "audio", track: "a1", media: "m1", start: 0, duration: 90,
+      source_in: 2, speed: 1, volume_db: 0, fade_in: 0, fade_out: 0, color: "blue" });
+    engine.sources.mockReturnValue("[]");
+    // What the decoder hands back for 2×: each half second of the recording in a quarter second of sound.
+    for (let chunk = 4; chunk < 12; chunk++) decoding.sound.set(chunk,
+      { start: chunk * 0.5, sampleRate: 48000, channels: [new Float32Array(12000)] });
+    const told = vi.fn(); preview.onStatus(told);
+    preview.setSpeed(2);
+    expect(preview.speed).toBe(2);
+    expect(told).toHaveBeenCalled();
+    preview.setProject(p, {}); draw(); preview.play(); draw();
+    expect(decoding.requestAudio.mock.calls.at(-1)![5]).toBe(2);
+    // The first half second of the recording, heard in a quarter second.
+    const [at, offset, length] = clock.nodes[0].start.mock.calls[0];
+    expect(at).toBeCloseTo(0.05); expect(offset).toBeCloseTo(0); expect(length).toBeCloseTo(0.25);
+    // Half a second on the speaker's clock is a second of the edit.
+    clock.currentTime = 0.55; draw();
+    expect(playhead.frame).toBeCloseTo(30);
+    // Back to 1× while it plays: on from where it is, the sound placed again at the recording's own speed.
+    const nodes = [...clock.nodes];
+    preview.setSpeed(1);
+    expect(nodes.every((node) => node.stop.mock.calls.length === 1)).toBe(true);
+    for (let chunk = 4; chunk < 12; chunk++) decoding.sound.set(chunk,
+      { start: chunk * 0.5, sampleRate: 48000, channels: [new Float32Array(24000)] });
+    draw();
+    expect(playhead.playing).toBe(true);
+    expect(playhead.frame).toBeCloseTo(30);
+    expect(decoding.requestAudio.mock.calls.at(-1)![5]).toBe(1);
+    clock.currentTime = 1.1; draw();
+    expect(playhead.frame).toBeCloseTo(45);
+    preview.pause();
+  });
+
   it("does not stop or replay audio when a video frame is late", async () => {
     const p = fixture(); p.media[0].has_audio = true;
     p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
@@ -389,6 +426,12 @@ describe("preview seeks and lifetime", () => {
     expect(video.play).toHaveBeenCalled();
     video.currentTime = 2.0; draw();
     expect(playhead.frame).toBeCloseTo(59.75, 6);
+    // At 2× the video itself plays at twice the speed, its own clock still the playhead's.
+    preview.setSpeed(2);
+    expect((video as unknown as { playbackRate: number }).playbackRate).toBe(2);
+    expect(playhead.playing).toBe(true);
+    preview.setSpeed(1);
+    expect((video as unknown as { playbackRate: number }).playbackRate).toBe(1);
     // An edit since: the video stops where it was and the canvas draws live.
     preview.setSmooth(null); draw();
     expect(video.pause).toHaveBeenCalled();
@@ -537,6 +580,45 @@ describe("preview seeks and lifetime", () => {
     expect(playhead.playing).toBe(false);
     expect(playhead.frame).toBe(89);
     expect(sent("preview_pause").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("plays at 2× on the window's clock: the window is told the speed before it plays, and at once when it changes mid-play", async () => {
+    const calls: string[] = [];
+    const sent = await inWindow((command) => { calls.push(command); return null; });
+    preview.setProject(withSound(), {}); await settle(); draw(); await settle();
+    preview.setSpeed(2); await settle();
+    expect(sent("preview_rate")).toEqual([{ rate: 2 }]);
+    preview.play(); await settle();
+    expect(sent("preview_play")).toEqual([{ frame: 0 }]);
+    expect(calls.indexOf("preview_rate")).toBeLessThan(calls.indexOf("preview_play"));
+    // Mid-play: the window carries on from where its clock is; nothing is played again.
+    preview.setSpeed(1); await settle();
+    expect(sent("preview_rate")).toEqual([{ rate: 2 }, { rate: 1 }]);
+    expect(sent("preview_play")).toHaveLength(1);
+    expect(playhead.playing).toBe(true);
+  });
+
+  it("a window opened again is told the speed again before it plays (a new one plays at 1×)", async () => {
+    await inWindow();
+    preview.setProject(withSound(), {}); await settle(); draw(); await settle();
+    preview.setSpeed(2); await settle();
+    const sent = await inWindow();
+    preview.setProject(withSound(), {}); await settle(); draw(); await settle();
+    preview.play(); await settle();
+    expect(sent("preview_rate")).toEqual([{ rate: 2 }]);
+    expect(sent("preview_play")).toEqual([{ frame: 0 }]);
+  });
+
+  it("a window with no speeds plays at 1×, and the speed button says so", async () => {
+    const sent = await inWindow((command) => (command === "preview_rate" ? "command preview_rate not found" : null));
+    preview.setProject(withSound(), {}); await settle(); draw(); await settle();
+    // At 1× nothing is said of it: that window plays at 1× anyway.
+    preview.play(); await settle();
+    expect(sent("preview_play")).toEqual([{ frame: 0 }]);
+    expect(playhead.playing).toBe(true);
+    preview.setSpeed(2); await settle();
+    expect(preview.speed).toBe(1);
+    expect(playhead.playing).toBe(true);
   });
 
   it("patches the page's engine with a clips-only change instead of sending the edit whole", async () => {

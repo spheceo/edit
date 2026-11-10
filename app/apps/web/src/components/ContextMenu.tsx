@@ -29,7 +29,24 @@ export type MenuItem =
   | { heading: string }
   /** Who’s signed in, at the top of the account menu: their photo, name and email. */
   | { person: { name: string; email: string; picture: string | null } }
-  | { swatches: true; value?: ClipColor; onSelect: (color: ClipColor) => void };
+  | { swatches: true; value?: ClipColor; onSelect: (color: ClipColor) => void }
+  /**
+   * A level set by dragging, in the menu itself (`slider` is its name: a
+   * clip's volume). The menu stays open, so it can be heard and set again;
+   * `onStart` and `onEnd` are the drag's ends, one undo step between them.
+   */
+  | {
+      slider: string;
+      icon?: ReactNode;
+      value: number;
+      min: number;
+      max: number;
+      step: number;
+      format: (value: number) => string;
+      onStart: () => void;
+      onChange: (value: number) => void;
+      onEnd: () => void;
+    };
 
 interface MenuState {
   menu: { x: number; y: number; items: MenuItem[]; key: number; width?: number; owner?: Element } | null;
@@ -103,6 +120,73 @@ export function ContextMenuHost() {
     <AnimatePresence>
       {menu && <Panel key={menu.key} x={menu.x} y={menu.y} items={menu.items} width={menu.width} root />}
     </AnimatePresence>
+  );
+}
+
+/** How near its knob (px) a press takes hold of it where it is; further off, the knob comes to the press. */
+const KNOB_REACH = 9;
+
+/** A menu row with a level to drag: its name, the track, what it's at. */
+function SliderRow({ item, iconColumn, onPointerEnter }: { item: Extract<MenuItem, { slider: string }>; iconColumn: boolean; onPointerEnter: () => void }) {
+  const { min, max, step } = item;
+  const [value, setValue] = useState(item.value);
+  const track = useRef<HTMLDivElement>(null);
+  /** The drag under way: how far from the knob's centre it took hold. */
+  const drag = useRef<number | null>(null);
+  const at = (level: number) => Math.min(1, Math.max(0, (level - min) / (max - min)));
+  const end = () => {
+    if (drag.current === null) return;
+    drag.current = null;
+    item.onEnd();
+  };
+  // The menu closed under a drag (the window lost focus, Escape): the drag ends there.
+  const ending = useRef(end);
+  ending.current = end;
+  useEffect(() => () => ending.current(), []);
+  const move = (clientX: number) => {
+    const box = track.current?.getBoundingClientRect();
+    if (drag.current === null || !box || box.width <= 0) return;
+    const level = min + at(min + ((clientX - drag.current - box.left) / box.width) * (max - min)) * (max - min);
+    const next = Math.round(level / step) * step;
+    setValue(next);
+    item.onChange(next);
+  };
+  return (
+    <div className="flex h-8 items-center gap-2.5 px-2 text-[13px] text-fg" onPointerEnter={onPointerEnter}>
+      {iconColumn && <span className="flex size-4 shrink-0 items-center justify-center text-muted">{item.icon}</span>}
+      <span className="whitespace-nowrap">{item.slider}</span>
+      <div
+        role="slider"
+        aria-label={item.slider}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        aria-valuetext={item.format(value)}
+        className="group flex h-8 min-w-[120px] flex-1 cursor-pointer touch-none items-center px-1.5"
+        onPointerDown={(event) => {
+          if (event.button !== 0) return;
+          const box = track.current!.getBoundingClientRect();
+          const knob = box.left + at(value) * box.width;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          drag.current = Math.abs(event.clientX - knob) <= KNOB_REACH ? event.clientX - knob : 0;
+          item.onStart();
+          if (drag.current === 0) move(event.clientX);
+        }}
+        onPointerMove={(event) => move(event.clientX)}
+        onPointerUp={end}
+        onPointerCancel={end}
+        onLostPointerCapture={end}
+      >
+        <div ref={track} className="relative h-1 w-full rounded-full bg-white/15">
+          <div className="absolute inset-y-0 left-0 rounded-full bg-white/70" style={{ width: `${at(value) * 100}%` }} />
+          <div
+            className="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_1px_3px_#0008] transition-transform duration-150 group-hover:scale-110 group-active:scale-125"
+            style={{ left: `${at(value) * 100}%` }}
+          />
+        </div>
+      </div>
+      <span className="w-[58px] shrink-0 text-right text-[12px] text-muted tabular">{item.format(value)}</span>
+    </div>
   );
 }
 
@@ -231,6 +315,20 @@ function Panel({ x, y, back, items, root, onEnter, width }: { x: number; y: numb
             </div>
           );
         }
+        if ("slider" in item)
+          return (
+            <SliderRow
+              key={index}
+              item={item}
+              iconColumn={iconColumn}
+              onPointerEnter={() => {
+                // Not an item to rest on: nothing lit, and a submenu left open closes as it would for one.
+                setActive(-1);
+                stopSwitching();
+                if (open !== null) switching.current = setTimeout(() => setOpen(null), 350);
+              }}
+            />
+          );
         const highlighted = active === index || open?.index === index;
         return (
           <button

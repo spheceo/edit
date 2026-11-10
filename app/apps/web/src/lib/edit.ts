@@ -948,6 +948,27 @@ export function setFades(project: Project, ids: Iterable<string>, frames: number
   }
 }
 
+/** How loud a sound clip is set (dB): its volume, or with volume keys the loudest of them. Null for a clip with no sound of its own. */
+export function volumeOf(clip: Clip): number | null {
+  if (clip.type !== "audio") return null;
+  const keys = clip.keyframes?.volume_db;
+  return keys?.length ? Math.max(...keys.map((key) => key.value)) : clip.volume_db;
+}
+
+/**
+ * Makes the sound among `ids` (and of the pictures among them) louder or
+ * quieter by `by` dB: the volume and every volume key with it, so a duck or a
+ * swell keeps its shape.
+ */
+export function changeVolume(project: Project, ids: Iterable<string>, by: number) {
+  for (const id of withLinked(project, ids)) {
+    const clip = project.clips.find((candidate) => candidate.id === id);
+    if (!clip || clip.type !== "audio") continue;
+    clip.volume_db += by;
+    for (const key of clip.keyframes?.volume_db ?? []) key.value += by;
+  }
+}
+
 /** Marks the source of each selected clip under `frame`; the mark shows on every clip of that media. */
 export function addMarker(project: Project, ids: Iterable<string>, frame: number) {
   const fps = rate(project.settings);

@@ -64,9 +64,21 @@ it rests once it's here; a script open on this Mac keeps its footage here
 (`locks.openHere`), so the file never goes from under the window. Three failed
 asks in a row and the page's player takes the cut back at the same moment.
 Speed (1× and 2×, the sound's pitch kept) and volume are the window's
-(`preview_rate`, `preview_volume`), there for the editor too when it wants
-them. For checks, `window.__editScript` has the page's `player`, its
-`playhead` and `drawnBy()` ("window", "page" or "choosing").
+(`preview_rate`, `preview_volume`). For checks, `window.__editScript` has the
+page's `player`, its `playhead` and `drawnBy()` ("window", "page" or
+"choosing").
+
+**The editor plays at 2× as well** (Nov 10; JJ: "a button where we can speed
+up when watching the video. like in premiere"): the viewer's 1× / 2× button,
+the one Script mode's monitor has, and L while it plays. `preview.setSpeed`
+(`lib/playback.ts`) is the one place, for whichever player plays: the window's
+is told (`preview_rate`, before a play and at once mid-play; a window opened
+again is told again, since a new one plays at 1×), the render's video plays at
+it with its sound in step (`SmoothStream.follow`'s `speed`), and the page's own
+clock runs at it with each clip's sound asked of the decoder at its own speed
+times the player's (the worker's WSOLA, as a sped clip's). A window that
+refuses the speed plays at 1×, and the button says 1×. The speed stays until
+it's changed or Edit is closed.
 
 To see it without screen access: `EDIT_PREVIEW_TRACE=1` says each placement and
 draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,

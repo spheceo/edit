@@ -26,6 +26,7 @@ import { rate } from "../lib/types";
 
 const useFrame = () => useSyncExternalStore(playhead.subscribe, () => Math.floor(playhead.frame));
 const usePlaying = () => useSyncExternalStore(playhead.subscribe, () => playhead.playing);
+const useSpeed = () => useSyncExternalStore(preview.onStatus, () => preview.speed);
 const useFullscreen = () => useSyncExternalStore(
   (listener) => {
     document.addEventListener("fullscreenchange", listener);
@@ -316,11 +317,12 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
   const points = useInOut();
   const span = inOutSpan(duration, points);
   const noting = useNotes((state) => state.draft !== null);
+  const speed = useSpeed();
   return (
     <div className="flex flex-col">
       {fullscreen && <ScrubBar frame={frame} duration={duration} />}
       <div className={cx("flex h-11 shrink-0 items-center px-3", !fullscreen && "border-t border-line")}>
-      <div className="w-[180px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
+      <div className="w-[220px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
       <div className="flex flex-1 items-center justify-center gap-0.5">
         <IconButton label="Go to start (Home)" onClick={goToStart}>
           <SkipBack size={15} />
@@ -343,7 +345,7 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
           <SkipForward size={15} />
         </IconButton>
       </div>
-      <div className="flex w-[180px] items-center justify-end gap-2">
+      <div className="flex w-[220px] items-center justify-end gap-2">
         {!fullscreen && (
           <IconButton label={noting ? "Close the note" : "Leave a note here (Q)"} active={noting} aria-pressed={noting} onClick={toggleNote}>
             <MessageSquarePlus size={15} />
@@ -363,6 +365,16 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
         ) : (
           <div className="font-mono text-[13px] text-faint tabular">{timecode(duration, fps)}</div>
         )}
+        {/* Watching an edit through in half the time; Script mode's monitor has the same button. */}
+        <IconButton
+          label={speed === 1 ? "Play at 2× speed (L while playing)" : "Play at normal speed (L while playing)"}
+          active={speed !== 1}
+          aria-pressed={speed !== 1}
+          onClick={() => preview.setSpeed(speed === 1 ? 2 : 1)}
+          className="font-mono text-[12px] tabular"
+        >
+          {speed}×
+        </IconButton>
         <IconButton label={fullscreen ? "Exit full screen (F)" : "Full screen (F)"} onClick={toggleFullscreen}>
           {fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}
         </IconButton>

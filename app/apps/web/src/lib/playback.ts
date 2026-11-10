@@ -134,6 +134,9 @@ class Preview {
   private nativeAsked: number | null = null;
   /** A play on the window's clock (each play a generation, so a stale answer is known), and whether its position is being asked for. */
   private nativePlay = 0;
+  /** The speed the window's player has (null: not told since it opened; a newly opened one plays at 1), and the asks to it, one after another. */
+  private nativeSpeed: number | null = null;
+  private speedAsk: Promise<void> = Promise.resolve();
   private nativePolling = false;
   private nativeHinted = 0;
   /** The project the page's engine holds (what the next change is a patch of; null: send it whole). */
@@ -218,6 +221,13 @@ class Preview {
   private streamSound: HTMLAudioElement | null = null;
   /** The rendered video is what the viewer shows (playing, or paused on its frame). */
   smoothShown = false;
+  /**
+   * How fast it plays: 1, or 2 to watch an edit through in half the time (JJ,
+   * Nov 10: "a button where we can speed up when watching the video. like in
+   * premiere"), the sound sped with it at its own pitch. Whichever player
+   * plays: the window's, the render's, the page's own.
+   */
+  speed = 1;
   private listeners = new Set<Listener>();
   private decoder = new Decoder(() => this.invalidate(), (error, key) => {
     const media = key === undefined ? undefined : [...this.sources, ...this.sounds].find(([, url]) => url === key)?.[0];
@@ -273,6 +283,7 @@ class Preview {
     this.video?.removeEventListener("playing", this.onVideoPlaying);
     this.video?.removeEventListener("seeked", this.onVideoPlaying);
     this.video = video;
+    if (video) video.playbackRate = this.speed;
     video?.addEventListener("waiting", this.onVideoWaiting);
     video?.addEventListener("playing", this.onVideoPlaying);
     video?.addEventListener("seeked", this.onVideoPlaying);
@@ -336,6 +347,41 @@ class Preview {
   private stopSmooth() {
     if (this.video && !this.video.paused) this.video.pause();
     if (this.stream) this.stream.follow(this.video?.currentTime ?? 0, false);
+  }
+
+  /**
+   * Plays at `speed` from here on, where it is if it's playing: the window's
+   * player is told, the render plays at it, and the page's own clock starts
+   * again at the playhead with the sound cut for the new speed.
+   */
+  setSpeed(speed: number) {
+    if (speed === this.speed) return;
+    this.speed = speed;
+    if (this.video) this.video.playbackRate = speed;
+    if (this.native) void this.sendSpeed();
+    else if (playhead.playing && !this.smoothShown) this.resetClock();
+    this.notify();
+  }
+
+  /**
+   * Tells the window's player the speed, when it has another. One that
+   * refuses (a window built before it had speeds) plays at 1×, and the
+   * button goes back to saying so.
+   */
+  private sendSpeed(): Promise<void> {
+    this.speedAsk = this.speedAsk.then(async () => {
+      const speed = this.speed;
+      if (!this.native || speed === this.nativeSpeed) return;
+      try {
+        await nativePreview.rate(speed);
+        this.nativeSpeed = speed;
+      } catch (error) {
+        if (this.nativeSpeed === null && speed === 1) { this.nativeSpeed = 1; return; }
+        note("warn", "preview", `the window's player didn't take ${speed}× speed: ${error}`);
+        if (this.speed === speed) { this.speed = this.nativeSpeed ?? 1; this.notify(); }
+      }
+    });
+    return this.speedAsk;
   }
 
   /** Puts the rendered video at `frame` (a hair into it, so it never lands on the frame before); drawn live where a streamed render has nothing yet. */
@@ -438,6 +484,7 @@ class Preview {
         return;
       }
       this.native = true;
+      this.nativeSpeed = null;
       this.nativeStale = true;
       this.nativeHas = null;
       this.nativeDrawn = null;
@@ -660,7 +707,8 @@ class Preview {
     this.queued = 0;
     cancelAnimationFrame(this.loop);
     this.loop = 0;
-    nativePreview.play(from).then(() => {
+    // The speed first, then the play at it; a pause meanwhile, and nothing is played.
+    this.sendSpeed().then(() => (generation === this.nativePlay && playhead.playing && this.native ? nativePreview.play(from) : null)).then(() => {
       if (generation !== this.nativePlay || !playhead.playing) return;
       this.followNative(generation);
     }, (error: unknown) => {
@@ -1136,7 +1184,9 @@ class Preview {
     this.showSmooth(playhead.frame);
     // A streamed render's sound is its own element's.
     video.muted = this.stream !== null;
-    this.stream?.follow(video.currentTime, true);
+    // A new file in the element starts at 1× again.
+    video.playbackRate = this.speed;
+    this.stream?.follow(video.currentTime, true, this.speed);
     void video.play().catch((error: unknown) => {
       // Refused (no user gesture, a file that won't play): drawn live instead.
       note("warn", "preview", `smooth playback didn't start: ${error}`);
@@ -1170,7 +1220,7 @@ class Preview {
           this.play();
           return;
         }
-        this.stream.follow(video.currentTime, true);
+        this.stream.follow(video.currentTime, true, this.speed);
         if (performance.now() - this.poked >= 1000) { this.poked = performance.now(); this.stream.poke(); }
       }
       if (performance.now() - this.persistedAt >= 1000) this.remember();
@@ -1224,7 +1274,7 @@ class Preview {
     if (!this.engine) { this.resetClock(); this.setBuffering(true); return; }
     const fps = rate(this.project.settings);
     let frame = this.runningClock
-      ? this.frameAtStart + Math.max(0, this.audio.currentTime - this.clockStart) * fps
+      ? this.frameAtStart + Math.max(0, this.audio.currentTime - this.clockStart) * fps * this.speed
       : playhead.frame;
     const out = this.project.mark_out ?? null;
     if (out !== null && this.playedFrom < out && frame >= out && out < this.duration) {
@@ -1391,7 +1441,7 @@ class Preview {
     else if (scrubbed !== null) this.decoder.requestRough(scrubbed.key, scrubbed.url, lane, scrubbed.time, media.fps || 30, scrubbed.seconds, 0.5 / (media.fps || 30));
     else if (!playhead.playing && this.dragging && !this.settled) this.decoder.requestRough(url, url, lane, source.time, media.fps || 30, media.duration);
     else this.decoder.requestVideo(url, url, lane, source.time, media.fps || 30, media.duration,
-      playhead.playing ? 1 : this.direction, playhead.playing, speed / rate(this.project!.settings));
+      playhead.playing ? 1 : this.direction, playhead.playing, speed * (playhead.playing ? this.speed : 1) / rate(this.project!.settings));
   }
 
   private warm(frame: number, sources: PictureSource[]) {
@@ -1413,7 +1463,7 @@ class Preview {
       if (this.clips[mid].start <= frame) lo = mid + 1; else hi = mid;
     }
     const upcoming: Clip[] = [];
-    for (let i = lo; i < this.clips.length && this.clips[i].start <= frame + fps * LOOK_AHEAD; i++) upcoming.push(this.clips[i]);
+    for (let i = lo; i < this.clips.length && this.clips[i].start <= frame + fps * this.speed * LOOK_AHEAD; i++) upcoming.push(this.clips[i]);
     for (const clip of upcoming) if (clip.type === "video" && !this.tracks.get(clip.track)?.hidden) {
       this.requestPicture({ clip: clip.id, media: clip.media, time: clip.source_in }, lanes);
     }
@@ -1429,13 +1479,18 @@ class Preview {
     if (time >= media.duration) return;
     const lane = `a:${clip.id}`;
     lanes.add(lane);
-    this.decoder.requestAudio(url, url, lane, time, media.duration, clip.speed);
+    this.decoder.requestAudio(url, url, lane, time, media.duration, this.stretch(clip));
+  }
+
+  /** How much faster than its recording a clip's sound plays: its own speed, and the player's (at rest too, so the sound it warms is what the next play needs). */
+  private stretch(clip: AudioClip) {
+    return clip.speed * this.speed;
   }
 
   private audioReady(frame: number, ahead: number) {
     if (!this.project) return true;
     const fps = rate(this.project.settings);
-    const until = frame + ahead * fps;
+    const until = frame + ahead * fps * this.speed;
     return this.clipsAround(frame, until).every((clip) => {
       if (!this.audible(clip)) return true;
       const media = this.media.get(clip.media)!;
@@ -1444,7 +1499,7 @@ class Preview {
       const end = Math.min(media.duration, clip.source_in + (Math.min(until, clipEnd(clip)) - clip.start) / fps * clip.speed);
       const first = Math.floor((time + 1e-8) / AUDIO_CHUNK_SECONDS);
       const last = Math.max(first, Math.floor((end - 1e-8) / AUDIO_CHUNK_SECONDS));
-      for (let chunk = first; chunk <= last; chunk++) if (!this.decoder.pcm(this.sounds.get(clip.media)!, chunk, clip.speed)) return false;
+      for (let chunk = first; chunk <= last; chunk++) if (!this.decoder.pcm(this.sounds.get(clip.media)!, chunk, this.stretch(clip))) return false;
       return true;
     });
   }
@@ -1454,7 +1509,9 @@ class Preview {
     const audio = this.audio;
     if (!project || !audio) return;
     const fps = rate(project.settings);
-    const until = frame + fps * AUDIO_AHEAD;
+    // Frames of the edit that go by in a second of the speaker's clock.
+    const pace = fps * this.speed;
+    const until = frame + pace * AUDIO_AHEAD;
     for (const clip of this.clipsAround(frame, until)) {
       if (!this.audible(clip)) continue;
       const url = this.sounds.get(clip.media)!;
@@ -1465,15 +1522,16 @@ class Preview {
       for (let chunk = first; chunk <= last; chunk++) {
         const key = `${clip.id}@${chunk}`;
         if (this.scheduled.has(key)) continue;
-        const pcm = this.decoder.pcm(url, chunk, clip.speed);
+        const stretch = this.stretch(clip);
+        const pcm = this.decoder.pcm(url, chunk, stretch);
         if (!pcm) continue;
         const start = Math.max(frame, clip.start, clip.start + (pcm.start - clip.source_in) / clip.speed * fps);
         const end = Math.min(clipEnd(clip), clip.start + (Math.min(media.duration, pcm.start + AUDIO_CHUNK_SECONDS) - clip.source_in) / clip.speed * fps);
         if (end <= start) continue;
         const offset = clip.source_in + (start - clip.start) / fps * clip.speed - pcm.start;
-        const when = this.clockStart + (start - this.frameAtStart) / fps;
+        const when = this.clockStart + (start - this.frameAtStart) / pace;
         const late = Math.max(0, audio.currentTime - when);
-        const length = (end - start) / fps - late;
+        const length = (end - start) / pace - late;
         if (length <= 0) continue;
         const buffer = audio.createBuffer(pcm.channels.length, pcm.channels[0].length, pcm.sampleRate);
         // One side in both ears when the clip says so, as the export's mix (mix.rs OneSide).
@@ -1485,14 +1543,14 @@ class Preview {
         const gain = audio.createGain();
         const at = Math.max(audio.currentTime, when);
         // Automation follows the same frame fades and volume keys as the native mixer.
-        for (let sample = start + late * fps; sample <= end; sample = Math.min(end, sample + 1)) {
+        for (let sample = start + late * pace; sample <= end; sample = Math.min(end, sample + 1)) {
           const local = sample - clip.start;
           let volume = 10 ** (paramAt(clip, "volume_db", sample) / 20);
           // Linear from silence at the clip's start and to silence at its end, as the export's (mix.rs fade_gain).
           if (clip.fade_in > 0) volume *= Math.min(1, Math.max(0, local / clip.fade_in));
           if (clip.fade_out > 0) volume *= Math.min(1, Math.max(0, (clip.duration - local) / clip.fade_out));
-          const t = at + (sample - start - late * fps) / fps;
-          if (sample === start + late * fps) gain.gain.setValueAtTime(volume, t);
+          const t = at + (sample - start - late * pace) / pace;
+          if (sample === start + late * pace) gain.gain.setValueAtTime(volume, t);
           else gain.gain.linearRampToValueAtTime(volume, t);
           if (sample === end) break;
         }
@@ -1500,16 +1558,16 @@ class Preview {
         let mute: GainNode | undefined;
         if (clip.mutes?.length) {
           mute = audio.createGain();
-          const playedFrom = start + late * fps;
+          const playedFrom = start + late * pace;
           const sourceAt = (frameAt: number) => clip.source_in + (frameAt - clip.start) / fps * clip.speed;
-          const contextAt = (time: number) => at + ((time - clip.source_in) / clip.speed * fps + clip.start - playedFrom) / fps;
+          const contextAt = (time: number) => at + ((time - clip.source_in) / clip.speed * fps + clip.start - playedFrom) / pace;
           mutePoints(clip.mutes, sourceAt(playedFrom), sourceAt(end)).forEach(([time, value], index) => {
             if (index === 0) mute!.gain.setValueAtTime(value, at);
             else mute!.gain.linearRampToValueAtTime(value, contextAt(time));
           });
           source.connect(gain).connect(mute).connect(audio.destination);
         } else source.connect(gain).connect(audio.destination);
-        source.start(at, Math.max(0, offset / clip.speed + late), length);
+        source.start(at, Math.max(0, offset / stretch + late), length);
         const scheduled = { source, gain, mute, clip: clip.id, url };
         source.onended = () => {
           source.disconnect(); gain.disconnect(); mute?.disconnect();

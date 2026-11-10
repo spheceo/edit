@@ -334,7 +334,10 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
       } else if (key === "k") {
         preview.pause();
       } else if (key === "l") {
-        preview.play();
+        // As Premiere's shuttle: L plays, and L again while it plays is 2× (pressed again, not held down); once more is 1×, the viewer's speed button.
+        if (event.repeat) return;
+        if (playhead.playing) preview.setSpeed(preview.speed === 1 ? 2 : 1);
+        else preview.play();
       }
     };
     window.addEventListener("keydown", onKey);

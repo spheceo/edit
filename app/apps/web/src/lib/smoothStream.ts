@@ -95,8 +95,8 @@ export class SmoothStream {
     return true;
   }
 
-  /** Keeps the sound with the picture at `time` (s), playing or not. */
-  follow(time: number, playing: boolean) {
+  /** Keeps the sound with the picture at `time` (s), playing (at `speed`, the picture's) or not. */
+  follow(time: number, playing: boolean, speed = 1) {
     const url = this.info?.soundUrl ?? null;
     if (url !== this.soundSource) {
       this.soundSource = url;
@@ -108,9 +108,9 @@ export class SmoothStream {
     if (sync.seek) {
       // One move, and not another while that one is still landing.
       if (!this.sound.seeking) this.sound.currentTime = time;
-      this.sound.playbackRate = 1;
+      this.sound.playbackRate = playing ? speed : 1;
     } else {
-      this.sound.playbackRate = playing ? sync.rate : 1;
+      this.sound.playbackRate = playing ? sync.rate * speed : 1;
     }
     if (playing && this.sound.paused) void this.sound.play().catch(() => {});
     if (!playing && !this.sound.paused) this.sound.pause();

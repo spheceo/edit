@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addElement,
+  changeVolume,
   clipEnd,
   duplicateClips,
   folderOf,
@@ -19,6 +20,7 @@ import {
   setSpeed,
   splitAt,
   validateProject,
+  volumeOf,
 } from "./edit";
 import type { Clip, Keyframe, Media, Project } from "./types";
 
@@ -124,6 +126,28 @@ describe("timeline operations", () => {
     expect(next.clips.find((clip) => clip.id === "a")!.duration).toBe(30);
     expect(next.clips.find((clip) => clip.id === "b")!.start).toBe(30);
     assertNoOverlaps(next);
+  });
+
+  it("a clip's volume moves its level and every volume key by the same, and a picture's linked sound with it", () => {
+    const sound = (id: string, extra: Partial<Clip> = {}): Clip =>
+      ({ id, track: "a1", start: 0, duration: 60, color: "green", fade_in: 0, fade_out: 0, type: "audio", media: "m1", source_in: 0, speed: 1, volume_db: -18, ...extra }) as Clip;
+    const base = project([
+      video("v", 0, 60, { link: "pair" } as Partial<Clip>),
+      sound("s", { link: "pair" } as Partial<Clip>),
+      sound("music", { start: 60, volume_db: -24, keyframes: { volume_db: [{ frame: 0, value: -24, ease: "linear" }, { frame: 30, value: -30, ease: "linear" }] } }),
+    ]);
+    const music = base.clips.find((clip) => clip.id === "music")!;
+    // With keys, the loudest of them is the clip's level; a picture has none of its own.
+    expect(volumeOf(music)).toBe(-24);
+    expect(volumeOf(base.clips.find((clip) => clip.id === "v")!)).toBeNull();
+    const next = produce(base, (draft) => {
+      changeVolume(draft, ["v", "music"], 4.5);
+    });
+    expect(volumeOf(next.clips.find((clip) => clip.id === "s")!)).toBe(-13.5);
+    const louder = next.clips.find((clip) => clip.id === "music")!;
+    expect(louder.keyframes!.volume_db.map((key) => key.value)).toEqual([-19.5, -25.5]);
+    expect(volumeOf(louder)).toBe(-19.5);
+    expect(validateProject(next)).toBeNull();
   });
 
   it("duration changes stop at the next clip and validation catches overlaps", () => {

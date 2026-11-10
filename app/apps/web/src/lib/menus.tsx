@@ -39,6 +39,7 @@ import {
   addElement,
   addMarker,
   addTrack,
+  changeVolume,
   clearMarkers,
   clipEnd,
   deleteClips,
@@ -55,6 +56,7 @@ import {
   setSpeed,
   splitAt,
   unlinkClips,
+  volumeOf,
   withLinked,
   type Element,
 } from "./edit";
@@ -77,6 +79,9 @@ const ELEMENT_ITEMS: { id: Element; label: string; icon: ReactNode }[] = [
   { id: "waveform", label: "Glowing waveform", icon: <AudioWaveform size={14} /> },
 ];
 
+/** What the clip menu's volume goes between (dB), half a dB at a time: quieter than the bottom is a mute or a fade. */
+const VOLUME = { min: -40, max: 12, step: 0.5 };
+
 function addAt(element: Element, frame: number, track?: string) {
   let id = "";
   state().edit((draft) => {
@@ -98,6 +103,11 @@ export function clipMenu(clipId: string): MenuItem[] {
   const linked = isLinked(project, ids);
   const canLink = !linked && clips.some((clip) => clip.type === "video") && clips.some((clip) => clip.type === "audio");
   const fps = rate(project.settings);
+  // The sound to set the volume of: the clip clicked, or the sound linked to the picture clicked.
+  const sound = [...withLinked(project, ids)].map((id) => project.clips.find((clip) => clip.id === id)).filter((clip) => clip?.type === "audio");
+  const heard = sound.find((clip) => clip!.id === clipId) ?? sound[0];
+  /** Where the drag under way started from (dB): every sound selected moves by as much as this one. */
+  let from = 0;
   return [
     {
       label: "Split at playhead",
@@ -131,6 +141,24 @@ export function clipMenu(clipId: string): MenuItem[] {
       onSelect: () => editor.edit((draft) => clearMarkers(draft, ids)),
     },
     { separator: true },
+    ...(heard
+      ? [
+          {
+            slider: "Volume",
+            icon: <Volume2 size={14} />,
+            value: volumeOf(heard) ?? 0,
+            ...VOLUME,
+            format: (db: number) => `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)} dB`,
+            onStart: () => {
+              const now = state().project?.clips.find((clip) => clip.id === heard.id);
+              from = (now && volumeOf(now)) ?? 0;
+              state().beginGesture();
+            },
+            onChange: (db: number) => state().gesture((draft) => changeVolume(draft, ids, db - from)),
+            onEnd: () => state().endGesture(),
+          },
+        ]
+      : []),
     {
       label: "Speed",
       icon: <Gauge size={14} />,

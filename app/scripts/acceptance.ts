@@ -336,6 +336,20 @@ async function pageChecks(id: string): Promise<void> {
   timing("video misses while playing", misses <= 5, `${misses} (at most 5)`);
   if (after.audioOutput?.state !== "running") record("audio underruns", "skip", `the page's sound never started here (AudioContext ${after.audioOutput?.state ?? "missing"}): no sound device`);
   else check("audio underruns", underruns === 0, `${underruns}`);
+  // The viewer's 2× (its speed button, L while playing): 2 s of playing from the start is 4 s of the edit.
+  if (after.audioOutput?.state !== "running") record("play at 2×", "skip", "the page's player plays on the sound's clock, and no sound started here");
+  else {
+    await page.js(`${P}.seek(0)`);
+    await sleep(800);
+    await page.js(`${P}.setSpeed(2)`);
+    await page.js(`${P}.play()`, true);
+    await sleep(2000);
+    const fast = await page.js(`(() => ({ ...${P}.diagnostics, at: window.__edit.playhead.frame, playing: window.__edit.playhead.playing }))()`);
+    await page.js(`${P}.pause()`);
+    await page.js(`${P}.setSpeed(1)`);
+    if (!fast.playing || fast.at <= 0) check("play at 2×", false, `the playhead didn't move (frame ${Math.round(fast.at)}, playing ${fast.playing})`);
+    else timing("play at 2×", fast.at >= frames(3.2) && fast.at <= frames(4.4), `${Math.round(fast.at)} frames advanced in 2 s (${frames(4)} asked), ${fast.audioUnderruns - after.audioUnderruns} audio underruns`);
+  }
   // Scrub: 60 positions across the edit, one every 33 ms, as a drag; which were drawn.
   const scrub = await page.js(
     `new Promise((done) => { const p = ${P}; const wanted = Array.from({ length: 60 }, (_, i) => Math.round(i * ${lastFrame} / 59)); const seen = new Set(); let i = 0; let live = true;

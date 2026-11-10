@@ -264,7 +264,11 @@ export function Home() {
   // "until the first prompt is kicked off the project isn't a Script project
   // it's still in the importing phase").
   const importingNow = new Map<string, Importing>();
+  // One the server follows live is said from that alone: the script's saved progress lags it (5 against 58), and
+  // creeping both, each reset the other's creep every render, so the number sat still (JJ, Nov 10).
+  const followed = new Set(writing.map((one) => one.id));
   for (const one of localScripts) {
+    if (followed.has(one.id)) continue;
     if (one.status === "processing") importingNow.set(one.id, { word: `Importing ${Math.floor(creeping(one.id, one.progress ?? 0))}%`, stopped: false, percent: creeping(one.id, one.progress ?? 0) });
     else if (one.status === "error" || one.status === "needs_choice") importingNow.set(one.id, { word: one.status === "needs_choice" ? "Waiting on a choice" : "Stopped", stopped: true });
     // In, but its first prompt not started yet: still importing until the workflow is under way.

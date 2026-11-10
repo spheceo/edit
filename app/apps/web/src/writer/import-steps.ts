@@ -65,12 +65,16 @@ export function creeping(id: string, said: number, now = Date.now()): number {
     seen = kept(id);
     if (seen !== undefined) CREEP.set(id, seen);
   }
+  if (!Number.isFinite(said)) said = 0;
+  if (seen !== undefined && !Number.isFinite(seen.shown)) seen = undefined;
   if (seen === undefined || seen.said !== said) {
     const from = Math.max(said, seen?.shown ?? 0);
     CREEP.set(id, { said, from, since: now, shown: from });
     keep(id, { said, from, since: now });
     return from;
   }
-  seen.shown = Math.min(99, Math.max(seen.shown, seen.from + SCALE * Math.log1p((now - seen.since) / MINUTE)));
+  // A clock read before `since` (the dialog's, ticking once a second, or one from before it opened) creeps nothing:
+  // log1p of under -1 is NaN, and it stuck (JJ, Nov 10: "NaN%" on a 9-hour import's dialog).
+  seen.shown = Math.min(99, Math.max(seen.shown, seen.from + SCALE * Math.log1p(Math.max(0, now - seen.since) / MINUTE)));
   return seen.shown;
 }

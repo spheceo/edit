@@ -162,6 +162,56 @@ test("big files go up in parts, a failed part is retried with a fresh URL, and p
   }
 });
 
+test("an upload nobody waits for holds its parts while a share has the line out, and goes on after; one stopped while it waits ends", async () => {
+  const { dir, cleanup } = scratch("cloud-line");
+  try {
+    cloud.timing.filePart = MIB;
+    const data = pattern(3 * MIB + 99);
+    for (const resumable of [false, true]) {
+      // Both ways a big file goes up: in one run, and resumably (an export is over the resumable size).
+      cloud.timing.resumableFrom = resumable ? MIB : 512 * MIB;
+      cloud.keepUploadJournalsIn(resumable ? `${dir}/uploads` : null);
+      const key = `edit/test/behind-${resumable ? "resumable" : "plain"}.mp4`;
+      const file = `${dir}/export-${resumable}.mp4`;
+      fs.writeFileSync(file, data);
+      const puts = () => mock.calls(`/r2/${key}`, "PUT").length;
+      let release = () => {};
+      const share = cloud.first(() => new Promise<void>((resolve) => (release = resolve)));
+      expect(cloud.lineTaken()).toBe(true);
+      const sent = cloud.uploadFile(file, key, undefined, undefined, true);
+      await Bun.sleep(60);
+      expect(puts()).toBe(0);
+      // What someone waits on isn't held: a review copy goes up meanwhile.
+      const copy = `${dir}/copy-${resumable}.mp4`;
+      fs.writeFileSync(copy, pattern(2 * MIB + 5));
+      await cloud.uploadFile(copy, `${key}.copy.mp4`);
+      expect(mock.cloud.objects.has(`${key}.copy.mp4`)).toBe(true);
+      expect(puts()).toBe(0);
+      release();
+      await share;
+      await sent;
+      expect(cloud.lineTaken()).toBe(false);
+      expect(Buffer.from(mock.cloud.objects.get(key)!).equals(Buffer.from(data))).toBe(true);
+    }
+    // Stopped while it waits (a newer export of the same file): it ends, and nothing went up.
+    let release = () => {};
+    const share = cloud.first(() => new Promise<void>((resolve) => (release = resolve)));
+    const stop = new AbortController();
+    const file = `${dir}/stopped.mp4`;
+    fs.writeFileSync(file, data);
+    const sent = cloud.uploadFile(file, "edit/test/behind-stopped.mp4", undefined, stop.signal, true);
+    await Bun.sleep(30);
+    stop.abort();
+    await expect(sent).rejects.toThrow("cancelled");
+    expect(mock.cloud.objects.has("edit/test/behind-stopped.mp4")).toBe(false);
+    release();
+    await share;
+  } finally {
+    cloud.keepUploadJournalsIn(null);
+    cleanup();
+  }
+});
+
 /** A big file whose upload stops at part 4 (R2 refuses parts 4 and 5 until it's let go): parts 1 to 3 are up, its journal kept. */
 async function stoppedUpload(dir: string, key: string): Promise<{ file: string; data: Uint8Array; journal: () => string[] }> {
   cloud.timing.filePart = MIB;

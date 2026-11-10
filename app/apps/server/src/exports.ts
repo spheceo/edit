@@ -169,7 +169,8 @@ export function exportCloudKey(project: string, name: string): string {
 /** Injectable cloud IO for `archiveExportFile` (tests stand in for R2). */
 export const exportCloud = {
   enabled: (): boolean => cloud.enabled(),
-  upload: (path: string, key: string, signal?: AbortSignal): Promise<void> => cloud.uploadFile(path, key, undefined, signal),
+  // Behind whatever someone waits on (cloud.first: a share on its way to its link): nobody waits for this copy.
+  upload: (path: string, key: string, signal?: AbortSignal): Promise<void> => cloud.uploadFile(path, key, undefined, signal, true),
   head: (key: string): Promise<{ size: number } | null> => cloud.head(key),
 };
 

@@ -248,8 +248,52 @@ function fileSource(fd: number): Source {
   };
 }
 
-/** Uploads the file at `path` to `key`: one PUT under 64 MiB, else multipart. `signal` stops it (a share the person cancelled). */
-export async function uploadFile(path: string, key: string, progress: Report = () => {}, signal?: AbortSignal): Promise<void> {
+// Whose turn the line out is. A Mac has one, and a home's is small. JJ's,
+// Nov 9 (about 8 Mbit/s): a share's review copy (0.55 GB, what he and the
+// reviewers wait for) went up beside its export's own copy for the cloud (a
+// few GB nobody waits for, started the moment the export ended), and the link
+// took 19 min 35 s from an export that took 24 s. So what someone waits on
+// goes `first`, and an upload sent `behind` (a finished export's cloud copy, a
+// review's full-quality file) holds its next part until nothing is.
+let waitedOn = 0;
+const lineWaiters = new Set<() => void>();
+
+/** Runs `work`, which someone is waiting on (a share, from its export to its link), with the line out to itself. */
+export async function first<T>(work: () => Promise<T>): Promise<T> {
+  waitedOn += 1;
+  try {
+    return await work();
+  } finally {
+    waitedOn -= 1;
+    if (waitedOn === 0) for (const wake of [...lineWaiters]) wake();
+  }
+}
+
+/** Whether something a person waits on has the line out now. */
+export function lineTaken(): boolean {
+  return waitedOn > 0;
+}
+
+/** Waits until nothing a person waits on has the line (at once when nothing has), or `signal` stops the wait. */
+async function lineFree(signal?: AbortSignal): Promise<void> {
+  while (waitedOn > 0 && signal?.aborted !== true) {
+    await new Promise<void>((resolve) => {
+      const wake = () => {
+        lineWaiters.delete(wake);
+        signal?.removeEventListener("abort", wake);
+        resolve();
+      };
+      lineWaiters.add(wake);
+      signal?.addEventListener("abort", wake, { once: true });
+    });
+  }
+}
+
+/**
+ * Uploads the file at `path` to `key`: one PUT under 64 MiB, else multipart. `signal` stops it (a share the person
+ * cancelled). `behind`: nobody waits for it, so it gives the line to what someone does (`first`), a part at a time.
+ */
+export async function uploadFile(path: string, key: string, progress: Report = () => {}, signal?: AbortSignal, behind = false): Promise<void> {
   checkKey(key);
   if (signal?.aborted) throw new Error("the share was cancelled");
   await diag.timeOnAsync("cloud", "cloud: upload file", `${path} → ${key}`, async () => {
@@ -265,12 +309,12 @@ export async function uploadFile(path: string, key: string, progress: Report = (
       const size = stat.size;
       const journal = size >= timing.resumableFrom ? journalPath(key) : null;
       if (journal !== null) {
-        await resumable(fd, journal, { key, size, mtimeMs: stat.mtimeMs, part: partSize(timing.filePart, size) }, progress, signal);
+        await resumable(fd, journal, { key, size, mtimeMs: stat.mtimeMs, part: partSize(timing.filePart, size) }, progress, signal, behind);
         const now = fs.statSync(path);
         if (now.size !== size || now.mtimeMs !== stat.mtimeMs) throw new TransferMismatch({ message: `${path} changed while uploading` });
         return;
       }
-      const sent = await upload(fileSource(fd), key, size, partSize(timing.filePart, size), FILE_PARALLEL, progress, signal);
+      const sent = await upload(fileSource(fd), key, size, partSize(timing.filePart, size), FILE_PARALLEL, progress, signal, behind);
       if (sent !== size) throw new TransferMismatch({ message: `${path} changed while uploading (${size} bytes, sent ${sent})` });
     } finally {
       fs.closeSync(fd);
@@ -365,7 +409,7 @@ function abortUpload(key: string, uploadId: string): void {
  * fails is kept to resume on the next try, unless it was cancelled; one R2
  * no longer has is begun again, once.
  */
-async function resumable(fd: number, journal: string, file: Omit<Journal, "uploadId" | "parts">, report: Report, signal?: AbortSignal): Promise<void> {
+async function resumable(fd: number, journal: string, file: Omit<Journal, "uploadId" | "parts">, report: Report, signal?: AbortSignal, behind = false): Promise<void> {
   let saved = readJournal(journal);
   if (saved !== null && (saved.key !== file.key || saved.size !== file.size || saved.mtimeMs !== file.mtimeMs || saved.part !== file.part)) {
     abortUpload(saved.key, saved.uploadId);
@@ -385,7 +429,7 @@ async function resumable(fd: number, journal: string, file: Omit<Journal, "uploa
       writeAtomic(journal, JSON.stringify(state));
     }
     try {
-      await sendParts(fd, journal, state, report, signal);
+      await sendParts(fd, journal, state, report, signal, behind);
       fs.rmSync(journal, { force: true });
       return;
     } catch (error) {
@@ -407,7 +451,7 @@ async function resumable(fd: number, journal: string, file: Omit<Journal, "uploa
 }
 
 /** Sends the parts R2 doesn't hold yet, `FILE_PARALLEL` at once, each noted in the journal as it's up; then completes the upload. */
-async function sendParts(fd: number, journal: string, state: Journal, report: Report, signal?: AbortSignal): Promise<void> {
+async function sendParts(fd: number, journal: string, state: Journal, report: Report, signal?: AbortSignal, behind = false): Promise<void> {
   const count = Math.max(1, Math.ceil(state.size / state.part));
   if (count > MAX_PARTS) throw new Error(`${state.key} needs more than ${MAX_PARTS} parts`);
   const lengthOf = (n: number) => Math.min(state.part, state.size - (n - 1) * state.part);
@@ -423,7 +467,9 @@ async function sendParts(fd: number, journal: string, state: Journal, report: Re
   let failure: unknown = null;
   const worker = async () => {
     while (failure === null && next < missing.length) {
+      if (behind) await lineFree(signal);
       if (signal?.aborted) throw new Error("the share was cancelled");
+      if (failure !== null || next >= missing.length) break;
       const n = missing[next++]!;
       const data = Buffer.allocUnsafe(lengthOf(n));
       for (let got = 0; got < data.length; ) {
@@ -576,11 +622,13 @@ async function upload(
   parallel: number,
   report: Report,
   signal?: AbortSignal,
+  behind = false,
 ): Promise<number> {
   if (signal?.aborted) throw new Error("the share was cancelled");
   const progress = new Progress(total ?? 0, report);
   const kind = contentType(key);
   const first = await readPart(source, part);
+  if (behind) await lineFree(signal);
   if (first.length < part) {
     // It all fits in one request.
     await retry(`upload of ${key}`, async () => {
@@ -596,7 +644,7 @@ async function upload(
   if (typeof created.uploadId !== "string") throw lacking("the relay gave no upload id");
   const uploadId = created.uploadId;
   try {
-    const size = await multipart(source, key, uploadId, first, part, parallel, progress, signal);
+    const size = await multipart(source, key, uploadId, first, part, parallel, progress, signal, behind);
     report(size, total ?? size);
     return size;
   } catch (error) {
@@ -623,6 +671,7 @@ async function multipart(
   parallel: number,
   progress: Progress,
   signal?: AbortSignal,
+  behind = false,
 ): Promise<number> {
   let failed = false;
   let error: unknown = null;
@@ -636,6 +685,7 @@ async function multipart(
   let number = 1;
   let data = first;
   for (;;) {
+    if (behind) await lineFree(signal);
     if (signal?.aborted) {
       fail(new Error("the share was cancelled"));
       break;

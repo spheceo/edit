@@ -474,13 +474,14 @@ export function fullBehind(home: string, projectId: string, name: string, path: 
         // again (Sphe, Nov 10: an update goes through at any time, and nothing it cuts is uploaded twice).
         const there = attempt === 1 ? await cloud.head(key).catch(() => null) : null;
         if (there === null || there.size !== last.total || last.total === 0) {
+          // Behind a share on its way to its link (cloud.first): the Download button's file is waited for by nobody yet.
           await cloud.uploadFile(path, key, (sent, total) => {
             // Parts going up this run: the restarts before don't count against it.
             if (!moved) jobs.progressed(home, job);
             moved = true;
             if (run === null || Date.now() - toldAt >= fullUpload.tellMs) say(sent, total);
             else last = { sent, total };
-          });
+          }, undefined, true);
         }
         // Named in its version only now: named at the publish, the page's Download button was there hours before the
         // file (Nov 8, Killer Pastor's v3: its 4.6 GB export still going up, and Download saved "media.json", the 404).
@@ -685,12 +686,16 @@ async function runShare(app: App, projectId: string): Promise<{ url: string; ver
         }, 10_000);
   ticker?.unref?.();
   try {
-    if (first.export !== undefined && first.path === undefined) {
-      const path = await exportStep(app, projectId, first);
-      haltShare(projectId);
-      jobs.step(home, key, "review copy", { path });
-    }
-    return await publishSteps(app, projectId);
+    // The line out is the share's from its export to its link: the export's own copy for the cloud, which starts the
+    // moment the export ends, and any full-quality file still going up wait behind it (cloud.first).
+    return await cloud.first(async () => {
+      if (first.export !== undefined && first.path === undefined) {
+        const path = await exportStep(app, projectId, first);
+        haltShare(projectId);
+        jobs.step(home, key, "review copy", { path });
+      }
+      return await publishSteps(app, projectId);
+    });
   } catch (error) {
     const message = diag.messageOf(error);
     const cancelled = message === "the share was cancelled" || message === "the export was cancelled" || droppedShares.has(projectId);
@@ -1648,7 +1653,7 @@ export async function uploadFull(app: App, projectId: string, n: number, progres
   if (version === undefined) throw new Error(`v${n} isn't shared from here`);
   if (!fs.existsSync(version.path)) throw new Error(`v${n}'s export isn't on ${THIS_MACHINE} any more (${version.path}): export it again`);
   const key = fullKeyOf(`edit/reviews/${projectId}/${version.timeline}`, version.path);
-  await cloud.uploadFile(version.path, key, progress);
+  await cloud.uploadFile(version.path, key, progress, undefined, true);
   const bytes = fs.statSync(version.path).size;
   try {
     await cloud.mutation("reviews:setMeta", { sourceId: projectId, version: n, meta: { fullKey: key } });

@@ -27,10 +27,13 @@ function fakeCloud(refuse: () => boolean = () => false) {
   const r2 = new Map<string, number>();
   const versions: { n: number; meta: Record<string, unknown> }[] = [];
   const calls: string[] = [];
+  /** Each upload by its file's name: whether a share had the line out then, and whether it was sent behind one. */
+  const line: Record<string, { taken: boolean; behind: boolean }> = {};
   spies.push(
     spyOn(cloud, "enabled").mockReturnValue(true),
-    spyOn(cloud, "uploadFile").mockImplementation(async (from: string, key: string) => {
+    spyOn(cloud, "uploadFile").mockImplementation(async (from: string, key: string, _progress?: unknown, _signal?: unknown, behind = false) => {
       calls.push(`upload ${key.split("/").pop()}`);
+      line[key.split("/").pop()!] = { taken: cloud.lineTaken(), behind };
       r2.set(key, fs.statSync(from).size);
     }),
     spyOn(cloud, "head").mockImplementation(async (key: string) => (r2.has(key) ? { size: r2.get(key)!, etag: null, contentType: null } : null)),
@@ -52,7 +55,7 @@ function fakeCloud(refuse: () => boolean = () => false) {
   );
   // The steps' own calls: the copy, the poster, the publish (describe's JSON beside the video and the full-quality file behind aren't steps).
   const steps = () => calls.filter((one) => ["upload video.mp4", "upload poster.jpg", "reviews:publish", "reviews:compress"].includes(one));
-  return { r2, versions, calls, steps };
+  return { r2, versions, calls, steps, line };
 }
 
 const ffmpeg = (...args: string[]) => tools.run([tools.ffmpeg(), "-v", "error", "-nostdin", "-y", ...args]);
@@ -87,7 +90,7 @@ async function carryOn(app: Parameters<typeof reviews.resumeShareJob>[0], home: 
 
 test("a share runs its steps in order, says each where the dialog reads it, and is up on the link only once published", async () => {
   const { app, home, id, cleanup } = await exported("share-steps");
-  const { calls, versions, steps: made } = fakeCloud();
+  const { calls, versions, steps: made, line } = fakeCloud();
   const steps: string[] = [];
   const step = jobs.step;
   spies.push(spyOn(jobs, "step").mockImplementation((...given: Parameters<typeof jobs.step>) => {
@@ -108,6 +111,11 @@ test("a share runs its steps in order, says each where the dialog reads it, and 
     expect(reviews.shareNow(home, id)).toEqual({ line: null, share: expect.objectContaining({ state: "done", version: 1, url: "https://review.test/r1" }) });
     // Done in the same write that listed its full-quality upload, which goes on behind, after the publish.
     expect(calls.indexOf("upload full.mp4")).toBeGreaterThan(calls.indexOf("reviews:publish"));
+    // The line out was the share's while its copy went up (what's waited for), and the full-quality file is sent
+    // behind any share: on a home line the two had gone up together and the link took twice as long (JJ, Nov 9).
+    expect(line["video.mp4"]).toEqual({ taken: true, behind: false });
+    expect(line["full.mp4"]!.behind).toBe(true);
+    expect(cloud.lineTaken()).toBe(false);
     expect(remote.busyWith(app)).not.toContain("a share");
   } finally {
     cleanup();

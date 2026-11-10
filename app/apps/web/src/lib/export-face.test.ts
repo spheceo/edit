@@ -66,6 +66,18 @@ describe("the Share dialog's line", () => {
     expect(shareStatus({ ...base, exportState: exported, share: { state: "done" } })).toEqual({ kind: "up" });
   });
 
+  it("an Export's end is the end: its file, never what an earlier share left", () => {
+    const only = { ...base, only: true };
+    const exported = { state: "done", progress: 1, path: "/Users/jj/Movies/Edit/Cops Realize.mp4" };
+    // The link's last share is done, and this isn't one: "Up on the link" would be a lie about this file.
+    expect(shareStatus({ ...only, exportState: exported, share: { state: "done" } })).toEqual({ kind: "saved", path: "/Users/jj/Movies/Edit/Cops Realize.mp4" });
+    expect(shareStatus({ ...only, exportState: { state: "running", progress: 0.4 }, share: { state: "failed", error: "an old share's" } })).toEqual({ kind: "progress", text: "Exporting… 40%" });
+    expect(shareStatus({ ...only, exportState: { state: "failed", progress: 0, error: "no room" }, share: { state: "done" } })).toEqual({ kind: "export-failed", error: "no room" });
+    expect(shareStatus({ ...only, exportState: { state: "cancelled", progress: 0 }, share: { state: "done" } })).toEqual({ kind: "cancelled" });
+    // A share begun since says its own line.
+    expect(shareStatus({ ...only, exportState: exported, sharing: "uploading 10%" })).toEqual({ kind: "progress", text: "Uploading 10%…" });
+  });
+
   it("says why a share failed after its export, from the server", () => {
     expect(shareStatus({ ...base, exportState: { state: "done", progress: 1 }, share: { state: "failed", error: "the review copy came out wrong" } })).toEqual({ kind: "share-failed", error: "the review copy came out wrong" });
   });

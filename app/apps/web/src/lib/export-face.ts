@@ -87,6 +87,8 @@ export type ShareStatus =
   | { kind: "export-failed"; error: string | null }
   | { kind: "cancelled" }
   | { kind: "up" }
+  /** An Export (this computer only) that's done: its file. */
+  | { kind: "saved"; path: string }
   | { kind: "none" };
 
 /**
@@ -95,19 +97,28 @@ export type ShareStatus =
  * "Up on the link" only once the server says the version is published
  * (`share.state === "done"`): the export finishing is not the share (the
  * Nov 8 audit, 2c.1: it said "Up on the link" before the copy, the upload
- * and the publish, whose failures then came only by polling).
+ * and the publish, whose failures then came only by polling). `only`: the
+ * export under way or just done was asked for by itself (Export), so its end
+ * is the end, and what an earlier share left isn't said over it.
  */
 export function shareStatus(given: {
-  exportState: { state: string; progress: number; waiting?: string; phase?: string; error?: string } | null;
+  exportState: { state: string; progress: number; path?: string; waiting?: string; phase?: string; error?: string } | null;
   sharing: string | null;
   share: { state: "running" | "done" | "failed"; error?: string } | null;
   linked: boolean;
   stopped: boolean;
+  only?: boolean;
 }): ShareStatus {
   const { exportState, sharing, share } = given;
   if (exportState?.state === "queued") return { kind: "progress", text: exportState.waiting ? `Export queued · ${exportState.waiting}` : "Export queued · you can keep editing" };
   if (exportState?.state === "running") return { kind: "progress", text: exportState.phase ? capitalize(exportState.phase) : `Exporting… ${Math.round(exportState.progress * 100)}%` };
   if (sharing) return { kind: "progress", text: `${capitalize(sharing)}…` };
+  if (given.only === true) {
+    if (exportState?.state === "done" && exportState.path) return { kind: "saved", path: exportState.path };
+    if (exportState?.state === "failed") return { kind: "export-failed", error: exportState.error ?? null };
+    if (given.stopped || exportState?.state === "cancelled") return { kind: "cancelled" };
+    return { kind: "none" };
+  }
   if (share?.state === "failed") return { kind: "share-failed", error: share.error ?? "The share stopped" };
   if (exportState?.state === "failed") return { kind: "export-failed", error: exportState.error ?? null };
   if (given.stopped || exportState?.state === "cancelled") return { kind: "cancelled" };

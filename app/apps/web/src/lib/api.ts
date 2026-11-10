@@ -254,8 +254,9 @@ export const api = {
     return request<FsListing>("GET", `/api/fs${asked ? `?${asked}` : ""}`);
   },
   /** `drive`: upload the finished file to Drive (by default only a whole subtitled video is). */
-  exportProject: (id: string, path: string, options: ExportOptions, drive?: boolean) =>
-    request<{ path: string }>("POST", `/api/projects/${id}/export`, drive === undefined ? { path, options } : { path, options, drive }),
+  /** Exports to this computer only (the Share dialog's Export): into the exports folder, no review link, no Drive, no copy for the cloud. */
+  exportHere: (id: string, options: ExportOptions, watermark: string | null) =>
+    request<{ path: string }>("POST", `/api/projects/${id}/export`, { options, drive: false, keepLocal: true, ...(watermark === null ? {} : { watermark }) }),
   /** The folder exports are written into (export_folder.ts). `chosen` is false until someone picks one. */
   exportFolder: () => request<ExportFolder>("GET", "/api/exports/folder"),
   /** Saves that folder. Later exports go there. */

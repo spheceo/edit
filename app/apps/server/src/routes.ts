@@ -1106,6 +1106,8 @@ async function startExport(context: Context): Promise<Response> {
   const given = (await optionalBody(context)) ?? {};
   const path = field<string>(given, "path", "string");
   const drive = field<boolean>(given, "drive", "boolean");
+  // The Share dialog's Export: the file on this computer and nowhere else (no copy for the cloud).
+  const keepLocal = field<boolean>(given, "keepLocal", "boolean");
   // A channel's watermark over it (channel_marks.ts): its picture's id in the Watermarks folder.
   const watermark = field<string>(given, "watermark", "string");
   const asked = given.options;
@@ -1137,7 +1139,7 @@ async function startExport(context: Context): Promise<Response> {
   const output =
     path !== null && path.trim() !== "" ? expandHome(path) : defaultExportPath(app.store, live.project);
   try {
-    return json({ path: await app.exports.start(app.store, app.library, live.project, options, output, { ...(drive === null ? {} : { drive }), ...(watermark === null || watermark === "" ? {} : { watermark }) }) });
+    return json({ path: await app.exports.start(app.store, app.library, live.project, options, output, { ...(drive === null ? {} : { drive }), ...(keepLocal === true ? { keepLocal: true } : {}), ...(watermark === null || watermark === "" ? {} : { watermark }) }) });
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

@@ -1,10 +1,12 @@
-import { Check, Copy, ExternalLink, Link2, Trash2 } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, FolderSearch, Link2, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { api, type Review } from "../lib/api";
 import { projectDuration } from "../lib/edit";
 import { shareStatus } from "../lib/export-face";
 import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "../lib/exporting";
+import { onThisMac, showInFinder } from "../lib/files";
+import { FILE_MANAGER, THIS_MACHINE } from "../lib/platform";
 import { preview } from "../lib/playback";
 import { flushSave, useEditor } from "../lib/store";
 import { rate } from "../lib/types";
@@ -21,6 +23,12 @@ import { Button, cx, Modal, Select } from "./ui";
  * moment, and the notes come back to the agent. The first share makes the
  * link. A later share replaces the latest version when it has no comments,
  * and adds the next version when it has any.
+ *
+ * Export is back beside it (JJ, Nov 10: "an export option that is only to
+ * export on your pc … not to the feedback link where it takes a year"): the
+ * same file, in the exports folder of the computer running Edit and nowhere
+ * else. No review copy, no upload, no link, so it's there when the encode
+ * ends (his Mac, Nov 9: an export of 24 s, and a link 19 min 35 s later).
  */
 const HOUSE: Omit<ExportOptions, "range" | "chapters"> = { ...DEFAULTS, size: null, fps: null, preset: "youtube" };
 
@@ -46,6 +54,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [retrying, setRetrying] = useState(false);
   // A share or export just stopped here, so a finished export isn't announced as the new version.
   const [stopped, setStopped] = useState(false);
+  // The export asked for here was an Export (this computer only), not a share's.
+  const [only, setOnly] = useState(false);
   useEffect(() => {
     if (!open) return;
     setMarkTouched(false);
@@ -81,6 +91,11 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     };
   }, [open, id, sharing, starting]);
 
+  // A share under way (begun here, or by Ready for changes) is what the dialog says, not an Export before it.
+  useEffect(() => {
+    if (sharing !== null) setOnly(false);
+  }, [sharing]);
+
   // The project's watermark as last shared, until it's changed here.
   const savedMark = review?.watermark ?? null;
   useEffect(() => {
@@ -115,10 +130,12 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   if (!project) return null;
   const busy = starting || sharing !== null;
+  const exporting = exportState?.state === "queued" || exportState?.state === "running";
   const link = review?.review ?? null;
 
-  const share = async () => {
-    if (busy) return;
+  // Share and Export make the same file: the edit as saved, whole, the house export.
+  const start = async (go: (options: ExportOptions, watermark: string | null) => Promise<void>) => {
+    if (busy || exporting) return;
     setStarting(true);
     setStopped(false);
     setProblem(null);
@@ -130,15 +147,24 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       const duration = projectDuration(project);
       const span: [number, number] = [0, duration];
       const embedded = chaptersInSpan(chapters, span, rate(project.settings));
-      const options: ExportOptions = { ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [] };
-      await api.shareProject(project.id, options, false, true, marked && channel !== null ? channel : null);
-      setReview(await api.review(project.id));
+      await go({ ...HOUSE, range: span, chapters: embedded.length >= 2 ? embedded : [] }, marked && channel !== null ? channel : null);
     } catch (error) {
       setProblem((error as Error).message);
     } finally {
       setStarting(false);
     }
   };
+  const share = () =>
+    start(async (options, watermark) => {
+      setOnly(false);
+      await api.shareProject(project.id, options, false, true, watermark);
+      setReview(await api.review(project.id));
+    });
+  const exportHere = () =>
+    start(async (options, watermark) => {
+      await api.exportHere(project.id, options, watermark);
+      setOnly(true);
+    });
 
   // Approving deletes the other versions' files: two clicks.
   const approve = async () => {
@@ -174,8 +200,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   // The server's answer: a reviewer's comment on the latest version makes the next share a new version, else it replaces it.
   const next = review?.next ?? null;
-  const exporting = exportState?.state === "queued" || exportState?.state === "running";
-  const status = shareStatus({ exportState, sharing, share: lastShare, linked: link !== null, stopped });
+  const status = shareStatus({ exportState, sharing, share: lastShare, linked: link !== null, stopped, only });
   const ended = !busy && !exporting && (status.kind === "share-failed" || status.kind === "export-failed" || status.kind === "cancelled");
   const retry = async () => {
     if (busy || retrying) return;
@@ -318,6 +343,22 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
                 <Check size={13} /> Up on the link
               </span>
             )}
+            {!problem && status.kind === "saved" && (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="flex items-center gap-1.5 text-success" title={status.path}>
+                  <Check size={13} /> Exported
+                </span>
+                {onThisMac() ? (
+                  <Button size="sm" variant="ghost" className="shrink-0" onClick={() => showInFinder(status.path)}>
+                    <FolderSearch size={13} /> Show in {FILE_MANAGER}
+                  </Button>
+                ) : (
+                  <a className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-secondary transition-colors hover:bg-hover hover:text-fg" href={`/api/exports/file?path=${encodeURIComponent(status.path)}`} download>
+                    <Download size={13} /> Download
+                  </a>
+                )}
+              </span>
+            )}
           </div>
           {(exporting || sharing !== null) && (
             <Button variant="ghost" disabled={stopping || sharing === "cancelling"} onClick={() => void stop()}>
@@ -332,7 +373,15 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button variant="primary" disabled={busy || retrying || projectDuration(project) <= 0} onClick={() => void share()}>
+          <Button
+            variant="subtle"
+            disabled={busy || exporting || retrying || projectDuration(project) <= 0}
+            title={`The video file, saved on ${THIS_MACHINE} only: nothing goes on the link`}
+            onClick={() => void exportHere()}
+          >
+            Export
+          </Button>
+          <Button variant="primary" disabled={busy || exporting || retrying || projectDuration(project) <= 0} onClick={() => void share()}>
             {busy ? "Sharing…" : link && next !== null ? (next.replace ? `Replace v${next.version}` : `Share v${next.version}`) : "Share"}
           </Button>
         </div>

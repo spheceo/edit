@@ -33,7 +33,7 @@ const KEEP_FINISHED = 50;
 export interface StartExtra {
   /** Upload the finished file to Drive; by default only a whole subtitled video is (`drive.wanted`). */
   drive?: boolean;
-  /** Keep the local file after its verified cloud upload (default: deleted, cloud is canonical). */
+  /** The file stays on this computer and no copy of it goes to the cloud (the Share dialog's Export; by default it's archived there, and deleted here when the disk is short). */
   keepLocal?: boolean;
   /** A share's export (reviews.exportAndShare): a failure is the share's to try again, not the export's (retry_after_update.ts). */
   share?: boolean;

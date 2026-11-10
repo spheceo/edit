@@ -1,10 +1,10 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import * as fs from "node:fs";
 import { defaultExportsDir, parent } from "../src/paths.ts";
 
 import type { App } from "../src/app.ts";
-import { ExportRegistry, resumeSnapshot } from "../src/exports.ts";
+import { ExportRegistry, exportCloud, resumeSnapshot } from "../src/exports.ts";
 import type * as jobs from "../src/jobs.ts";
 import type { ExportOptions } from "../src/model.ts";
 import { parseRange } from "../src/http/files.ts";
@@ -313,6 +313,40 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     const project = store.get(id)!.project;
     expect(defaultExportPath(store, project)).toBe(`${defaultExportsDir()}/Teen_ the edit_.mp4`);
   } finally {
+    useNative(before);
+    cleanup();
+  }
+});
+
+test("the Share dialog's Export leaves the file in the exports folder and sends no copy of it to the cloud", async () => {
+  const { dir, app, store, cleanup } = fixtureHome("server-export-here", { services: { exports: new ExportRegistry() } });
+  const before = useNative(exportingNative(20));
+  const sent: string[] = [];
+  const spies = [
+    spyOn(exportCloud, "enabled").mockReturnValue(true),
+    spyOn(exportCloud, "upload").mockImplementation(async (_path: string, key: string) => void sent.push(key)),
+    spyOn(exportCloud, "head").mockImplementation(async () => ({ size: 8 })),
+  ];
+  try {
+    const id = store.create("Kept here", { width: 64, height: 36, fps: 30 }).project.id;
+    const { send, jsonBody } = client(app);
+    fs.mkdirSync(`${dir}/exports`);
+    expect((await send("/api/exports/folder", jsonBody("POST", { path: `${dir}/exports` }))).status).toBe(200);
+    // What the page sends (api.exportHere): no path, so the exports folder; no Drive; kept here.
+    const started = await send(`/api/projects/${id}/export`, jsonBody("POST", { options: { format: "h264" }, drive: false, keepLocal: true }));
+    const { path } = (await started.json()) as { path: string };
+    expect(path).toBe(`${fs.realpathSync(dir)}/exports/Kept here.mp4`);
+    while (app.exports.running()) await Bun.sleep(10);
+    await Bun.sleep(40);
+    expect(fs.readFileSync(path, "utf8")).toBe("exported");
+    expect(sent).toEqual([]);
+    // Any other export's copy goes up, as before.
+    await send(`/api/projects/${id}/export`, jsonBody("POST", { path: `${dir}/exports/again.mp4`, drive: false }));
+    while (app.exports.running()) await Bun.sleep(10);
+    for (let tries = 0; tries < 100 && sent.length === 0; tries++) await Bun.sleep(10);
+    expect(sent).toEqual([`edit/exports/${id}/again.mp4`]);
+  } finally {
+    for (const spy of spies) spy.mockRestore();
     useNative(before);
     cleanup();
   }

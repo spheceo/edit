@@ -205,7 +205,7 @@ function asking(name: string) {
   };
 }
 
-test("an idea's captions come straight when YouTube turns the proxy away, and the proxy is then asked last", async () => {
+test("an idea's captions come straight only when YouTube turns the proxy away, and the proxy is asked first every time", async () => {
   const home = asking("words-proxy-refused");
   try {
     const fake = ytdlp(home.dir, `if (proxied) refuse(${JSON.stringify(BOT)});\nput("en-orig", ${JSON.stringify(data)});`);
@@ -215,9 +215,35 @@ test("an idea's captions come straight when YouTube turns the proxy away, and th
     // Kept where an import finds them: its excerpt asks nobody.
     expect(await writeCaptionTranscript(home.home, "youtube:abcdefghijk#10000-11000", `${home.dir}/excerpt.json`)).toBe(true);
     expect(fake.calls()).toHaveLength(2);
-    // The next case doesn't wait out the refused proxy first.
+    // Sparing of this Mac's address: the next case asks the proxy first again, refused a moment ago or not.
     await words(home.home, "bcdefghijkl", USES.idea);
-    expect(fake.calls().slice(2).map((args) => args.includes("--proxy"))).toEqual([false]);
+    expect(fake.calls().slice(2).map((args) => args.includes("--proxy"))).toEqual([true, false]);
+    // An import, whose video came down straight anyway, asks a way turned away lately last.
+    expect(await read(home.home, "cdefghijklm", USES.footage)).not.toBeNull();
+    expect(fake.calls().slice(4).map((args) => args.includes("--proxy"))).toEqual([false]);
+  } finally { home.done(); }
+});
+
+test("an idea's straight asks go one at a time with a rest between, and none for a while once YouTube refuses this address", async () => {
+  const home = asking("words-sparing");
+  try {
+    // Each ask says when it began and ended; the proxy is always refused.
+    const fake = ytdlp(home.dir, `if (proxied) refuse(${JSON.stringify(BOT)});\nfs.appendFileSync(${JSON.stringify(`${home.dir}/spans`)}, "b");\nawait Bun.sleep(150);\nfs.appendFileSync(${JSON.stringify(`${home.dir}/spans`)}, "e");\nif (args.at(-1).endsWith("refusedhere")) refuse(${JSON.stringify(BOT)});\nput("en-orig", ${JSON.stringify(data)});`);
+    const rests: number[] = [];
+    youtube.timing.pause = async (ms) => {
+      rests.push(ms);
+    };
+    await Promise.all(["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"].map((id) => words(home.home, id, USES.idea)));
+    // Three cases at once: their straight asks never overlapped, and each was followed by its rest.
+    expect(fs.readFileSync(`${home.dir}/spans`, "utf8")).toBe("bebebe");
+    expect(rests.filter((ms) => ms === 10_000)).toHaveLength(3);
+    // YouTube refuses this address: the next cases ask the proxy and leave the address alone.
+    const before = fake.calls().length;
+    expect(await words(home.home, "refusedhere", USES.idea).catch((error: unknown) => error)).toBeInstanceOf(NoWords);
+    expect(fake.calls().slice(before).map((args) => args.includes("--proxy"))).toEqual([true, false]);
+    const after = fake.calls().length;
+    expect(await words(home.home, "ddddddddddd", USES.idea).catch((error: unknown) => error)).toBeInstanceOf(NoWords);
+    expect(fake.calls().slice(after).map((args) => args.includes("--proxy"))).toEqual([true]);
   } finally { home.done(); }
 });
 
@@ -236,10 +262,11 @@ test("turned away on every way is said as that, never as a video without caption
     expect((failure as Error).message).not.toContain("no English captions");
     expect((failure as Error).message).not.toContain("secret");
     expect(fake.calls()).toHaveLength(2);
-    // Its sound was still tried: a download has one more way.
-    expect(heard).toBe(1);
-    // Asked again (Try again), YouTube answers and the captions are read: nothing said "unavailable" meanwhile.
+    // Not heard: its sound would be asked of the addresses YouTube just turned away.
+    expect(heard).toBe(0);
+    // Asked again (Try again), YouTube answers the proxy and the captions are read: nothing said "unavailable" meanwhile.
     expect((await words(home.home, "abcdefghijk", USES.idea)).words).toHaveLength(3);
+    expect(fake.calls()).toHaveLength(3);
   } finally { home.done(); }
 });
 
@@ -316,6 +343,9 @@ test.skipIf(Bun.which("ffmpeg") === null)("with no captions and no Apple recogni
     expect(stages).toEqual(["No captions: fetching the video's sound", "No captions: hearing the video"]);
     const download = fake.calls().find((args) => args.includes("-f"))!;
     expect(download[download.indexOf("-f") + 1]).toBe("ba[ext=m4a]/ba/b");
+    // An idea's download is sparing too: through the proxy, and never with the person's YouTube sign-in.
+    expect(download).toContain("--proxy");
+    expect(fake.calls().some((args) => args.includes("--cookies-from-browser"))).toBe(false);
     expect(mock.calls("/v1/transcribe")).toHaveLength(1);
     // Kept: read again, nothing is fetched or heard.
     const calls = fake.calls().length;

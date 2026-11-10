@@ -49,7 +49,7 @@ type Format = { format_id?: string; vcodec?: string; acodec?: string; protocol?:
 /** What yt-dlp says of the video (its formats), asked as an idea asks YouTube. Tests give their own. */
 export const looks = {
   info: async (home: string, id: string, signal?: AbortSignal): Promise<{ duration: number; formats: Format[]; way: youtube.Way }> => {
-    const asked = await youtube.ask(home, id, ["--no-playlist", "--no-warnings", "-J"], USES.idea.ways, (tried) => tried.code === 0, { area: "ideas", ...(signal ? { signal } : {}) }).catch((error: unknown) => {
+    const asked = await youtube.ask(home, id, ["--no-playlist", "--no-warnings", "-J"], USES.idea.ways, (tried) => tried.code === 0, { area: "ideas", sparing: USES.idea.sparing, ...(signal ? { signal } : {}) }).catch((error: unknown) => {
       if (error instanceof youtube.Unanswered) throw new Error(`YouTube didn't give the video (${error.message.slice(0, 200)})`);
       throw error;
     });

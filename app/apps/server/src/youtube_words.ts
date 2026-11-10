@@ -53,20 +53,24 @@ export interface Use {
   cues: boolean;
   /** With no captions, the video's sound is fetched and heard. */
   hear: boolean;
+  /** This machine's own address is kept for when it's needed (`youtube.ask`): the proxy first every time, straight asks one at a time with a rest between, none for ten minutes once YouTube refuses the address, and never the person's YouTube sign-in. */
+  sparing: boolean;
 }
 
 export const USES = {
   /**
-   * An idea's case: read for its titles, never cut. Through the proxy first
-   * (Sphe, Oct 31: "try not to do research locally to not risk ip bans"),
-   * straight when it's the proxy's address YouTube turns away: one small
-   * question a case, where an import downloads the whole video straight.
+   * An idea's case: read for its titles, never cut. Nobody's own footage, and
+   * many cases a sitting, so sparing of the person's address (Sphe, Oct 31:
+   * "try not to do research locally to not risk ip bans"; Nov 10: "we can use
+   * the Mac ip but sparingly, only if needed we don't want to get users banned
+   * for any reason"): through the proxy, straight only when YouTube turns the
+   * proxy's address away.
    */
-  idea: { area: "ideas", ways: ["proxy", "straight"], cues: true, hear: true },
-  /** An import's footage: cut on the word, so word-timed tracks only. With none, the file here is heard (media.ts). */
-  footage: { area: "transcribe", ways: ["straight", "proxy"], cues: false, hear: false },
+  idea: { area: "ideas", ways: ["proxy", "straight"], cues: true, hear: true, sparing: true },
+  /** An import's footage: cut on the word, so word-timed tracks only. With none, the file here is heard (media.ts). The video itself was downloaded straight, so its captions are asked the same way. */
+  footage: { area: "transcribe", ways: ["straight", "proxy"], cues: false, hear: false, sparing: false },
   /** Script mode: a recording's rough words, and Find clips' videos. With none, the recording here is heard (writer/transcription.ts); chosen footage is heard exactly before it's cut. */
-  script: { area: "writer", ways: ["straight", "straight", "proxy"], cues: true, hear: false },
+  script: { area: "writer", ways: ["straight", "straight", "proxy"], cues: true, hear: false, sparing: false },
 } as const satisfies Record<string, Use>;
 
 export type Json3 = { events?: { tStartMs?: number; dDurationMs?: number; segs?: { utf8?: string; tOffsetMs?: number; isSpeakerChange?: number }[] }[] };
@@ -234,7 +238,7 @@ export async function track(home: string, id: string, use: Use, signal?: AbortSi
       // A track that came down is an answer, whatever became of the others. Ending well with none is one too (the video
       // has none), unless a track was there and refused: that's YouTube turning this way away.
       (tried) => tracks() || (tried.code === 0 && !/Unable to download video subtitles/i.test(tried.stderr)),
-      { area: use.area, ...(signal ? { signal } : {}) },
+      { area: use.area, sparing: use.sparing, ...(signal ? { signal } : {}) },
     );
     let info: Record<string, unknown> | null = null;
     for (const line of asked.stdout.split("\n").reverse()) {
@@ -363,8 +367,8 @@ export async function words(home: string, id: string, use: Use, signal?: AbortSi
     if (error.gone) throw new NoWords(`YouTube doesn't give this video (${error.message}).`);
     turnedAway = true;
   }
-  if (use.hear) {
-    // Turned away for its captions, the video may still come down: a download has one more way (the YouTube sign-in from Chrome).
+  // Heard only when YouTube answered that there are no captions: turned away, its sound would be asked of the same addresses again.
+  if (use.hear && !turnedAway) {
     const heard = await hearing.hear(home, id, use, signal, onStage).catch((error: unknown) => {
       if (signal?.aborted) throw error;
       diag.warn(use.area, `${id}: hearing it in place of captions: ${diag.messageOf(error)}`);
@@ -398,7 +402,7 @@ async function hear(home: string, id: string, use: Use, signal?: AbortSignal, on
   onStage?.("No captions: fetching the video's sound");
   const folder = join(dir, "sound");
   try {
-    const sound = await youtube.downloadSound(home, id, folder);
+    const sound = await youtube.downloadSound(home, id, folder, use.sparing);
     signal?.throwIfAborted();
     onStage?.("No captions: hearing the video");
     // Apple's recogniser where this Mac has it; Scribe only where there's none (Linux, an older macOS), its words alone.

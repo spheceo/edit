@@ -405,10 +405,13 @@ const overRoutes = Effect.fn("youtube.overRoutes")(function* (
   format: string | null,
   progress: Progress,
   saying: string,
+  sparing = false,
 ) {
   let binary = yield* Effect.promise(() => ytdlp(home));
   const url = `https://www.youtube.com/watch?v=${id}`;
-  const routes = routesFor(yield* Effect.promise(() => proxyUrl()), straight);
+  const proxy = yield* Effect.promise(() => proxyUrl());
+  // Sparing of this machine's own address: the proxy first, then straight once, and never the person's YouTube sign-in.
+  const routes: Route[] = sparing ? [...(proxy === "" ? [] : [{ proxy, signIn: false }]), { proxy: null, signIn: false }] : routesFor(proxy, straight);
   let updated = false;
   let last: TryFailure = new Unrecognised({ line: "yt-dlp failed" });
   for (let attempt = 0; attempt < routes.length; ) {
@@ -647,10 +650,10 @@ export async function downloadRange(home: string, id: string, range: [number, nu
   return { path, name: path.slice(dir.length + 1), size: fs.statSync(path).size };
 }
 
-/** A video's sound alone (m4a where YouTube has it), to hear a video that has no captions: a few MB where the picture is hundreds. */
-export async function downloadSound(home: string, id: string, dir: string): Promise<Downloaded> {
+/** A video's sound alone (m4a where YouTube has it), to hear a video that has no captions: a few MB where the picture is hundreds. `sparing`: through the proxy first, straight only when that fails, never with the YouTube sign-in. */
+export async function downloadSound(home: string, id: string, dir: string, sparing = false): Promise<Downloaded> {
   fs.mkdirSync(dir, { recursive: true });
-  const path = await runPromise(overRoutes(home, id, dir, 1, null, "ba[ext=m4a]/ba/b", () => {}, `YouTube video ${id}'s sound couldn't be downloaded`).pipe(inArea("youtube")));
+  const path = await runPromise(overRoutes(home, id, dir, 1, null, "ba[ext=m4a]/ba/b", () => {}, `YouTube video ${id}'s sound couldn't be downloaded`, sparing).pipe(inArea("youtube")));
   return { path, name: path.slice(dir.length + 1), size: fs.statSync(path).size };
 }
 
@@ -691,41 +694,69 @@ const TURNED_AWAY_MS = 10 * 60_000;
 /** Test hook: every way as good as new. */
 export const forgetRefusals = (): void => turnedAway.clear();
 
+// Sparing of this machine's own address (Sphe, Nov 10, on ideas: "we can use
+// the Mac ip but sparingly, only if needed we don't want to get users banned
+// for any reason"). A sparing question goes straight only after the proxy
+// was asked and turned away, however often that is (the proxy first every
+// time: its refusals cost a wait, never the person's address); its straight
+// asks go one at a time across Edit with a rest between them, so a batch of
+// ideas is never a burst from one address; and once YouTube turns this
+// address away it isn't asked from again for ten minutes.
+const SPARING_REST_MS = 10_000;
+let straightLine: Promise<void> = Promise.resolve();
+
+/** `work` in its turn in the line of sparing straight asks, the next one a rest after it. */
+function inStraightLine<T>(work: () => Promise<T>): Promise<T> {
+  const turn = straightLine.then(work);
+  straightLine = turn.then(
+    () => timing.pause(SPARING_REST_MS),
+    () => timing.pause(SPARING_REST_MS),
+  );
+  return turn;
+}
+
 /**
  * Asks YouTube about video `id` with yt-dlp `args` (no `--proxy`, no URL),
  * over `ways` in order, until `answered` says a try was (its files are
  * there, or yt-dlp ended well). A refusal, a 429 or a failure nobody has
  * seen goes on to the next way; a video that's gone or needs a sign-in ends
  * it; an outdated yt-dlp is brought up to date once and asked again. Throws
- * `Unanswered` with yt-dlp's last line when no way was answered.
+ * `Unanswered` with yt-dlp's last line when no way was answered. `sparing`
+ * keeps this machine's own address for when it's needed (above).
  */
-export async function ask(home: string, id: string, args: readonly string[], ways: readonly Way[], answered: (asked: Asked) => boolean, options: { area: string; signal?: AbortSignal; timeoutMs?: number } = { area: "youtube" }): Promise<Asked> {
+export async function ask(home: string, id: string, args: readonly string[], ways: readonly Way[], answered: (asked: Asked) => boolean, options: { area: string; sparing?: boolean; signal?: AbortSignal; timeoutMs?: number } = { area: "youtube" }): Promise<Asked> {
   const now = Date.now();
   const lately = (way: Way) => now - (turnedAway.get(way) ?? -Infinity) < TURNED_AWAY_MS;
-  const queue = [...ways.filter((way) => !lately(way)), ...ways.filter(lately)];
+  // A way turned away lately is asked last; a sparing question keeps its order (the proxy first, always) and leaves this address alone while it's refused.
+  const queue = options.sparing === true ? ways.filter((way) => way === "proxy" || !lately(way)) : [...ways.filter((way) => !lately(way)), ...ways.filter(lately)];
   let binary = await ytdlp(home);
   let updated = false;
-  let last: TryFailure = new Unrecognised({ line: "the YouTube proxy isn't available" });
+  let last: TryFailure = new Unrecognised({ line: queue.includes("straight") ? "the YouTube proxy isn't available" : `YouTube turned ${THIS_MACHINE} away a few minutes ago` });
   for (let at = 0; at < queue.length; at++) {
     const way = queue[at]!;
     // The proxy's address is asked for (the relay's, kept ten minutes) only when its turn comes; with none, the next way.
     const proxy = way === "proxy" ? await proxyUrl() : "";
     if (way === "proxy" && proxy === "") continue;
     const runtime = runtimeArgs();
+    const once = async (): Promise<Asked | null> => {
+      options.signal?.throwIfAborted();
+      // Its turn in the line may come after another idea's ask was turned away from this address: then not this one either.
+      if (way === "straight" && options.sparing === true && Date.now() - (turnedAway.get(way) ?? -Infinity) < TURNED_AWAY_MS) return null;
+      const child = Bun.spawn([binary, ...runtime, ...(way === "proxy" ? ["--proxy", proxy] : []), ...args, `https://www.youtube.com/watch?v=${id}`], { stdout: "pipe", stderr: "pipe", env: runtimeEnv(runtime) });
+      const stop = () => child.kill("SIGKILL");
+      options.signal?.addEventListener("abort", stop, { once: true });
+      const timeout = setTimeout(stop, options.timeoutMs ?? 120_000);
+      try {
+        const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        return { way, stdout, stderr, code };
+      } finally {
+        clearTimeout(timeout);
+        options.signal?.removeEventListener("abort", stop);
+      }
+    };
+    const asked = await (way === "straight" && options.sparing === true ? inStraightLine(once) : once());
     options.signal?.throwIfAborted();
-    const child = Bun.spawn([binary, ...runtime, ...(way === "proxy" ? ["--proxy", proxy] : []), ...args, `https://www.youtube.com/watch?v=${id}`], { stdout: "pipe", stderr: "pipe", env: runtimeEnv(runtime) });
-    const stop = () => child.kill("SIGKILL");
-    options.signal?.addEventListener("abort", stop, { once: true });
-    const timeout = setTimeout(stop, options.timeoutMs ?? 120_000);
-    let asked: Asked;
-    try {
-      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      asked = { way, stdout, stderr, code };
-    } finally {
-      clearTimeout(timeout);
-      options.signal?.removeEventListener("abort", stop);
-    }
-    options.signal?.throwIfAborted();
+    if (asked === null) continue;
     if (answered(asked)) {
       turnedAway.delete(way);
       return asked;

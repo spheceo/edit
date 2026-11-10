@@ -55,9 +55,12 @@ again on top (`ideas/cloud.ts`).
      bad version) or leaves it;
    - the video's words (`youtube_words.ts`, its `idea` use): YouTube's
      captions through the YouTube proxy first (the user: "try not to do
-     research locally to not risk ip bans"), straight from the Mac when
-     YouTube turns the proxy's address away, kept where Edit's imports find
-     them (`cache/youtube-captions/<id>/`). With no English captions the
+     research locally to not risk ip bans"), straight from the Mac only when
+     YouTube turns the proxy's address away, and sparingly ("we don't want to
+     get users banned for any reason"): the proxy is asked first every time,
+     straight asks go one at a time with a rest between, and none go from a
+     Mac for ten minutes once YouTube refuses its address. Kept where Edit's
+     imports find them (`cache/youtube-captions/<id>/`). With no English captions the
      video's sound alone is fetched and heard on the Mac. Skipped only when
      there are no words to be had, saying which it was: the video is gone,
      YouTube turned Edit away for now (try again), or nothing is said in it

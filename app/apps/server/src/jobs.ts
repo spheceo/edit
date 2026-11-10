@@ -333,6 +333,8 @@ export function list(home: string | null, kind?: Kind): Job[] {
  */
 export function takeOver(home: string, kinds?: readonly Kind[]): Job[] {
   const out: Job[] = [];
+  // Edit restarted itself on purpose (an update): the jobs it cut aren't failing, and aren't counted.
+  const planned = wasPlanned(home);
   change(home, (jobs) => {
     let changed = false;
     for (const job of jobs) {
@@ -340,7 +342,9 @@ export function takeOver(home: string, kinds?: readonly Kind[]): Job[] {
       // Waiting on a time, the encoder or the person: not cut short by the restart; woken when it's due (`wake`).
       if (asleep(job)) continue;
       changed = true;
-      if (job.attempts >= MOST_RESUMES) {
+      if (planned) {
+        out.push(job);
+      } else if (job.attempts >= MOST_RESUMES) {
         job.state = "given_up";
         job.given_up = `cut short by ${job.attempts + 1} restarts in a row`;
         diag.warn("jobs", `${job.key} was cut short ${job.attempts + 1} times; not starting it again (kept; unstick starts it again)`);
@@ -352,6 +356,35 @@ export function takeOver(home: string, kinds?: readonly Kind[]): Job[] {
     return changed;
   });
   return out;
+}
+
+/** How long a planned restart's note counts: an exec takes seconds; an older note is a restart that never happened. */
+const PLANNED_MS = 5 * 60_000;
+
+function restartNote(home: string): string {
+  return join(home, "restart.json");
+}
+
+/**
+ * Noted just before Edit restarts itself on purpose (an update, remote
+ * support's restart), after the work that could be stopped cleanly was: the
+ * next start carries every job on without counting the restart against it.
+ */
+export function plannedRestart(home: string): void {
+  writeAtomic(restartNote(home), JSON.stringify({ at: Date.now(), pid: process.pid }));
+}
+
+/** Whether this start follows a planned restart (read once, then forgotten). */
+function wasPlanned(home: string): boolean {
+  const path = restartNote(home);
+  let at = 0;
+  try {
+    at = Number((JSON.parse(fs.readFileSync(path, "utf8")) as { at?: unknown }).at ?? 0);
+    fs.rmSync(path, { force: true });
+  } catch {
+    return false;
+  }
+  return Date.now() - at < PLANNED_MS;
 }
 
 /** A waiting job with something to wait for (a time, the encoder, the person): `wake` starts it, never a restart. */

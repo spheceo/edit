@@ -18,6 +18,31 @@ export function scriptKey(id: string): string {
   return `script:${id}`;
 }
 
+/**
+ * What an update would lose now: only work that doesn't yet carry on by
+ * itself after Edit restarts (everything else in `busyWith` is a job that
+ * picks up from what it kept, paid requests are answered first and the
+ * programs Edit started are stopped before it: serve.ts's update.onPrepare).
+ * An update waits for these alone (Sphe, Nov 10: "let Update go through at
+ * any time"). A kind leaves this list once it carries on.
+ */
+export function wouldLose(_app: App): string[] {
+  let uploading = false;
+  try {
+    uploading = seams.drive.uploading();
+  } catch (error) {
+    if (!seams.isUnavailable(error)) throw error;
+  }
+  const said = [
+    uploading ? "an upload to Drive" : "",
+    importing() ? "footage coming in from Drive" : "",
+    writerJobs.runningList().length > 0 ? "Claude on a script" : "",
+    thumbnailRuns.anyRunning() ? "Claude on a thumbnail" : "",
+    ideaRuns.anyRunning() ? "Claude on an idea" : "",
+  ];
+  return [...new Set(said.filter(Boolean))];
+}
+
 /** Others' work this computer is doing (reviews' fixes): each says what runs, or nothing. */
 const others = new Set<() => string | null>();
 

@@ -46,6 +46,7 @@ import { inArea, runPromise } from "./effect/runtime.ts";
 import * as service from "./effect/service.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
 import { withExtension } from "./paths.ts";
+import * as paidWork from "./paid.ts";
 import * as relay from "./relay.ts";
 import { serdeParse } from "./rust.ts";
 import * as tools from "./tools.ts";
@@ -414,12 +415,18 @@ const saved = <E, R>(file: string, tag: string, hear: Effect.Effect<Transcript, 
       }
     });
     if (kept !== null) return kept;
-    const transcript = yield* hear;
-    yield* Effect.try(() => {
-      fs.mkdirSync(file.slice(0, file.lastIndexOf("/")), { recursive: true });
-      writeAtomic(file, JSON.stringify({ tag, transcript }));
-    }).pipe(Effect.catch((error) => Effect.logWarning(`keeping what was heard in ${file}: ${ioMessage(error.cause)}`)));
-    return transcript;
+    // Paid from the moment it's sent until it's kept: a restart Edit makes itself waits for it (paid.ts).
+    return yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.acquireRelease(Effect.promise(() => paidWork.enter()), () => Effect.sync(() => paidWork.leave()));
+        const transcript = yield* hear;
+        yield* Effect.try(() => {
+          fs.mkdirSync(file.slice(0, file.lastIndexOf("/")), { recursive: true });
+          writeAtomic(file, JSON.stringify({ tag, transcript }));
+        }).pipe(Effect.catch((error) => Effect.logWarning(`keeping what was heard in ${file}: ${ioMessage(error.cause)}`)));
+        return transcript;
+      }),
+    );
   });
 
 // ── Heard by link ───────────────────────────────────────────────────────────
@@ -701,7 +708,8 @@ export const transcribeFile = Effect.fn("transcribe.file")(function* (source: st
     const audio = yield* temporary(withExtension(target, "ogg"));
     yield* encode(["-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source), "-i", source, "-map", "0:a:0"], audio, "could not extract audio");
     const seconds = yield* lengthOf(audio);
-    return seconds <= WHOLE_UP_TO ? yield* ask(audio, keyterms, again) : yield* hearLong(source, audio, seconds, target, keyterms, again, wholeVoices);
+    // Kept as soon as it's heard, like a piece, so a restart before the transcript is written doesn't pay for it again.
+    return seconds <= WHOLE_UP_TO ? yield* saved(withExtension(target, "single.json"), `${fixed3(seconds)} ${keyterms.join("|")} ${again}`, ask(audio, keyterms, again)) : yield* hearLong(source, audio, seconds, target, keyterms, again, wholeVoices);
   }).pipe(Effect.scoped);
   // Heard again, it never comes out much shorter than the transcript it replaces (Killer Pastor in dev, Nov 8: its
   // 1 h 52 min recording heard again through a proxy that could only play its first 3 minutes left 323 words for

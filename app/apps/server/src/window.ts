@@ -107,6 +107,11 @@ let open: { command: string[]; child: Bun.Subprocess<"pipe", "inherit", "inherit
  * then cloud projects open here are pushed and their locks let go, and Edit
  * exits (with the window's code when it couldn't open).
  */
+/** The window's process, which a restart's clean-up leaves alone (it closes it last, onRestart), or null. */
+export function windowPid(): number | null {
+  return open?.child.pid ?? null;
+}
+
 export function runWindow(command: string[]): void {
   let restarting = false;
   // An update execs a new `edit app`, which opens a fresh window: this one goes first.

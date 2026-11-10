@@ -251,8 +251,8 @@ const RULES: Rule[] = [
     fix: "Wait for them to finish, or take it over from the banner at the top.",
   })],
   [/update when it's done/i, () => ({
-    title: "Edit will update when the work running now finishes",
-    fix: "Your export, upload or import keeps going; press Update again once it's done.",
+    title: "Edit will update once this finishes",
+    fix: "Exports, imports and the agent carry on through an update; this one doesn't yet. Press Update again once it's done.",
   })],
 ];
 

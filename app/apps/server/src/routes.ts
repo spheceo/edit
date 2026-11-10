@@ -11,6 +11,7 @@ import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { cleanCache, cleanCloudPreviews } from "./cache_cleanup.ts";
 import { importDrive } from "./drive_import.ts";
+import * as busyNow from "./busy.ts";
 import * as remoteActions from "./remote_actions.ts";
 import * as youtubeSignIn from "./youtube_signin.ts";
 import * as problemReports from "./problem_reports.ts";
@@ -470,13 +471,14 @@ async function updateInstall({ app }: Context): Promise<Response> {
 
 /** Shared by the local update route and an explicitly enabled remote request. */
 export async function installUpdate(app: App, remote = false) {
-  // What a restart would cut off (remote_actions.busyWith, the one list a remote restart uses too); an agent turn only
-  // when the update was asked from afar (here, the person asking is the one with the turn).
-  const busy = () => remoteActions.busyWith(app, remote);
+  // Only what wouldn't carry on after the restart holds an update (busy.wouldLose); exports, imports, shares,
+  // fixes and agent turns pick up where they were. From afar (remote support), it still waits for an idle Mac.
+  const busy = () => (remote ? remoteActions.busyWith(app, true) : busyNow.wouldLose(app));
   const now = busy();
   if (now.length > 0) throw new ApiError(409, `${now.join(", ")} ${now.length === 1 ? "is" : "are"} running; update when it's done`);
   try {
-    return await app.updater.install(remote ? () => busy().length === 0 : undefined);
+    // Rechecked just before the restart: work of that kind may have started while it downloaded.
+    return await app.updater.install(() => busy().length === 0);
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

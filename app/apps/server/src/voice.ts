@@ -13,6 +13,7 @@ import { ioMessage, nowMs, writeAtomic } from "./files.ts";
 import * as media from "./media.ts";
 import type { Project } from "./model.ts";
 import { isFile, join, withExtension } from "./paths.ts";
+import * as paidWork from "./paid.ts";
 import * as relay from "./relay.ts";
 import { charCount, f32Saved, serdeParse, takeChars, trim } from "./rust.ts";
 import { field, optional, readStruct, required, SerdeError, type Struct } from "./serde.ts";
@@ -567,6 +568,11 @@ export function narrationLines(project: Project): [string, string | null][] {
  * Returns ElevenLabs' request id, for stitching the next line onto it.
  */
 async function speak(body: unknown, path: string): Promise<string | null> {
+  // Paid until the take is in place: a restart Edit makes itself waits for it (paid.ts).
+  return paidWork.paid(() => speakNow(body, path));
+}
+
+async function speakNow(body: unknown, path: string): Promise<string | null> {
   const partial = withExtension(path, "partial");
   try {
     // A connection dropped part way (JJ, Oct 26: "The socket connection was

@@ -60,6 +60,23 @@ test("a restart starts unfinished jobs again; one cut short three times is kept 
   }
 });
 
+test("a restart Edit made itself (an update) isn't counted against the jobs it cut; an old note doesn't count", () => {
+  const dir = home();
+  try {
+    jobs.begin(dir, "export", "p1", { output: "/x.mp4" });
+    for (let restart = 0; restart < 5; restart++) {
+      jobs.plannedRestart(dir);
+      expect(jobs.takeOver(dir).map((job) => [job.key, job.attempts])).toEqual([["export:p1", 0]]);
+    }
+    // Read once: the next start without a note counts as before.
+    expect(jobs.takeOver(dir).map((job) => job.attempts)).toEqual([1]);
+    fs.writeFileSync(`${dir}/restart.json`, JSON.stringify({ at: Date.now() - 3_600_000 }));
+    expect(jobs.takeOver(dir).map((job) => job.attempts)).toEqual([2]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("taking over keeps every job listed, its count raised, until its work ends", () => {
   const dir = home();
   try {

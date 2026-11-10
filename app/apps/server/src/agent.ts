@@ -1246,7 +1246,7 @@ export class Agents implements seams.AgentPanel {
    * Claude Code is closed. The turns stay noted as running, so a
    * restart carries them on.
    */
-  shutdown(): void {
+  shutdown(said?: string): void {
     this.claudeSupport.close();
     if (this.watchdog !== null) {
       clearInterval(this.watchdog);
@@ -1259,7 +1259,7 @@ export class Agents implements seams.AgentPanel {
       chat.halted = true;
       this.abandon(
         project,
-        `Edit was closed during this turn. Back within ${RESUME_WITHIN_MS / 60_000} minutes (a restart), it carries on by itself; otherwise send a message to carry on.`,
+        said ?? `Edit was closed during this turn. Back within ${RESUME_WITHIN_MS / 60_000} minutes (a restart), it carries on by itself; otherwise send a message to carry on.`,
       );
     }
     for (const running of this.claudeQueries.values()) {

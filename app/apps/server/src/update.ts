@@ -100,6 +100,28 @@ export function onRestart(hook: () => void): void {
   beforeRestart.push(hook);
 }
 
+/**
+ * What runs, awaited, before Edit restarts itself (an update, remote
+ * support's restart): the work that can stop cleanly does, so everything
+ * else carries on after it as it would after a quit (serve.ts). Bounded by
+ * each hook; a hook that fails is logged and the restart goes on.
+ */
+const preparing: (() => Promise<void>)[] = [];
+
+export function onPrepare(hook: () => Promise<void>): void {
+  preparing.push(hook);
+}
+
+async function prepare(): Promise<void> {
+  for (const hook of preparing) {
+    try {
+      await hook();
+    } catch (error) {
+      diag.warn("update", `getting ready to restart: ${diag.messageOf(error)}`);
+    }
+  }
+}
+
 export class Updater implements UpdaterSeam {
   private latest: Release | null = null;
   private checked: number | null = null;
@@ -190,6 +212,7 @@ export class Updater implements UpdaterSeam {
         // A remote request may have been accepted while idle, then downloaded
         // while the owner started work. Recheck immediately before exec.
         while (canRestart && !canRestart()) await Bun.sleep(1000);
+        await prepare();
         restart(exe);
       } catch (error) {
         const said = diag.messageOf(error);
@@ -663,7 +686,8 @@ function restart(exe: string): never {
 }
 
 /** Starts this Edit again where it runs (remote support's restart): the same program and arguments, so it binds the same ports. */
-export function restartSelf(): never {
+export async function restartSelf(): Promise<never> {
+  await prepare();
   restart(process.execPath);
 }
 

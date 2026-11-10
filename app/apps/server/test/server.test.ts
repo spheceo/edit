@@ -274,8 +274,9 @@ test("an export runs one at a time, tells clients how it goes, and only its file
     expect(await second.json()).toEqual({
       error: 'this project already has an export running (into teen.mp4): wait for it (wait {for: ["export"]}) or cancel it',
     });
+    // An export carries on through an update (Nov 10), so it doesn't hold one: the ask goes on to the updater (none in tests).
     const busy = await send("/api/update", { method: "POST" });
-    expect([busy.status, await busy.json()]).toEqual([409, { error: "an export is running; update when it's done" }]);
+    expect([busy.status, await busy.json()]).toEqual([400, { error: "updater.install is not available" }]);
     expect((await send(`/api/exports/file?path=${encodeURIComponent(path)}`)).status).toBe(404);
     while (app.exports.running()) await Bun.sleep(10);
     // Its prep is said before the encode's progress (Nov 3: a share sat at 0% while it got ready).

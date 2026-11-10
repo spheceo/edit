@@ -460,7 +460,7 @@ export function restart(app: App): string {
   const running = busyWith(app);
   if (running.length > 0) throw new Error(`Not restarted: ${running.join(", ")} would be cut off. Try again when it's done, or unstick first.`);
   diag.info("remote", "restarting, as an admin asked");
-  setTimeout(() => restartSelf(), 3_000).unref?.();
+  setTimeout(() => void restartSelf(), 3_000).unref?.();
   return "restarting in 3 s";
 }
 

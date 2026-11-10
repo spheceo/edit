@@ -44,6 +44,8 @@ import * as seams from "./seams.ts";
 import { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as update from "./update.ts";
+import * as paidWork from "./paid.ts";
+import { windowPid } from "./window.ts";
 import * as exactAfter from "./writer/exact_after.ts";
 import * as writer from "./writer/index.ts";
 import * as writerImports from "./writer/imports.ts";
@@ -167,6 +169,61 @@ export function endLeftovers(pid = process.pid): string[] {
     }
   }
   return ended;
+}
+
+/** How long a restart waits for paid requests in flight (a transcription piece is at most ~90 s of audio). */
+const PAID_WAIT_MS = 120_000;
+
+/**
+ * Stops every process this one started, and theirs, before Edit restarts
+ * itself: asked to end, then made to after `graceMs`. The window is left
+ * (the restart closes it last). What each was doing is a job that carries
+ * on after the restart from what it kept. Answers the programs stopped.
+ */
+export async function stopChildren(graceMs = 3_000, pid = process.pid): Promise<string[]> {
+  const listed = Bun.spawnSync(["/bin/ps", "-axo", "pid=,ppid=,command="], { stdout: "pipe", stderr: "ignore" });
+  const rows = new TextDecoder()
+    .decode(listed.stdout)
+    .split("\n")
+    .flatMap((line) => {
+      const found = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+      return found === null ? [] : [{ pid: Number(found[1]), parent: Number(found[2]), command: found[3]! }];
+    });
+  const kept = windowPid();
+  const under = new Set<number>();
+  const visit = (parent: number) => {
+    for (const row of rows) {
+      if (row.parent !== parent || row.pid === kept || under.has(row.pid)) continue;
+      under.add(row.pid);
+      visit(row.pid);
+    }
+  };
+  visit(pid);
+  under.delete(process.pid);
+  const names = rows.filter((row) => under.has(row.pid)).map((row) => (/^\S*?([^/\s]+)(?:\s|$)/.exec(row.command)?.[1] ?? "?"));
+  const signal = (name: NodeJS.Signals) => {
+    for (const one of under) {
+      try {
+        process.kill(one, name);
+      } catch {
+        under.delete(one);
+      }
+    }
+  };
+  signal("SIGTERM");
+  const until = Date.now() + graceMs;
+  while (under.size > 0 && Date.now() < until) {
+    await Bun.sleep(100);
+    for (const one of [...under]) {
+      try {
+        process.kill(one, 0);
+      } catch {
+        under.delete(one);
+      }
+    }
+  }
+  signal("SIGKILL");
+  return names;
 }
 
 /** The data folder's lock for the life of this process, so a second Edit on the same folder is noticed. */
@@ -306,6 +363,23 @@ export function start(home: string, host: string | null, port: number): { app: A
       process.exit(code);
     })();
   };
+  // Before Edit restarts itself (an update, remote support's restart): what can stop cleanly does, and the rest
+  // carries on after it as after a quit (Sphe, Nov 10: updates shouldn't wait for an import to finish).
+  update.onPrepare(async () => {
+    // Paid requests in flight are answered and kept first, so none is paid for twice (paid.ts).
+    if (!(await paidWork.settle(PAID_WAIT_MS))) diag.warn("update", `restarting with ${paidWork.count()} paid request(s) still unanswered after ${PAID_WAIT_MS / 1000} s`);
+    try {
+      app.agents.shutdown?.("Edit is updating. This turn carries on by itself once it's back, in a few seconds.");
+    } catch (error) {
+      diag.warn("agent", `before the update: ${diag.messageOf(error)}`);
+    }
+    // Saves pushed and locks let go, within the quit's budget.
+    await Promise.race([Promise.all([seams.cloudProjects.shutdown(), writerLocks.releaseAll()]).catch(() => undefined), Bun.sleep(TIMING.QUIT_BUDGET)]);
+    // Every program this run started stops before the new run starts its own on the same files.
+    const stopped = await stopChildren();
+    if (stopped.length > 0) diag.info("update", `stopped ${stopped.length} process(es) before restarting (${[...new Set(stopped)].join(", ")}): their work carries on after it`);
+    jobs.plannedRestart(app.store.home);
+  });
   process.on("SIGINT", () => quit(130));
   process.on("SIGTERM", () => quit(143));
   // A promise nobody waited on that failed: said in the log, where it used to go unseen (the audit, Oct 23).

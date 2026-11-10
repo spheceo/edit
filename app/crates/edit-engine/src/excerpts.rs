@@ -22,6 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -45,20 +46,38 @@ pub fn object_of(path: &Path) -> Option<String> {
     crate::util::url_object(path)
 }
 
+/// How many times what's known has grown.
+static CHANGES: AtomicU64 = AtomicU64::new(0);
+
+/// A count that moves on whenever an excerpt is added: a reader kept open
+/// looks again (`of`) when it has. The window's player keeps its readers
+/// while a long preview's pieces are cut behind it, and one opened before a
+/// piece was cut read the stream for good (Nov 10).
+pub fn changes() -> u64 {
+    CHANGES.load(Ordering::Relaxed)
+}
+
 /// Adds `excerpts` of `object` (a URL without its query) to what readers use.
+/// Nothing new: the list readers hold stays the one known (`Arc::ptr_eq`).
 pub fn add(object: &str, excerpts: impl IntoIterator<Item = Excerpt>) {
     let mut known = known().lock();
     let mut all: Vec<Excerpt> = known
         .get(object)
         .map(|list| list.as_ref().clone())
         .unwrap_or_default();
+    let mut grew = false;
     for excerpt in excerpts {
         if excerpt.to > excerpt.from && !all.contains(&excerpt) {
             all.push(excerpt);
+            grew = true;
         }
+    }
+    if !grew {
+        return;
     }
     all.sort_by(|a, b| a.from.total_cmp(&b.from));
     known.insert(object.to_owned(), Arc::new(all));
+    CHANGES.fetch_add(1, Ordering::Relaxed);
 }
 
 /// The excerpts of what `path` reads, if it's a cloud URL with any.
@@ -114,5 +133,20 @@ mod tests {
         assert_eq!(covering(&list, 30.0, &[1]), Some(0));
         assert_eq!(covering(&list, 61.0, &[]), None);
         assert!(of(Path::new("https://r2.example/other.mp4")).is_none());
+        // Told the same again: the list readers hold is still the one known, and nothing has changed for them.
+        let before = changes();
+        add(
+            "https://r2.example/edit/originals/drive/abc/a.mp4",
+            [excerpt(30.0, 60.0)],
+        );
+        let again = of(url).unwrap();
+        assert!(Arc::ptr_eq(&list, &again));
+        // (Other tests add theirs meanwhile: only that this one didn't is checked, by the list.)
+        add(
+            "https://r2.example/edit/originals/drive/abc/a.mp4",
+            [excerpt(60.0, 90.0)],
+        );
+        assert!(changes() > before);
+        assert_eq!(of(url).unwrap().len(), 3);
     }
 }

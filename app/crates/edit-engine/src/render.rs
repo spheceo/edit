@@ -330,6 +330,8 @@ pub(crate) struct VideoReader {
     copied: bool,
     /// A cloud original's stretches cut to this Mac (`crate::excerpts`), read instead of the URL where they reach.
     excerpts: Option<Arc<Vec<crate::excerpts::Excerpt>>>,
+    /// `crate::excerpts::changes` when `excerpts` was last looked up.
+    excerpts_seen: u64,
     /// The excerpt being read (its index) and its reader.
     excerpt: Option<(usize, Box<VideoReader>)>,
     /// Excerpts that wouldn't read: the URL for those stretches.
@@ -359,6 +361,7 @@ impl VideoReader {
         let (width, height) = (source.key.width, source.key.height);
         #[cfg(target_os = "macos")]
         let url = crate::util::is_url(&source.key.path);
+        let excerpts_seen = crate::excerpts::changes();
         let excerpts = crate::excerpts::of(&source.key.path);
         Self {
             source,
@@ -381,9 +384,36 @@ impl VideoReader {
             ahead: None,
             copied: false,
             excerpts,
+            excerpts_seen,
             excerpt: None,
             broken: Vec::new(),
         }
+    }
+
+    /// Takes the excerpts cut since this reader last looked; whether an
+    /// excerpt it had open was let go for it (its picture isn't this reader's
+    /// last any more). The window's player keeps its readers, and a long
+    /// preview's pieces are cut behind it once its project is open: a reader
+    /// opened before a piece was cut read the stream for as long as it lived.
+    fn look_for_excerpts(&mut self) -> bool {
+        let now = crate::excerpts::changes();
+        if now == self.excerpts_seen {
+            return false;
+        }
+        self.excerpts_seen = now;
+        let fresh = crate::excerpts::of(&self.source.key.path);
+        let same = match (&self.excerpts, &fresh) {
+            (Some(held), Some(known)) => Arc::ptr_eq(held, known),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return false;
+        }
+        self.excerpts = fresh;
+        // Both count in the list it held.
+        self.broken.clear();
+        self.excerpt.take().is_some()
     }
 
     /// The frame at `time` from a local excerpt that holds it, into `out`;
@@ -584,6 +614,7 @@ impl VideoReader {
             }
             return Ok(&self.frame);
         }
+        self.look_for_excerpts();
         if self.excerpts.is_some() {
             let mut frame = std::mem::take(&mut self.frame);
             frame.resize(self.source.bytes(), 0);
@@ -627,16 +658,17 @@ impl VideoReader {
             self.copied = true;
             return Ok(true);
         }
+        let dropped = self.look_for_excerpts();
         if self.excerpts.is_some() {
             if let Some(changed) = self.read_excerpt(time, out, if_changed) {
                 return Ok(changed);
             }
             // Off the excerpts: what `out` holds is the excerpt's, not this reader's last picture.
-            if self.excerpt.take().is_some() {
+            if self.excerpt.take().is_some() || dropped {
                 return self.frame_into_url(time, out, false);
             }
         }
-        self.frame_into_url(time, out, if_changed)
+        self.frame_into_url(time, out, if_changed && !dropped)
     }
 
     /// `frame_into` from the reader's own file (the URL of a cloud original).
@@ -4390,6 +4422,79 @@ mod tests {
             .as_ref()
             .is_some_and(|(_, inner)| !inner.native_failed));
         // Outside it the URL is read (one that doesn't answer here).
+        assert!(reader.frame_at(1.8).is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A reader opened before its excerpt was cut reads it once it's there:
+    /// the window's player keeps its readers, and a long preview's pieces are
+    /// cut after the project opens (Nov 10: those readers streamed for good).
+    #[test]
+    fn a_reader_open_before_an_excerpt_was_cut_reads_it_after() {
+        let dir = temp_dir("excerpt-late");
+        let path = dir.join("counter-late.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("color=c=black:size=64x36:rate=30:duration=2,format=yuv420p,geq=lum='16+3*N':cb=128:cr=128")
+            .args(["-c:v", "libx264", "-qp", "4", "-g", "15"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let cut = |from: &str, name: &str| {
+            let out = dir.join(name);
+            let done = Command::new(crate::util::ffmpeg())
+                .args(["-v", "error", "-ss", from, "-i"])
+                .arg(&path)
+                .args(["-t", "0.5", "-map", "0:v:0", "-c:v", "copy", "-an"])
+                .arg(&out)
+                .status()
+                .unwrap();
+            assert!(done.success());
+            out
+        };
+        let object = "https://r2.invalid/edit/pieces/v3/youtube/lateLATE01/proxy.mp4";
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": format!("{object}?sig=1"), "kind": "video",
+            "duration": 2.0, "width": 64, "height": 36, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, PathBuf::from(&media.path), (64, 36), Order::Rgba);
+        // Opened with nothing cut: the stream, which doesn't answer here.
+        let mut reader = VideoReader::open(source.clone());
+        assert!(reader.excerpts.is_none());
+        assert!(reader.frame_at(0.6).is_err());
+        // The piece from 0.5 s is cut: the same reader reads it.
+        crate::excerpts::add(
+            object,
+            [crate::excerpts::Excerpt {
+                from: 0.5,
+                to: 1.0,
+                path: cut("0.5", "a.mp4"),
+            }],
+        );
+        for n in [18_i64, 15, 29] {
+            assert_eq!(
+                counted(reader.frame_at(n as f64 / 30.0).unwrap()),
+                n,
+                "frame {n}"
+            );
+        }
+        // And the next one, cut while that one's open; a frame of the first again after.
+        let mut out = vec![0; source.bytes()];
+        crate::excerpts::add(
+            object,
+            [crate::excerpts::Excerpt {
+                from: 1.0,
+                to: 1.5,
+                path: cut("1.0", "b.mp4"),
+            }],
+        );
+        for n in [31_i64, 44, 20] {
+            assert!(reader.frame_into(n as f64 / 30.0, &mut out, true).unwrap());
+            assert_eq!(counted(&out), n, "frame {n} after the second piece");
+        }
+        // Where no piece reaches, still the stream.
         assert!(reader.frame_at(1.8).is_err());
         std::fs::remove_dir_all(dir).ok();
     }

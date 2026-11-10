@@ -493,6 +493,8 @@ class Preview {
       this.framed = false;
       this.setSmooth(null);
       recordTiming("preview: native", 0);
+      // A new window plays at 1×: told the speed now, the sound it makes ready at rest is at that speed, so the first play starts at once.
+      if (this.speed !== 1) void this.sendSpeed();
     } catch (error) {
       this.nativeRefused = true;
       this.nativeOff("refused open", `the window's own preview didn't open: ${error}`);

@@ -598,13 +598,17 @@ describe("preview seeks and lifetime", () => {
     expect(playhead.playing).toBe(true);
   });
 
-  it("a window opened again is told the speed again before it plays (a new one plays at 1×)", async () => {
+  it("a window opened again is told the speed as it opens, before any play (a new one plays at 1×, and its sound at rest is made ready at the speed it has)", async () => {
     await inWindow();
     preview.setProject(withSound(), {}); await settle(); draw(); await settle();
     preview.setSpeed(2); await settle();
     const sent = await inWindow();
+    await settle();
+    expect(sent("preview_rate")).toEqual([{ rate: 2 }]);
+    expect(sent("preview_play")).toEqual([]);
     preview.setProject(withSound(), {}); await settle(); draw(); await settle();
     preview.play(); await settle();
+    // Not said twice: the play goes straight out.
     expect(sent("preview_rate")).toEqual([{ rate: 2 }]);
     expect(sent("preview_play")).toEqual([{ frame: 0 }]);
   });

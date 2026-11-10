@@ -73,7 +73,8 @@ up when watching the video. like in premiere"): the viewer's 1× / 2× button,
 the one Script mode's monitor has, and L while it plays. `preview.setSpeed`
 (`lib/playback.ts`) is the one place, for whichever player plays: the window's
 is told (`preview_rate`, before a play and at once mid-play; a window opened
-again is told again, since a new one plays at 1×), the render's video plays at
+again is told as it opens, since a new one plays at 1× and the sound it makes
+ready at rest is at the speed it has), the render's video plays at
 it with its sound in step (`SmoothStream.follow`'s `speed`), and the page's own
 clock runs at it with each clip's sound asked of the decoder at its own speed
 times the player's (the worker's WSOLA, as a sped clip's). A window that

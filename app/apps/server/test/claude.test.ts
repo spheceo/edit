@@ -2,11 +2,12 @@
 // messages (shaped as a real Opus 5.5 turn sent them) mapped onto the chat,
 // with a stand-in query (no Claude Code is started).
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import * as fs from "node:fs";
 
 import * as jobs from "../src/jobs.ts";
+import * as localPreviews from "../src/local_previews.ts";
 
 import { agentHooks, Agents, editToolsFailed, readChat, STALL_MS, timing } from "../src/agent.ts";
 import * as claude from "../src/claude.ts";
@@ -171,6 +172,31 @@ test("claude is the default provider and a turn streams text and edit tools onto
     expect(asked[1]!.options.resume).toBe("session-1");
     expect(asked[1]!.options.effort).toBe("high");
   } finally {
+    home.cleanup();
+  }
+});
+
+test("a turn's footage comes down at its start and, with what it added, at its end, before the edit is opened to be watched", async () => {
+  const home = fixtureHome("claude-footage");
+  const asked: string[][] = [];
+  const fetching = spyOn(localPreviews, "fetchAll").mockImplementation((_cache, project) => void asked.push(project.media.map((one) => one.id)));
+  try {
+    const project = home.store.create("Footage", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await home.store.update(project, "test", (draft) => void draft.media.push(media({ id: "m1", name: "a.mp4", path: "/a.mp4", kind: "video", duration: 60 })));
+    const { agents, queries } = agentsWith(home);
+    await agents.send(project, "Add the map", null, null);
+    expect(asked).toEqual([["m1"]]);
+    // The turn makes a map (a media of its own), then ends.
+    await home.store.update(project, "agent", (draft) => void draft.media.push(media({ id: "m2", name: "map.mp4", path: "/map.mp4", kind: "video", duration: 8 })));
+    const q = queries[0]!;
+    q.push({ type: "system", subtype: "init", session_id: "session-1" });
+    q.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    q.end();
+    await settle();
+    expect(agents.withChat(project).running).toBe(false);
+    expect(asked.at(-1)).toEqual(["m1", "m2"]);
+  } finally {
+    fetching.mockRestore();
     home.cleanup();
   }
 });

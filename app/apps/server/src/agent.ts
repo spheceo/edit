@@ -1376,6 +1376,10 @@ export class Agents implements seams.AgentPanel {
 
   /** A turn ended (`error` null when it finished): a busy model's turn is picked up again a few times, else the chat is done. */
   private turnEnded(project: string, error: string | null): void {
+    // What the turn added (a map, B-roll, a voice-over) comes down too, before the edit is opened to be watched: fetched
+    // only at the turn's start, a map it made was first fetched when JJ opened the edit (2 minutes, Nov 10).
+    const ended = this.store.get(projectOf(project));
+    if (ended !== null) localPreviews.fetchAll(this.store.cacheDir(), ended.project);
     const chat = this.withChat(project);
     const { halted, generation } = chat;
     if (error !== null && busyModel(error) && !halted) {

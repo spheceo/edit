@@ -289,6 +289,9 @@ test("a whole preview the native player reads stays through every clean under th
     expect(await sources("stale")).toBe(copies.stale!);
     markOpened(store.home, ids.open!, Date.now() - hour);
     markOpened(store.home, ids.stale!, Date.now() - 72 * hour);
+    // Not saved since it was last opened, three days ago.
+    const days = (Date.now() - 72 * hour) / 1000;
+    fs.utimesSync(`${store.home}/projects/${ids.stale!}.json`, days, days);
     // R2 has both at their size, and the cache is under its budget: both stay.
     expect((await cleanCloudPreviews(app, false, async () => ({ size: 1000 }))).files).toBe(0);
     expect(cleanCache(app, false, Date.now(), { cacheBytes: 1e12, freeBytes: 0, free: 1e12 }).files).toBe(0);
@@ -423,7 +426,7 @@ test("past the budget, cloud copies go by project: footage nobody uses, then a d
       fs.utimesSync(path, old, old);
     };
     const ids: Record<string, string> = {};
-    for (const name of ["open", "stale", "done"]) {
+    for (const name of ["open", "stale", "done", "agent"]) {
       const live = store.create(name, { width: 1920, height: 1080, fps: 30 });
       const project = structuredClone(live.project);
       const proxy = `edit/proxies/drive/${name}File01.mp4`;
@@ -436,22 +439,30 @@ test("past the budget, cloud copies go by project: footage nobody uses, then a d
       put(`${cache}/cloud/blocks/${createHash("sha1").update(proxy).digest("hex")}/0`, 1000);
     }
     put(`${cache}/cloud/sound/originals/drive/nobodysFile1/x.mp4.mov`, 1000);
-    // Opened here 1 hour and 3 days ago; "done" was opened 2 hours ago but is marked done.
+    // Opened here 1 hour and 3 days ago; "done" was opened 2 hours ago but is marked done. "agent" was opened 3 days
+    // ago too, and the agent has saved it since, an hour ago, with the editor closed (JJ's day, Nov 10).
     markOpened(store.home, ids.open!, Date.now() - hour);
     markOpened(store.home, ids.stale!, Date.now() - 72 * hour);
     markOpened(store.home, ids.done!, Date.now() - 2 * hour);
+    markOpened(store.home, ids.agent!, Date.now() - 72 * hour);
+    const at = (hours: number) => (Date.now() - hours * hour) / 1000;
+    for (const [name, hours] of [["open", 1], ["stale", 72], ["done", 2], ["agent", 1]] as const) {
+      fs.utimesSync(`${store.home}/projects/${ids[name]!}.json`, at(hours), at(hours));
+    }
     const done = new Set([ids.done!]);
     const gone = (name: string) => !fs.existsSync(`${cache}/cloud/sound/originals/drive/${name}File01/${name}.mp4.mov`);
     // Over by a little: only the footage nobody uses.
-    const total = 7000;
+    const total = 9000;
     let report = cleanCache(app, false, Date.now(), { cacheBytes: total - 500, freeBytes: 0, free: 1e12 }, done);
     expect(report.bytes).toBe(1000);
     expect(fs.existsSync(`${cache}/cloud/sound/originals/drive/nobodysFile1/x.mp4.mov`)).toBe(false);
-    // Over by more: the done project's, then the stale one's; never the one open an hour ago.
+    // Over by more: the done project's, then the stale one's; never the one open an hour ago, nor the one the agent
+    // worked on an hour ago (by its open alone it went with the stale one, and came down again when it was opened).
     report = cleanCache(app, false, Date.now(), { cacheBytes: 0, freeBytes: 0, free: 1e12 }, done);
     expect(report.bytes).toBe(4000);
     expect(gone("done") && gone("stale")).toBe(true);
     expect(gone("open")).toBe(false);
+    expect(gone("agent")).toBe(false);
     expect(fs.existsSync(`${cache}/cloud/blocks/${createHash("sha1").update("edit/proxies/drive/openFile01.mp4").digest("hex")}/0`)).toBe(true);
     // The disk nearly full: an edit opened an hour ago gives its copies back too.
     report = cleanCache(app, false, Date.now(), { cacheBytes: 1e12, freeBytes: 1e9, free: 0 }, done);

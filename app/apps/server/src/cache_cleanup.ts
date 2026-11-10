@@ -392,9 +392,10 @@ function blockFolder(key: string): string {
 }
 
 /**
- * When each project was last worked on here, for the cache's order: its last
- * open (opened.ts), else its last save; 0 for a done or archived one, so its
- * footage goes before an active project's.
+ * When each project was last worked on here, for the cache's order: the later
+ * of its last open (opened.ts) and its last save here (an agent's turn, the
+ * editor closed); 0 for a done or archived one, so its footage goes before an
+ * active project's.
  */
 function lastUsed(app: App, inUse: Used, done: Set<string>): Map<string, number> {
   const opened = openedTimes(app.store.home);
@@ -406,7 +407,10 @@ function lastUsed(app: App, inUse: Used, done: Set<string>): Map<string, number>
   }
   const times = new Map<string, number>();
   for (const [id, project] of inUse.projects) {
-    times.set(id, done.has(id) || archived[id] !== undefined ? 0 : (opened[id] ?? project.saved));
+    // Worked on: the later of its last open in the editor and its last save (an agent's turn saves it, with the editor
+    // closed). By the open alone, a project opened in the morning and edited by the agent all afternoon lost its
+    // footage copies by evening, and came down again when it was opened to be watched (JJ's Mac, Nov 10: 110 files).
+    times.set(id, done.has(id) || archived[id] !== undefined ? 0 : Math.max(opened[id] ?? 0, project.saved));
   }
   return times;
 }

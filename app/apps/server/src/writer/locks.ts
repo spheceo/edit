@@ -99,6 +99,12 @@ function watched(lock: Lock, now: number): boolean {
   return false;
 }
 
+/** Whether a script page on this Mac has `id` open now. */
+export function openHere(id: string): boolean {
+  const lock = locks.get(id);
+  return lock !== undefined && watched(lock, performance.now());
+}
+
 /** What the script page shows: who holds it when it's someone else, and whether this Mac may change it. */
 export function status(id: string): { holder: string | null; writable: boolean } {
   const lock = locks.get(id);

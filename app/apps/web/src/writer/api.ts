@@ -1,4 +1,5 @@
 import type { Adding, Brief, BuildStatus, ChatTurn, DocComment, DocFile, Choice, ClaudeStatus, Draft, Feedback, Finds, Focus, LearnStep, Lesson, Pacing, Kind, Research, ReviewApproval, ReviewBlock, ReviewCounts, ReviewNote, ImportProgress, Role, Script, Snapshot, Summary, TrelloCards, TrelloList, Version, VideoCheck, Footage, TrelloCard } from "./types";
+import type { CutSource } from "@edit/types/script_cut";
 
 /** Writer's own replies are JSON. Anything else came from in between (Vite
  * while the app restarts, a dropped tailnet hop), and says so plainly. A
@@ -302,6 +303,14 @@ export const cloudStatus = () => (http<CloudStatus>("/api/writer/cloud"));
  */
 export const previewSrc = (id: string, v: number | string) =>
   `/api/writer/scripts/${id}/proxy?v=${v}`;
+
+/**
+ * The addresses a cut plays from as the files Edit.app's window player reads
+ * (the server's writer/window_sources.ts): only the ones on this Mac; `coming`
+ * are on their way down, so it's asked again.
+ */
+export const windowSources = (srcs: string[]) =>
+  http<{ cache: string; sources: Record<string, CutSource>; coming: string[] }>("/api/writer/window-sources", json({ srcs }));
 
 /** Shares the script on a Repack review link, or its next version on the same link. */
 /** The script as it is now made its review's only version, v1, on the same link. */

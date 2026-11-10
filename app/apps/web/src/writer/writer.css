@@ -1555,3 +1555,9 @@
 .writer-root .page .block[data-state] .grow-read mark[data-kind="note"] { background: #f8d66d; box-shadow: 0 0 0 2px #f8d66d; }
 .writer-root .grow-read mark.cut { display: inline-block; width: 0; height: 1.1em; vertical-align: text-bottom; border-left: 2px solid #2fbf71; margin-left: -1px; background: none; box-shadow: none; }
 .writer-root .grow-read mark.cut[data-kind="open"] { border-left-color: #e0a800; }
+/* Edit.app's window draws the monitor's picture in a layer under the page (window-player.ts): the page is
+   see-through down to it there. The window behind is black, as the studio is, so nothing else changes colour;
+   the monitor's panel colour stays under its seek bar and transport. */
+html.native-preview .writer-root, html.native-preview .writer-root .studio { background: transparent; }
+.writer-root .monitor[data-window], .writer-root .screen[data-window] { background: transparent; }
+.writer-root .monitor[data-window] > :not(.screen) { background: var(--panel); }

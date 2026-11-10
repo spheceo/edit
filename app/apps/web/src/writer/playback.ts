@@ -105,11 +105,6 @@ export interface Player {
   dispose(): void;
 }
 
-/** The script's player: the shared decode pipeline, drawn on a canvas (Edit's window and every browser it runs in have WebCodecs). */
-export function newPlayer(clips: Item[], playhead: Playhead): Player {
-  return new ScriptPlayer(clips, playhead);
-}
-
 /** The proxies are conformed to 30 fps when they're made (writer/media.ts). */
 const PROXY_FPS = 30;
 /** Sound is scheduled this far ahead of the playhead. */
@@ -133,6 +128,10 @@ const SLOW_WAIT_MS = 3000;
 const DECODE_RETRY_MS = 4_000;
 
 /**
+ * The page's player: every browser, Linux, and footage still only in the
+ * cloud. In Edit.app the window's own player plays the cut instead when its
+ * recordings are files on the Mac (player.ts chooses; window-player.ts).
+ *
  * Plays the cut through the shared decode pipeline (lib/decoder.ts): frames
  * decoded by worker lanes and kept in a cache — the coming clips' first frames
  * are decoded before their cuts land — the sound's PCM chunks scheduled on the

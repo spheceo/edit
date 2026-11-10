@@ -35,6 +35,7 @@ import * as cloud from "./cloud.ts";
 import * as handoff from "./handoff.ts";
 import { fetchVideo, importing } from "./imports.ts";
 import * as jobs from "./jobs.ts";
+import * as locks from "./locks.ts";
 import * as media from "./media.ts";
 import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
@@ -89,7 +90,8 @@ function shared(dir: string): Map<string, string> {
   }
 }
 
-const busy = (id: string): boolean => jobs.running(id) || importing(id);
+/** Work running on it here, or its page open here: Edit.app's window plays its preview from the file (window_sources.ts), which must not go from under it. */
+const busy = (id: string): boolean => jobs.running(id) || importing(id) || locks.openHere(id);
 /** Scripts whose recordings were offered to Edit's originals since Edit started: once each, so one that can't be shared isn't tried every round. */
 const offered = new Set<string>();
 

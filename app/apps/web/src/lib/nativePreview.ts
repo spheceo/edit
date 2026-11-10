@@ -59,9 +59,20 @@ export interface NativeWhere {
   starved: number;
 }
 
+/**
+ * The window has one player, opened by whichever screen shows a picture (the
+ * editor's viewer, the script's monitor) and closed as it leaves. A close
+ * still under way gives the page its background back when it ends, so an open
+ * waits for it: opened sooner, the layer would be painted over.
+ */
+let closing: Promise<unknown> = Promise.resolve();
+
 export const nativePreview = {
   /** Opens the layer (hidden until placed); false when this Mac's window can't. */
-  open: async (): Promise<boolean> => (await call("preview_open")) === true,
+  open: async (): Promise<boolean> => {
+    await closing;
+    return (await call("preview_open")) === true;
+  },
   /** Where the viewer is, in the page's points, the radius of its top corners, and whether the layer shows. */
   place: (rect: { x: number; y: number; width: number; height: number }, radius: number, visible: boolean): Promise<unknown> =>
     call("preview_place", { ...rect, radius, visible }),
@@ -83,5 +94,13 @@ export const nativePreview = {
   position: async (): Promise<NativeWhere> => (await call("preview_position")) as NativeWhere,
   /** The playhead is about to land on `frame`: its pictures are made ready. */
   hint: (frame: number): Promise<unknown> => call("preview_hint", { frame }),
-  close: (): Promise<unknown> => call("preview_close"),
+  /** The playing speed (1, or 2 for Script mode's 2×): the sound sped with it, its pitch kept; playing carries on from where it is. */
+  rate: (rate: number): Promise<unknown> => call("preview_rate", { rate }),
+  /** How loud the speaker is, 0 to 1, at once. */
+  volume: (level: number): Promise<unknown> => call("preview_volume", { level }),
+  close: (): Promise<unknown> => {
+    const closed = call("preview_close");
+    closing = closed.catch(() => {});
+    return closed;
+  },
 };

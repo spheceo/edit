@@ -1,6 +1,6 @@
 # Script mode on the editor's player (Nov 10, 2026)
 
-Sphe, Nov 10: "it seems like the script mode and the edits mode are seen as distinct, completely separate options when we're making improvements to video playback. When one is improved, the other should be improved as well… within the edits app, in the script writing section, we should have the same improvements." To be discussed with Sphe after nightly-70 is out, then built. Nothing here is started.
+Sphe, Nov 10: "it seems like the script mode and the edits mode are seen as distinct, completely separate options when we're making improvements to video playback. When one is improved, the other should be improved as well… within the edits app, in the script writing section, we should have the same improvements." Sphe, later that day: "let's build things out." Built Nov 10 (see "Where it stands"); how it works now is in docs/preview.md, "Script mode plays on the same player".
 
 ## Why it keeps happening
 
@@ -39,7 +39,23 @@ One player for both: Script mode hands its cut to the same window player the edi
 5. **Measure both, the same way.** The harness from Nov 10 (step files through `EDIT_PREVIEW_JS`, the window's trace) on a real script: a play across 30 cuts, 40 jumps, a drag, a cold open, a word clicked in the transcript to its picture. Same marks as the editor's.
 6. **Keep them together after.** Acceptance (`scripts/acceptance.ts`) opens a script as well as an edit; and `--native` has to work first (today the window shows "Sign in to Edit", so it has never drawn a frame).
 
-## Open questions for the discussion
+## Where it stands (Nov 10)
+
+- **1, the cut as an edit:** `app/packages/edit-types/src/script_cut.ts` (`cutProject`, `auditionProject`), checked against the engine's own rules in `apps/server/test/script_cut.test.ts`. Item boundaries are in milliseconds (word times), so "exact at 30 fps" became: each boundary on the nearest frame of the edited clock, never drifting. Black runs under the whole cut, so one that ends on a card plays to the card's end.
+- **2, a `Player` for Edit.app:** `apps/web/src/writer/window-player.ts`, chosen by `writer/player.ts` (the window's when every recording is a file here, else the page's; the cut moves between them where it rests). The window's layer goes under the monitor's screen. No patches: a cut is small, so it goes whole when it changes.
+- **3, script footage on the Mac:** `POST /api/writer/window-sources` (`apps/server/src/writer/window_sources.ts`). The preview file where it's here; one only in the cloud comes down whole when the scripts' budget has room, and plays on the page's player until then. Not built: the piece under the playhead first. A streamed preview stays on the page's player, which reads it in blocks; the window would open it through FFmpeg at every jump.
+- **4, speed and volume:** `preview_rate` / `preview_volume` in the window's player, built on the Mac (the engine only compiles there).
+- **5, measured:** not yet. To do on a Mac with a real script, with the harness and marks above.
+- **6, kept together:** acceptance opens a script in headless Chrome (first picture, a play across a cut, a drag, a source moment, no error), which is the page's player. The window's (`--native`) still can't sign in, so it isn't run for either mode.
+
+## What was decided for the open questions
+
+- Shipped as it lands, behind nothing: the page's player is still there for everything the window can't play.
+- Any speed from 0.25× to 4× in the engine; the monitor's button stays 1× / 2×.
+- The browser keeps the page's player as it is.
+- A long preview comes down whole only when there's room for it; on a small disk it stays in the cloud and plays as before.
+
+## Open questions for the discussion (as asked before it was built)
 
 - Hold a nightly for this, or ship it as it lands (the browser's Script player stays as it is either way)?
 - 2× only, or other speeds while the rate is being built?

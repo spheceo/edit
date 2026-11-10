@@ -75,7 +75,7 @@ describe("the script's player", () => {
 
   function started() {
     const playhead = new playback.Playhead();
-    const player = playback.newPlayer(clips, playhead);
+    const player = new playback.ScriptPlayer(clips, playhead);
     player.attach({ width: 0, height: 0, getContext: () => ({ drawImage: vi.fn() }) } as unknown as HTMLCanvasElement);
     player.setSource("/api/writer/scripts/s/proxy?v=1", 100_000);
     return { player, playhead };

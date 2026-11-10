@@ -42,6 +42,32 @@ browser, or five failed frames in a row: the page draws as below. Measured Nov
 8–9 on Cops Realize (M1, cloud footage) in docs/plans/2026-11-08-audit.md
 ("A's stage 2, measured after").
 
+**Script mode plays on the same player** (Nov 10,
+docs/plans/2026-11-10-script-player.md; Sphe: "When one is improved, the other
+should be improved as well"). Until then the script page had a player of its
+own in the page (`writer/playback.ts`, WebCodecs on a canvas, the page's audio
+clock), and every improvement above passed it by. Now the script's cut is
+handed to the window as a small edit (`@edit/types/script_cut`: a linked
+picture and sound clip per footage item, black where a card is, boundaries on
+the nearest frame of the edited clock at 30 fps) and drawn in the same layer,
+placed under the monitor's screen (`writer/window-player.ts`); an audition
+(the footage straight through) is the same edit with one clip, the whole
+recording. The monitor's `Player` is unchanged, so the transcript, the
+timeline, the captions and the cards drive it as before. `writer/player.ts`
+chooses: the window's player when every recording the cut plays is a file on
+this Mac (`POST /api/writer/window-sources`, `writer/window_sources.ts`: the
+script's `proxy.mp4`, a commentary's clip footage), the page's otherwise (a
+browser, Linux, a preview only in the cloud). A preview only in the cloud
+comes down whole behind the ask when the scripts' footage and Edit's cache
+have room for it (`storage.overBudget`), and the cut moves to the window where
+it rests once it's here; a script open on this Mac keeps its footage here
+(`locks.openHere`), so the file never goes from under the window. Three failed
+asks in a row and the page's player takes the cut back at the same moment.
+Speed (1× and 2×, the sound's pitch kept) and volume are the window's
+(`preview_rate`, `preview_volume`), there for the editor too when it wants
+them. For checks, `window.__editScript` has the page's `player`, its
+`playhead` and `drawnBy()` ("window", "page" or "choosing").
+
 To see it without screen access: `EDIT_PREVIEW_TRACE=1` says each placement and
 draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,
 play and pause by itself, and `EDIT_PREVIEW_SHOT=<file.png>` then saves the

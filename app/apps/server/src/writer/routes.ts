@@ -41,6 +41,7 @@ import * as store from "./store.ts";
 import * as trello from "./trello.ts";
 import * as versions from "./versions.ts";
 import * as watch from "./watch.ts";
+import { windowSources } from "./window_sources.ts";
 import { begin as beginJob } from "./work.ts";
 import { carryingOn } from "./index.ts";
 
@@ -712,6 +713,22 @@ export function routes(router: Router<App>): void {
         notWhileWriting(id(context), "Claude is writing this script.");
         return detail(data, commentary.saveDraft(data, id(context), Number(given.revision), given.draft));
       });
+    })
+    // What Edit.app's window player reads the page's recordings from (window_sources.ts): only scripts this person may see.
+    .post("/api/writer/window-sources", async (context) => {
+      const given = await body<{ srcs?: unknown }>(context);
+      const srcs = Array.isArray(given.srcs) ? given.srcs.filter((src): src is string => typeof src === "string").slice(0, 200) : [];
+      const data = dataOf(context.app);
+      return answer(() =>
+        windowSources(context.app, srcs, (script) => {
+          try {
+            readFor(data, script);
+            return true;
+          } catch {
+            return false;
+          }
+        }),
+      );
     })
     // The preview: the file on this Mac, a range at a time (cloud.ts streams one that's only in the cloud).
     .get("/api/writer/scripts/{id}/proxy", async (context) => {

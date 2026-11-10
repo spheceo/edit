@@ -18,7 +18,8 @@ import { scriptText } from "./doc-export";
 import { FootageDoc } from "./footage-doc";
 import { ReusedCases } from "./reused-cases";
 import { Monitor } from "./monitor";
-import { clipStarts, editedPosition, newPlayer, Playhead } from "./playback";
+import { clipStarts, editedPosition, Playhead } from "./playback";
+import { newPlayer } from "./player";
 import { Timeline } from "./timeline";
 import { type Picked, ResearchList, Transcript, useSpeakers } from "./transcript";
 import type { BuildStatus, ChatTurn, Clip, Highlight, Research, Script } from "./types";
@@ -177,7 +178,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   // One playhead per player, made together, so a reload of the code keeps them paired.
   const [{ player, playhead }] = useState(() => {
     const playhead = new Playhead();
-    return { playhead, player: newPlayer(clips, playhead) };
+    return { playhead, player: newPlayer(clips, playhead, src, script.durationMs) };
   });
   useEffect(() => () => player.dispose(), [player]);
   useEffect(() => player.update(clips), [player, clips]);

@@ -17,7 +17,13 @@
 //   decode error, a 3 s play with videoMisses at most 5 and no audio
 //   underrun, a scrub of 60 positions showing over half of them, full screen
 //   in and out with the picture still drawn after; then scripts/home-audit.ts
-//   at two widths against the same server.
+//   at two widths against the same server. Between them it opens a script
+//   as well (docs/plans/2026-11-10-script-player.md, "Keep them together
+//   after"): one written as an import leaves it, its preview made the same
+//   way, and through window.__editScript (writer/player.ts) asserts the
+//   monitor's first picture, a 3 s play across a cut, a drag that settles
+//   where it stopped, a footage moment outside the cut shown as the source,
+//   and no error.
 // - native: Edit.app's window helper opens the project with
 //   EDIT_PREVIEW_CHECK=0 EDIT_PREVIEW_TRACE=1 (crates/edit-window/src/preview.rs
 //   seeks, scrubs and plays by itself) and fails on a frame drawn in over
@@ -368,6 +374,93 @@ async function pageChecks(id: string): Promise<void> {
   await shot(page, "editor");
 }
 
+// ---- A script ----
+
+const SCRIPT_ID = "acce97a0-0000-4000-8000-5c1e97000001";
+/** The script's cut: six seconds from 0:08, a card, five from 0:01 (ms). */
+const scriptCut = [
+  { id: "a", startMs: 8_000, endMs: 14_000 },
+  { id: "card", startMs: 0, endMs: 2_000, kind: "cut-in", narration: "Meanwhile, across town." },
+  { id: "b", startMs: 1_000, endMs: 6_000 },
+];
+const scriptMs = scriptCut.reduce((sum, clip) => sum + clip.endMs - clip.startMs, 0);
+
+/** A script as an import leaves one in the data folder: script.json and its 30 fps preview, 20 s long. */
+function makeScript(): boolean {
+  const dir = join(home, "writer", "scripts", SCRIPT_ID);
+  mkdirSync(dir, { recursive: true });
+  const ffmpeg = process.env.EDIT_FFMPEG ?? "ffmpeg";
+  const made = Bun.spawnSync([ffmpeg, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30", "-f", "lavfi", "-i", "sine=frequency=330", "-t", "20", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "30", "-c:a", "aac", "-ac", "2", "-movflags", "+faststart", join(dir, "proxy.mp4")]);
+  if (made.exitCode !== 0) {
+    check("fixture script", false, made.stderr.toString().slice(-300));
+    return false;
+  }
+  const now = Date.now();
+  writeFileSync(join(dir, "script.json"), JSON.stringify({ id: SCRIPT_ID, title: "Acceptance script", sourceKind: "youtube", sourceUrl: "", originalPath: "", status: "ready", stage: "", progress: 100, error: null, durationMs: 20_000, revision: 1, createdAt: now, updatedAt: now, overview: [], words: [], clips: scriptCut }));
+  return true;
+}
+
+async function scriptChecks(): Promise<void> {
+  if (chromePath() === null) {
+    record("the script's player", "skip", "no Chrome on this machine");
+    return;
+  }
+  if (!makeScript()) return;
+  const page = await openPage(`/scripts/${SCRIPT_ID}`);
+  const opened = page.navigated;
+  const S = "window.__editScript";
+  for (let tries = 0; tries < 200 && !(await page.js(`Boolean(${S}?.player)`)); tries++) await sleep(100);
+  if (!(await page.js(`Boolean(${S}?.player)`))) {
+    check("the script opens", false, "its monitor's player wasn't made within 20 s (script.png)");
+    await shot(page, "script");
+    return;
+  }
+  const state = () => page.js(`(() => { const s = ${S}; return { framed: s.player.framed, buffering: s.player.buffering, error: s.player.error, playing: s.player.playing, ms: s.playhead.ms, sourceMs: s.playhead.sourceMs, auditioning: s.playhead.auditioning, by: s.drawnBy() }; })()`);
+  let first: number | null = null;
+  for (let tries = 0; tries < 600; tries++) {
+    const now = await state();
+    if (now.error) break;
+    if (now.framed) {
+      first = performance.now() - opened;
+      break;
+    }
+    await sleep(50);
+  }
+  const by = (await state()).by;
+  if (first === null) check("script: first picture", false, `none in 30 s${(await state()).error ? `: ${(await state()).error}` : ""}`);
+  else timing("script: first picture", first < 3000, `${(first / 1000).toFixed(2)} s after opening (under 3 s), drawn by the ${by}'s player`);
+  // Play 3 s from 4 s: across the first cut, into the card. The page's player runs on the sound's clock, so with no sound device it never starts.
+  const sound = by === "page" ? await page.js("(async () => { try { const audio = new AudioContext(); await Promise.race([audio.resume(), new Promise((done) => setTimeout(done, 1000))]); const state = audio.state; void audio.close(); return state; } catch { return 'missing'; } })()", true) : "running";
+  if (sound !== "running") record("script: play 3 s", "skip", `the page's sound never started here (AudioContext ${sound}): no sound device, and the script's player plays on the sound's clock`);
+  else {
+    await page.js(`${S}.player.seek(4000)`);
+    await sleep(800);
+    await page.js(`${S}.player.play()`, true);
+    await sleep(3000);
+    const played = await state();
+    await page.js(`${S}.player.pause()`);
+    if (!played.playing || played.ms <= 4000) check("script: play 3 s", false, `the playhead didn't move (${Math.round(played.ms)} ms, playing ${played.playing})`);
+    else timing("script: play 3 s", played.ms >= 6500, `${((played.ms - 4000) / 1000).toFixed(2)} s advanced (3 asked), across a cut into the card`);
+  }
+  // A drag: 40 positions across the cut, one every 33 ms; it rests on the last, its picture drawn.
+  const last = scriptMs - 1500;
+  await page.js(`(() => { const p = ${S}.player; let i = 0; const step = () => { p.seek(Math.round(i * ${last} / 39)); if (++i < 40) setTimeout(step, 33); }; step(); })()`);
+  let rested = await state();
+  for (let tries = 0; tries < 200 && !(rested.ms === last && rested.framed && !rested.buffering); tries++) {
+    await sleep(50);
+    rested = await state();
+  }
+  slowHere("script: a drag settles where it stopped", rested.ms === last && rested.framed && !rested.buffering, `at ${Math.round(rested.ms)} ms (${last} asked, within 10 s)${rested.buffering ? ", still waiting on its picture" : ""}`);
+  // A word clicked in the transcript that the cut doesn't play: the footage itself, at that moment.
+  await page.js(`${S}.player.cue(17000)`);
+  await sleep(500);
+  const cued = await state();
+  check("script: a moment outside the cut shows the source", cued.auditioning && cued.sourceMs === 17000 && !cued.playing, `source ${Math.round(cued.sourceMs)} ms, ${cued.auditioning ? "shown as the source" : "not shown as the source"}`);
+  const said = [(await state()).error, ...page.errors].filter((one) => one);
+  check("script: no error", said.length === 0, said.length === 0 ? "none" : said.slice(0, 3).join("; "));
+  await shot(page, "script");
+}
+
 async function homeAudit(): Promise<void> {
   if (chromePath() === null) {
     record("Home's layout", "skip", "no Chrome on this machine");
@@ -436,6 +529,9 @@ try {
       if (NATIVE !== null) await nativeChecks(id, NATIVE);
       else {
         await pageChecks(id).catch((error: unknown) => check("the page's player", false, String(error)));
+        running.chrome?.kill();
+        await running.chrome?.exited;
+        await scriptChecks().catch((error: unknown) => check("the script's player", false, String(error)));
         running.chrome?.kill();
         await homeAudit();
       }

@@ -272,6 +272,8 @@ int edit_scale(const uint8_t *source, uint32_t sw, uint32_t sh, size_t sstride,
 // writes one at the start of a file whose first picture isn't at 0, as our
 // slowed clips' renders are, so a clip from 0 opened on a black frame.
 @property NSArray<NSValue *> *gaps;
+// Where the track's first picture is shown (movie seconds): its first edit with media.
+@property double start;
 @end
 
 @implementation EditReader
@@ -352,8 +354,10 @@ void *edit_reader_open(const char *path, uint32_t width, uint32_t height,
         if (!isfinite(end) || end <= 0) { fail(error, capacity, @"Native track has no finite duration"); return NULL; }
         r.end = end;
         NSMutableArray<NSValue *> *gaps = [NSMutableArray array];
+        r.start = -1;
         for (AVAssetTrackSegment *segment in r.track.segments) {
             if (segment.empty) [gaps addObject:[NSValue valueWithCMTimeRange:segment.timeMapping.target]];
+            else if (r.start < 0) r.start = CMTimeGetSeconds(segment.timeMapping.target.start);
         }
         r.gaps = gaps;
         CGAffineTransform t = r.track.preferredTransform;
@@ -395,6 +399,18 @@ int edit_reader_frame(void *handle, double time, uint8_t *out, size_t length, in
         r.requested = time;
         if (!r.held) r.held = [r copyNextPicture];
         if (!r.next) r.next = [r copyNextPicture];
+        // At the edit's start, a picture less than half a frame after the one held takes its place:
+        // a file FFmpeg cut a hair before a keyframe keeps the frames from the
+        // keyframe before, marked to discard, and AVFoundation hands the last
+        // of them out at the edit's start, the file's own first picture just
+        // after it (Nov 10: a long preview's piece opened on the frame before).
+        while (r.held && r.next &&
+               fabs(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(r.held)) - r.start) < 0.000001 &&
+               CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(r.next)) - r.start < step * 0.5) {
+            CFRelease(r.held);
+            r.held = r.next;
+            r.next = [r copyNextPicture];
+        }
         while (r.next && CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(r.next)) <= time + 0.000001) {
             if (r.held) CFRelease(r.held);
             r.held = r.next;

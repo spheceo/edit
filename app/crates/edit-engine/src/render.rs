@@ -421,6 +421,16 @@ impl VideoReader {
     /// after, and the URL read instead).
     fn read_excerpt(&mut self, time: f64, out: &mut [u8], if_changed: bool) -> Option<bool> {
         let excerpts = self.excerpts.clone()?;
+        // The frame nearest `time` is read from the excerpt that holds it, at
+        // its own time. A time in a piece's last half-frame is nearest the next
+        // piece's first frame, which a piece cut to its own frames doesn't have:
+        // its last frame was shown again in its place (Nov 10, a 29.99992 fps
+        // preview at 30 fps, a repeat and a frame missed at piece 20's start).
+        let time = if self.source.fps > 0.0 {
+            self.nearest(time) as f64 / self.source.fps
+        } else {
+            time
+        };
         loop {
             let index = crate::excerpts::covering(&excerpts, time, &self.broken)?;
             let excerpt = excerpts.get(index)?;
@@ -4496,6 +4506,118 @@ mod tests {
         }
         // Where no piece reaches, still the stream.
         assert!(reader.frame_at(1.8).is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A time in a piece's last half-frame is the next piece's first frame, as
+    /// it is read from the stream: each piece is cut to its own frames, so the
+    /// one before has no frame there (Nov 10, a long preview in the window:
+    /// its last frame shown twice and the next piece's first never).
+    #[test]
+    fn a_time_nearest_the_next_pieces_first_frame_reads_it() {
+        let dir = temp_dir("excerpt-edge");
+        let path = dir.join("counter-edge.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("color=c=black:size=64x36:rate=30:duration=2,format=yuv420p,geq=lum='16+3*N':cb=128:cr=128")
+            .args(["-c:v", "libx264", "-qp", "4", "-g", "15"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let cut = |from: &str, name: &str| {
+            let out = dir.join(name);
+            let done = Command::new(crate::util::ffmpeg())
+                .args(["-v", "error", "-ss", from, "-i"])
+                .arg(&path)
+                .args(["-frames:v", "15", "-map", "0:v:0", "-c:v", "copy", "-an"])
+                .arg(&out)
+                .status()
+                .unwrap();
+            assert!(done.success());
+            out
+        };
+        let object = "https://r2.invalid/edit/pieces/v3/youtube/edgeEDGE01/proxy.mp4";
+        crate::excerpts::add(
+            object,
+            [
+                crate::excerpts::Excerpt {
+                    from: 0.5,
+                    to: 1.0,
+                    path: cut("0.5", "a.mp4"),
+                },
+                crate::excerpts::Excerpt {
+                    from: 1.0,
+                    to: 1.5,
+                    path: cut("1.0", "b.mp4"),
+                },
+            ],
+        );
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": format!("{object}?sig=1"), "kind": "video",
+            "duration": 2.0, "width": 64, "height": 36, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, PathBuf::from(&media.path), (64, 36), Order::Rgba);
+        let mut reader = VideoReader::open(source.clone());
+        let mut out = vec![0; source.bytes()];
+        // Frame 29 (a's last), then a third of a frame before b: frame 30, b's first. And back.
+        for (time, n) in [
+            (29.0 / 30.0, 29_i64),
+            (1.0 - 0.3 / 30.0, 30),
+            (29.4 / 30.0, 29),
+            (14.6 / 30.0, 15),
+        ] {
+            assert!(
+                reader.frame_into(time, &mut out, false).is_ok(),
+                "at {time}"
+            );
+            assert_eq!(counted(&out), n, "at {time}");
+            assert_eq!(counted(reader.frame_at(time).unwrap()), n, "at {time}");
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A file cut by FFmpeg a hair before a keyframe keeps the frames from the
+    /// keyframe before, marked to discard, and starts its edit after them:
+    /// AVFoundation hands the last of those out at the edit's start, then the
+    /// file's own first frame 1/90000 s later. Its first frame is the latter
+    /// (Nov 10: a long preview's piece 20 opened on the frame before it).
+    #[test]
+    fn a_file_starting_after_frames_to_discard_starts_on_its_own_first_frame() {
+        let dir = temp_dir("discarded-start");
+        let path = dir.join("counter.mp4");
+        let made = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg("color=c=black:size=64x36:rate=30:duration=2,format=yuv420p,geq=lum='16+3*N':cb=128:cr=128")
+            .args(["-c:v", "libx264", "-qp", "4", "-g", "15", "-bf", "0", "-video_track_timescale", "90000"])
+            .arg(&path)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let cut = dir.join("cut.mp4");
+        let done = Command::new(crate::util::ffmpeg())
+            .args(["-v", "error", "-ss", "0.99999", "-i"])
+            .arg(&path)
+            .args(["-t", "0.5", "-map", "0:v:0", "-c:v", "copy", "-an"])
+            .arg(&cut)
+            .status()
+            .unwrap();
+        assert!(done.success());
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": cut.to_string_lossy(), "kind": "video",
+            "duration": 0.5, "width": 64, "height": 36, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, cut.clone(), (64, 36), Order::Rgba);
+        let mut reader = VideoReader::open(source);
+        for n in [0_i64, 1, 0, 2] {
+            assert_eq!(
+                counted(reader.frame_at(n as f64 / 30.0).unwrap()),
+                30 + n,
+                "frame {n}"
+            );
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 

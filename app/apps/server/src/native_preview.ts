@@ -18,10 +18,10 @@
 //   same proxy bytes were kept in four forms).
 // - A pieced proxy (proxy_pieces.ts, a video of 20 minutes or more) is no
 //   file to fetch: its pieces come down or are made behind the viewer
-//   (`cloud_media.prefetchProject`'s fill), and each piece here is cut into a
-//   file of its own (its picture copied, time 0 the piece's start) that the
-//   window reads instead of the stream where it reaches (the engine's
-//   excerpts, crates/edit-engine/src/excerpts.rs).
+//   (`cloud_media.fillPieces`, started here), and each piece here that the
+//   timeline plays is cut into a file of its own (its picture copied, time 0
+//   the piece's start) that the window reads instead of the stream where it
+//   reaches (the engine's excerpts, crates/edit-engine/src/excerpts.rs).
 //
 // Playing, the window mixes the edit's sound itself (crates/edit-engine/src/player.rs),
 // so each heard media's sound file is named too: a made preview's sound
@@ -33,6 +33,8 @@
 // every 15 s while any is. And when the cache's cleaner takes a copy handed
 // out here (cache_cleanup.ts), the project's pages hear it (`native-sources`)
 // and ask again, rather than a jump failing on the missing file.
+
+import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
 import * as cloudMedia from "./cloud_media.ts";
@@ -63,10 +65,27 @@ const cutsWaiting: { url: string; from: number; to: number; out: string }[] = []
 const cutting = new Set<string>();
 const cutFailed = new Map<string, number>();
 
+/**
+ * Cuts a piece into `out`, whole or not at all: into a file beside it, moved
+ * into place once FFmpeg is done, so a cut Edit quits during never leaves half
+ * a piece the window would read. The pieces' folder is made here: nothing
+ * else makes it, and until Nov 10 nothing did, so no piece was ever cut (JJ's
+ * Mac, 104 times in six hours: "Error opening output files: No such file or
+ * directory") and a long video's picture came through the stream for good.
+ */
+async function cutWhole(url: string, from: number, to: number, out: string): Promise<void> {
+  const part = out.replace(/\.mp4$/, ".part.mp4");
+  try {
+    fs.mkdirSync(out.slice(0, out.lastIndexOf("/")), { recursive: true });
+    await cut(url, from, to, part, new AbortController().signal);
+    fs.renameSync(part, out);
+  } finally {
+    fs.rmSync(part, { force: true });
+  }
+}
+
 /** Seams for tests. */
-export const hooks = {
-  cut: (url: string, from: number, to: number, out: string): Promise<void> => cut(url, from, to, out, new AbortController().signal),
-};
+export const hooks = { cut: cutWhole };
 
 function cutNext(): void {
   while (cutting.size < CUTS_AT_ONCE) {
@@ -90,9 +109,12 @@ function cutNext(): void {
 /**
  * The pieces of pieced proxy `base` on this Mac as files the window reads
  * (cut from `url`, the loopback stream, which answers them from the pieces
- * here); pieces here but not cut yet are cut behind this.
+ * here); of those the timeline plays (`played`: stretches of the video, in
+ * seconds), the ones here but not cut yet are cut behind this, in its order.
+ * Only those: a cut piece is a second copy of its minute of the preview (a
+ * two-hour interview's, 3.6 GB), and an edit plays a part of it.
  */
-async function pieceExcerpts(cache: string, base: string, url: string): Promise<NativeExcerpt[]> {
+async function pieceExcerpts(cache: string, base: string, url: string, played: [number, number][]): Promise<NativeExcerpt[]> {
   const context = cloudMedia.piecesHere(cache);
   let layout: pieces.Layout;
   try {
@@ -100,19 +122,28 @@ async function pieceExcerpts(cache: string, base: string, url: string): Promise<
   } catch {
     return [];
   }
+  const wanted: number[] = [];
+  for (const [from, to] of played) {
+    for (let n = pieces.pieceAt(layout, from); n <= pieces.pieceAt(layout, to); n++) if (!wanted.includes(n)) wanted.push(n);
+  }
   const out: NativeExcerpt[] = [];
-  for (let n = 0; n < layout.pieces; n++) {
-    if (!pieces.pictureHere(context, base, n)) continue;
+  const file = (n: number) => cloudMedia.localPath(cache, `${base}/native/${n}.mp4`);
+  const span = (n: number): [number, number] => {
     const [first, end] = pieces.framesOf(layout, n);
-    const from = first / layout.fps;
-    const to = end / layout.fps;
-    const file = cloudMedia.localPath(cache, `${base}/native/${n}.mp4`);
-    if (isFile(file)) {
-      out.push({ from, to: n === layout.pieces - 1 ? TO_THE_END : to, path: file });
-      continue;
-    }
-    if (Date.now() - (cutFailed.get(file) ?? 0) < RETRY_MS || cutting.has(file) || cutsWaiting.some((one) => one.out === file)) continue;
-    cutsWaiting.push({ url, from, to, out: file });
+    return [first / layout.fps, end / layout.fps];
+  };
+  // Every piece cut already is read from its file, played now or not.
+  for (let n = 0; n < layout.pieces; n++) {
+    if (!isFile(file(n))) continue;
+    const [from, to] = span(n);
+    out.push({ from, to: n === layout.pieces - 1 ? TO_THE_END : to, path: file(n) });
+  }
+  for (const n of wanted) {
+    const path = file(n);
+    if (isFile(path) || !pieces.pictureHere(context, base, n)) continue;
+    if (Date.now() - (cutFailed.get(path) ?? 0) < RETRY_MS || cutting.has(path) || cutsWaiting.some((one) => one.out === path)) continue;
+    const [from, to] = span(n);
+    cutsWaiting.push({ url, from, to, out: path });
   }
   cutNext();
   return out;
@@ -132,14 +163,24 @@ export async function nativeSources(app: App, project: Project): Promise<Respons
   const excerpts: Record<string, NativeExcerpt[]> = {};
   player.markNative(project.id);
   cloudMedia.stopPrefetch(project.id);
+  // A pieced proxy's pieces the timeline plays come down behind the viewer, in its order (one fill a project).
+  cloudMedia.fillPieces(app, project.id);
   // Only what the timeline shows comes down (Cops Realize lists 169 own-file videos, 1.5 GB; its clips show 66, 0.7 GB),
   // in playhead order: the media first played first.
   const shown = new Set(project.clips.flatMap((clip) => (clip.type === "video" ? [clip.media] : [])));
   const heard = new Set(project.clips.flatMap((clip) => (clip.type === "audio" ? [clip.media] : [])));
   const firstUse = new Map<string, number>();
-  for (const clip of project.clips) {
+  // The stretches of each video the timeline shows (seconds of it), in the timeline's order.
+  const fps = project.settings.fps > 0 ? project.settings.fps : 30;
+  const played = new Map<string, [number, number][]>();
+  for (const clip of [...project.clips].sort((a, b) => a.start - b.start)) {
     if (clip.type !== "video" && clip.type !== "audio") continue;
     firstUse.set(clip.media, Math.min(firstUse.get(clip.media) ?? Infinity, clip.start));
+    if (clip.type !== "video") continue;
+    const from = clip.source_in ?? 0;
+    const stretches = played.get(clip.media) ?? [];
+    stretches.push([from, from + (clip.duration / fps) * (clip.speed ?? 1)]);
+    played.set(clip.media, stretches);
   }
   const inPlayheadOrder = [...project.media].sort((a, b) => (firstUse.get(a.id) ?? Infinity) - (firstUse.get(b.id) ?? Infinity));
   for (const media of inPlayheadOrder) {
@@ -158,7 +199,7 @@ export async function nativeSources(app: App, project: Project): Promise<Respons
         if (shown.has(media.id) || heard.has(media.id)) {
           if (base === null) fetchWhole(key, local);
           else if (shown.has(media.id)) {
-            const here = await pieceExcerpts(cache, base, url);
+            const here = await pieceExcerpts(cache, base, url, played.get(media.id) ?? []);
             if (here.length > 0) excerpts[media.id] = here;
           }
         }

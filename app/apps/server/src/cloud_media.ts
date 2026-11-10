@@ -1687,32 +1687,35 @@ export function stopPrefetch(id: string): void {
   prefetches.set(id, (prefetches.get(id) ?? 0) + 1);
 }
 
+/** The fill of pieces under way per project, and the frame it began from. */
+const fills = new Map<string, { from: number; stopped: boolean }>();
+
+/** Seams for tests. */
+export const fillHooks = {
+  fill: (context: pieces.Context, wants: { base: string; seconds: number }[], stop: () => boolean): Promise<number> => pieces.fill(context, wants, stop),
+};
+
 /**
- * Reads the proxies' stretches project `id`'s timeline plays, in timeline
- * order from frame `from`, into the block cache before the viewer asks
- * (off Modal, step 5: a Mac with nothing cached waited on R2's ~0.25 s per
- * block as it played). Behind every read the viewer makes (cloud_blocks.ts
- * `prefetch`), `PREFETCH.seconds` of the timeline or `PREFETCH.bytes` at
- * most; the cache's budget evicts it like any block. A proxy's bytes are
- * taken as even through it (they're about: one rate, a keyframe each half
- * second), a block either side kept for the slack.
+ * Brings the pieces of every pieced proxy (proxy_pieces.ts: a video of 20
+ * minutes or more) that project `id`'s timeline plays onto this Mac, in the
+ * timeline's order from frame `from`, behind the viewer; one fill a project
+ * (asked again from the same frame while one runs: nothing; from another: the
+ * older stops). For the page's player and Edit.app's window alike: from
+ * Nov 9 to 10 a project the window drew got none (the block prefetch was
+ * turned off for it, and this was inside it), so on a Mac without the footage
+ * each minute of a long video came from R2 at the moment it was first played.
  */
-export async function prefetchProject(app: App, id: string, from = 0): Promise<number> {
-  // Drawn by Edit.app's window: its whole copies come down instead (native_preview.ts), never blocks.
-  if (playbackBlocks === null || !cloud.enabled() || player.isNative(id)) return 0;
-  const root = playbackBlocks;
+export function fillPieces(app: App, id: string, from = 0): void {
+  if (playbackBlocks === null || !cloud.enabled()) return;
   const live = app.store.get(id);
-  if (live === null) return 0;
-  const generation = (prefetches.get(id) ?? 0) + 1;
-  prefetches.set(id, generation);
-  const stop = () => prefetches.get(id) !== generation;
+  if (live === null) return;
+  const running = fills.get(id);
+  if (running !== undefined) {
+    if (running.from === from) return;
+    running.stopped = true;
+  }
   const project = live.project;
   const fps = project.settings.fps > 0 ? project.settings.fps : 30;
-  const until = from + PREFETCH.seconds * fps;
-  const clips = project.clips
-    .filter((clip): clip is Extract<Clip, { type: "video" | "audio" }> => (clip.type === "video" || clip.type === "audio") && clip.start + clip.duration > from && clip.start < until)
-    .sort((a, b) => a.start - b.start);
-  // Pieced proxies: their pieces the whole timeline plays, in its order from `from`, made behind the viewer.
   const wants: { base: string; seconds: number }[] = [];
   for (const clip of [...project.clips].sort((a, b) => a.start - b.start)) {
     if ((clip.type !== "video" && clip.type !== "audio") || clip.start + clip.duration <= from) continue;
@@ -1726,13 +1729,52 @@ export async function prefetchProject(app: App, id: string, from = 0): Promise<n
       wants.push({ base, seconds: (clip.source_in ?? 0) + ((frame - clip.start) / fps) * speed });
     }
   }
-  if (wants.length > 0) {
-    // Behind the viewer like the block prefetch: making pieces reads R2 too, so it starts only once the viewer rests.
-    void (async () => {
-      if (!(await cloudBlocks.waitForViewerRest(stop))) return;
-      await pieces.fill(piecesContext(app.store.cacheDir()), wants, stop);
-    })().catch((error: unknown) => diag.warn("pieces", `${id}: ${diag.messageOf(error)}`));
+  if (wants.length === 0) {
+    fills.delete(id);
+    return;
   }
+  const mine = { from, stopped: false };
+  fills.set(id, mine);
+  const stop = () => mine.stopped;
+  // Behind the viewer like the block prefetch: making pieces reads R2 too, so it starts only once the viewer rests.
+  void (async () => {
+    if (!(await cloudBlocks.waitForViewerRest(stop))) return;
+    await fillHooks.fill(piecesContext(app.store.cacheDir()), wants, stop);
+  })()
+    .catch((error: unknown) => diag.warn("pieces", `${id}: ${diag.messageOf(error)}`))
+    .finally(() => {
+      if (fills.get(id) === mine) fills.delete(id);
+    });
+}
+
+/**
+ * Reads the proxies' stretches project `id`'s timeline plays, in timeline
+ * order from frame `from`, into the block cache before the viewer asks
+ * (off Modal, step 5: a Mac with nothing cached waited on R2's ~0.25 s per
+ * block as it played). Behind every read the viewer makes (cloud_blocks.ts
+ * `prefetch`), `PREFETCH.seconds` of the timeline or `PREFETCH.bytes` at
+ * most; the cache's budget evicts it like any block. A proxy's bytes are
+ * taken as even through it (they're about: one rate, a keyframe each half
+ * second), a block either side kept for the slack.
+ */
+export async function prefetchProject(app: App, id: string, from = 0): Promise<number> {
+  if (playbackBlocks === null || !cloud.enabled()) return 0;
+  // A long video's pieces are the one footage form both players read, so they come down for either.
+  fillPieces(app, id, from);
+  // Drawn by Edit.app's window: its whole copies come down instead (native_preview.ts), never blocks.
+  if (player.isNative(id)) return 0;
+  const root = playbackBlocks;
+  const live = app.store.get(id);
+  if (live === null) return 0;
+  const generation = (prefetches.get(id) ?? 0) + 1;
+  prefetches.set(id, generation);
+  const stop = () => prefetches.get(id) !== generation;
+  const project = live.project;
+  const fps = project.settings.fps > 0 ? project.settings.fps : 30;
+  const until = from + PREFETCH.seconds * fps;
+  const clips = project.clips
+    .filter((clip): clip is Extract<Clip, { type: "video" | "audio" }> => (clip.type === "video" || clip.type === "audio") && clip.start + clip.duration > from && clip.start < until)
+    .sort((a, b) => a.start - b.start);
   const sizes = new Map<string, number | null>();
   let bytes = 0;
   for (const clip of clips) {

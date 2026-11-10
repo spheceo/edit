@@ -3,6 +3,7 @@ import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 
 import * as cloud from "../src/cloud.ts";
+import * as cloudBlocks from "../src/cloud_blocks.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
 import * as steps from "../src/import_steps.ts";
 import { playbackKey, playbackPath } from "../src/cloud_playback.ts";
@@ -13,7 +14,9 @@ import { mediaKey, sharedSourceOf } from "../src/media.ts";
 import type { Media, Probe, Project } from "../src/model.ts";
 import { useNative, wrap } from "../src/native/index.ts";
 import { createStub } from "../src/native/stub.ts";
+import * as player from "../src/player.ts";
 import { newProject } from "../src/project.ts";
+import * as pieces from "../src/proxy_pieces.ts";
 import { cacheKey, watchWindow } from "../src/watch.ts";
 import { fixtureHome, type Fixture } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
@@ -923,6 +926,61 @@ test("a streamed proxy whose key the cloud doesn't have is failed, not ready, an
     expect(status.proxy).toBe("failed");
     expect(status.error).toContain("isn't in the cloud");
   } finally {
+    cleanup();
+  }
+});
+
+test("a long video's pieces come down behind the viewer for a project Edit.app's window draws too, one fill a project", async () => {
+  const fixture = home("fill-pieces");
+  const { app, store, cleanup } = fixture;
+  player.reset();
+  // The viewer at rest (a test before this one read through the blocks): a fill waits for that.
+  cloudBlocks.noteViewerMiss(1);
+  const asked: { wants: { base: string; seconds: number }[]; stop: () => boolean; done: () => void }[] = [];
+  const filling = spyOn(cloudMedia.fillHooks, "fill").mockImplementation((_context, wants, stop) => new Promise<number>((resolve) => asked.push({ wants, stop, done: () => resolve(0) })));
+  try {
+    const key = pieces.proxyKeyOf("youtube:longVIDEO01");
+    const base = pieces.baseOf(key)!;
+    const id = store.create("p", SETTINGS).project.id;
+    await store.update(id, "test", (p) => {
+      p.media.push(media("long", playbackPath(key, app.port), { duration: 7200, cloud: { source: "youtube:longVIDEO01", original: "edit/originals/youtube/longVIDEO01/a.mp4", proxy: key, size: 3 } }));
+      p.media.push(media("short", playbackPath("edit/proxies/drive/SHORTabcdef1.mp4", app.port), { cloud: { source: "drive:SHORTabcdef1", original: "edit/originals/drive/SHORTabcdef1/a.mp4", proxy: "edit/proxies/drive/SHORTabcdef1.mp4", size: 3 } }));
+      // Two minutes of the long one from 1:05 of it, then a short one (no pieces), then the long one again further in.
+      p.clips.push(
+        { type: "video", id: "c1", track: "v1", media: "long", start: 0, duration: 3600, source_in: 65, speed: 1 } as never,
+        { type: "video", id: "c2", track: "v1", media: "short", start: 3600, duration: 60, source_in: 0, speed: 1 } as never,
+        { type: "video", id: "c3", track: "v1", media: "long", start: 3660, duration: 300, source_in: 3000, speed: 1 } as never,
+      );
+    });
+    // The window's: where it reads from was asked (native-sources), so no block is read ahead for it.
+    player.markNative(id);
+    expect(await cloudMedia.prefetchProject(app, id, 0)).toBe(0);
+    await Bun.sleep(5);
+    expect(asked.length).toBe(1);
+    expect(asked[0]!.wants.every((want) => want.base === base)).toBe(true);
+    // Every half minute of what's played, in the timeline's order.
+    expect(asked[0]!.wants.map((want) => Math.round(want.seconds))).toEqual([65, 95, 125, 155, 3000]);
+    // Asked again while it runs (the page asks every 15 s while anything streams): nothing new.
+    cloudMedia.fillPieces(app, id);
+    await Bun.sleep(5);
+    expect(asked.length).toBe(1);
+    expect(asked[0]!.stop()).toBe(false);
+    // From further on: the older one stops.
+    cloudMedia.fillPieces(app, id, 3660);
+    await Bun.sleep(5);
+    expect(asked.length).toBe(2);
+    expect(asked[0]!.stop()).toBe(true);
+    expect(asked[1]!.wants.map((want) => Math.round(want.seconds))).toEqual([3000]);
+    // Done: the next ask starts one again (a clip added since is then filled).
+    asked[1]!.done();
+    await Bun.sleep(5);
+    cloudMedia.fillPieces(app, id, 3660);
+    await Bun.sleep(5);
+    expect(asked.length).toBe(3);
+  } finally {
+    for (const one of asked) one.done();
+    filling.mockRestore();
+    player.reset();
     cleanup();
   }
 });

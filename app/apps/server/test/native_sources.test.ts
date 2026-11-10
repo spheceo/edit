@@ -107,7 +107,7 @@ test("footage that's its own proxy (an original of 256 MB or less) comes down wh
   }
 });
 
-test("a pieced proxy's pieces here are cut into files the window reads instead of the stream; the rest stream", async () => {
+test("a pieced proxy's pieces here that the timeline plays are cut into files the window reads instead of the stream; the rest stream", async () => {
   const { app, store, cleanup } = fixtureHome("native-sources-pieces");
   reset();
   try {
@@ -115,7 +115,7 @@ test("a pieced proxy's pieces here are cut into files the window reads instead o
     const key = pieces.proxyKeyOf("drive:longFile0001");
     const base = pieces.baseOf(key)!;
     const cache = store.cacheDir();
-    // A two-hour file: 120 pieces, the second one here.
+    // A two-hour file: 120 pieces; the second one here, which the clip plays, and the sixth, which nothing plays.
     const layout = { ...pieces.plan("drive:longFile0001", "edit/originals/drive/longFile0001/long.mp4", 7200, 30, 1920, 1080, true), head: 1, total: 1 };
     const write = (path: string, text: string) => {
       fs.mkdirSync(path.slice(0, path.lastIndexOf("/")), { recursive: true });
@@ -123,6 +123,7 @@ test("a pieced proxy's pieces here are cut into files the window reads instead o
     };
     write(localPath(cache, `${base}/layout.json`), JSON.stringify(layout));
     write(localPath(cache, `${base}/video/1.m4s`), "piece");
+    write(localPath(cache, `${base}/video/5.m4s`), "piece");
     await store.update(id, "test", (p) => {
       p.media.push({ ...media({ id: "long", name: "long.mp4", path: "https://r2.example/long", kind: "video", duration: 7200 }), cloud: { proxy: key } } as never);
       p.clips.push(clip({ id: "c1", type: "video", track: "v1", media: "long", start: 0, duration: 30, source_in: 65 }));
@@ -140,6 +141,7 @@ test("a pieced proxy's pieces here are cut into files the window reads instead o
       expect(first.excerpts).toEqual({});
       await Bun.sleep(10);
       const file = localPath(cache, `${base}/native/1.mp4`);
+      // Only what the timeline plays is cut: a cut piece is a second copy of its minute.
       expect(cuts).toEqual([[url, 60, 120, file]]);
       const second = await ask();
       expect(second.sources.long).toBe(url);
@@ -149,6 +151,26 @@ test("a pieced proxy's pieces here are cut into files the window reads instead o
     }
   } finally {
     reset();
+    cleanup();
+  }
+});
+
+// The real cut, where the test above stands in for it: nothing made the pieces' folder, so on a real Mac every cut
+// failed ("Error opening output files: No such file or directory", JJ's Mac, Nov 10) while that test passed.
+test.skipIf(Bun.which("ffmpeg") === null)("a piece is cut into a folder nothing has made yet, and lands whole", async () => {
+  const { dir, cleanup } = fixtureHome("native-sources-cut");
+  try {
+    const footage = `${dir}/footage.mp4`;
+    const made = Bun.spawnSync(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "testsrc=d=4:s=160x90:r=30", "-g", "30", "-pix_fmt", "yuv420p", footage]);
+    expect(made.exitCode).toBe(0);
+    const out = `${dir}/pieces/youtube/abc/native/1.mp4`;
+    await hooks.cut(footage, 1, 3, out);
+    expect(fs.statSync(out).size).toBeGreaterThan(1000);
+    expect(fs.readdirSync(`${dir}/pieces/youtube/abc/native`)).toEqual(["1.mp4"]);
+    // One that fails leaves nothing the window would take for a piece.
+    await expect(hooks.cut(`${dir}/missing.mp4`, 0, 1, `${dir}/pieces/youtube/abc/native/2.mp4`)).rejects.toThrow();
+    expect(fs.readdirSync(`${dir}/pieces/youtube/abc/native`)).toEqual(["1.mp4"]);
+  } finally {
     cleanup();
   }
 });

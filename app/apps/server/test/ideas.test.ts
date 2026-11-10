@@ -525,16 +525,114 @@ test("a run's ending survives a cloud save that fails: kept in jobs.json, and sa
   }
 });
 
-test("a run a restart cut short (listed, no ending) is marked stopped by its resumer, without a turn of Claude's", async () => {
+test("a run a restart cut short from a build that didn't keep what was asked is marked stopped by its resumer, without a turn of Claude's", async () => {
   const startedAt = Date.now() - 60_000;
   const mine = videoIdea("i13-test");
   mine.run = { what: "chat", state: "running", holder: "test-mac", by: "Sphe", startedAt, renewedAt: startedAt };
   await cloud.commit(mine, 0, "Sphe");
+  let asked = 0;
+  run.asking.ask = async () => {
+    asked++;
+    throw new Error("not asked");
+  };
   const key = jobs.begin(home, "idea", "i13-test", { holder: "test-mac", by: "Sphe", what: "chat", startedAt });
-  run.resumeRun(home, jobs.get(home, key)!);
+  await run.resumeRun({ home, port: 7700 }, jobs.get(home, key)!);
   for (let tries = 0; tries < 100 && jobs.get(home, key) !== undefined; tries++) await Bun.sleep(10);
   expect(rows.get("i13-test")!.body.run).toMatchObject({ state: "stopped", error: "Edit restarted before Claude finished. Ask again." });
   expect(rows.get("i13-test")!.body.chat).toEqual([]);
+  expect(asked).toBe(0);
+});
+
+/** Waits for `check` to hold (at most a couple of seconds). */
+async function until(check: () => boolean): Promise<void> {
+  for (let tries = 0; tries < 200 && !check(); tries++) await Bun.sleep(10);
+}
+
+test("an update stops a run without an ending, and the next start carries it on: the person's message once, Claude told, the same run done", async () => {
+  await cloud.commit(videoIdea("i15-test"), 0, "Sphe");
+  let asks = 0;
+  // Claude, on the turn the update cuts: it works until it's stopped.
+  run.asking.ask = (question) => {
+    asks++;
+    return new Promise((_, reject) => question.signal?.addEventListener("abort", () => reject(new Error("Stopped by you. Completed work is saved.")), { once: true }));
+  };
+  await run.chat(context(), "i15-test", "drop the dad one");
+  await until(() => asks === 1);
+  const key = jobs.keyOf("idea", "i15-test");
+  const startedAt = rows.get("i15-test")!.body.run!.startedAt;
+  try {
+    await run.prepareRestart(2_000);
+    // Let go with no ending: the job as it was (what was asked kept), the cloud's run still this Mac's, no answer of Claude's.
+    expect(run.isRunning("i15-test")).toBe(false);
+    expect(jobs.get(home, key)).toMatchObject({ state: "running", args: { holder: "test-mac", by: "Sphe", what: "chat", startedAt, asked: "drop the dad one", options: {} } });
+    expect(jobs.get(home, key)!.args.ending).toBeUndefined();
+    expect(rows.get("i15-test")!.body.run).toMatchObject({ state: "running", holder: "test-mac", startedAt });
+    // A message sent while Edit restarts is left for the next start too.
+    await cloud.commit(videoIdea("i16-test"), 0, "Sphe");
+    await run.chat(context(), "i16-test", "another angle");
+    await until(() => !run.isRunning("i16-test"));
+    expect(jobs.get(home, jobs.keyOf("idea", "i16-test"))!.args).toMatchObject({ asked: "another angle" });
+    expect(jobs.get(home, jobs.keyOf("idea", "i16-test"))!.args.ending).toBeUndefined();
+    expect(asks).toBe(1);
+  } finally {
+    run.restart.preparing = false;
+  }
+  // The next start: the same run carried on.
+  const seen = claudeCalls([], "Dropped it.");
+  await run.resumeRun({ home, port: 7700 }, jobs.get(home, key)!);
+  expect(run.isRunning("i15-test")).toBe(true);
+  const idea = await settled("i15-test");
+  expect(seen.prompt).toContain("# Carrying on\nEdit restarted while you were on this.");
+  expect(seen.prompt).toContain("# The person asks\ndrop the dad one");
+  expect(idea.chat.map((turn) => [turn.role, turn.text])).toEqual([["you", "drop the dad one"], ["claude", "Dropped it."]]);
+  expect(idea.run).toMatchObject({ what: "chat", state: "done", holder: "test-mac", startedAt });
+  expect(jobs.get(home, key)).toBeUndefined();
+  // The message sent during the restart, carried on too.
+  claudeCalls([], "Here's another.");
+  await run.resumeRun({ home, port: 7700 }, jobs.get(home, jobs.keyOf("idea", "i16-test"))!);
+  expect((await settled("i16-test")).chat.map((turn) => turn.text)).toEqual(["another angle", "Here's another."]);
+});
+
+test("a run the restart cut as its ending was noted is never run again; one Edit was away from too long, or no longer this Mac's, isn't carried on", async () => {
+  let asks = 0;
+  run.asking.ask = async () => {
+    asks++;
+    throw new Error("not asked");
+  };
+  const startedAt = Date.now() - 60_000;
+  const cut = (id: string, holder = "test-mac", at = startedAt) => {
+    const idea = videoIdea(id);
+    idea.chat = [{ role: "you", text: "go on", at, by: "Sphe" }];
+    idea.run = { what: "chat", state: "running", holder, by: "Sphe", startedAt: at, renewedAt: at };
+    return cloud.commit(idea, 0, "Sphe");
+  };
+  const kept = { holder: "test-mac", by: "Sphe", what: "chat", startedAt, options: {}, asked: "go on" };
+  // Its ending noted (Claude had answered): saved as it was, Claude not asked again.
+  await cut("i17-test");
+  const ended = jobs.begin(home, "idea", "i17-test", kept);
+  runLease.ended(home, ended, { ...kept, state: "done", text: "Gone on.", endedAt: Date.now() });
+  await run.resumeRun({ home, port: 7700 }, jobs.get(home, ended)!);
+  await until(() => jobs.get(home, ended) === undefined);
+  expect(rows.get("i17-test")!.body.run!.state).toBe("done");
+  expect(rows.get("i17-test")!.body.chat.map((turn) => turn.text)).toEqual(["go on", "Gone on."]);
+  // Edit away longer than a restart: marked stopped.
+  await cut("i18-test");
+  const away = jobs.begin(home, "idea", "i18-test", kept);
+  const file = `${home}/jobs.json`;
+  const listed = JSON.parse(fs.readFileSync(file, "utf8")) as jobs.Job[];
+  listed.find((one) => one.key === away)!.updated_ms = Date.now() - jobs.TURN_RESUME_MS - 60_000;
+  fs.writeFileSync(file, JSON.stringify(listed));
+  await run.resumeRun({ home, port: 7700 }, jobs.get(home, away)!);
+  await until(() => jobs.get(home, away) === undefined);
+  expect(rows.get("i18-test")!.body.run).toMatchObject({ state: "stopped", error: "Edit restarted before Claude finished. Ask again." });
+  // Another Mac took it once the lease lapsed: theirs left alone, the job crossed off.
+  await cut("i19-test", "other-mac", Date.now());
+  const taken = jobs.begin(home, "idea", "i19-test", kept);
+  await run.resumeRun({ home, port: 7700 }, jobs.get(home, taken)!);
+  await until(() => jobs.get(home, taken) === undefined);
+  expect(jobs.get(home, taken)).toBeUndefined();
+  expect(rows.get("i19-test")!.body.run).toMatchObject({ state: "running", holder: "other-mac" });
+  expect(asks).toBe(0);
 });
 
 test("a run is held by a lease its Mac renews while it goes; another Mac takes it only once the lease has lapsed", async () => {

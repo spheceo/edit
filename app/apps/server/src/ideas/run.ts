@@ -66,9 +66,27 @@ async function slot<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-type Running = { turn: live.Turn; abort: AbortController; step: string; startedAt: number; ending?: true };
+/** `stopped`: by the person (its ending is theirs), not by a restart. */
+type Running = { turn: live.Turn; abort: AbortController; step: string; startedAt: number; ending?: true; stopped?: true };
 /** The runs on this Mac, by idea: their live turn (what Claude has said, its tools) and how to stop them. */
 const runs = new Map<string, Running>();
+
+/** Set once Edit is about to restart itself (`prepareRestart`); tests set it back. */
+export const restart = { preparing: false };
+
+/**
+ * Before Edit restarts itself (update.onPrepare, ideas/index.ts): each run is
+ * stopped without an ending, its job left as it was, so the next start
+ * carries it on (`resumeRun`). An update used to wait for every run (Sphe,
+ * Nov 10: "let Update go through at any time"). Waits at most `waitMs` for
+ * them to let go; one already saving how it ended is left to land.
+ */
+export async function prepareRestart(waitMs = 10_000): Promise<void> {
+  restart.preparing = true;
+  for (const one of runs.values()) if (one.ending !== true) one.abort.abort();
+  const until = Date.now() + waitMs;
+  while ([...runs.values()].some((one) => one.ending !== true) && Date.now() < until) await Bun.sleep(50);
+}
 
 /** What a run on this Mac is doing now, for the page. */
 export function liveOf(id: string): Pick<IdeaRun, "said" | "tools" | "step"> | null {
@@ -86,6 +104,7 @@ export const anyRunning = (): boolean => runs.size > 0;
 export function stop(id: string): boolean {
   const run = runs.get(id);
   if (run === undefined) return false;
+  run.stopped = true;
   run.abort.abort();
   return true;
 }
@@ -591,11 +610,12 @@ type Ending = { state: IdeaRun["state"]; error?: string; text: string };
  */
 export async function repackage(context: Context, id: string, options: { improve?: boolean; changes?: boolean } = {}): Promise<void> {
   if (runs.has(id)) throw new Error("Claude is already working on this idea.");
-  await begin(context, id, "repackage", (idea) => {
+  const kept = { ...(options.improve ? { improve: true } : {}), ...(options.changes ? { changes: true } : {}) };
+  await begin(context, id, "repackage", { options: kept, asked: null }, (idea) => {
     const asked = options.changes ? "Make the changes the reviewers asked for." : options.improve ? "Improve this case's titles: it's already on the board." : "Repackage this case.";
     idea.chat = [...idea.chat, { role: "you" as const, text: idea.steer && !options.changes ? `${asked} Angle: ${idea.steer}` : asked, at: Date.now(), by: context.by }].slice(-KEPT_TURNS);
   });
-  void work(context, id, "repackage", options, null);
+  void work(context, id, "repackage", kept, null);
 }
 
 /** A turn of the conversation about an idea. */
@@ -604,7 +624,7 @@ export async function chat(context: Context, id: string, text: string, images: I
   if (asked === "") throw new Error("Write what you'd like changed.");
   if ([...asked].length > 4000) throw new Error("Keep the message under 4,000 characters.");
   if (runs.has(id)) throw new Error("Claude is already working on this idea: wait for it, or stop it.");
-  await begin(context, id, "chat", (idea) => {
+  await begin(context, id, "chat", { options: {}, asked }, (idea) => {
     idea.chat = [...idea.chat, { role: "you" as const, text: asked, at: Date.now(), by: context.by, ...(images.length > 0 ? { images } : {}) }].slice(-KEPT_TURNS);
   });
   void work(context, id, "chat", {}, asked);
@@ -613,8 +633,12 @@ export async function chat(context: Context, id: string, text: string, images: I
 /** A run's job in jobs.json: its lease while it runs, then its ending until the cloud has it. */
 const jobOf = (id: string): string => jobs.keyOf("idea", id);
 
-/** Marks the run queued in the cloud (refused while another Mac holds one), and lists it. */
-async function begin(context: Context, id: string, what: IdeaRun["what"], also: (idea: Idea) => void): Promise<void> {
+/** What a run's job keeps: its lease's holder, who asked, and what was asked, to carry it on after a restart (`resumeRun`). */
+type Kept = { holder: string; by: string; what: IdeaRun["what"]; startedAt: number; options?: Options; asked?: string | null };
+type Options = { improve?: boolean; changes?: boolean };
+
+/** Marks the run queued in the cloud (refused while another Mac holds one), and lists it with what was asked. */
+async function begin(context: Context, id: string, what: IdeaRun["what"], asked: Pick<Kept, "options" | "asked">, also: (idea: Idea) => void): Promise<void> {
   // The last run's ending first, if it hasn't landed: the new run would take its place.
   await runLease.land(context.home, jobOf(id), (ending) => saveEnding(id, ending), "ideas");
   const startedAt = Date.now();
@@ -624,8 +648,10 @@ async function begin(context: Context, id: string, what: IdeaRun["what"], also: 
     idea.run = { what, state: "queued", holder: context.holder, by: context.by, startedAt, renewedAt: startedAt, step: "Waiting for a turn" };
     also(idea);
   });
-  jobs.begin(context.home, "idea", id, { holder: context.holder, by: context.by, what, startedAt }, "", "queued");
+  jobs.begin(context.home, "idea", id, { holder: context.holder, by: context.by, what, startedAt, ...asked } satisfies Kept, "", "queued");
   runs.set(id, { turn: { text: "", trace: [], startedAt }, abort: new AbortController(), step: "Waiting for a turn", startedAt });
+  // Asked as Edit restarts: left for the next start to carry on.
+  if (restart.preparing) runs.get(id)!.abort.abort();
 }
 
 /** Renews this Mac's lease on a run while it goes. */
@@ -663,21 +689,59 @@ async function saveEnding(id: string, given: Record<string, unknown>, named?: (t
 }
 
 /**
- * A run a restart cut short (serve.ts's resumer for `idea`): its noted ending
- * saved, or, cut short before it ended, marked stopped, until the cloud has it.
+ * A run a restart cut short (serve.ts's resumer for `idea`). One whose ending
+ * was noted before it: that ending saved, never run again. One cut short
+ * before it ended, with Edit back soon (an update, remote support's restart, a
+ * crash; within jobs.TURN_RESUME_MS, as agent turns): carried on as the same
+ * run, Claude told that what it saved is there (Sphe, Nov 10: an update goes
+ * through at any time, and what it cuts carries on by itself). Away longer,
+ * from a build that didn't keep what was asked, or no longer this Mac's run:
+ * marked stopped, until the cloud has it.
  */
-export function resumeRun(home: string, job: jobs.Job): void {
+export async function resumeRun(place: Pick<Context, "home" | "port">, job: jobs.Job): Promise<void> {
   const id = job.project;
   if (runs.has(id)) return;
   if (job.args.ending === undefined) {
-    const { holder, by, what, startedAt } = job.args as { holder: string; by: string; what: IdeaRun["what"]; startedAt: number };
+    const carried = await carryOn(place, job).catch((error: unknown) => {
+      diag.warn("ideas", `${id}: carrying on the run the restart cut short: ${diag.messageOf(error)}`);
+      return false;
+    });
+    // Carried on, or a run asked here meanwhile took its place.
+    if (carried || runs.has(id)) return;
+    const { holder, by, what, startedAt } = job.args as Kept;
     const text = "Edit restarted before Claude finished. Ask again.";
-    runLease.ended(home, job.key, { what, state: "stopped", error: text, text, holder, by, startedAt, endedAt: Date.now(), interrupted: true } satisfies Noted);
+    runLease.ended(place.home, job.key, { what, state: "stopped", error: text, text, holder, by, startedAt, endedAt: Date.now(), interrupted: true } satisfies Noted);
   }
-  void runLease.land(home, job.key, (ending) => saveEnding(id, ending), "ideas");
+  void runLease.land(place.home, job.key, (ending) => saveEnding(id, ending), "ideas");
 }
 
-async function work(context: Context, id: string, what: IdeaRun["what"], options: { improve?: boolean; changes?: boolean }, asked: string | null): Promise<void> {
+/** Carries on a run a restart cut short, when it's still this Mac's and Edit wasn't away long: whether it did. */
+async function carryOn(place: Pick<Context, "home" | "port">, job: jobs.Job): Promise<boolean> {
+  const id = job.project;
+  const kept = job.args as Kept;
+  if (kept.options === undefined || kept.asked === undefined || Date.now() - job.updated_ms > jobs.TURN_RESUME_MS) return false;
+  // The lease renewed as it's taken back, so the page shows it going, and another Mac never takes it meanwhile.
+  let ours = false;
+  await cloud.change(id, kept.by, (idea) => {
+    const run = idea.run;
+    ours = run !== null && run.holder === kept.holder && run.startedAt === kept.startedAt && (run.state === "running" || run.state === "queued");
+    if (!ours) return false;
+    idea.run = { ...run!, state: "queued", renewedAt: Date.now(), step: "Waiting for a turn" };
+  });
+  if (!ours || runs.has(id)) return false;
+  // The same run: its start kept, so its lease and its ending (saveEnding) still match it.
+  runs.set(id, { turn: { text: "", trace: [], startedAt: Date.now() }, abort: new AbortController(), step: "Waiting for a turn", startedAt: kept.startedAt });
+  if (restart.preparing) runs.get(id)!.abort.abort();
+  diag.info("ideas", `${id}: carrying on the ${kept.what} the restart cut short`);
+  void work({ ...place, holder: kept.holder, by: kept.by }, id, kept.what, kept.options, kept.asked, true);
+  return true;
+}
+
+/** Stopped by Edit restarting itself (`prepareRestart`), not by the person: left for the next start to carry on. */
+const cutByRestart = (running: Running, ending: Ending): boolean => restart.preparing && running.abort.signal.aborted && running.stopped !== true && ending.state === "stopped";
+
+/** A run, from its queue to its ending. `carried`: carried on after a restart cut it short (Claude is told). */
+async function work(context: Context, id: string, what: IdeaRun["what"], options: Options, asked: string | null, carried = false): Promise<void> {
   const running = runs.get(id)!;
   const signal = running.abort.signal;
   let ending: Ending;
@@ -751,6 +815,7 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
         recent.length > 0 ? `# The conversation so far\n${recent.join("\n\n")}` : "",
         "# The chat\nThe person reads your words as Markdown, and it shows pictures: ![what it is](a picture's file path or image id).",
         attached.length > 0 ? `# Pictures the person attached to this message (Read them)\n${attached.map((one) => `- ${one}`).join("\n")}` : "",
+        carried ? "# Carrying on\nEdit restarted while you were on this. What you saved before it is in the idea as it is now; carry on from there rather than doing it again." : "",
         what === "chat"
           ? `# The person asks\n${asked}`
           : `# The task\n${options.changes ? "Make the changes the reviewers asked for." : "Repackage this case."} Steer: ${idea.steer.trim() || "none"}. Summary: ${idea.wantsSummary ? "asked for" : "not asked for"}.`,
@@ -783,6 +848,12 @@ async function work(context: Context, id: string, what: IdeaRun["what"], options
   const tools = toolsOf(running.turn);
   const workedMs = Date.now() - running.turn.startedAt;
   if (folder !== null) fs.rmSync(folder, { recursive: true, force: true });
+  if (cutByRestart(running, ending)) {
+    // No ending: its job stays as it was and the cloud's run this Mac's, so the next start carries it on (resumeRun).
+    runs.delete(id);
+    diag.info("ideas", `${id}: Edit is restarting; the ${what} carries on after it`);
+    return;
+  }
   // Noted before the cloud is told, and saved until it lands (run_lease.ts); still running here until the first try's done,
   // so a look in between never sees it not running with its run still "running".
   const noted: Noted = { what, state: ending.state, text: ending.text, ...(ending.error ? { error: ending.error } : {}), ...(tools.length > 0 ? { tools } : {}), workedMs, holder: context.holder, by: context.by, startedAt: running.startedAt, endedAt: Date.now() };

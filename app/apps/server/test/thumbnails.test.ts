@@ -4,8 +4,13 @@ import { addComment, canonical, commentOf, editComment, describeComments, design
 import { baseBrief, changed, fresh, pickModel } from "../src/thumbnails/run.ts";
 import type { Model } from "../src/thumbnails/openart.ts";
 import { paramsOf, stateOf } from "../src/thumbnails/openart.ts";
+import * as cloud from "../src/thumbnails/cloud.ts";
 import { withStops } from "../src/thumbnails/cloud.ts";
-import { HOUSE_SHADOW, NO_ADJUST, type ImageLayer } from "@edit/types/thumbnails";
+import * as jobs from "../src/jobs.ts";
+import * as run from "../src/thumbnails/run.ts";
+import { scratch } from "./helpers/home.ts";
+import { MockServer } from "./mocks/server.ts";
+import { HOUSE_SHADOW, NO_ADJUST, type ImageLayer, type Thumbnail } from "@edit/types/thumbnails";
 import { adjustPixels, blurPixelsAlpha, captionShadow, shadowMetrics, shownText, type Context } from "@edit/types/thumbnail_render";
 import { sizeOf } from "../src/thumbnails/size.ts";
 
@@ -311,4 +316,69 @@ test("where the canvas won't blur (WebKit, the desktop window), the shadow's blu
   expect(alpha(40 + sigma)).toBeCloseTo(0.16, 1);
   expect(alpha(20)).toBeCloseTo(1, 1);
   expect(alpha(60)).toBeCloseTo(0, 1);
+});
+
+test("an update stops a thumbnail's turn without an ending, and the next start carries it on: the person's message once, the same turn done", async () => {
+  // mamagi's thumbnails functions, in memory.
+  const rows = new Map<string, { body: Thumbnail; rev: number }>();
+  const mock = MockServer.start();
+  const restore = mock.useEnv({ EDIT_RELAY_TOKEN: "test-token" });
+  const { dir: home, cleanup } = scratch("thumbnail-restart");
+  mock.on("POST", "/v1/ideas/convex", (request) => {
+    const { path, args } = request.json<{ path: string; args: Record<string, unknown> }>();
+    const ok = (value: unknown) => Response.json({ status: "success", value });
+    const id = args.thumbId as string;
+    if (path === "thumbnails:get") return ok(rows.has(id) ? rows.get(id)! : null);
+    if (path === "thumbnails:listAssets") return ok([]);
+    const rev = rows.get(id)?.rev ?? 0;
+    if (args.baseRev !== rev) return Response.json({ status: "error", errorMessage: "conflict", errorData: { code: "conflict", message: "conflict" } });
+    rows.set(id, { body: args.body as Thumbnail, rev: rev + 1 });
+    return ok({ rev: rev + 1 });
+  });
+  const ask = run.hooks.ask;
+  try {
+    await cloud.commit(fresh("t-restart", "Sphe", "Mom Lies", ""), 0, "Sphe");
+    const context = { origin: "http://127.0.0.1:7700", port: 7700, cacheDir: `${home}/cache`, home, holder: "test-mac", by: "Sphe" };
+    let asks = 0;
+    let prompt = "";
+    // Claude, on the turn the update cuts: it works until it's stopped.
+    run.hooks.ask = (question) => {
+      asks++;
+      prompt = question.prompt;
+      return new Promise((_, reject) => question.signal?.addEventListener("abort", () => reject(new Error("Stopped by you. Completed work is saved.")), { once: true }));
+    };
+    await run.chat(context, "t-restart", "make him look guiltier", []);
+    for (let tries = 0; tries < 200 && asks === 0; tries++) await Bun.sleep(10);
+    const key = jobs.keyOf("thumbnail", "t-restart");
+    const startedAt = rows.get("t-restart")!.body.run!.startedAt;
+    try {
+      await run.prepareRestart(2_000);
+    } finally {
+      run.restart.preparing = false;
+    }
+    expect(run.isRunning("t-restart")).toBe(false);
+    expect(jobs.get(home, key)).toMatchObject({ state: "running", args: { holder: "test-mac", by: "Sphe", startedAt, asked: "make him look guiltier", images: [] } });
+    expect(jobs.get(home, key)!.args.ending).toBeUndefined();
+    expect(rows.get("t-restart")!.body.run).toMatchObject({ state: "running", holder: "test-mac", startedAt });
+    // The next start: the same turn carried on, Claude told.
+    run.hooks.ask = async (question) => {
+      asks++;
+      prompt = question.prompt;
+      return { structured: null, text: "Darker eyes now.", session: null, costUsd: 0, result: {}, replies: 1, biggestReply: 0 };
+    };
+    await run.resumeRun({ origin: context.origin, port: context.port, cacheDir: context.cacheDir, home }, jobs.get(home, key)!);
+    for (let tries = 0; tries < 200 && (run.isRunning("t-restart") || jobs.get(home, key) !== undefined); tries++) await Bun.sleep(10);
+    expect(asks).toBe(2);
+    expect(prompt).toContain("# Carrying on\nEdit restarted while you were on this turn.");
+    expect(prompt).toContain("# The person asks\nmake him look guiltier");
+    const thumb = rows.get("t-restart")!.body;
+    expect(thumb.chat.map((turn) => [turn.role, turn.text])).toEqual([["you", "make him look guiltier"], ["claude", "Darker eyes now."]]);
+    expect(thumb.run).toMatchObject({ state: "done", holder: "test-mac", startedAt });
+    expect(jobs.get(home, key)).toBeUndefined();
+  } finally {
+    run.hooks.ask = ask;
+    restore();
+    mock.stop();
+    cleanup();
+  }
 });

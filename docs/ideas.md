@@ -71,7 +71,10 @@ again on top (`ideas/cloud.ts`).
    sentence of 30 words or fewer. A refusal says why and Claude fixes it in
    the same turn. A run is done with 3–5 titles and the guide.
 4. Three runs at a time on a Mac. What someone wrote by hand (a title, the
-   guide) stays on a fresh run. A run cut off by a restart is marked stopped.
+   guide) stays on a fresh run. A run an update or a restart cuts off carries
+   on by itself once Edit is back within ten minutes: the same run, the
+   person's message once, Claude told that what it saved is there (Nov 10: an
+   update no longer waits for a run). Away longer, it's marked stopped.
 
 The page's conversation runs the same way: "another angle", "drop the dad
 one", "make the dress title the main one".

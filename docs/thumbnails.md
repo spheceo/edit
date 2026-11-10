@@ -86,6 +86,12 @@ drops what redo had.
 Pictures dropped or pasted anywhere on the page join the thumbnail and go to
 Claude with the next message.
 
+A turn an update or a restart cuts off carries on by itself once Edit is back
+within ten minutes: the same turn, the person's message once, Claude told that
+what it changed is there (Nov 10: an update no longer waits for a turn). A
+picture OpenArt was making as it was cut may be made again. Away longer, the
+turn is marked stopped.
+
 Versions: one until the person asks for another or for options (each draft is
 a version). Once there are two, they sit side by side under the canvas, each
 drawn as it stands: a click shows one at once, from the layouts and drawings

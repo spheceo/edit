@@ -96,6 +96,40 @@ test("projects: create, read, replace with a stale rev, delete; refusals worded"
   }
 });
 
+test("projects: Bodycam HQ is made only with Edit V2 on and only for bodycam; an ordinary project's file is unchanged", async () => {
+  const { app, home, cleanup } = fixtureHome("server-hq");
+  try {
+    const { send, jsonBody } = client(app);
+    const saved = (id: string) => fs.readFileSync(`${home}/projects/${id}.json`, "utf8");
+    const plain = (await (await send("/api/projects", jsonBody("POST", { name: "Plain" }))).json()) as { project: { id: string } };
+    expect(saved(plain.project.id)).not.toContain('"hq"');
+    const off = await send("/api/projects", jsonBody("POST", { name: "HQ", hq: true }));
+    expect([off.status, await off.json()]).toEqual([400, { error: "Edit V2 is off: turn it on in Settings → Beta." }]);
+    // This fixture's own home, never the machine's.
+    expect((await send("/api/beta", jsonBody("PUT", { v2: true }))).status).toBe(200);
+    const other = await send("/api/projects", jsonBody("POST", { name: "HQ", style: "courtroom", hq: true }));
+    expect([other.status, await other.json()]).toEqual([400, { error: "Only a bodycam project can be Bodycam HQ." }]);
+    expect((await send("/api/projects", jsonBody("POST", { name: "HQ", hq: "yes" }))).status).toBe(422);
+    const made = await send("/api/projects", jsonBody("POST", { name: "HQ", hq: true }));
+    const { project } = (await made.json()) as { project: { id: string; style: string; hq?: boolean } };
+    expect([made.status, project.style, project.hq]).toEqual([200, "bodycam", true]);
+    expect(saved(project.id)).toContain('"hq":true');
+    const { id: _hqId, name: _hqName, ...hqRest } = JSON.parse(saved(project.id)) as Record<string, unknown>;
+    const { id: _id, name: _name, ...plainRest } = JSON.parse(saved(plain.project.id)) as Record<string, unknown>;
+    expect(hqRest).toEqual({ ...plainRest, hq: true });
+    // Home's list says which is HQ.
+    const listed = (await (await send("/api/projects")).json()) as { projects: { id: string; hq?: boolean }[] };
+    expect(listed.projects.find((one) => one.id === project.id)?.hq).toBe(true);
+    expect(listed.projects.find((one) => one.id === plain.project.id)?.hq).toBeUndefined();
+    // With the beta off again, a plain create is as it was.
+    expect((await send("/api/beta", jsonBody("PUT", { v2: false }))).status).toBe(200);
+    const after = (await (await send("/api/projects", jsonBody("POST", { name: "Plain again", hq: false }))).json()) as { project: { id: string } };
+    expect(saved(after.project.id)).not.toContain('"hq"');
+  } finally {
+    cleanup();
+  }
+});
+
 const ffmpeg = Bun.which("ffmpeg");
 
 test.skipIf(ffmpeg === null)("an upload streams to the project's media folder and is imported; refusals say why", async () => {

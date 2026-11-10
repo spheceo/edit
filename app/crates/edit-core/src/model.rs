@@ -77,6 +77,11 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub note: Option<String>,
+    /// Made the new way (Edit V2, a beta; "Bodycam HQ"): its graphics are code
+    /// the agent writes (`Media::effect`), played live from the playhead, and
+    /// its editor is the viewer and the chat. The style stays the kind of video.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hq: bool,
 }
 
 /// The account that started a project (accounts.spheceo.com).
@@ -425,6 +430,13 @@ pub struct Media {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub library: Option<LibraryKind>,
+    /// A coded effect: the name of its folder of code among the project's
+    /// effects (a page that draws any second on request). `path` is what the
+    /// engine plays for it: a still of it until it's rendered, then the
+    /// render. The viewer plays the page itself, live, in its place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub effect: Option<String>,
 }
 
 /// Which half of the team's sound library a sound is from.
@@ -1846,6 +1858,7 @@ impl Project {
             created_by: None,
             origin: None,
             note: None,
+            hq: false,
         };
         for kind in [
             TrackKind::Video,

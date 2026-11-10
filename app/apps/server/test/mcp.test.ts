@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { dispatch, INSTRUCTIONS, registerTool, targetProject, text, toolReference, TOOLS } from "../src/mcp/index.ts";
+import { dispatch, HQ_TOOLS, INSTRUCTIONS, registerTool, targetProject, text, toolReference, TOOLS, toolsFor } from "../src/mcp/index.ts";
 import { handlerFor, unregisterTool, unregistered } from "../src/mcp/registry.ts";
 import { stableStringify } from "../src/stable.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -27,8 +27,11 @@ test("a_scoped_chat_reads_another_project_but_never_edits_it_or_answers_for_it",
 });
 
 test("tool_reference_is_one_short_line_per_tool", () => {
-  const reference = toolReference();
-  expect(reference.trimEnd().split("\n").length).toBe(TOOLS.length);
+  // What every chat is shown; a Bodycam HQ project's (Edit V2) has the effects' three tools as well.
+  const reference = toolReference(toolsFor(false));
+  expect(reference.trimEnd().split("\n").length).toBe(TOOLS.length - HQ_TOOLS.length);
+  expect(toolReference(toolsFor(true)).trimEnd().split("\n").length).toBe(TOOLS.length);
+  expect(toolReference(toolsFor(true)).length).toBeLessThan(reference.length + 900);
   expect(reference).toContain("- apply_edit_plan(base_rev: integer, operations: array, ");
   // Commentary's posts, video references and shot checks, Edit Script and the team's effects, came in Oct 26;
   // read_upload (any file dropped in, Oct 31) one short line more, note_lesson (the lessons inbox, Nov 1) another,
@@ -40,7 +43,7 @@ test("tool_reference_is_one_short_line_per_tool", () => {
 });
 
 test("every tool takes project_id; the instructions list the skills", () => {
-  expect(TOOLS.length).toBe(101);
+  expect(TOOLS.length).toBe(104);
   for (const tool of TOOLS) {
     expect(tool.inputSchema.type).toBe("object");
     expect(tool.inputSchema.properties.project_id).toEqual({
@@ -75,7 +78,8 @@ test("JSON-RPC: initialize, ping, tools/list, notifications and unknown methods"
       error: { code: -32601, message: "unknown method resources/list" },
     });
     const listed = (await dispatch(app, { id: 4, method: "tools/list" }, null)) as { result: { tools: unknown[] } };
-    expect(listed.result.tools).toEqual(TOOLS);
+    // The effects' tools are listed only to a chat in a project made the new way (test/effects.test.ts).
+    expect(listed.result.tools).toEqual(toolsFor(false));
   } finally {
     cleanup();
   }

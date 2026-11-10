@@ -6,6 +6,7 @@ import { editStyles, makesVideos, useAccount, writesScripts } from "../lib/accou
 import { api, type ProjectStatus, type WriterScriptRow } from "../lib/api";
 import { shareChip } from "../lib/export-face";
 import { hasImportLinks, importPaste } from "../lib/import-input";
+import { loadBeta, useBeta } from "../lib/beta";
 import { cloudApi, type CloudList, type CloudProject, type CloudStatus } from "../lib/cloud";
 import { copyDriveLink, openDrive, useDriveLink } from "../lib/drive";
 import { asleep, laterKey, useLater, type LaterKey } from "../lib/later";
@@ -845,6 +846,9 @@ const STYLE_NOTES: Record<Style, string> = {
   shorts: "9:16 · a video’s highlights in 45–60 s, reframed on the subject, our subtitles, music",
 };
 
+/** Bodycam HQ (Edit V2, Settings → Beta): a bodycam project whose graphics the agent writes as code. */
+const HQ_NOTE = "16:9 · a bodycam case with graphics the agent writes as code (beta)";
+
 export interface NoticeProps {
   tone: "warn" | "bad" | "info";
   text: string;
@@ -1553,7 +1557,7 @@ function TableRow({ subtitled, script = null, ...props }: CardProps & { subtitle
           {project.dev === true && <DevBadge />}
           {card.nameInput === null && note.mark}
         </div>
-        <Category style={project.style} compilation={script?.compilation} />
+        <Category style={project.style} hq={project.hq} compilation={script?.compilation} />
         <StatusCell>
           {aside.entry ? (
             <AsideStatus entry={aside.entry} />
@@ -1989,6 +1993,9 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
   const [text, setText] = useState("");
   const [style, setStyle] = useState<Style>("bodycam");
   const [picked, setPicked] = useState(false);
+  /** Bodycam HQ picked (its pill shows only with Edit V2 on, after Bodycam, for an edit). */
+  const [hq, setHq] = useState(false);
+  const v2 = useBeta((beta) => beta.v2);
   const [prompt, setPrompt] = useState("");
   const [sources, setSources] = useState<Source[] | null>(null);
   /** Several videos: one case or a compilation, as the person said (null: not yet). */
@@ -2015,6 +2022,8 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
   const styles = STYLES.filter((option) => (writing ? writable(option.value) : allowed === null || allowed.has(option.value)));
   const kind = styles.some((option) => option.value === style) ? style : (styles[0]?.value ?? "bodycam");
   const commentary = writing && kind === "commentary";
+  const offersHq = v2 && !writing && styles.some((option) => option.value === "bodycam");
+  const asHq = offersHq && hq && kind === "bodycam";
 
   // A fresh dialog each time.
   useEffect(() => {
@@ -2029,7 +2038,10 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
     setPreview(null);
     setError(null);
     setPicked(start !== null);
+    setHq(false);
     setMode(writes ? "write" : "edit");
+    // A switch made in Settings on this computer is seen as the dialog opens.
+    void loadBeta().catch(() => {});
     if (start !== null) setStyle(start.style);
     else if (only !== null) setStyle(only);
   }, [open]);
@@ -2166,7 +2178,7 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
         return;
       }
       if (input !== "" && allowed !== null && !allowed.has(kind)) throw new Error("Your account can’t make full edits: an admin can give you an Edit style at accounts.spheceo.com.");
-      const { project } = await api.createProject({ name: title.trim(), style: kind, ...(kind === "shorts" ? SHORTS_FORMAT : FORMAT) });
+      const { project } = await api.createProject({ name: title.trim(), style: kind, ...(asHq ? { hq: true } : {}), ...(kind === "shorts" ? SHORTS_FORMAT : FORMAT) });
       if (input === "") {
         onClose();
         navigate(`/p/${project.id}`);
@@ -2336,23 +2348,26 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
         <div>
           <span className={label}>Kind</span>
           <div className="flex flex-wrap gap-1.5">
-            {styles.map((option) => (
-              <button
-                type="button"
-                key={option.value}
-                title={STYLE_NOTES[option.value]}
-                onClick={() => {
-                  setStyle(option.value);
-                  setPicked(true);
-                }}
-                className={cx(
-                  "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors",
-                  kind === option.value ? "border-line-strong bg-raised text-fg" : "border-line text-muted hover:text-fg",
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
+            {styles
+              .flatMap((option) => (offersHq && option.value === "bodycam" ? [{ ...option, hq: false }, { ...option, label: "Bodycam HQ", hq: true }] : [{ ...option, hq: false }]))
+              .map((option) => (
+                <button
+                  type="button"
+                  key={option.hq ? "bodycam-hq" : option.value}
+                  title={option.hq ? HQ_NOTE : STYLE_NOTES[option.value]}
+                  onClick={() => {
+                    setStyle(option.value);
+                    setHq(option.hq);
+                    setPicked(true);
+                  }}
+                  className={cx(
+                    "flex h-7 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition-colors",
+                    kind === option.value && asHq === option.hq ? "border-line-strong bg-raised text-fg" : "border-line text-muted hover:text-fg",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
           </div>
         </div>
 

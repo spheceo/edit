@@ -21,6 +21,13 @@ export function authority(value: string): { host: string; port: number | null } 
   return { host: url.hostname, port: port === undefined ? null : Number(port) };
 }
 
+let strangers: string | null = null;
+
+/** The one path a page with no origin may read from (GET): the effects' files, under a key in the path itself (effects.ts). */
+export function letStrangersRead(prefix: string): void {
+  strangers = prefix;
+}
+
 /**
  * Refuses a request that names a host this server doesn't answer to, comes
  * from another site's page, or says it's cross-site. Null when it may go on.
@@ -51,6 +58,10 @@ export function checkHost(request: Request, allowed: string[]): Response | null 
     const page = refererOrigin(request.headers.get("referer"));
     if (page !== null && loopbackSibling(page, host)) return null;
   }
+  // A coded effect's page has no origin of its own (effects.ts shuts it in), so what it loads from its own folder
+  // comes as a stranger's request would: an Origin of "null" or none, marked cross-site, and no Referer at all
+  // (Chrome sends none from such a page). Let in by the path alone, which holds a key only Edit's own page is told.
+  if (request.method === "GET" && (origin === null || origin === "null") && strangers !== null && pathname.startsWith(strangers)) return null;
   // Opening Edit from a link in another app (a chat, Slack) is a top-level GET
   // the browser marks cross-site; the page that loads only shows Edit, which
   // the other site can't read or frame (x-frame-options). The API stays
@@ -110,7 +121,8 @@ export const mapSibling = loopbackSibling;
 /** The headers every answer that passed the check carries. */
 export function secure(response: Response): Response {
   response.headers.set("x-content-type-options", "nosniff");
-  response.headers.set("x-frame-options", "DENY");
+  // Nothing of Edit's is framed by anyone, but a coded effect's page, which Edit's own viewer frames: its policy says who may (effects.ts).
+  if (!(response.headers.get("content-security-policy") ?? "").includes("frame-ancestors")) response.headers.set("x-frame-options", "DENY");
   return response;
 }
 

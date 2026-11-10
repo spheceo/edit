@@ -90,8 +90,9 @@ export function KindMark({ kind }: { kind: "edit" | "subtitles" | "script" | "id
 }
 
 /** A row's category: its kind of video, "Compilation" after it when it's over several videos ("Bodycam Compilation"); an idea's niche. */
-export function Category({ style, compilation = false, text: given }: { style?: Style | null; compilation?: boolean; text?: string }) {
-  const label = STYLES.find((option) => option.value === style)?.label ?? "";
+export function Category({ style, hq = false, compilation = false, text: given }: { style?: Style | null; hq?: boolean; compilation?: boolean; text?: string }) {
+  // Bodycam HQ (Edit V2) is a bodycam project with `hq` set, not a style of its own.
+  const label = hq && style === "bodycam" ? "Bodycam HQ" : (STYLES.find((option) => option.value === style)?.label ?? "");
   const text = given ?? (compilation ? `${label} Compilation`.trim() : label);
   return (
     <span role="cell" className={cx("truncate text-[13px] text-secondary", CATEGORY)} title={text || undefined}>

@@ -11,6 +11,7 @@
 //     agent/writer/<name>.md                   Script mode's guides (Repack's, word for word)
 //     agent/ideas/<name>.md                    the ideas' craft (Sphe Research's, word for word)
 //     agent/thumbnails/<name>.md               the thumbnails' craft (Claude making one with the team)
+//     agent/hq/notes.md                        a Bodycam HQ video's rules (Edit V2: graphics written as code, effects.ts)
 //
 // A file may open with frontmatter (`---` lines of `key: value`); a house
 // skill's `description` is its line in the instructions' SKILLS list, which
@@ -127,6 +128,9 @@ export function thumbnailsGuide(name: string): string {
   if (text === undefined) throw new Error(`agent text: no agent/thumbnails/${name}.md`);
   return parse(text).body;
 }
+
+/** What a video made the new way adds to the agent's instructions (agent/hq/notes.md): its graphics are effects it writes as code. */
+export const HQ_NOTES: string = parse(FILES["hq/notes.md"] ?? "").body;
 
 /** Every file's path under agent/ (the test checks each one is used). */
 export const PATHS: readonly string[] = Object.keys(FILES);

@@ -176,6 +176,8 @@ export interface ProjectSummary {
   dev?: boolean;
   /** Its note (`Project::note`), left from Home's ⋯. */
   note?: string;
+  /** A Bodycam HQ project (`Project::hq`, Edit V2): its graphics are code the agent writes. */
+  hq?: boolean;
 }
 
 export type Stage = "pending" | "working" | "ready" | "failed" | "skipped";

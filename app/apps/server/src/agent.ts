@@ -22,7 +22,9 @@ import * as jobs from "./jobs.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
-import { INSTRUCTIONS, toolReference } from "./mcp/index.ts";
+import { HQ_NOTES } from "./agent_text.ts";
+import * as effects from "./effects.ts";
+import { INSTRUCTIONS, toolReference, toolsFor } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
 import { compareStrings, takeChars, charCount } from "./rust.ts";
@@ -819,12 +821,16 @@ export class Agents implements seams.AgentPanel {
     chat.effort = effort ?? chat.effort;
     const workspace = join(this.dir, "workspace");
     fs.mkdirSync(workspace, { recursive: true });
+    // A video made the new way: its agent writes the graphics as code, so it runs in the project's effects folder
+    // with the file tools, each allowed there and nowhere else (checked against Claude Code 2.1.319, Nov 10: a write
+    // or a read outside the folder is refused, with nothing asked), and what it writes is on screen as it's saved.
+    const code = live.project.hq === true ? effects.workshop(this.store, projectOf(project)) : null;
     const options: claude.Options = {
-      ...claude.baseOptions(binary, workspace),
+      ...claude.baseOptions(binary, code ?? workspace),
       model: chat.model ?? this.turnModel(project, text),
       // No built-in tools; Edit's own run without asking, anything else is refused.
-      tools: [],
-      allowedTools: ["mcp__edit"],
+      tools: code === null ? [] : [...effects.FILE_TOOLS],
+      allowedTools: code === null ? ["mcp__edit"] : ["mcp__edit", ...effects.fileRules(code)],
       permissionMode: "dontAsk",
       mcpServers: { edit: { type: "http", url: `http://127.0.0.1:${this.port}/mcp?project=${projectOf(project)}` } },
       systemPrompt: agentInstructions(live.project),
@@ -1608,18 +1614,23 @@ class ClaudeTurn {
 }
 
 /** The developer instructions every turn carries: who the agent is, how to work fast, the house style, every tool on one line. */
-export function agentInstructions(project: Pick<Project, "name" | "style" | "settings">): string {
+export function agentInstructions(project: Pick<Project, "name" | "style" | "settings" | "hq">): string {
   const { settings } = project;
+  const hq = project.hq === true;
+  // A video made the new way (effects.ts): its agent also writes code, in the project's effects folder and nowhere else.
+  const hands = hq
+    ? "Edit through the `edit` tools, and write this video's graphics as code with your file tools (Read, Write, Edit, Glob, Grep), which work only in your working directory, the project's effects folder; you have no shell. "
+    : "Edit only through the `edit` tools; you have no shell or files. ";
   const waiting = "Slow tools (watch_footage, caption_speakers, map_view, export) answer when they're done: start them as early as their inputs allow and never call one again to check on it. ";
   const tools = "The edit tools (call them directly; every one is listed here)";
   return (
     `You are the agent built into Edit, a video editor. The user is watching the editor while you work: every change you make through the \`edit\` tools appears live on their timeline and can be undone with ⌘Z. ` +
-    `Edit only through the \`edit\` tools; you have no shell or files. The project is "${project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps). ` +
+    `${hands}The project is "${project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps). ` +
     "Every tool call is a round trip the user waits on, so work in as few as you can (see WORK FAST): start with get_edit_context (narrowed to the part you're working on; never get_project), make the changes you've decided in one apply_edit_plan and the tools that place sounds, images or text in one batch, then look once with the plan's review_frames or one contact_sheet and fix only what's actually wrong. Don't re-read what you've read or re-check work that hasn't changed. " +
     "Independent tool calls (lookups, renders) can go in one step, side by side. " +
     waiting +
     "When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. When asked to resume, recover or finish a partially edited/imported project, load resume-edit first and preserve completed work. For other requests, load the skill for the part you're working on (see SKILLS). " +
-    `Keep replies short: say what you changed and where (timecodes).\n\n${INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}\n\n${tools}:\n${toolReference()}`
+    `Keep replies short: say what you changed and where (timecodes).\n\n${INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}${hq ? `\n\n${HQ_NOTES}` : ""}\n\n${tools}:\n${toolReference(toolsFor(hq))}`
   );
 }
 

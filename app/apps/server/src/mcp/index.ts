@@ -15,11 +15,11 @@ import { readJson, type RouteContext } from "../http/router.ts";
 import { stableStringify } from "../stable.ts";
 import { VERSION } from "../version.ts";
 import { INSTRUCTIONS } from "./instructions.ts";
-import { handlerFor, registerTool, text, TOOLS, type Content } from "./registry.ts";
+import { handlerFor, registerTool, text, TOOLS, toolsFor, type Content } from "./registry.ts";
 
 export { INSTRUCTIONS } from "./instructions.ts";
 export { toolReference } from "./reference.ts";
-export { image, registerTool, text, TOOLS, type Content, type ToolCall, type ToolHandler } from "./registry.ts";
+export { HQ_TOOLS, image, registerTool, text, TOOLS, toolsFor, type Content, type ToolCall, type ToolHandler } from "./registry.ts";
 export { stableStringify } from "../stable.ts";
 
 /** Who agent edits come from (clients skip their own echo by it). */
@@ -70,7 +70,7 @@ export async function dispatch(app: App, message: unknown, scope: string | null)
       result = {};
       break;
     case "tools/list":
-      result = { tools: TOOLS };
+      result = { tools: toolsFor(scope !== null && app.store.get(scope)?.project.hq === true) };
       break;
     case "tools/call": {
       const tool = typeof given.name === "string" ? given.name : "";

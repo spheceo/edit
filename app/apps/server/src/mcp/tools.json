@@ -3530,5 +3530,84 @@
       "type": "object"
     },
     "name": "add_cut_in"
+  },
+  {
+    "description": "Look at a coded effect (a Bodycam HQ project): stills of it at the seconds you give, drawn by the same page the viewer plays, with its length, what a frame costs to play from each of them on this computer (so you know it plays live), and everything its page gets wrong (an error it threw, a rule of the effect contract it breaks). Look after every change, at the moments the change touches: you can't see the effect any other way. The pictures come in the order of `times`.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "description": "The effect: its folder's name under effects/.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "times": {
+          "description": "Seconds into the effect, at most 8 (default: six spread over its length).",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "look_at_effect"
+  },
+  {
+    "description": "Put a coded effect among the project's media (a Bodycam HQ project), so it's placed, moved and cut like footage: answers its media id and length. Place it with add_clip or apply_edit_plan as any video; the viewer plays its page live wherever its clip is. Call it again after changing the effect's length. Refused while the page has an error or breaks the effect contract (look_at_effect says which).",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "description": "The effect: its folder's name under effects/.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "add_effect"
+  },
+  {
+    "description": "Give a coded effect one of the project's pictures (a Bodycam HQ project): a photo as it is, or a video's frame at `time`, copied into the effect's folder, the only place its page can load from. Answers the file's name to use in the page (beside scene.html) and its size in pixels.",
+    "inputSchema": {
+      "properties": {
+        "as": {
+          "description": "What to call the file, without its ending (default: the media's name).",
+          "type": "string"
+        },
+        "media_id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "The effect: its folder's name under effects/.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "time": {
+          "description": "For a video: the second of the frame to take.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "media_id"
+      ],
+      "type": "object"
+    },
+    "name": "effect_picture"
   }
 ]

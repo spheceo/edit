@@ -593,6 +593,7 @@ mod tests {
                 markers: Vec::new(),
                 cloud: None,
                 library: None,
+                effect: None,
             });
             let (v1, v2) = (project.tracks[0].id.clone(), project.tracks[1].id.clone());
             let clip = |id: &str, track: String, content: ClipContent| Clip {

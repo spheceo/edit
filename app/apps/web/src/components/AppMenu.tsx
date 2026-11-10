@@ -1,9 +1,10 @@
-// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens. Settings: who's signed in, notifications, YouTube and updates.
+// The account menu (your avatar at the top right, or across the top of Home's sidebar: you, Manage account, Settings, Logs, Report a problem, Sign out; a ⋯ when signed out) and the dialogs it opens. Settings: who's signed in, notifications, YouTube, updates and the betas.
 
 import { Bug, ChevronDown, Ellipsis, LogIn, LogOut, ScrollText, Settings, UserRound } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { loadAccount, signIn, signOut, useAccount } from "../lib/account";
+import { loadBeta, setBeta, useBeta } from "../lib/beta";
 import { closeDialog, openDialog, useDialogs } from "../lib/dialogs";
 import { buildReport, closeReport, copyText, openReport, useReport } from "../lib/diagnostics";
 import { chooseChannel, useUpdate, watchUpdates, type UpdateChannel } from "../lib/update";
@@ -14,7 +15,7 @@ import { ProblemView } from "./ProblemView";
 import { StartedBy } from "./StartedBy";
 import { ExportFolderPrompt, ExportsSettings } from "./ExportFolder";
 import { StorageSettings } from "./StorageSettings";
-import { Button, cx, IconButton, Modal, Select, Tabs } from "./ui";
+import { Button, cx, IconButton, Modal, Select, Switch, Tabs } from "./ui";
 import { FILE_MANAGER, MOD } from "../lib/platform";
 
 /** `row`: as Home's sidebar has it (the study portal's): the photo, the name and a chevron across the sidebar's top. */
@@ -409,7 +410,7 @@ function NotificationsGroup() {
   );
 }
 
-/** Edit's settings, laid out as Writer's: who's signed in, then YouTube and updates; the build and Done at the foot. */
+/** Edit's settings, laid out as Writer's: who's signed in, then YouTube, updates and the betas; the build and Done at the foot. */
 function SettingsDialog() {
   const person = useAccount((state) => (state.account?.signed_in ? state.account.person : null));
   const status = useUpdate((state) => state.status);
@@ -450,6 +451,7 @@ function SettingsDialog() {
             />
           </Row>
         </Group>
+        <BetaGroup />
       </div>
       <div className="flex items-center gap-3 px-6 pt-5 pb-6">
         <span className="text-[13px] text-faint" title={status?.enabled ? "Built by the release workflow" : "A dev build: it never updates itself"}>
@@ -460,6 +462,26 @@ function SettingsDialog() {
         </Button>
       </div>
     </>
+  );
+}
+
+/** What's being tried before everyone has it, on or off for this computer (lib/beta.ts). */
+function BetaGroup() {
+  const v2 = useBeta((beta) => beta.v2);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void loadBeta().catch(() => {});
+  }, []);
+  const turn = (on: boolean) => {
+    setError(null);
+    setBeta("v2", on).catch((reason: Error) => setError(reason.message));
+  };
+  return (
+    <Group title="Beta">
+      <Row name="Edit V2" detail="Beta. Adds Bodycam HQ to New project: the agent writes each graphic as code, and it plays as soon as it’s written. For this computer." bad={error ?? undefined}>
+        <Switch checked={v2} onChange={turn} />
+      </Row>
+    </Group>
   );
 }
 

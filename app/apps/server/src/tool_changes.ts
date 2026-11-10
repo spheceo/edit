@@ -9,7 +9,7 @@
 
 import { createHash } from "node:crypto";
 
-import { TOOLS } from "./mcp/registry.ts";
+import { toolsFor } from "./mcp/registry.ts";
 import { stableStringify } from "./stable.ts";
 import { allSkillNames } from "./styles.ts";
 
@@ -23,7 +23,8 @@ export interface ToolSchema {
 /** The schema of the build that's running. */
 export function current(): ToolSchema {
   const tools: Record<string, string[]> = {};
-  for (const tool of TOOLS) tools[tool.name] = Object.keys(tool.inputSchema?.properties ?? {}).filter((arg) => arg !== "project_id").sort();
+  // Without the effects' tools: a chat is told of new tools as it resumes, and those are only a Bodycam HQ project's (Edit V2), whose chat has them listed from its first turn.
+  for (const tool of toolsFor(false)) tools[tool.name] = Object.keys(tool.inputSchema?.properties ?? {}).filter((arg) => arg !== "project_id").sort();
   return schemaOf(tools, [...allSkillNames()].sort());
 }
 

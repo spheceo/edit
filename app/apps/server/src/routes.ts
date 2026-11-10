@@ -65,6 +65,8 @@ import "./agent_reports.ts";
 import * as presence from "./presence.ts";
 import * as devProjects from "./dev_projects.ts";
 import * as channelMarks from "./channel_marks.ts";
+import * as beta from "./beta.ts";
+import * as effects from "./effects.ts";
 import { BUILD, VERSION } from "./version.ts";
 import { jsonForSerde } from "./rust.ts";
 import * as remoteSupport from "./remote_support.ts";
@@ -113,6 +115,8 @@ export function buildRouter(): Router<App> {
   memory.routes(router);
   devProjects.routes(router);
   channelMarks.routes(router);
+  beta.routes(router);
+  effects.routes(router);
   archive.routes(router);
   covers.routes(router);
   avatars.routes(router);
@@ -510,10 +514,14 @@ async function createProject(context: Context): Promise<Response> {
     return value;
   };
   const settings = { width: size("width"), height: size("height"), fps: size("fps") };
+  // Bodycam HQ (Edit V2): a bodycam project whose graphics the agent writes as code, only with the beta on.
+  const hq = field<boolean>(given, "hq", "boolean") === true;
+  if (hq && !beta.read(context.app.store.home).v2) throw bad("Edit V2 is off: turn it on in Settings → Beta.");
+  if (hq && style !== "bodycam") throw bad("Only a bodycam project can be Bodycam HQ.");
   if (!kinds.mayStart(style as Style)) throw new ApiError(403, kinds.cantMake(`edit.${style}`));
   let live;
   try {
-    live = context.app.store.createAs(name, style as Style, settings);
+    live = context.app.store.createAs(name, style as Style, settings, hq);
   } catch (error) {
     throw bad(diag.messageOf(error));
   }

@@ -23,4 +23,11 @@ cloud?: CloudMedia,
  * transcribed. Kept here because a cloud copy's `path` (the cache's
  * `originals/sha256/…`) no longer says it came from `library/`.
  */
-library?: LibraryKind, };
+library?: LibraryKind, 
+/**
+ * A coded effect: the name of its folder of code among the project's
+ * effects (a page that draws any second on request). `path` is what the
+ * engine plays for it: a still of it until it's rendered, then the
+ * render. The viewer plays the page itself, live, in its place.
+ */
+effect?: string, };

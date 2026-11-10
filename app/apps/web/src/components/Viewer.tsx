@@ -17,6 +17,7 @@ import { importProgress } from "../lib/import_progress";
 import { toggleNote, useNotes } from "../lib/notes";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
+import { EffectLayer } from "./EffectLayer";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { ProblemView } from "./ProblemView";
 import { WaitingFiles } from "./ScriptPanel";
@@ -208,6 +209,8 @@ export function Viewer() {
         />
         {/* Smooth playback over the canvas; clicks go through to it. */}
         <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
+        {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
+        <EffectLayer wrap={wrap} />
         {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
         {!fullscreen && <NoteBoxLayer wrap={wrap} />}
         {!fullscreen && <NoteDraft />}
@@ -310,6 +313,8 @@ function dragTransform(event: React.PointerEvent, wrap: HTMLDivElement) {
 }
 
 function Transport({ fullscreen }: { fullscreen: boolean }) {
+  // A video made the new way has no timeline on screen (Editor.tsx): the bar full screen has is its way through the edit.
+  const hq = useEditor((state) => state.project?.hq === true);
   const frame = useFrame();
   const playing = usePlaying();
   const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
@@ -320,7 +325,7 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
   const speed = useSpeed();
   return (
     <div className="flex flex-col">
-      {fullscreen && <ScrubBar frame={frame} duration={duration} />}
+      {(fullscreen || hq) && <ScrubBar frame={frame} duration={duration} />}
       <div className={cx("flex h-11 shrink-0 items-center px-3", !fullscreen && "border-t border-line")}>
       <div className="w-[220px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
       <div className="flex flex-1 items-center justify-center gap-0.5">

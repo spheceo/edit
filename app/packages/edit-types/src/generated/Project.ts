@@ -78,4 +78,10 @@ origin?: string,
  * A note someone left on it from Home's ⋯ ("goes on Sam's channel"):
  * the team's, shown beside its name on Home. None when there's none.
  */
-note?: string, };
+note?: string, 
+/**
+ * Made the new way (Edit V2, a beta; "Bodycam HQ"): its graphics are code
+ * the agent writes (`Media::effect`), played live from the playhead, and
+ * its editor is the viewer and the chat. The style stays the kind of video.
+ */
+hq?: boolean, };

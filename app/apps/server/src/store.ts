@@ -411,11 +411,13 @@ export class Store {
     return this.createAs(name, "bodycam", settings);
   }
 
-  /** A new project of a given style (the kind of video). */
-  createAs(name: string, style: Style, settings: Settings): Live {
+  /** A new project of a given style (the kind of video); `hq`, a Bodycam HQ project (Edit V2, beta.ts). */
+  createAs(name: string, style: Style, settings: Settings, hq = false): Live {
     const id = `p${nowMs()}-${nextFileId()}`;
     const trimmed = name.trim() === "" ? "Untitled" : name.trim();
     const project = newProject(id, trimmed, settings, style);
+    // Only when on: an ordinary project's file stays as it was, with no `hq` key.
+    if (hq) project.hq = true;
     const by = creator();
     if (by !== null) project.created_by = by;
     if (this.marksDev) project.origin = "dev";
@@ -787,6 +789,7 @@ function summaryOf(project: Project, modifiedMs: number): ProjectSummary {
   if (project.created_by !== undefined && project.created_by !== null) summary.created_by = project.created_by;
   if (project.origin === "dev") summary.dev = true;
   if (typeof project.note === "string" && project.note !== "") summary.note = project.note;
+  if (project.hq === true) summary.hq = true;
   const missing = missingMedia(project);
   const used = usedMedia(project).length;
   if (used > 0) summary.media_used = used;

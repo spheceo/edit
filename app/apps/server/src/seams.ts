@@ -920,6 +920,8 @@ export interface BrollSeam {
   readonly MAP_EXPORT_WAIT: number;
   /** Chrome on this machine, if any. */
   chrome(): string | null;
+  /** The server's own address as a page in that Chrome reaches it ("127.0.0.1:7700"). */
+  pageHost(app: App): string;
   isMapStandIn(path: string): boolean;
   mapView(app: App, projectId: string, args: Json): Promise<Json>;
   mediaTranscript(app: App, media: Media, from: number, to: number, words: boolean): Promise<string>;

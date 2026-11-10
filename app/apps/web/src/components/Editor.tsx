@@ -5,6 +5,7 @@ import { addElement, addMarker, clipEnd, closeGap, deleteClips, duplicateClips, 
 import { playhead, preview } from "../lib/playback";
 import { api, ApiError } from "../lib/api";
 import { cloudApi } from "../lib/cloud";
+import { loadEffects } from "../lib/effects";
 import { clientId, connectEvents, leave, settled, syncScriptJob, useEditor } from "../lib/store";
 import { clearIn, clearInOut, clearOut, markIn, markOut } from "../lib/inOut";
 import { goToEnd, goToStart, useView } from "../lib/timelineView";
@@ -63,6 +64,9 @@ export function Editor({ id }: { id: string }) {
       .then(({ rev, project }) => {
         if (!alive) return;
         useEditor.getState().load(rev, project);
+        // A video made the new way: its coded effects, which the viewer plays live (lib/effects.ts). Without the
+        // list they show as their stills, and the next change to one brings it.
+        if (project.hq === true) void loadEffects(id).catch(() => {});
         void syncScriptJob(id);
         // A reset the agent was already asking about when the page (re)loaded.
         void api
@@ -122,14 +126,19 @@ export function Editor({ id }: { id: string }) {
           <div className="flex min-h-0 flex-1">
             <Viewer />
           </div>
-          <ResizeBar resizing={resizing} setResizing={setResizing} />
-          <div
-            className="shrink-0"
-            // A reset glides to the default; while dragged it follows the pointer at once.
-            style={{ height: timelineHeight, transition: resizing ? "none" : "height 0.32s cubic-bezier(0.2, 0.7, 0.2, 1)" }}
-          >
-            <Timeline />
-          </div>
+          {/* A video made the new way (Edit V2) is the viewer and the chat: its timeline is the agent's to work, and the viewer's own bar moves through it. */}
+          {project.hq !== true && (
+            <>
+              <ResizeBar resizing={resizing} setResizing={setResizing} />
+              <div
+                className="shrink-0"
+                // A reset glides to the default; while dragged it follows the pointer at once.
+                style={{ height: timelineHeight, transition: resizing ? "none" : "height 0.32s cubic-bezier(0.2, 0.7, 0.2, 1)" }}
+              >
+                <Timeline />
+              </div>
+            </>
+          )}
         </div>
         <ChatDock working={agentWorking}>
           <AgentPanel />
@@ -231,6 +240,8 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
       const key = event.key.toLowerCase();
       const fps = rate(project.settings);
       const handled = () => event.preventDefault();
+      // A video made the new way shows no timeline: the keys that select, cut and place on one do nothing there (a stray S would split a clip nobody can see).
+      if (project.hq === true && (mod ? ["a", "d", "k"].includes(key) : ["s", "backspace", "delete", "v", "c", "m", "n", "g", "t"].includes(key))) return;
 
       if (mod && key === "z") {
         handled();

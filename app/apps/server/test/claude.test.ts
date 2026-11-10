@@ -5,6 +5,7 @@
 import { expect, spyOn, test } from "bun:test";
 
 import * as fs from "node:fs";
+import { join } from "node:path";
 
 import * as jobs from "../src/jobs.ts";
 import * as localPreviews from "../src/local_previews.ts";
@@ -107,6 +108,29 @@ function agentsWith(home: ReturnType<typeof fixtureHome>, hangs = false) {
 }
 
 const stream = (event: Record<string, unknown>) => ({ type: "stream_event", event, parent_tool_use_id: null });
+
+test("a Bodycam HQ project's turn runs in its effects folder with the file tools, allowed there and nowhere else", async () => {
+  const home = fixtureHome("claude-hq");
+  try {
+    const project = home.store.create("HQ test", { width: 1920, height: 1080, fps: 30 }).project.id;
+    await home.store.update(project, "test", (made) => {
+      made.hq = true;
+    });
+    const { agents, asked } = agentsWith(home);
+    await agents.send(project, "Make the evidence board", null, null);
+    const { options } = asked[0]!;
+    const folder = fs.realpathSync(join(home.home, "media", project, "effects"));
+    expect(options.cwd).toBe(folder);
+    expect(options.tools).toEqual(["Read", "Write", "Edit", "Glob", "Grep"]);
+    expect(options.allowedTools).toEqual(["mcp__edit", `Read(/${folder}/**)`, `Edit(/${folder}/**)`, `Write(/${folder}/**)`]);
+    // Still nothing asked and nothing run: a tool that isn't allowed is refused.
+    expect(options.permissionMode).toBe("dontAsk");
+    expect(String(options.systemPrompt)).toContain("THIS IS A BODYCAM HQ VIDEO");
+    expect(String(options.systemPrompt)).toContain("- look_at_effect(name: string, times?: array)");
+  } finally {
+    home.cleanup();
+  }
+});
 
 test("claude is the default provider and a turn streams text and edit tools onto the chat", async () => {
   const home = fixtureHome("claude");

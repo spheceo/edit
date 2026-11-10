@@ -13,6 +13,7 @@ import type { App } from "./app.ts";
 import { parseTranscript } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import * as jobs from "./jobs.ts";
+import { refuseExport as refuseEffectExport } from "./effects.ts";
 import { copyFile, ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { fingerprint } from "./hash.ts";
@@ -921,7 +922,7 @@ export function setListening(host: string, port: number): void {
   listening = { host, port };
 }
 
-function pageHost(app: App): string {
+export function pageHost(app: App): string {
   const address = listening ?? { host: "127.0.0.1", port: app.port };
   const host =
     address.host === "0.0.0.0" || address.host === "::" || address.host === ""
@@ -1226,6 +1227,10 @@ export function isMapStandIn(path: string): boolean {
  * still by mistake.
  */
 export async function waitForMaps(app: App, projectId: string, limitMs: number): Promise<void> {
+  // A coded effect (Edit V2) has no render yet and would export as its still: refused here, the one
+  // place every export (the agent's, the button's, a share's) stops before it starts.
+  const live = app.store.get(projectId);
+  if (live !== null) refuseEffectExport(live.project);
   const started = timing.now();
   // Each stand-in left without its footage is started again once, here,
   // rather than refused (Oct 21: three exports waited on agents to call

@@ -33,6 +33,14 @@ export interface Tool {
 /** Every tool as tools/list declares it. */
 export const TOOLS: Tool[] = declared as unknown as Tool[];
 
+/** The tools of coded effects (effects.ts): offered only in a project made the new way (`Project::hq`), so every other chat's list is what it was. */
+export const HQ_TOOLS: readonly string[] = ["look_at_effect", "add_effect", "effect_picture"];
+
+/** The tools a chat in a project is offered. */
+export function toolsFor(hq: boolean): Tool[] {
+  return hq ? TOOLS : TOOLS.filter((tool) => !HQ_TOOLS.includes(tool.name));
+}
+
 // The skill tool's choices are the skills in agent/ (agent_text.ts), so a new
 // skill file is offered without touching tools.json.
 const skillName = TOOLS.find((tool) => tool.name === "skill")?.inputSchema.properties.name;

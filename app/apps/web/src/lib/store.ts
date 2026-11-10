@@ -805,6 +805,9 @@ export function connectEvents() {
     } else if (event.type === "native-sources" && project && event.id === project.id) {
       // The cleaner took a copy Edit.app's window reads (the server's native_preview.ts): lib/playback.ts asks again.
       window.dispatchEvent(new CustomEvent("edit:native-sources", { detail: event.id }));
+    } else if (event.type === "effects" && project && event.id === project.id) {
+      // A coded effect's files changed (the agent saved one): the viewer loads its page again (lib/effects.ts).
+      window.dispatchEvent(new CustomEvent("edit:effects", { detail: { id: event.id, effects: event.effects } }));
     } else if (event.type === "export" && project && event.id === project.id) {
       useEditor.setState({ exportState: event });
     } else if (event.type === "playback" && project && event.id === project.id) {

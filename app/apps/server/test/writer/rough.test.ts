@@ -164,8 +164,8 @@ test.skipIf(ffmpeg === null)("the exact stage sends Scribe only the chosen stret
     const before = server.requests.length;
     const report = await exact.run(one, dir, file, one.clips, () => {});
     const posted = server.requests.slice(before).filter((request) => request.method === "POST" && request.path.startsWith("/v1/transcribe"));
-    // One request for the one 11.4 s stretch, never the 5 minutes, and never a whole hearing for voices.
-    expect(posted).toHaveLength(exact.pieces(11.4).length);
+    // One request for the one 11.4 s stretch, never the 5 minutes.
+    expect(posted).toHaveLength(1);
     expect(posted.every((request) => request.path === "/v1/transcribe")).toBe(true);
     expect(report.heardMs).toBe(11_400);
     expect(report.footageMs).toBe(300_000);

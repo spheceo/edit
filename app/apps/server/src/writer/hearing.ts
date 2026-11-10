@@ -2,11 +2,9 @@
 // transcription system (transcribe.ts), kept in `work/transcript.json`: one
 // already there that listened for these names is used as it is.
 //
-// Who speaks comes from pyannote while the relay's flag is on (voices.ts), as
-// a project's footage has since Nov 8, so Scribe isn't paid to hear the whole
-// recording a second time for its voices: Writer's recordings are the long
-// ones (JJ's Mac, Nov 4 to 8: 56 hours heard whole on top of the pieces, one
-// part 5 h 33 min), and until Nov 9 this path still asked for both.
+// Scribe hears it once, whole, for its words and who speaks (transcribe.ts);
+// while the relay's flag is on, pyannote's voices are laid over Scribe's
+// (voices.ts; off from Nov 10).
 //
 // In Effect since Nov 1 (docs/plans/2026-11-01-effect.md, round 2, area 1):
 // the stretch is cut by an FFmpeg and into a file the hearing's scope owns,
@@ -47,8 +45,8 @@ export function cached(work: string): transcribe.Transcript | null {
   }
 }
 
-/** Hears `file` (its `span` in ms, or all of it) listening for `keyterms`; times in the transcript are seconds into what was heard. `withVoices` false: words only (exact.ts asks pyannote once for a whole stretch, not per piece). */
-export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [number, number] | null, work: string, keyterms: readonly string[], withVoices: boolean = true) {
+/** Hears `file` (its `span` in ms, or all of it) listening for `keyterms`; times in the transcript are seconds into what was heard. */
+export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [number, number] | null, work: string, keyterms: readonly string[]) {
   fs.mkdirSync(work, { recursive: true });
   const kept = cached(work);
   if (kept !== null && covers(kept.keyterms, keyterms)) return kept;
@@ -64,11 +62,10 @@ export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [
       ).pipe(Effect.mapError((error) => new StretchUncut({ message: `Could not take the sound out of the footage: ${error.message}` })));
       source = cut;
     }
-    // With pyannote's voices, Scribe hears the words only (no whole hearing); pyannote hears the cut while it's still here.
-    const pyannote = withVoices ? yield* Effect.promise(() => voices.on()) : false;
     const target = join(work, "transcript.json");
-    yield* transcribe.transcribeFile(source, target, keyterms, false, withVoices && !pyannote);
-    if (pyannote) yield* Effect.promise(() => voices.revoice(null, source, target, null));
+    yield* transcribe.transcribeFile(source, target, keyterms, false);
+    // pyannote hears the cut while it's still here.
+    if (yield* Effect.promise(() => voices.on())) yield* Effect.promise(() => voices.revoice(null, source, target, null));
   }).pipe(Effect.scoped);
   const heard = cached(work);
   if (heard === null) return yield* new transcribe.AnswerUnreadable({ message: "Scribe's answer couldn't be read." });
@@ -76,9 +73,9 @@ export const hearing = Effect.fn("writer.hear")(function* (file: string, span: [
 });
 
 /** `hearing` for code that isn't Effect yet; a stop (`signal`) ends its FFmpeg and its request and says so. */
-export function hear(file: string, span: [number, number] | null, work: string, keyterms: readonly string[], signal?: AbortSignal, withVoices = true): Promise<transcribe.Transcript> {
+export function hear(file: string, span: [number, number] | null, work: string, keyterms: readonly string[], signal?: AbortSignal): Promise<transcribe.Transcript> {
   if (signal?.aborted) return Promise.reject(new Error(STOPPED));
-  return runPromise(transcribe.asConfigured(hearing(file, span, work, keyterms, withVoices)), signal ? { signal } : undefined).catch((error: unknown) => {
+  return runPromise(transcribe.asConfigured(hearing(file, span, work, keyterms)), signal ? { signal } : undefined).catch((error: unknown) => {
     if (signal?.aborted) throw new Error(STOPPED);
     throw error;
   });

@@ -23,7 +23,6 @@ import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as transcribe from "./transcribe.ts";
 import * as voices from "./voices.ts";
-import { writeCaptionTranscript } from "./youtube_words.ts";
 
 export type { Probe } from "./model.ts";
 
@@ -465,25 +464,20 @@ export class Processor {
     const target = this.paths(source).transcript;
     // A cloud excerpt whose whole recording was heard already (Writer shares its words) takes its words from there.
     const shared = again ? null : sharedSourceOf(this.store.cacheDir(), source);
-    const words = async (pyannote: boolean) => {
+    // Scribe's words and voices, never YouTube's captions: they have no voices (every line its own
+    // `caption_turn_N`) and JJ's notes caught their words wrong ("bit*", "slept", a "you" missing).
+    const words = async () => {
       if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
-      // Heard again: properly (Scribe), not from YouTube's captions, which
-      // are what a second hearing is usually for. With pyannote's voices, Scribe
-      // hears the words too (Sphe, Nov 8: "scribe + pyannote"; JJ's notes on the
-      // captions' words: "bit*", "slept", a "you" missing).
-      const captions = again || pyannote ? null : this.captionSource(source);
-      if (captions !== null && await writeCaptionTranscript(this.store.home, captions, target)) return;
       // A pieced proxy is heard from its original, as its other analyses are: read through the proxy, a long
       // recording made every piece at once (Killer Pastor in dev, Nov 8: its 1 h 52 min tape heard again took Edit
       // past 23 GB and Bun aborted).
-      await transcribe.run(await this.inputOf(source), target, keyterms, again, !pyannote);
+      await transcribe.run(await this.inputOf(source), target, keyterms, again);
     };
-    // The words, then pyannote's voices while the relay's flag is on (voices.ts), before
-    // the transcript is ready, so speakers.ts names pyannote's voices, not Scribe's or the captions' lines.
+    // The words, then pyannote's voices while the relay's flag is on (voices.ts; off from Nov 10), before
+    // the transcript is ready, so speakers.ts names the voices that will stay.
     const hear = async () => {
-      const pyannote = await voices.on();
-      await words(pyannote);
-      if (pyannote) await voices.revoice(this.store.cacheDir(), await this.inputOf(source), target, this.cloudSource(source));
+      await words();
+      if (await voices.on()) await voices.revoice(this.store.cacheDir(), await this.inputOf(source), target, this.cloudSource(source));
     };
     void diag
       .timeOnAsync("media", "media: transcription", source, hear)

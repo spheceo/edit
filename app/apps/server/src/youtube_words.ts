@@ -405,9 +405,9 @@ async function hear(home: string, id: string, use: Use, signal?: AbortSignal, on
     const sound = await youtube.downloadSound(home, id, folder, use.sparing);
     signal?.throwIfAborted();
     onStage?.("No captions: hearing the video");
-    // Apple's recogniser where this Mac has it; Scribe only where there's none (Linux, an older macOS), its words alone.
+    // Apple's recogniser where this Mac has it; Scribe only where there's none (Linux, an older macOS).
     if (await macSpeech.available()) await macSpeech.hear(sound.path, target, signal);
-    else await transcribe.run(sound.path, target, [], false, false);
+    else await transcribe.run(sound.path, target);
     const heard = kept();
     diag.info(use.area, `${id}: no captions; heard ${heard?.words.length ?? 0} words (${heard?.model ?? "nothing"})`);
     return heard;

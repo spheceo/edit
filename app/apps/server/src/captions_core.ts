@@ -53,11 +53,11 @@ export async function transcriptOf(app: App, media: Media, project?: Project): P
           throw new Error(ioMessage(error));
         }
         const transcript = parseTranscript(text);
-        // YouTube's captions while pyannote's voices are on: heard by Scribe, once (its voices then pyannote's, media.ts).
+        // YouTube's captions kept before Nov 8 (they have no voices): heard by Scribe, once (media.ts).
         const captionsAgain = `${path}\ncaptions`;
-        if (transcript.model === "youtube-captions" && !reheard.has(captionsAgain) && (await voices.on())) {
+        if (transcript.model === "youtube-captions" && !reheard.has(captionsAgain)) {
           reheard.add(captionsAgain);
-          diag.info("media", `${media.name}: heard by Scribe rather than YouTube's captions, its voices pyannote's`);
+          diag.info("media", `${media.name}: heard by Scribe rather than YouTube's captions`);
           app.media.transcribe(path, true, names, true);
           continue;
         }

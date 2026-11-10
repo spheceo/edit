@@ -17,7 +17,7 @@ import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
-import { serialize, type Transcript } from "../transcribe.ts";
+import { MODEL as SCRIBE, serialize, type Transcript } from "../transcribe.ts";
 import * as drive from "./drive.ts";
 import * as hearing from "./hearing.ts";
 import { named } from "./jobs.ts";
@@ -95,7 +95,7 @@ function transcriptOf(dir: string, script: Script, recording: Shared): Transcrip
   const derived = heard !== null && heard.words.length === words.length && heard.words.every((word, at) => word.text === words[at]!.text);
   if (heard !== null && heard.words.length > 0 && !derived) return heard;
   const speakers = Object.fromEntries(Object.entries(script.speakers ?? {}).flatMap(([label, name]) => (strip(label) === null ? [] : [[strip(label)!, name]])));
-  return { model: heard?.model || "scribe_v2", language: heard?.language ?? null, words, speakers, ...(heard?.keyterms ? { keyterms: heard.keyterms } : {}) };
+  return { model: heard?.model || SCRIBE, language: heard?.language ?? null, words, speakers, ...(heard?.keyterms ? { keyterms: heard.keyterms } : {}) };
 }
 
 /** The parts of a script `folderPart` reads: Script mode's own, or Writer's as the handoff has it. */

@@ -59,11 +59,33 @@ const running = new Set<string>();
 const latest = new Map<string, ImportProgress>();
 /** When each running import began. */
 const started = new Map<string, number>();
+/** Each running import's fiber, so a delete can stop it (`stop`). */
+const fibers = new Map<string, Fiber.Fiber<unknown, unknown>>();
 
 /** Whether this script is importing right now. */
 export const importing = (id: string): boolean => running.has(id);
 /** Whether any script is importing (a restart would cut it off). */
 export const anyImporting = (): boolean => running.size > 0;
+
+/**
+ * Stops script `id`'s import, if one runs here, and waits for it to end: its
+ * downloads and FFmpegs ended, nothing more written. False when none ran.
+ * Deleting a script stops its import first: Delete only said "This import is
+ * still running", and an import has no other stop (JJ, Nov 10: a 23-recording
+ * Drive import he no longer wanted held off nightly-70's update).
+ */
+export async function stop(id: string): Promise<boolean> {
+  const fiber = fibers.get(id);
+  if (fiber === undefined) return false;
+  await runtime.runPromise(Fiber.interrupt(fiber));
+  // Its slot, let go as it ended (run's caller lets it go a step later): gone now, so nothing waits on it.
+  running.delete(id);
+  latest.delete(id);
+  started.delete(id);
+  stages.delete(id);
+  diag.info("writer", `${id.slice(0, 8)}: its import stopped, as its script is deleted`);
+  return true;
+}
 
 /** Every import running now, so the page can follow them. */
 export const progress = (): ImportProgress[] => [...latest.values()];
@@ -97,7 +119,7 @@ export type Answer = "started" | "finished";
  * Its slot (`done`) is let go however it ends, an interruption included.
  */
 function carryOnAlone(app: App, data: string, dir: string, script: Script, done: () => void): void {
-  runtime.runFork(
+  const fiber = runtime.runFork(
     importScript(app, dir, script).pipe(
       // Its slot let go first: the build refuses a script still importing, so every first build
       // started here was refused ("This import is still running") and never ran (JJ's Mac, Nov 3–6:
@@ -110,6 +132,15 @@ function carryOnAlone(app: App, data: string, dir: string, script: Script, done:
       inArea("writer"),
     ),
   );
+  held(script.id, fiber);
+}
+
+/** `fiber` kept as script `id`'s import until it ends. */
+function held(id: string, fiber: Fiber.Fiber<unknown, unknown>): void {
+  fibers.set(id, fiber);
+  fiber.addObserver(() => {
+    if (fibers.get(id) === fiber) fibers.delete(id);
+  });
 }
 
 /**
@@ -619,7 +650,9 @@ export function remakeFootage(dir: string, script: Script): boolean {
 
 /** `importScript` for the code that isn't Effect yet: its failure an Error with the same words. */
 function run(app: App, dir: string, script: Script): Promise<Script> {
-  return runPromise(importScript(app, dir, script).pipe(inArea("writer")));
+  const fiber = runtime.runFork(importScript(app, dir, script).pipe(inArea("writer")));
+  held(script.id, fiber);
+  return runPromise(Fiber.join(fiber));
 }
 
 /** An import that stopped: what it said, and the kind of what stopped it (so Try again reads it). */

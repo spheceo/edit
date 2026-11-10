@@ -130,12 +130,13 @@ export function routes(router: Router<App>): void {
     )
     .get("/api/writer/library", () => json({ version: store.libraryVersion() }))
     .get("/api/writer/scripts/{id}", (context) => answer(() => detail(dataOf(context.app), readFor(dataOf(context.app), id(context)))))
+    // Whatever runs on it, its import or Claude, is stopped first: deleting is how a script no one wants stops.
     .delete("/api/writer/scripts/{id}", (context) =>
-      answer(() => {
+      answer(async () => {
         const data = dataOf(context.app);
         readFor(data, id(context));
-        idle(id(context));
-        if (jobs.running(id(context))) throw new Error("Claude is still writing this script.");
+        await imports.stop(id(context));
+        if (!(await jobs.stopAndWait(id(context)))) throw new Error("Claude is still stopping on this script. Try again in a moment.");
         // The cloud's delete is recorded first: a crash between the two can't bring the script back.
         cloud.deleted(data, id(context));
         store.remove(data, id(context));

@@ -102,6 +102,8 @@ export type Outcome = [report: string, costUsd: number];
 const jobs = new Map<string, BuildStatus>();
 const titles = new Map<string, string>();
 const stops = new Map<string, AbortController>();
+/** Each running job's end, so a delete can wait for a stopped one (`stopAndWait`). */
+const endings = new Map<string, Promise<void>>();
 
 const file = (data: string, id: string): string | null => {
   try {
@@ -188,6 +190,26 @@ export function stop(id: string): void {
 }
 
 /**
+ * Stops script `id`'s job, if one runs, and waits up to `ms` for it to end
+ * (its last status written): false when it hadn't by then. A script is deleted
+ * only once Claude has let go of it, or what it writes last would bring back
+ * a folder the delete took away.
+ */
+export async function stopAndWait(id: string, ms = 30_000): Promise<boolean> {
+  const ending = endings.get(id);
+  if (!running(id) || ending === undefined) return true;
+  stops.get(id)?.abort();
+  stage(id, "Stopping…");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>((resolve) => (timer = setTimeout(() => resolve(false), ms)));
+  try {
+    return await Promise.race([ending.then(() => true as const), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Starts `work` on a script in the background: refused while one runs.
  * `run` does it; its report and cost are kept as the job's outcome.
  */
@@ -207,6 +229,8 @@ export function start(data: string, id: string, title: string, work: Work, run: 
   // What Claude says and the tools it runs, for the chat's live turn (live.ts).
   const turn: live.Turn = { text: "", trace: [], startedAt: job.startedAt };
   job.turn = turn;
+  let ended = () => {};
+  endings.set(id, new Promise<void>((resolve) => (ended = resolve)));
   void live.within(turn, async () => {
     try {
       const [report, cost] = await run(context);
@@ -226,6 +250,8 @@ export function start(data: string, id: string, title: string, work: Work, run: 
       delete job.turn;
       keep(data, id, job);
       stops.delete(id);
+      endings.delete(id);
+      ended();
       tell(id, title, work, job);
     }
   });

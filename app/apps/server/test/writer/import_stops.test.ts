@@ -12,6 +12,7 @@ import * as captionTurns from "../../src/writer/caption_turns.ts";
 import { timing } from "../../src/transcribe.ts";
 import * as imports from "../../src/writer/imports.ts";
 import * as store from "../../src/writer/store.ts";
+import * as writerJobs from "../../src/writer/jobs.ts";
 import { fixtureHome } from "../helpers/home.ts";
 import { MockServer, scribeAnswer } from "../mocks/server.ts";
 
@@ -177,6 +178,62 @@ test.skipIf(ffmpeg === null)("an import refused for the transcription plan's cre
     fs.writeFileSync(`${app.store.home}/jobs.json`, JSON.stringify(listed));
     await jobs.wake(app.store.home, ["script"]);
     expect(woken).toEqual([id!]);
+  } finally {
+    cleanup();
+  }
+}, 120_000);
+
+test.skipIf(ffmpeg === null)("deleting a script stops its import first; Claude on a script is stopped and waited for (JJ, Nov 10: Delete said \"This import is still running\" and held off the update)", async () => {
+  const { dir, app, cleanup } = fixtureHome("import-delete");
+  try {
+    const data = store.dataDir(app.store.home);
+    const source = `${dir}/call.m4a`;
+    expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=300:duration=20", "-c:a", "aac", "-b:a", "32k", source]).exitCode).toBe(0);
+    // The words take long: the import is still running when it's stopped.
+    mock.on("POST", "/v1/transcribe", async () => (await Bun.sleep(20_000), Response.json(scribeAnswer(["Too", "late"]))));
+    expect(await imports.stop("5b1f0c2d-3e4a-4b6c-9d7e-8f0a1b2c3d4e")).toBe(false);
+    for (const answer of ["started", "finished"] as const) {
+      const built: string[] = [];
+      const hook = imports.hooks.build;
+      imports.hooks.build = (_app, id) => void built.push(id);
+      try {
+        const ending = answer === "finished" ? imports.fromFile(app, data, source, null, `Unwanted ${answer}`, null, { note: "" }, "finished").catch((error: unknown) => error) : null;
+        if (ending !== null) for (let i = 0; i < 100 && store.ids(data).length === 0; i++) await Bun.sleep(20);
+        const script = answer === "started" ? await imports.fromFile(app, data, source, null, `Unwanted ${answer}`, null, { note: "" }, "started") : store.read(store.scriptDir(data, store.ids(data)[0]!));
+        await Bun.sleep(300);
+        expect(imports.importing(script.id)).toBe(true);
+        const asked = Date.now();
+        expect(await imports.stop(script.id)).toBe(true);
+        expect(Date.now() - asked).toBeLessThan(5_000);
+        expect(imports.importing(script.id)).toBe(false);
+        expect(imports.anyImporting()).toBe(false);
+        store.remove(data, script.id);
+        if (ending !== null) await ending;
+        // Nothing of it comes back, and no build starts.
+        await Bun.sleep(500);
+        expect(fs.existsSync(store.scriptDir(data, script.id))).toBe(false);
+        expect(ffmpegsFor(store.scriptDir(data, script.id))).toBe(0);
+        expect(built).toEqual([]);
+      } finally {
+        imports.hooks.build = hook;
+      }
+    }
+
+    // Claude on a script: stopped, and the delete waits for its last word.
+    const id = "6c2f0c2d-3e4a-4b6c-9d7e-8f0a1b2c3d4e";
+    fs.mkdirSync(store.scriptDir(data, id), { recursive: true });
+    writerJobs.start(data, id, "Busy", { kind: "build", note: "" } as writerJobs.Work, async (job) => {
+      await new Promise((resolve) => job.signal.addEventListener("abort", resolve));
+      await Bun.sleep(200);
+      throw new Error("stopped");
+    });
+    expect(writerJobs.running(id)).toBe(true);
+    expect(await writerJobs.stopAndWait(id)).toBe(true);
+    expect(writerJobs.running(id)).toBe(false);
+    expect(await writerJobs.stopAndWait(id)).toBe(true);
+    // One that won't let go in time is said so.
+    writerJobs.start(data, id, "Stuck", { kind: "build", note: "" } as writerJobs.Work, () => new Promise(() => {}));
+    expect(await writerJobs.stopAndWait(id, 100)).toBe(false);
   } finally {
     cleanup();
   }

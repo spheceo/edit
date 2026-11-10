@@ -107,3 +107,46 @@ export const nativePreview = {
     return closed;
   },
 };
+
+/** One play on the window's clock, as it went: what the line in the log says (`playLine`). */
+export interface NativeRun {
+  /** Where it began (the edit's frame) and the edit's rate. */
+  from: number;
+  fps: number;
+  /** Frames the window showed, passed over, and drew late (over a frame's time). */
+  shown: number;
+  skipped: number;
+  slow: number;
+  /** The longest a frame took to draw (ms), and how often the speaker ran out of sound. */
+  longest: number;
+  starved: number;
+}
+
+/**
+ * The log's line for a play of two seconds or more (shorter ones are a tap):
+ * how it went, so a hitch is in a teammate's report without asking them (Nov 10:
+ * the window wrote nothing about its plays). A warning when it shows: frames
+ * passed over (more than 1 in 100), a frame held a tenth of a second, the sound
+ * short; null for a short one. `where`: the editor's viewer or the script's
+ * monitor, both the window's one player.
+ */
+export function playLine(run: NativeRun, where = "in the window"): { level: "info" | "warn"; text: string } | null {
+  if (run.shown < run.fps * 2) return null;
+  const at = Math.floor(run.from / run.fps);
+  const clock = `${Math.floor(at / 60)}:${String(at % 60).padStart(2, "0")}`;
+  const seconds = (run.shown + run.skipped) / run.fps;
+  const bad = run.skipped * 100 > run.shown || run.longest >= 100 || run.starved > 0;
+  const text =
+    `played ${seconds.toFixed(1)} s from ${clock} ${where}: ${run.shown} frames shown, ${run.skipped} passed over, ` +
+    `${run.slow} drawn late, the longest ${Math.round(run.longest)} ms; ${run.starved > 0 ? `the sound ran short ${run.starved}×` : "the sound never ran short"}`;
+  return { level: bad ? "warn" : "info", text };
+}
+
+/** A play's run so far, with what the window said while it played (`preview_position`). */
+export function heardRun(run: NativeRun, at: NativeWhere): void {
+  run.shown += at.drawn;
+  run.skipped += at.skipped;
+  run.slow += at.slow;
+  run.starved += at.starved;
+  for (const ms of at.draws) run.longest = Math.max(run.longest, ms);
+}

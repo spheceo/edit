@@ -172,6 +172,27 @@ describe("the script's cut on the window's player", () => {
     expect(page.fake.last("preview_play")).toEqual({ frame: 47 });
   });
 
+  it("a play on the script writes its line in the log as it ends, as the editor's do", async () => {
+    const posted: { level: string; message: string }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { body?: string }) => {
+      if (String(url).includes("/api/diagnostics/client")) posted.push(JSON.parse(String(init?.body)));
+      return new Response("{}", { status: 200 });
+    }));
+    const { player } = await started();
+    player.play(0);
+    await page.settle();
+    // 70 answers from the window while it plays, a frame shown in each.
+    for (let n = 1; n <= 70; n++) {
+      page.fake.frame = n;
+      await page.frames();
+    }
+    player.pause();
+    await page.settle();
+    const line = posted.find((one) => one.message.includes("on the script"));
+    expect(line).toMatchObject({ level: "info" });
+    expect(line!.message).toMatch(/^preview: played 2\.3 s from 0:00 on the script: 70 frames shown, 0 passed over, 0 drawn late, the longest 3 ms; the sound never ran short$/);
+  });
+
   it("a footage moment outside the cut is shown, and played straight through, as the whole recording; back in the cut it's the cut again", async () => {
     const { player, playhead } = await started();
     // 30 s of the footage: in neither item.

@@ -539,6 +539,29 @@ describe("preview seeks and lifetime", () => {
     expect(preview.native).toBe(true);
   });
 
+  it("asks the window for no frame until it has taken the edit: opened, a frame asked for first found no edit (\"no edit to draw yet\", JJ's Mac at every open)", async () => {
+    let take: (() => void) | null = null;
+    const sent = await inWindow();
+    const invoke = (window as unknown as { __TAURI_INTERNALS__: { invoke: ReturnType<typeof vi.fn> } }).__TAURI_INTERNALS__.invoke;
+    const answer = invoke.getMockImplementation() as (command: string, args: Record<string, unknown>) => Promise<unknown>;
+    invoke.mockImplementation(async (command: string, args: Record<string, unknown> = {}) => {
+      if (command === "preview_project" && take === null) {
+        await new Promise<void>((resolve) => (take = resolve));
+      }
+      if (command === "preview_frame" && take !== null && sent("preview_project").length === 0) throw "no edit to draw yet";
+      return answer(command, args);
+    });
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle(); draw(); await settle();
+    // The edit is on its way: nothing is asked of the window meanwhile, and nothing failed.
+    expect(take).not.toBeNull();
+    expect(sent("preview_frame")).toHaveLength(0);
+    expect(preview.diagnostics.nativeFrames.failed).toBe(0);
+    take!(); await settle(); await settle(); draw(); await settle();
+    expect(sent("preview_frame")).toHaveLength(1);
+    expect(preview.diagnostics.nativeFrames.failed).toBe(0);
+    expect(preview.native).toBe(true);
+  });
+
   it("draws in the page when the window refuses the edit, and says why", async () => {
     await inWindow((command) => (command === "preview_project" ? "unknown media m9" : null));
     preview.setProject(fixture(), {}); await settle(); draw(); await settle();
@@ -549,7 +572,8 @@ describe("preview seeks and lifetime", () => {
 
   it("keeps each window frame's time for the reports", async () => {
     await inWindow();
-    preview.setProject(fixture(), {}); await settle(); draw(); await settle();
+    // The first frame once the window has taken the edit (the animation frame after).
+    preview.setProject(fixture(), {}); await settle(); draw(); await settle(); draw(); await settle();
     preview.seek(10); draw(); await settle();
     const report = preview.diagnostics.nativeFrames;
     expect(report.drawn).toBe(2);
@@ -580,6 +604,35 @@ describe("preview seeks and lifetime", () => {
     expect(playhead.playing).toBe(false);
     expect(playhead.frame).toBe(89);
     expect(sent("preview_pause").length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("writes one line to the log for each play in the window: how it went, a warning when it stuttered", async () => {
+    const { playLine } = await import("./nativePreview");
+    const run = { from: 30 * 75, fps: 30, shown: 1379, skipped: 0, slow: 2, longest: 53, starved: 0 };
+    expect(playLine(run)).toEqual({ level: "info", text: "played 46.0 s from 1:15 in the window: 1379 frames shown, 0 passed over, 2 drawn late, the longest 53 ms; the sound never ran short" });
+    // A tap of play: nothing.
+    expect(playLine({ ...run, shown: 40 })).toBeNull();
+    // A stutter: frames passed over, a held frame, the sound short.
+    expect(playLine({ ...run, skipped: 20 })!.level).toBe("warn");
+    expect(playLine({ ...run, longest: 119 })!.level).toBe("warn");
+    expect(playLine({ ...run, starved: 1 })!.text).toContain("the sound ran short 1×");
+    expect(playLine({ ...run, skipped: 10 })!.level).toBe("info");
+
+    // A play in the window ends in its line, sent to this Mac's log.
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { body?: string }) => {
+      if (String(url).includes("/api/diagnostics/client")) posted.push(String(init?.body));
+      return new Response("{}", { status: 200 });
+    }));
+    await inWindow();
+    preview.setProject(withSound(), {}); await settle(); draw(); await settle(); draw(); await settle();
+    preview.play(); await settle();
+    // 75 frames shown over two answers, one of them late.
+    for (let n = 0; n < 75; n++) { windowClock.frame = n; draw(); await settle(); }
+    preview.pause(); await settle();
+    const line = posted.map((body) => JSON.parse(body) as { level: string; message: string }).find((one) => one.message.includes("in the window"));
+    expect(line).toMatchObject({ level: "info" });
+    expect(line!.message).toMatch(/^preview: played 2\.5 s from 0:00 in the window: 75 frames shown, 0 passed over/);
   });
 
   it("plays at 2× on the window's clock: the window is told the speed before it plays, and at once when it changes mid-play", async () => {

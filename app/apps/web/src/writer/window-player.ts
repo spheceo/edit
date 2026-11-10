@@ -24,8 +24,8 @@
 
 import { auditionProject, cutProject, frameAt, msAt, type Cut, type CutSource } from "@edit/types/script_cut";
 
-import { note, recordTiming } from "../lib/diagnostics";
-import { nativePreview, type NativeWhere } from "../lib/nativePreview";
+import { note, recordTiming, tell } from "../lib/diagnostics";
+import { heardRun, nativePreview, playLine, type NativeRun, type NativeWhere } from "../lib/nativePreview";
 import { isCutIn } from "./clips";
 import { clipStarts, editedAtSource, editedPosition, sameCut, type Item, type Player, type Playhead } from "./playback";
 
@@ -85,6 +85,8 @@ export class WindowPlayer implements Player {
   private retry: ReturnType<typeof setTimeout> | undefined;
   private follow = 0;
   private polling = false;
+  /** The play under way in the window, for its line in the log when it ends (the editor's, `playLine`). */
+  private run: NativeRun | null = null;
 
   private canvas: HTMLCanvasElement | null = null;
   private placing = 0;
@@ -278,6 +280,7 @@ export class WindowPlayer implements Player {
     if (this.sent?.json !== edit.json) {
       if (this.playingThere) {
         this.playingThere = false;
+        this.endRun();
         await nativePreview.pause();
       }
       await nativePreview.project(edit.json, ++this.revision, edit.paths, edit.paths, {}, this.cache);
@@ -306,6 +309,8 @@ export class WindowPlayer implements Player {
         if (epoch === this.epoch) this.finish();
         return;
       }
+      this.endRun();
+      this.run = { from: this.frameOf(edit), fps: edit.cut.project.settings.fps, shown: 0, skipped: 0, slow: 0, longest: 0, starved: 0 };
       this.playingThere = true;
       this.drawn = null;
       recordTiming("script preview: play (window)", 0);
@@ -314,6 +319,7 @@ export class WindowPlayer implements Player {
     }
     if (this.playingThere) {
       this.playingThere = false;
+      this.endRun();
       const at = await nativePreview.pause();
       if (at !== null && this.adoptPause) this.heardAt(at);
     }
@@ -358,6 +364,7 @@ export class WindowPlayer implements Player {
     // What it has is no longer known: the edit goes whole again.
     this.sent = null;
     this.playingThere = false;
+    this.endRun();
     if (this.running) this.replay = true;
     clearTimeout(this.retry);
     this.retry = setTimeout(() => this.kick(), 250);
@@ -390,7 +397,19 @@ export class WindowPlayer implements Player {
     this.follow = requestAnimationFrame(tick);
   }
 
+  /** The play under way ended (a pause, a seek, the end, a new cut, a failure): its line in the log. */
+  private endRun() {
+    const run = this.run;
+    this.run = null;
+    if (run === null) return;
+    const line = playLine(run, "on the script");
+    if (line === null) return;
+    if (line.level === "warn") note("warn", "preview", line.text);
+    else tell("preview", line.text);
+  }
+
   private heard(at: NativeWhere) {
+    if (this.run !== null) heardRun(this.run, at);
     for (const ms of at.draws) recordTiming("script preview: window draw", ms);
     if (at.skipped > 0) recordTiming("script preview: window skipped frames", at.skipped);
     if (at.starved > 0) recordTiming("script preview: window sound starved", at.starved);
@@ -402,12 +421,14 @@ export class WindowPlayer implements Player {
     }
     if (at.ended) {
       this.playingThere = false;
+      this.endRun();
       this.finish();
       return;
     }
     if (!at.playing) {
       // Stopped by itself (its layer hidden): the playhead rests where it got to.
       this.playingThere = false;
+      this.endRun();
       this.running = false;
       this.epoch++;
       this.heardAt(at.frame);
@@ -542,6 +563,7 @@ export class WindowPlayer implements Player {
     if (this.disposed) return;
     this.disposed = true;
     this.running = false;
+    this.endRun();
     cancelAnimationFrame(this.follow);
     cancelAnimationFrame(this.placing);
     clearTimeout(this.retry);

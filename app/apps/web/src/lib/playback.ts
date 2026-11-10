@@ -3,12 +3,12 @@
 import init, { createEngine, type Engine } from "../engine/pkg/edit_wasm";
 import { api, fetchRetrying, mediaHost, mediaUrl } from "./api";
 import { Decoder, videoTime } from "./decoder";
-import { addContext, note, recordTiming } from "./diagnostics";
+import { addContext, note, recordTiming, tell } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
 import { clipEnd, paramAt, projectDuration, validateClips, validateProject } from "./edit";
 import { peopleProblem } from "./people";
 import { mutePoints } from "./mutes";
-import { nativeAvailable, nativePreview, type NativeDrawn, type NativeExcerpt, type NativeWhere } from "./nativePreview";
+import { heardRun, nativeAvailable, nativePreview, playLine, type NativeDrawn, type NativeExcerpt, type NativeRun, type NativeWhere } from "./nativePreview";
 import * as patches from "./patch";
 import { SmoothStream } from "./smoothStream";
 import { savedFrame, saveFrame } from "./storage";
@@ -78,6 +78,7 @@ const PATCH_MOST = 512 * 1024;
 /** A window frame slower than this is reported with what made it slow (two frames at 60 fps). */
 const NATIVE_SLOW_MS = 33;
 
+
 /** What each media is decoded from in Edit.app's window and what its sound is read from, the local excerpts of streamed ones, and the media cache. */
 type NativeSources = { cache: string; sources: Record<string, string>; sounds: Record<string, string>; excerpts: Record<string, NativeExcerpt[]> };
 /** The window's player is asked where it is this often at most while it plays (once an animation frame otherwise). */
@@ -132,6 +133,8 @@ class Preview {
   private nativeStats = { draws: [] as number[], decodes: [] as number[], drawn: 0, skipped: 0, passed: 0, failed: 0, opens: 0, seeks: 0, streamed: 0, behind: 0, patches: 0, wholes: 0, refused: 0, off: null as string | null,
     played: 0, playedSkipped: 0, playedSlow: 0, starved: 0 };
   private nativeAsked: number | null = null;
+  /** The play on the window's clock under way, for its line in the log when it ends. */
+  private nativeRun: NativeRun | null = null;
   /** A play on the window's clock (each play a generation, so a stale answer is known), and whether its position is being asked for. */
   private nativePlay = 0;
   /** The speed the window's player has (null: not told since it opened; a newly opened one plays at 1), and the asks to it, one after another. */
@@ -628,8 +631,10 @@ class Preview {
     sent.then((accepted) => {
       this.nativeSending = false;
       this.nativeAccepted = accepted;
+      const first = this.nativeHas?.project.id !== project.id;
       this.nativeHas = { project, sources, revision: accepted };
-      if (this.nativeStale) this.invalidate();
+      // The first edit of this project taken: the frame the playhead's on can be drawn now.
+      if (this.nativeStale || first) this.invalidate();
     }, (error: unknown) => {
       this.nativeSending = false;
       if (!this.native) return;
@@ -649,7 +654,9 @@ class Preview {
   private drawNative() {
     if (!this.project || this.error) return;
     this.syncNative();
-    if (this.nativeStale && this.nativeHas === null) return;
+    // Only once the window has taken this project's edit: asked while it's on its way, the window had none ("no edit to
+    // draw yet" at every open on JJ's Mac, Nov 10) or, opening another project, drew the one before's frame.
+    if (this.nativeHas === null || this.nativeHas.project.id !== this.project.id) return;
     // Playing, the window draws the clock's frames itself; the page only follows (`followNative`).
     if (playhead.playing) return;
     const wanted = Math.floor(playhead.frame);
@@ -699,6 +706,9 @@ class Preview {
   /** Plays from the playhead on the window's clock, the page following its position. */
   private playNative() {
     const from = Math.floor(playhead.frame);
+    // A play from somewhere else while playing (a seek) is a play of its own.
+    this.endNativeRun();
+    if (this.project) this.nativeRun = { from, fps: rate(this.project.settings), shown: 0, skipped: 0, slow: 0, longest: 0, starved: 0 };
     const generation = ++this.nativePlay;
     playhead.playing = true;
     this.playedFrom = from;
@@ -744,6 +754,17 @@ class Preview {
     this.loop = requestAnimationFrame(tick);
   }
 
+  /** The play under way ended: its line in the log. */
+  private endNativeRun() {
+    const run = this.nativeRun;
+    this.nativeRun = null;
+    if (run === null) return;
+    const line = playLine(run);
+    if (line === null) return;
+    if (line.level === "warn") note("warn", "preview", line.text);
+    else tell("preview", line.text);
+  }
+
   /** The window's position: into the playhead and the diagnostics; its end pauses here. */
   private nativePosition(at: NativeWhere) {
     const s = this.nativeStats;
@@ -751,6 +772,7 @@ class Preview {
     s.playedSkipped += at.skipped;
     s.playedSlow += at.slow;
     s.starved += at.starved;
+    if (this.nativeRun !== null) heardRun(this.nativeRun, at);
     for (const ms of at.draws) {
       s.drawn++;
       s.draws.push(ms);
@@ -1240,6 +1262,7 @@ class Preview {
     this.loop = 0;
     this.resetClock();
     if (this.native && playing) {
+      this.endNativeRun();
       // The window stops its clock; where it rested is the playhead (it's told after, a frame at most from the last position).
       const generation = ++this.nativePlay;
       nativePreview.pause().then((at) => {

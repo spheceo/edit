@@ -58,6 +58,18 @@ export function openReport(trigger?: string) {
 export const closeReport = () => useReport.setState({ open: false });
 
 /** Notes something for the report; problems also go to the server's log. */
+/** An info line kept in this Mac's server log too (a `note` at info stays in the page): within the same allowance a minute. */
+export function tell(area: string, message: string) {
+  note("info", area, message);
+  if (sentThisMinute++ < 20) {
+    void fetch("/api/diagnostics/client", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ level: "info", message: `${area}: ${message}`.slice(0, 2000) }),
+    }).catch(() => {});
+  }
+}
+
 export function note(level: Level, area: string, message: string) {
   lines.push({ at: Date.now(), level, area, message: message.slice(0, 2000) });
   if (lines.length > KEEP) lines.shift();

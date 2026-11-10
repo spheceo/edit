@@ -296,6 +296,38 @@ test("markers, the project and the edit context read back as JSON", async () => 
   expect(transcript.transcript).toBe("No transcribed speech on the timeline.");
 });
 
+test("the script's comments come with the frame their words are said at (Nov 10: \"follow at that exact moment\")", async () => {
+  const { app, id, fixture } = setUp("tools-comments");
+  fixture.native.sections = () => ({ intro: null, intro_splits: 1, outro: null, parts: [] });
+  const path = `${fixture.dir}/bodycam.mp4`;
+  write(path, "");
+  const words = ["A", "grandmother", "keeps", "other", "people's", "children."].map((text, at) => ({ text, start: 20 + at * 0.5, end: 20.4 + at * 0.5, speaker: "speaker_0" }));
+  write(app.media.paths(path).transcript, JSON.stringify({ model: "scribe_v2", language: "eng", words }));
+  await fixture.store.update(id, "test", (project) => {
+    project.media.push(media({ id: "m", name: "bodycam.mp4", path, kind: "video", duration: 60, width: 1920, height: 1080, fps: 30, has_audio: true }));
+    const [v1, v2] = project.tracks.map((track) => track.id);
+    project.clips.push(
+      clip({ id: "card", track: v1, start: 0, duration: 100, type: "solid", fill: [0, 0, 0, 1] }),
+      clip({ id: "range", track: v1, start: 100, duration: 120, type: "video", media: "m", source_in: 19 }),
+      clip({ id: "after", track: v2, start: 220, duration: 30, type: "solid", fill: [0, 0, 0, 1] }),
+    );
+    project.script = {
+      blocks: [
+        { kind: "narration", text: "Then the call came in, from a home.", clip: "card", comments: [{ id: "k1", text: "edit: the porch footage here", on: "from a home" }, { id: "k2", text: "edit: dark music" }] },
+        { kind: "footage", url: "https://youtu.be/dQw4w9WgXcQ", file: "youtube:dQw4w9WgXcQ", start: 19, end: 23, label: "00:19 - 00:23", clip: "range", comments: [{ id: "k3", text: "edit: zoom in", on: "other people's children" }] },
+      ],
+    };
+  });
+  const context = JSON.parse(await said(app, "get_edit_context")) as { script_comments: unknown[] };
+  expect(context.script_comments).toEqual([
+    { at: 0, cut_in: 1, text: "edit: dark music" },
+    // A card not voiced yet: where its words fall through it.
+    { at: 66, cut_in: 1, on: "from a home", text: "edit: the porch footage here" },
+    // In the footage: the frame "other" is heard (20 + 1.5 s, the clip from 19 s at frame 100).
+    { at: 175, footage_block: 1, on: "other people's children", text: "edit: zoom in" },
+  ]);
+});
+
 test("a long commentary overview keeps timeline clips visible and full production notes available by chapter", async () => {
   const { app, id, fixture } = setUp("commentary-overview");
   fixture.native.sections = () => ({ intro: null, intro_splits: 1, outro: null, parts: [] });

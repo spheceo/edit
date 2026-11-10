@@ -78,12 +78,15 @@ test("footage actions cut words and move edges exactly", async () => {
   expect(await acted(dir(), script(), note({ anchor: { blockId: "c2", start: 0, end: 4, quote: "you?" }, action: "extend" }))).toBeNull();
 });
 
-test("a note for the editor goes on the clip as written", () => {
+test("a note for the editor goes on the words it's about, as written", () => {
   const [out] = editorNote(script(), note({ anchor: { blockId: "c2", start: 0, end: 4, quote: "you?" }, text: "a blue waveform for this call", intent: "editor" }))!;
-  expect(out.clips[2]!.notes!.at(-1)!.text).toBe("edit: a blue waveform for this call");
-  // On narration: the clip before it.
-  const [again] = editorNote(script(), note({ anchor: { blockId: "n1", start: 0, end: 2, quote: "He" }, text: "edit: zoom in" }))!;
-  expect(again.clips[0]!.notes!.at(-1)!.text).toBe("edit: zoom in");
+  expect(out.clips[2]!.notes!.at(-1)).toMatchObject({ text: "edit: a blue waveform for this call", anchor: { start: 0, end: 4, quote: "you?" } });
+  // On narration: the cut-in itself, on its words (it went on the clip before, Nov 10: JJ's "the note should stay on the text").
+  const [again] = editorNote(script(), note({ anchor: { blockId: "n1", start: 10, end: 25, quote: "he was home all" }, text: "edit: zoom in" }))!;
+  expect(again.clips[1]!.notes!.at(-1)).toMatchObject({ text: "edit: zoom in", anchor: { start: 10, end: 25, quote: "he was home all" } });
+  expect(again.clips[0]!.notes ?? []).toEqual([]);
+  // The review page shows it on those words.
+  expect(blocksOf(again).find((block) => block.id === "n1")).toMatchObject({ editNotes: ["edit: zoom in"], editMarks: [{ note: 0, start: 10, end: 25, quote: "he was home all" }] });
 });
 
 test("intents limit what a fix may change", () => {

@@ -6,7 +6,7 @@ import type { Project } from "../src/model.ts";
 import { findAddon, useNative, wrap, type Native } from "../src/native/index.ts";
 import { clipEnd, cutTime } from "../src/project.ts";
 import { layOut } from "../src/script.ts";
-import { applyToEdit, applyToScript, changesOf, editSide, linkOf } from "../src/script_sync.ts";
+import { applyToEdit, applyToScript, changesOf, editSide, linkOf, syncComments } from "../src/script_sync.ts";
 import { toParsed, type WriterScript } from "../src/writer_handoff.ts";
 import { media, project as newProject } from "./helpers/model.ts";
 
@@ -125,6 +125,27 @@ describe.skipIf(real === null)("a script and its edit, kept in step", () => {
     fresh.clips = fresh.clips.filter((clip) => clip.id !== b.id && !(b.link && clip.link === b.link));
     expect(applyToScript(fresh, script, script.edit!)).toBe(true);
     expect(script.clips.map((clip) => clip.id)).toEqual(["a", "n"]);
+  });
+
+  test("a comment left on the script after the edit was made reaches the edit's block, on its words; taken off, it goes", () => {
+    const [project, given] = made();
+    const now = structuredClone(given);
+    now.clips[1]!.notes = [{ id: "k1", text: "edit: the porch footage under this", at: 0, anchor: { start: 9, end: 17, quote: "call came" } }];
+    now.clips[2]!.notes = [{ id: "k2", text: "edit: blur the plate", at: 0 }];
+    // An older handoff's copy of the same comment in the notes isn't kept twice.
+    project.script!.blocks.find((block) => block.origin === "b")!.notes = ["edit: blur the plate"];
+    expect(changesOf(given.edit!, now).reworded).toEqual([]);
+    expect(syncComments(project, now)).toBe(true);
+    expect(project.script!.blocks.find((block) => block.origin === "n")!.comments).toEqual([{ id: "k1", text: "edit: the porch footage under this", on: "call came" }]);
+    const b = project.script!.blocks.find((block) => block.origin === "b")!;
+    expect([b.comments, b.notes]).toEqual([[{ id: "k2", text: "edit: blur the plate" }], undefined]);
+    expect(syncComments(project, now)).toBe(false);
+    // A ripple through the engine (edit_core::remove_time) keeps them.
+    cutTime(project, 0, 30);
+    expect(project.script!.blocks.find((block) => block.origin === "n")!.comments).toHaveLength(1);
+    now.clips[1]!.notes = [];
+    expect(syncComments(project, now)).toBe(true);
+    expect(project.script!.blocks.find((block) => block.origin === "n")!.comments).toBeUndefined();
   });
 
   test("nothing changed is no change, either way", () => {

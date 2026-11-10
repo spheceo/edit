@@ -38,6 +38,7 @@ export type {
   Rippled,
   Script,
   ScriptBlock,
+  ScriptComment,
   Section,
   Sections,
   Segment,

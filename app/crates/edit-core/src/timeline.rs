@@ -398,6 +398,7 @@ mod tests {
             blocks: vec![ScriptBlock::Narration {
                 text: "x".into(),
                 notes: Vec::new(),
+                comments: Vec::new(),
                 clip: Some("inside".into()),
                 voiceover: Some("snd".into()),
                 origin: None,

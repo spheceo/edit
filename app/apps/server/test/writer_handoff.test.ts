@@ -11,7 +11,7 @@ import { reusedScriptBlock } from "../src/project.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { THE_MACHINE, THIS_MACHINE } from "../src/machine.ts";
 
-test("a Writer script's clips become footage ranges of each recording and cut-ins, notes and edit: notes kept", () => {
+test("a Writer script's clips become footage ranges of each recording and cut-ins, the producer's comments kept on their words", () => {
   const joined: WriterScript = {
     id: "w1",
     title: "Mom Leaves 5 Kids",
@@ -22,8 +22,8 @@ test("a Writer script's clips become footage ranges of each recording and cut-in
       { title: "Ramos BWC.mp4", startMs: 60_000, durationMs: 120_000, url: "https://drive.google.com/file/d/1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876/view" },
     ],
     clips: [
-      { id: "c1", startMs: 5_000, endMs: 9_000, notes: [{ text: "edit: blur the child's face" }] },
-      { id: "c2", kind: "cut-in", startMs: 0, endMs: 3_000, narration: "On July 22, 2023, a call came in." },
+      { id: "c1", startMs: 5_000, endMs: 9_000, notes: [{ id: "k1", text: "edit: blur the child's face" }] },
+      { id: "c2", kind: "cut-in", startMs: 0, endMs: 3_000, narration: "On July 22, 2023, a call came in.", notes: [{ id: "k2", text: "edit: the 911 call's waveform here", anchor: { quote: "a call came in" } }] },
       // Across the join: the end of one recording and the start of the next.
       { id: "c3", startMs: 58_000, endMs: 62_500 },
     ],
@@ -32,8 +32,8 @@ test("a Writer script's clips become footage ranges of each recording and cut-in
   expect(parsed.title).toBe("Mom Leaves 5 Kids");
   // Each block knows the script clip it came from (both of c3's, one a recording): the link script_sync keeps.
   expect(parsed.blocks).toEqual([
-    { kind: "footage", url: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123/view", file: "1AbCdEfGhIjKlMnOpQrStUvWxYz0123", start: 5, end: 9, label: "00:05 - 00:09", notes: ["edit: blur the child's face"], origin: "c1" },
-    { kind: "narration", text: "On July 22, 2023, a call came in.", origin: "c2" },
+    { kind: "footage", url: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123/view", file: "1AbCdEfGhIjKlMnOpQrStUvWxYz0123", start: 5, end: 9, label: "00:05 - 00:09", comments: [{ id: "k1", text: "edit: blur the child's face" }], origin: "c1" },
+    { kind: "narration", text: "On July 22, 2023, a call came in.", comments: [{ id: "k2", text: "edit: the 911 call's waveform here", on: "a call came in" }], origin: "c2" },
     { kind: "footage", url: "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123/view", file: "1AbCdEfGhIjKlMnOpQrStUvWxYz0123", start: 58, end: 60, label: "00:58 - 01:00", origin: "c3" },
     { kind: "footage", url: "https://drive.google.com/file/d/1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876/view", file: "1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876", start: 0, end: 2.5, label: "00:00 - 00:03", origin: "c3" },
   ]);

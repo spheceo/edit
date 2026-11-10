@@ -39,6 +39,7 @@ export type * from "./Rgba";
 export type * from "./Rippled";
 export type * from "./Script";
 export type * from "./ScriptBlock";
+export type * from "./ScriptComment";
 export type * from "./Section";
 export type * from "./SectionKind";
 export type * from "./Sections";

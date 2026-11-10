@@ -291,6 +291,10 @@ pub enum ScriptBlock {
         label: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         notes: Vec<String>,
+        /// The producer's comments from Script mode: what the editor does at
+        /// this block, each on the words it's about.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        comments: Vec<ScriptComment>,
         /// The media this range plays from, once downloaded.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
@@ -323,6 +327,10 @@ pub enum ScriptBlock {
         text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         notes: Vec<String>,
+        /// The producer's comments from Script mode: what the editor does at
+        /// this block, each on the words it's about.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        comments: Vec<ScriptComment>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         clip: Option<String>,
@@ -337,6 +345,21 @@ pub enum ScriptBlock {
         #[cfg_attr(feature = "ts", ts(optional))]
         origin: Option<String>,
     },
+}
+
+/// A comment the producer left on a script block for the editor (Script
+/// mode's comments, kept in step with the script): what to do there.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct ScriptComment {
+    /// Script mode's id for it.
+    pub id: String,
+    pub text: String,
+    /// The words it's on: the narration's for a cut-in, the footage's spoken
+    /// words for a range. None is the whole block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub on: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]

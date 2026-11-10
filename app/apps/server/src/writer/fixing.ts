@@ -20,7 +20,7 @@ import type { Script } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
-import { blocksOf, changed, marksOf, pieceSpans, wordSpans, type Block, type Range, type Side } from "./blocks.ts";
+import { blocksOf, changed, marksOf, noteAnchor, pieceSpans, wordSpans, type Block, type Range, type Side } from "./blocks.ts";
 import * as casefiles from "./casefiles.ts";
 import * as chat from "./chat.ts";
 import * as commentary from "./commentary.ts";
@@ -638,18 +638,11 @@ export function editorNote(script: Script, note: reviews.Note): [Script, string]
     commentary.addNote(paragraph, text, typeof anchor?.quote === "string" ? anchor.quote : "");
     return [out, `Added for the editor: "${text}".`];
   }
-  const at = out.clips.findIndex((clip) => clip.id === block);
-  if (at < 0) return null;
-  let target = at;
-  if (out.clips[at]!.kind === "cut-in") {
-    const before = out.clips.slice(0, at).map((clip, index) => [clip, index] as const).reverse().find(([clip]) => clip.kind !== "cut-in");
-    const after = out.clips.slice(at + 1).map((clip, index) => [clip, at + 1 + index] as const).find(([clip]) => clip.kind !== "cut-in");
-    const found = before ?? after;
-    if (!found) return null;
-    target = found[1];
-  }
-  const clip = out.clips[target]!;
-  clip.notes = [...(clip.notes ?? []), { id: crypto.randomUUID(), text, at: Date.now() }];
+  // On the item it's about, a cut-in's narration too, on the reviewer's words: the editor does it there.
+  const clip = out.clips.find((one) => one.id === block);
+  if (clip === undefined) return null;
+  const words = typeof anchor?.quote === "string" && (anchor.side === undefined || anchor.side === "text") ? noteAnchor(out, clip, anchor.quote, typeof anchor.start === "number" ? anchor.start : undefined) : null;
+  clip.notes = [...(clip.notes ?? []), { id: crypto.randomUUID(), text, at: Date.now(), ...(words !== null ? { anchor: words } : {}) }];
   return [out, `Added for the editor: "${text}".`];
 }
 

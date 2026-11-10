@@ -17,7 +17,10 @@
 //     time there on every track (cutTime, insertTime);
 //   - a clip taken out takes its time with it;
 //   - a cut-in added goes in at the cut after the clip before it and is
-//     voiced; a range added plays there from the footage the edit has.
+//     voiced; a range added plays there from the footage the edit has;
+//   - the producer's comments are the script's as they are now, on each
+//     clip's narration or its first range (`syncComments`), for the agent
+//     to carry out where they're said.
 // An edit saved here is read back the same way: a script-made range whose
 // first in point or last out point moved, a cut-in reworded, or a script
 // clip's blocks gone changes the script (a version by "The edit"). A range is
@@ -47,7 +50,8 @@ import { isCutIn } from "./writer/blocks.ts";
 import * as writerJobs from "./writer/jobs.ts";
 import * as writerStore from "./writer/store.ts";
 import * as versions from "./writer/versions.ts";
-import { recordingFiles, toParsed, type WriterScript } from "./writer_handoff.ts";
+import { stableStringify } from "./stable.ts";
+import { commentsOf, recordingFiles, toParsed, type WriterScript } from "./writer_handoff.ts";
 
 /** Edit saves the sync makes, so it doesn't read them back as the edit's own. */
 export const ORIGIN = "script";
@@ -295,6 +299,33 @@ export function applyToEdit(project: Project, given: WriterScript, change: Chang
   return out;
 }
 
+/**
+ * The script's comments on the edit's blocks, as the script has them now: a
+ * clip's on its narration, or on its first range. Whether any changed. A
+ * comment an older handoff copied into the block's notes is taken out of them.
+ */
+export function syncComments(project: Project, script: Script): boolean {
+  let changed = false;
+  for (const clip of script.clips) {
+    const blocks = blocksOf(project, clip.id);
+    const home = blocks.find((block) => block.kind === "narration") ?? blocks[0];
+    if (home === undefined) continue;
+    const wanted = commentsOf(clip);
+    const texts = new Set(wanted.map((comment) => comment.text));
+    for (const block of blocks) {
+      const now = block === home ? wanted : [];
+      const notes = (block.notes ?? []).filter((note) => !texts.has(note.trim()));
+      if (stableStringify(block.comments ?? []) === stableStringify(now) && notes.length === (block.notes ?? []).length) continue;
+      if (now.length > 0) block.comments = now;
+      else delete block.comments;
+      if (notes.length > 0) block.notes = notes;
+      else delete block.notes;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // ---- The edit's changes, in the script ----
 
 /** The edit's changes to script-made clips since the two last agreed, applied to `script`'s clips; whether any were. */
@@ -386,7 +417,14 @@ export async function fromScript(app: App, scriptId: string): Promise<void> {
     return fromScript(app, scriptId);
   }
   const change = changesOf(link, script);
-  if (empty(change)) return;
+  if (empty(change)) {
+    // A comment added, changed or taken off: the edit's blocks say so, nothing else moves.
+    if (syncComments(structuredClone(live.project), script)) {
+      await app.store.update(link.project, ORIGIN, (project) => void syncComments(project, script));
+      diag.info("script", `${link.project}: the edit has its script's comments`);
+    }
+    return;
+  }
   const kept = link.clips.length - change.removed.length;
   if (link.clips.length >= 4 && kept / link.clips.length < 1 - REWRITTEN) {
     const reason = `The script was rebuilt (${change.removed.length} of ${link.clips.length} clips replaced), so the edit wasn't changed to match it: it keeps the script it was made from.`;
@@ -394,7 +432,11 @@ export async function fromScript(app: App, scriptId: string): Promise<void> {
     keepLink(dir, { ...link, outOfStep: reason });
     return;
   }
-  const [saved, done] = await app.store.update(link.project, ORIGIN, (project) => applyToEdit(project, script as unknown as WriterScript, change));
+  const [saved, done] = await app.store.update(link.project, ORIGIN, (project) => {
+    const out = applyToEdit(project, script as unknown as WriterScript, change);
+    syncComments(project, script);
+    return out;
+  });
   for (const [origin, text] of done.revoice) {
     const blocks = (app.store.get(link.project)?.project.script?.blocks ?? []).filter((block) => block.kind === "narration");
     const number = blocks.findIndex((block) => block.origin === origin) + 1;

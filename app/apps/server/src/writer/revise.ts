@@ -8,7 +8,7 @@
 
 import type { Clip, Focus, Proposal, Research, Script, Word } from "@edit/types/writer";
 
-import { caseCount, isCutIn } from "./blocks.ts";
+import { caseCount, isCutIn, noteAnchor } from "./blocks.ts";
 import * as claude from "./claude.ts";
 import * as formats from "./formats.ts";
 import type { Format } from "./formats.ts";
@@ -35,7 +35,7 @@ const REVISE_HEAD = "You are the producer's video editor, working in the same ti
 
 const REVISE_EDGES = "Clip edges decide whether a cut feels finished. Start each clip on the first word of a thought (the whole question, \"Do you feel any remorse?\", never \"remorse?\") and end it on the word that completes it, with its full stop or question mark. Never end on what follows a finished thought (the speaker's own \"Yeah, so\", the other speaker's \"Okay.\", \"Now,\" or \"And\") or on a hesitation (\"um\", \"so\"), and never start on one. Anchor to exact words; the app adds breathing room. CURRENT SCRIPT lists what the edge review flags on each clip.";
 
-const REVISE_EDITS = "Edits name timeline items by their IDs in CURRENT SCRIPT (i1, i2, …) and words by their transcript IDs (w12). An item an edit adds can be named by later edits as n1, n2, … in the order added. The edits:\n- {\"op\":\"trim\",\"id\":\"i3\",\"edge\":\"in\",\"wordId\":\"w120\"}: move a clip's in-point to just before that word, or (\"edge\":\"out\") its out-point to just after it.\n- {\"op\":\"remove_words\",\"firstWordId\":\"w40\",\"lastWordId\":\"w52\"}: take those words, inclusive, out of every clip that holds them; a clip may split in two.\n- {\"op\":\"insert_words\",\"firstWordId\":\"w300\",\"lastWordId\":\"w340\",\"afterId\":\"i4\"}: a new clip of those words after that item (\"afterId\":\"start\" for the very beginning; leave afterId out for the end).\n- {\"op\":\"split\",\"id\":\"i3\",\"wordId\":\"w130\"}: split a clip just before that word; the second half is a new item.\n- {\"op\":\"delete\",\"ids\":[\"i3\",\"i5\"]}: remove items.\n- {\"op\":\"move\",\"ids\":[\"i7\",\"i8\"],\"afterId\":\"i2\"} (or \"beforeId\"): move items, keeping their order, next to another item.\n- {\"op\":\"insert_cut_in\",\"afterId\":\"i4\",\"narration\":\"…\"}: a new cut-in card with its finished paragraph.\n- {\"op\":\"write\",\"id\":\"i6\",\"narration\":\"…\"}: the whole new paragraph for an existing cut-in.\n- {\"op\":\"correct_word\",\"wordId\":\"w55\",\"text\":\"Hernández\"}: fix how a word is spelled; its timing never changes.\n- {\"op\":\"tighten_pauses\"}: cut quiet pauses over 2 s in the kept footage to a beat (two seconds before an answer), as the build does.\n- {\"op\":\"polish_edges\"}: move every clip edge the edge review flags that a small fix can mend.\n- {\"op\":\"note\",\"id\":\"i3\",\"text\":\"edit: a blue waveform under this 911 call\"}: a note for the video editor on a footage clip, only when asked for one (\"tell the editor…\", \"add an edit note…\"). It starts \"edit:\" and says what to do in that section; the editor follows it over their usual plan.\nA clip stays inside one recording. START OVER: only when the producer asks to start the script over, rebuild it from scratch or throw it away, set startOver to true and send no edits. Nothing is cleared until the producer confirms it in the app; the transcript, speakers, sources and research stay. The reply says you have asked them to confirm. Never set it otherwise. The reply is for the producer: one to four short sentences on what you changed or proposed and why, or the answer to their question. Never show milliseconds or word IDs in it; give moments as [m:ss] footage times.";
+const REVISE_EDITS = "Edits name timeline items by their IDs in CURRENT SCRIPT (i1, i2, …) and words by their transcript IDs (w12). An item an edit adds can be named by later edits as n1, n2, … in the order added. The edits:\n- {\"op\":\"trim\",\"id\":\"i3\",\"edge\":\"in\",\"wordId\":\"w120\"}: move a clip's in-point to just before that word, or (\"edge\":\"out\") its out-point to just after it.\n- {\"op\":\"remove_words\",\"firstWordId\":\"w40\",\"lastWordId\":\"w52\"}: take those words, inclusive, out of every clip that holds them; a clip may split in two.\n- {\"op\":\"insert_words\",\"firstWordId\":\"w300\",\"lastWordId\":\"w340\",\"afterId\":\"i4\"}: a new clip of those words after that item (\"afterId\":\"start\" for the very beginning; leave afterId out for the end).\n- {\"op\":\"split\",\"id\":\"i3\",\"wordId\":\"w130\"}: split a clip just before that word; the second half is a new item.\n- {\"op\":\"delete\",\"ids\":[\"i3\",\"i5\"]}: remove items.\n- {\"op\":\"move\",\"ids\":[\"i7\",\"i8\"],\"afterId\":\"i2\"} (or \"beforeId\"): move items, keeping their order, next to another item.\n- {\"op\":\"insert_cut_in\",\"afterId\":\"i4\",\"narration\":\"…\"}: a new cut-in card with its finished paragraph.\n- {\"op\":\"write\",\"id\":\"i6\",\"narration\":\"…\"}: the whole new paragraph for an existing cut-in.\n- {\"op\":\"correct_word\",\"wordId\":\"w55\",\"text\":\"Hernández\"}: fix how a word is spelled; its timing never changes.\n- {\"op\":\"tighten_pauses\"}: cut quiet pauses over 2 s in the kept footage to a beat (two seconds before an answer), as the build does.\n- {\"op\":\"polish_edges\"}: move every clip edge the edge review flags that a small fix can mend.\n- {\"op\":\"note\",\"id\":\"i3\",\"on\":\"a grandmother keeps other people's children\",\"text\":\"edit: the porch footage under these words\"}: a note for the video editor, only when asked for one (\"tell the editor…\", \"add an edit note…\", \"leave a note on this line\"). It goes on the item it's about, a cut-in or a footage clip, and \"on\" is the exact words it's about, copied from that cut-in's narration or from what's said in that clip, so the editor does it at that moment (leave \"on\" out only for a note on the whole item). It starts \"edit:\" and says what to do there; the editor follows it over their usual plan, and the Doc shows it as a comment on those words.\n- {\"op\":\"remove_note\",\"id\":\"i3\",\"note\":1}: take off an item's note by its number in CURRENT SCRIPT, only when asked (to move a note: remove_note, then note where it belongs).\nA clip stays inside one recording. START OVER: only when the producer asks to start the script over, rebuild it from scratch or throw it away, set startOver to true and send no edits. Nothing is cleared until the producer confirms it in the app; the transcript, speakers, sources and research stay. The reply says you have asked them to confirm. Never set it otherwise. The reply is for the producer: one to four short sentences on what you changed or proposed and why, or the answer to their question. Never show milliseconds or word IDs in it; give moments as [m:ss] footage times.";
 
 function systemPrompt(script: Script, format: Format): string {
   const cases = format.compilation ? Math.max(caseCount(script.parts), 1) : 1;
@@ -56,7 +56,7 @@ const SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          op: { type: "string", enum: ["trim", "remove_words", "insert_words", "split", "delete", "move", "insert_cut_in", "write", "correct_word", "tighten_pauses", "polish_edges", "note"] },
+          op: { type: "string", enum: ["trim", "remove_words", "insert_words", "split", "delete", "move", "insert_cut_in", "write", "correct_word", "tighten_pauses", "polish_edges", "note", "remove_note"] },
           id: { type: "string" },
           ids: { type: "array", items: { type: "string" } },
           afterId: { type: "string" },
@@ -67,6 +67,8 @@ const SCHEMA = {
           lastWordId: { type: "string" },
           narration: { type: "string" },
           text: { type: "string" },
+          on: { type: "string" },
+          note: { type: "integer" },
         },
         required: ["op"],
       },
@@ -158,7 +160,7 @@ export function current(script: Script, format: Format): string {
       cue++;
       const narration = (clip.narration ?? "").trim();
       lines.push(`${label} cut-in (${purpose}): ${narration === "" ? "(nothing written)" : `"${narration}"`}`);
-      for (const note of clip.notes ?? []) lines.push(`   producer's comment${note.anchor ? ` on "${note.anchor.quote}"` : ""}: ${note.text}`);
+      for (const [at, note] of (clip.notes ?? []).entries()) lines.push(`   note ${at + 1}, the producer's comment${note.anchor ? ` on "${note.anchor.quote}"` : ""}: ${note.text}`);
       const proposal = (script.proposals ?? []).find((one) => one.cutIn === clip.id);
       if (proposal !== undefined) lines.push(`   pending proposal: "${proposal.after}"`);
       continue;
@@ -178,7 +180,7 @@ export function current(script: Script, format: Format): string {
       said = ` w${first}–w${last} "${tail.length === 0 ? head.join(" ") : `${head.join(" ")} … ${tail.join(" ")}`}"`;
     }
     lines.push(`${label} clip [${clock(clip.startMs)}–${clock(clip.endMs)}${recording}]${said}`);
-    for (const note of clip.notes ?? []) lines.push(`   producer's comment for the editor: "${note.text.trim()}"`);
+    for (const [at, note] of (clip.notes ?? []).entries()) lines.push(`   note ${at + 1}, the producer's comment for the editor${note.anchor ? ` on "${note.anchor.quote}"` : ""}: "${note.text.trim()}"`);
     for (const issue of issues) if (issue.id === clip.id) lines.push(`   edge review: ${issue.end ? "end" : "start"} ${issue.issue}`);
   }
   return lines.join("\n");
@@ -273,6 +275,13 @@ class Work {
     if (given === "" || given === "end") return this.clips.length;
     if (given === "start") return 0;
     return this.at(given) + 1;
+  }
+
+  /** Where a note's words are in its item (blocks.noteAnchor), or why they can't be found. */
+  anchor(clip: Clip, on: string): { start: number; end: number; quote: string } {
+    const found = noteAnchor({ ...this.script, corrections: this.corrections }, clip, on);
+    if (found === null) throw new Error(isCutIn(clip) ? `"${on}" isn't in that cut-in's narration: copy the words the note is on exactly.` : `"${on}" isn't said in that clip: copy the words the note is on exactly from what's said there.`);
+    return found;
   }
 
   static narration(given: unknown): string {
@@ -393,10 +402,17 @@ class Work {
         this.clips = tidy.polish(this.clips, words, this.corrections, this.script.durationMs)[0];
         return;
       case "note": {
-        const index = this.at(text("id") ?? "");
-        const clip = this.clips[index]!;
-        if (isCutIn(clip)) throw new Error("An edit note goes on a footage clip's timestamp, not a cut-in: put it on the clip it is about.");
-        clip.notes = [...(clip.notes ?? []), { id: crypto.randomUUID(), text: editNote(text("text") ?? ""), at: Date.now() }];
+        const clip = this.clips[this.at(text("id") ?? "")]!;
+        const body = editNote(text("text") ?? "");
+        const on = (text("on") ?? "").trim();
+        clip.notes = [...(clip.notes ?? []), { id: crypto.randomUUID(), text: body, at: Date.now(), ...(on !== "" ? { anchor: this.anchor(clip, on) } : {}) }];
+        return;
+      }
+      case "remove_note": {
+        const clip = this.clips[this.at(text("id") ?? "")]!;
+        const number = typeof edit.note === "number" ? edit.note : 0;
+        if (!Number.isInteger(number) || number < 1 || number > (clip.notes ?? []).length) throw new Error(`That item has ${(clip.notes ?? []).length} notes: name one by its number in CURRENT SCRIPT.`);
+        clip.notes = (clip.notes ?? []).filter((_, at) => at !== number - 1);
         return;
       }
       default:

@@ -68,6 +68,7 @@ import {
 import { asInt, byteLength, debugInts, debugStr, debugStrings, f32Saved as f32, fixed, isAlphanumeric, jsonForSerde, round, serdeParse, signed32, takeChars, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import { read, readStruct, SerdeError, type Field, type Struct } from "./serde.ts";
+import * as scriptComments from "./script_comments.ts";
 import * as sfx from "./sfx.ts";
 import { compareKeys, stableStringify } from "./stable.ts";
 import { agentView, isSubtitled, revisionConflict, UpdateError, type Live, type Store } from "./store.ts";
@@ -1907,6 +1908,8 @@ export function editContext(app: App, found: Live, args: Args): Args {
   const speakers = hooks.peopleSummary(p);
   const cutIns: Json[] = [];
   const footage: Json[] = [];
+  // The producer's comments from the script, each at the frame its words are said.
+  const comments: Json[] = [];
   (p.script?.blocks ?? []).forEach((block, index) => {
     if (block.kind === "narration") {
       const number = cutIns.length + 1;
@@ -1917,6 +1920,13 @@ export function editContext(app: App, found: Live, args: Args): Args {
       if (placed !== undefined && !inside(placed.start, clipEnd(placed))) {
         cutIns.push(null);
         return;
+      }
+      for (const comment of block.comments ?? []) {
+        const heard = comment.on !== undefined && voiceover !== undefined ? heardBy(app, p, voiceover) : null;
+        let at = heard !== null ? scriptComments.heardAt(heard, comment.on!) : null;
+        const share = at === null && comment.on !== undefined && placed !== undefined ? scriptComments.shareThrough(block.text, comment.on) : null;
+        if (share !== null) at = placed!.start + Math.round(share * (clipEnd(placed!) - placed!.start));
+        comments.push({ at: at ?? placed?.start ?? null, cut_in: number, ...(comment.on !== undefined ? { on: comment.on } : {}), text: comment.text });
       }
       cutIns.push({
         cut_in: number,
@@ -1931,6 +1941,11 @@ export function editContext(app: App, found: Live, args: Args): Args {
     } else {
       const placed = typeof block.clip === "string" ? clipOf(p, block.clip) : undefined;
       if (placed !== undefined && inside(placed.start, clipEnd(placed))) {
+        for (const comment of block.comments ?? []) {
+          const heard = comment.on !== undefined ? heardBy(app, p, placed) : null;
+          const at = heard !== null ? scriptComments.heardAt(heard, comment.on!) : null;
+          comments.push({ at: at ?? placed.start, footage_block: index, ...(comment.on !== undefined ? { on: comment.on } : {}), text: comment.text });
+        }
         footage.push({
           block: index,
           label: block.label,
@@ -2001,6 +2016,7 @@ export function editContext(app: App, found: Live, args: Args): Args {
     ...(isEssay(p.style) ? { chapters: commentaryAudit.outline(p) } : {}),
     speaker_line_counts: speakers,
     subtitles_in_span: subtitles,
+    ...(comments.length > 0 ? { script_comments: comments.sort((a, b) => Number((a as Args).at ?? 0) - Number((b as Args).at ?? 0)) } : {}),
     footage_blocks: footage,
     cut_ins: cutIns.filter((cutIn) => cutIn !== null),
     audit,
@@ -2089,6 +2105,15 @@ function lines(text: string): string[] {
 }
 
 /** A cut-in voice-over's words as `word@timeline-seconds`, from its transcript (null without one). */
+/** What a clip plays of its media's transcript, for placing a comment's words; null without one. */
+function heardBy(app: App, p: Project, clip: Clip): scriptComments.Heard | null {
+  if (clip.type !== "audio" && clip.type !== "video") return null;
+  const media = p.media.find((own) => own.id === clip.media);
+  const transcript = media === undefined ? null : readTranscript(app.media.paths(media.path).transcript);
+  if (transcript === null) return null;
+  return { start: clip.start, end: clipEnd(clip), sourceIn: clip.source_in ?? 0, speed: clip.speed ?? 1, fps: fpsOf(p), words: transcript.words };
+}
+
 function cutInWords(app: App, p: Project, clip: Clip): string | null {
   if (clip.type !== "audio") return null;
   const media = p.media.find((own) => own.id === clip.media);

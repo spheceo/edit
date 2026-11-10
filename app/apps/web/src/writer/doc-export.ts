@@ -187,7 +187,8 @@ export function footageContent(script: Script, copy = false): DocContent {
       // Its first and last words, then what the producer wrote on the
       // timestamp, each as Repack's own note.
       note(start, here(), boundary(clip, script.words, script.corrections));
-      for (const written of clip.notes ?? []) note(start, here(), written.text);
+      // A comment on words said in the clip names them: the Doc shows the timestamp alone.
+      for (const written of clip.notes ?? []) note(start, here(), written.anchor ? `“${written.anchor.quote}”\n${written.text}` : written.text);
     });
     if (block.clips.length) append(inline ? " " : "\n\n");
     // A reused case with nothing written on it still prints a word for its link's comment.

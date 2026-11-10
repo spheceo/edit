@@ -33,7 +33,7 @@
     "name": "skill"
   },
   {
-    "description": "Start here, once per stage: the revision (base_rev), sections, tracks, media, each cut-in's narration with its word timings (word@seconds) and the footage blocks with their notes, speaker line counts, mechanical issues, and the clips as one line each (id, track, type, [start,end) frames, media@source seconds, text, keyframed params). Subtitles are only counted. section (intro, story = between intro and outro, outro) or start/end (seconds) narrow everything to that span; clip_ids returns those clips in full (keyframes too). include_transcript adds the timeline's cached speech for the span. Never needs get_project.",
+    "description": "Start here, once per stage: the revision (base_rev), sections, tracks, media, cut-ins' narration with word timings (word@seconds), footage blocks with notes, script_comments (each at a frame), speaker line counts, mechanical issues, and the clips a line each (id, track, type, [start,end) frames, media@source seconds, text, keyframed params). Subtitles are only counted. section (intro, story = between intro and outro, outro) or start/end (seconds) narrow everything to that span; clip_ids returns those clips in full (keyframes too). include_transcript adds the span's cached speech. Never needs get_project.",
     "inputSchema": {
       "properties": {
         "clip_ids": {

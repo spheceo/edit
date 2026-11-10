@@ -39,10 +39,24 @@ test("a review fix writes saved narration straight in", () => {
   expect(proposals).toEqual([]);
 });
 
-test("adds an edit note to a footage clip only", () => {
+test("an edit note goes on the words it's about: a cut-in's narration or what a clip says (Nov 10, JJ: \"the note should stay on the text not on the clip\")", () => {
   const [clips] = apply(script(), [{ op: "note", id: "i1", text: "a blue waveform for this call" }], [], false);
   expect(clips[0]!.notes?.at(-1)?.text).toBe("edit: a blue waveform for this call");
-  expect(() => apply(script(), [{ op: "note", id: "i2", text: "edit: zoom" }], [], false)).toThrow("footage clip");
+  // On a cut-in, on its words.
+  const [onText] = apply(script(), [{ op: "note", id: "i2", on: "he was home", text: "edit: the porch footage under this" }], [], false);
+  expect(onText[1]!.notes?.at(-1)).toMatchObject({ text: "edit: the porch footage under this", anchor: { start: 8, end: 19, quote: "he was home" } });
+  // On a footage clip, on what's said there.
+  const [onFootage] = apply(script(), [{ op: "note", id: "i3", on: "where were you?", text: "edit: zoom in" }], [], false);
+  expect(onFootage[2]!.notes?.at(-1)?.anchor?.quote).toBe("Where were you?");
+  expect(() => apply(script(), [{ op: "note", id: "i2", on: "never said", text: "edit: zoom" }], [], false)).toThrow("isn't in that cut-in's narration");
+  // Moved: taken off one item, put on another.
+  const noted = script();
+  noted.clips[0]!.notes = [{ id: "x", text: "edit: zoom", at: 0 }];
+  expect(current(noted, formatOf("interrogation", false, "Case")).includes("note 1, the producer's comment for the editor")).toBe(true);
+  const [moved] = apply(noted, [{ op: "remove_note", id: "i1", note: 1 }, { op: "note", id: "i2", on: "home", text: "edit: zoom" }], [], false);
+  expect(moved[0]!.notes).toEqual([]);
+  expect(moved[1]!.notes?.at(-1)?.anchor?.quote).toBe("home");
+  expect(() => apply(noted, [{ op: "remove_note", id: "i1", note: 2 }], [], false)).toThrow("1 notes");
   expect(editNote("Edit:  zoom in slowly ")).toBe("edit: zoom in slowly");
 });
 

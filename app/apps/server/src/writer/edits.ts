@@ -25,7 +25,7 @@ export function checkClips(clips: Clip[], durationMs: number): Clip[] {
       [...note.text].length > 2_000 ||
       note.id === "" ||
       note.id.length > 80 ||
-      (note.anchor !== undefined && (note.anchor.start >= note.anchor.end || note.anchor.end > 12_000 || note.anchor.quote === "" || [...note.anchor.quote].length > 6_000));
+      (note.anchor !== undefined && (note.anchor.start >= note.anchor.end || note.anchor.end > 200_000 || note.anchor.quote === "" || [...note.anchor.quote].length > 6_000));
     if (notes.length > 50 || notes.some(badNote)) throw new Error("A timestamp holds up to 50 comments of up to 2,000 characters.");
     if (clip.kind === undefined) {
       if (clip.narration !== undefined || clip.narrationRole !== undefined || clip.reuse !== undefined) throw new Error("Only a cut-in holds narration.");

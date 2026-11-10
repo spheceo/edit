@@ -11,7 +11,8 @@
 // paragraph. A Drive folder's recordings are joined on that clock, `parts`
 // saying where each one starts and its link; a footage clip across two
 // recordings plays as one range of each. A clip's notes are the producer's
-// for the editor, an "edit:" one an instruction the agent follows there.
+// comments for the editor: the edit's blocks keep them as `comments`, each on
+// the words it's about, and the agent carries them out there.
 
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
@@ -30,7 +31,7 @@ import * as drive from "./writer/drive.ts";
 import * as writerShare from "./writer/handoff.ts";
 import * as writerStore from "./writer/store.ts";
 import type { Router } from "./http/router.ts";
-import type { Creator, ScriptBlock, Style } from "./model.ts";
+import type { Creator, ScriptBlock, ScriptComment, Style } from "./model.ts";
 import * as script from "./script.ts";
 import * as scriptSync from "./script_sync.ts";
 import { markReusedScript, parseScriptText } from "./compilation_input.ts";
@@ -40,6 +41,23 @@ import { join } from "./paths.ts";
 import { stableStringify } from "./stable.ts";
 import { THE_MACHINE } from "./machine.ts";
 
+/** A producer's comment on a Writer clip: on a cut-in's narration words, or a footage clip's timestamp (or its spoken words). */
+type WriterNote = { id?: string; text: string; anchor?: { quote: string } };
+
+/**
+ * A script clip's comments as its edit keeps them (Sphe, Nov 10: "leave notes
+ * which the edit agent will pick up and follow at that exact moment"): each
+ * with the words it's on, so the agent finds the frame they're said at.
+ */
+export function commentsOf(clip: { notes?: WriterNote[] }): ScriptComment[] {
+  return (clip.notes ?? []).flatMap((note, index) => {
+    const text = note.text.trim();
+    if (text === "") return [];
+    const on = note.anchor?.quote.trim() ?? "";
+    return [{ id: note.id || `note-${index + 1}`, text, ...(on !== "" ? { on } : {}) }];
+  });
+}
+
 /** A Writer script as its `script.json` has it (the parts the handoff reads). */
 export interface WriterScript {
   id: string;
@@ -47,7 +65,7 @@ export interface WriterScript {
   sourceKind?: string;
   sourceUrl?: string;
   kind?: string;
-  clips?: { id: string; startMs: number; endMs: number; kind?: string; narration?: string; reuse?: string; notes?: { text: string }[] }[];
+  clips?: { id: string; startMs: number; endMs: number; kind?: string; narration?: string; reuse?: string; notes?: WriterNote[] }[];
   parts?: { title: string; startMs: number; durationMs: number; url?: string; reuse?: string; mediaSource?: string; originalKey?: string }[];
   reuses?: { url: string; after: number; title?: string; script?: string; scriptTitle?: string; scriptText?: string; scriptBlocks?: ScriptBlock[] }[];
   commentary?: {
@@ -170,14 +188,14 @@ export function toParsed(given: WriterScript): Parsed {
     reused.add(url);
   };
   for (const clip of given.clips ?? []) {
-    const notes = (clip.notes ?? []).map((note) => note.text.trim()).filter((text) => text !== "");
+    const comments = commentsOf(clip);
     if (clip.kind === "cut-in") {
       const text = (clip.narration ?? "").trim();
-      if (text !== "" && !(clip.reuse && text === "REUSE")) blocks.push({ kind: "narration", text, ...(notes.length > 0 ? { notes } : {}), origin: clip.id });
+      if (text !== "" && !(clip.reuse && text === "REUSE")) blocks.push({ kind: "narration", text, ...(comments.length > 0 ? { comments } : {}), origin: clip.id });
       if (clip.reuse) appendReuse(clip.reuse);
       continue;
     }
-    // One range of each recording the clip plays over; its notes go with the first.
+    // One range of each recording the clip plays over; its comments go with the first.
     let first = true;
     for (const one of files) {
       const from = Math.max(clip.startMs, one.start);
@@ -191,7 +209,8 @@ export function toParsed(given: WriterScript): Parsed {
         start,
         end,
         label: `${mmss(start)} - ${mmss(end)}`,
-        ...((first && notes.length > 0) || one.originalKey ? { notes: [...(first ? notes : []), ...(one.originalKey ? [`Shared original: ${one.originalKey}`] : [])] } : {}),
+        ...(first && comments.length > 0 ? { comments } : {}),
+        ...(one.originalKey ? { notes: [`Shared original: ${one.originalKey}`] } : {}),
         origin: clip.id,
       });
       first = false;

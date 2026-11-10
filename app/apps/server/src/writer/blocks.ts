@@ -108,17 +108,41 @@ export function wordSpans(script: Script, clip: Clip, side: Side): [number, numb
   });
 }
 
+/**
+ * Where a note's words are in its item, as a comment's anchor: in a cut-in's
+ * narration, or in what a footage clip says (its review block's text), at
+ * `near` when they're there, else their first place; null when absent.
+ */
+export function noteAnchor(script: Script, clip: Clip, on: string, near?: number): { start: number; end: number; quote: string } | null {
+  const said = isCutIn(clip) ? (clip.narration ?? "") : spoken(script, wordSpans(script, clip, "text").map(([index]) => index));
+  const quote = on.trim();
+  if (quote === "") return null;
+  let start = near !== undefined && said.slice(near, near + quote.length) === quote ? near : said.indexOf(quote);
+  if (start < 0) start = said.toLowerCase().indexOf(quote.toLowerCase());
+  return start < 0 ? null : { start, end: start + quote.length, quote: said.slice(start, start + quote.length) };
+}
+
 function spoken(script: Script, indexes: number[]): string {
   return indexes.map((at) => script.corrections?.[script.words[at]!.id] ?? script.words[at]!.text).join(" ");
 }
 
 function footageBlocks(script: Script): Block[] {
   return script.clips.map((clip): Block => {
-    const editNotes = editLines((clip.notes ?? []).map((note) => note.text));
+    // Each edit note on the words it's about, where it has them (a cut-in's narration, or what the clip says).
+    const editNotes: string[] = [];
+    const editMarks: EditMark[] = [];
+    for (const note of clip.notes ?? []) {
+      const on = note.anchor ? noteAnchor(script, clip, note.anchor.quote, note.anchor.start) : null;
+      for (const line of editLines([note.text])) {
+        if (on !== null) editMarks.push({ note: editNotes.length, ...on });
+        editNotes.push(line);
+      }
+    }
+    const notes = { ...(editNotes.length ? { editNotes } : {}), ...(editMarks.length ? { editMarks } : {}) };
     if (isCutIn(clip)) {
       const text = clip.narration ?? "";
       const read = readMs(text);
-      return { id: clip.id, kind: "narration", text, readMs: read, durationMs: read, ...(editNotes.length ? { editNotes } : {}) };
+      return { id: clip.id, kind: "narration", text, readMs: read, durationMs: read, ...notes };
     }
     const inside = wordSpans(script, clip, "text");
     const context = (side: Side) => {
@@ -137,7 +161,7 @@ function footageBlocks(script: Script): Block[] {
       previewMs: [clip.startMs, clip.endMs],
       ...(inside.length ? { words: inside.map(([index]): [number, number] => [script.words[index]!.startMs, script.words[index]!.endMs]) } : {}),
       durationMs: Math.max(0, clip.endMs - clip.startMs),
-      ...(editNotes.length ? { editNotes } : {}),
+      ...notes,
     };
   });
 }

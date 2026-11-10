@@ -20,10 +20,11 @@ export type Clip = {
   narrationRole?: "intro" | "bridge" | "conclusion";
   /** On a compilation's transition into a reused case: the earlier video's link, a comment there, never narration. */
   reuse?: string;
-  /** What the producer wrote on a footage clip's timestamp; each goes into the Doc as a comment there. */
+  /** The producer's comments for the editor, on a footage clip's timestamp or a cut-in; each goes into the Doc as a comment there and to the edit's agent. */
   notes?: Note[];
 };
 
+/** `anchor`: the words it's on, offsets into a cut-in's narration or into what a footage clip says (its review block's text). */
 export type Note = { id: string; text: string; at: number; anchor?: { start: number; end: number; quote: string } };
 
 /** One recording of a joined Drive folder, on the joined clock. */

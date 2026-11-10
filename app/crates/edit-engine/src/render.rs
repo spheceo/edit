@@ -324,6 +324,8 @@ pub(crate) struct VideoReader {
     position: Option<f64>,
     /// The frame asked for now continues from the last one (for `decode_stats`).
     forward: bool,
+    /// Made ready for a cut ahead of the playhead (then, or looked for since) and not read from yet.
+    ahead: Option<Instant>,
     /// A still has been copied out since it was decoded.
     copied: bool,
     /// A cloud original's stretches cut to this Mac (`crate::excerpts`), read instead of the URL where they reach.
@@ -376,6 +378,7 @@ impl VideoReader {
             spare: Vec::new(),
             position: None,
             forward: false,
+            ahead: None,
             copied: false,
             excerpts,
             excerpt: None,
@@ -783,6 +786,10 @@ impl Drop for VideoReader {
     }
 }
 
+/// How long a reader made ready for a cut ahead is the last the pool lets go: the playhead reaches
+/// the cut within three seconds of playing (`player::AHEAD_SECONDS`), or it went elsewhere.
+const AHEAD_KEPT: std::time::Duration = std::time::Duration::from_secs(4);
+
 /// Open readers kept between frames, by file and size rather than by clip, so
 /// cutting back to a file (jump cuts, a sheet's frames) continues a reader
 /// instead of opening and seeking a new one.
@@ -804,35 +811,67 @@ impl ReaderPool {
     }
 
     /// The pooled reader for `source` that gets to `time` soonest (one just
-    /// behind it decodes forward; anything else seeks), or a new one.
+    /// behind it decodes forward; anything else seeks), or a new one. One
+    /// made ready for a cut ahead waits for its cut: it's never the one
+    /// taken to seek somewhere else.
     fn take(&mut self, source: &Source, time: f64) -> VideoReader {
         let cost = |reader: &VideoReader, used: u64| match reader.position {
             Some(position) if position <= time + 1e-6 && time - position <= 2.0 => time - position,
+            _ if reader
+                .ahead
+                .is_some_and(|since| since.elapsed() < AHEAD_KEPT) =>
+            {
+                f64::INFINITY
+            }
             _ => 1e6 - used as f64 * 1e-3,
         };
         let best = self
             .readers
             .iter()
             .enumerate()
-            .filter(|(_, (reader, _))| reader.source.key == source.key)
+            .filter(|(_, (reader, used))| {
+                reader.source.key == source.key && cost(reader, *used).is_finite()
+            })
             .min_by(|(_, (a, at)), (_, (b, bt))| cost(a, *at).total_cmp(&cost(b, *bt)))
             .map(|(index, _)| index);
         match best {
-            Some(index) => self.readers.swap_remove(index).0,
+            Some(index) => {
+                let mut reader = self.readers.swap_remove(index).0;
+                reader.ahead = None;
+                reader
+            }
             None => VideoReader::open(source.clone()),
         }
     }
 
     /// Whether a pooled reader of `source` would read on to `time` (it's just behind it) rather than seek.
-    /// Asked by the window's decode-ahead (PreviewPictures), which only Edit.app has.
+    /// Asked by the window's decode-ahead (PreviewPictures), which only Edit.app has: one made ready
+    /// for that cut is wanted still, and stays kept (`put_ahead`).
     #[cfg(target_os = "macos")]
-    fn ready(&self, source: &Source, time: f64) -> bool {
-        self.readers.iter().any(|(reader, _)| {
-            reader.source.key == source.key
+    fn ready(&mut self, source: &Source, time: f64) -> bool {
+        let mut found = false;
+        for (reader, _) in &mut self.readers {
+            if reader.source.key == source.key
                 && reader
                     .position
                     .is_some_and(|position| position <= time + 1e-6 && time - position <= FORWARD)
-        })
+            {
+                found = true;
+                if reader.ahead.is_some() {
+                    reader.ahead = Some(Instant::now());
+                }
+            }
+        }
+        found
+    }
+
+    /// A reader made ready for a cut ahead of the playhead. The pool lets the reader longest unused
+    /// go, which is this one by the time its cut comes (it was made seconds ago; the readers playing
+    /// are used every frame): so for a few seconds it's the last to go, not the first.
+    #[cfg(target_os = "macos")]
+    fn put_ahead(&mut self, mut reader: VideoReader) {
+        reader.ahead = Some(Instant::now());
+        self.put(reader);
     }
 
     fn put(&mut self, reader: VideoReader) {
@@ -844,7 +883,12 @@ impl ReaderPool {
                 .iter()
                 .enumerate()
                 .filter(|(_, (reader, _))| key.is_none_or(|key| reader.source.key == *key))
-                .min_by_key(|(_, (_, used))| *used)
+                .min_by_key(|(_, (reader, used))| {
+                    let kept = reader
+                        .ahead
+                        .is_some_and(|since| since.elapsed() < AHEAD_KEPT);
+                    (kept, *used)
+                })
                 .map(|(index, _)| index)
         };
         while self
@@ -1190,11 +1234,17 @@ const AHEAD_THREADS: usize = 1;
 #[cfg(target_os = "macos")]
 pub(crate) type Picture = (String, u32, u32, Vec<u8>);
 
+/// How many readers the preview keeps, and how many of one file (the one longest unused goes when there are more).
+#[cfg(target_os = "macos")]
+pub(crate) const READERS: usize = 12;
+#[cfg(target_os = "macos")]
+pub(crate) const READERS_A_FILE: usize = 3;
+
 #[cfg(target_os = "macos")]
 impl PreviewPictures {
     pub(crate) fn new() -> Self {
         // A few readers per file: two layers of one source, the way back after a jump, and the next cut's.
-        let pool = Arc::new(Mutex::new(ReaderPool::new(12, 3)));
+        let pool = Arc::new(Mutex::new(ReaderPool::new(READERS, READERS_A_FILE)));
         // What the ahead threads are opening now (file, size and the time in ms): a cut asked for every frame is opened once.
         let opening: Arc<Mutex<HashSet<(DecodeKey, i64)>>> = Arc::new(Mutex::new(HashSet::new()));
         let (ahead, requests) = mpsc::channel::<(Source, f64)>();
@@ -1224,7 +1274,7 @@ impl PreviewPictures {
                         // The frame decoded here is dropped: the reader now stands on it, and the frame's own
                         // read is a copy out of what it holds.
                         if reader.frame_into(time, &mut scratch, false).is_ok() {
-                            pool.lock().put(reader);
+                            pool.lock().put_ahead(reader);
                         }
                         opening.lock().remove(&key);
                     }
@@ -4733,5 +4783,41 @@ mod tests {
         pool.put(VideoReader::open(other.clone()));
         pool.put(VideoReader::open(other));
         assert_eq!(pool.readers.len(), 3);
+    }
+
+    /// At 2× a cut's reader was made ready, then let go for being the longest unused just before
+    /// its cut came (Cops Realize, frames 928 and 1007: a seek on the frame of the cut).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_reader_made_ready_for_a_cut_is_the_last_let_go() {
+        let media: Media = serde_json::from_value(json!({
+            "id": "m", "name": "m", "path": "/nowhere.mp4", "kind": "video",
+            "duration": 900.0, "width": 1920, "height": 1080, "fps": 30
+        }))
+        .unwrap();
+        let source = Source::new(&media, "/nowhere.mp4".into(), (640, 360), Order::Bgra);
+        let at = |seconds: f64| {
+            let mut reader = VideoReader::open(source.clone());
+            reader.position = Some(seconds);
+            reader
+        };
+        let mut pool = ReaderPool::new(3, 3);
+        pool.put_ahead(at(532.0));
+        // The readers playing are put back every frame, and others come: the cut's stays.
+        for frame in 0..10 {
+            let playing = pool.take(&source, 160.0 + f64::from(frame) / 30.0);
+            assert_ne!(
+                playing.position,
+                Some(532.0),
+                "the cut's reader isn't taken to play on"
+            );
+            pool.put(at(160.0 + f64::from(frame) / 30.0));
+            pool.put(at(40.0));
+            pool.put(at(700.0));
+        }
+        assert!(pool.ready(&source, 532.0), "still there for its cut");
+        // Read from at its cut, it's a reader like any other again.
+        let cut = pool.take(&source, 532.0);
+        assert_eq!((cut.position, cut.ahead.is_none()), (Some(532.0), true));
     }
 }

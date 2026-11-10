@@ -33,6 +33,7 @@ pub mod render;
 pub mod screen_text;
 pub mod seats;
 pub mod sheet;
+pub mod tempo;
 #[cfg(not(target_os = "macos"))]
 pub mod text_model;
 pub mod track;

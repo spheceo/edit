@@ -10,6 +10,8 @@ fn main() {
         "preview_pause",
         "preview_position",
         "preview_hint",
+        "preview_rate",
+        "preview_volume",
         "preview_close",
         "notices_status",
         "notices_allow",

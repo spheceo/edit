@@ -80,6 +80,31 @@ times the player's (the worker's WSOLA, as a sped clip's). A window that
 refuses the speed plays at 1×, and the button says 1×. The speed stays until
 it's changed or Edit is closed.
 
+**How the window plays at a speed** (Nov 10). The speed and the loudness are
+the page's to set (`preview_rate`, 0.25–4, and
+`preview_volume`, 0–1; both kept until changed, both 1 in a preview just opened):
+Script mode's 2× and volume buttons (docs/plans/2026-11-10-script-player.md, step 4).
+The mixer still mixes the timeline as it is; each window is made shorter or longer
+with its pitch kept on its way to the speaker (`crates/edit-engine/src/tempo.rs`:
+WSOLA, 20 ms blocks laid half over each other, each taken where the sound best goes
+on within 15 ms of where the speed puts it; at 1× the sound goes through untouched),
+the clock is the speaker's count times the speed, and the picture is drawn a stride
+of frames at a time (every other frame at 2×, which the reader decodes forward to;
+`skipped` counts only pictures missed beyond that). A change while playing never
+stops it: the sound at the speed before plays on while a second mixer gets the new
+speed's ready, which takes the speaker over a tenth of a second ahead of what's
+playing (`Feed::join`), each side faded 5 ms, and the clock changes speed at that
+sample. The volume is the speaker's own mixer, after the ring, so it's heard at once.
+The cuts warmed ahead are those within three seconds of playing (twice the frames
+at 2×), nearest first and no more than the reader pool keeps beside the readers
+playing, and a reader made ready for a cut is the last the pool lets go for four
+seconds, not the first. Measured Nov 10 on Cops Realize (M1): 2.000 s of timeline a
+second at 2× with 30 pictures a second drawn, no seek while playing, no change of
+speed leaving the speaker short (the new sound ready 11–83 ms after it's asked);
+on a minute of interrogation speech at 2× its pitch stays within 50 cents on 95.7%
+of voiced frames (FFmpeg's atempo 94.1%, the page's SoundTouch 89.2%). Nobody has
+listened to it yet.
+
 To see it without screen access: `EDIT_PREVIEW_TRACE=1` says each placement and
 draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,
 play and pause by itself, and `EDIT_PREVIEW_SHOT=<file.png>` then saves the

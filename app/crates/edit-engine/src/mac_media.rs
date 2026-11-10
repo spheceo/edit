@@ -127,6 +127,8 @@ unsafe extern "C" {
     fn edit_speaker_write(handle: *mut c_void, samples: *const f32, frames: usize) -> usize;
     fn edit_speaker_run(handle: *mut c_void, on: i32);
     fn edit_speaker_flush(handle: *mut c_void);
+    fn edit_speaker_keep(handle: *mut c_void, frames: usize) -> u64;
+    fn edit_speaker_volume(handle: *mut c_void, level: f32);
     fn edit_speaker_state(
         handle: *mut c_void,
         played: *mut u64,
@@ -678,6 +680,21 @@ impl Speaker {
     pub fn flush(&self) {
         // A flag and two counters on the handle this speaker owns.
         unsafe { edit_speaker_flush(self.handle.as_ptr()) };
+    }
+
+    /// Keeps the next `frames` of what's buffered and drops the rest (the
+    /// speed changed: what follows is mixed again), playing on meanwhile;
+    /// the frames written in all now, where the next write lands. Only with
+    /// no write under way, and `frames` a tenth of a second or more.
+    pub fn keep(&self, frames: usize) -> u64 {
+        // Counters and samples of the handle this speaker owns, ahead of what the output reads.
+        unsafe { edit_speaker_keep(self.handle.as_ptr(), frames) }
+    }
+
+    /// How loud it plays, 0 to 1, from now.
+    pub fn volume(&self, level: f32) {
+        // Sets the engine's mixer on the handle this speaker owns.
+        unsafe { edit_speaker_volume(self.handle.as_ptr(), level) };
     }
 
     pub fn state(&self) -> SpeakerState {

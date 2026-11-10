@@ -22,6 +22,8 @@
     "allow-preview-pause",
     "allow-preview-position",
     "allow-preview-hint",
+    "allow-preview-rate",
+    "allow-preview-volume",
     "allow-preview-close",
     "allow-notices-status",
     "allow-notices-allow",

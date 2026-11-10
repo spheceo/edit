@@ -24,6 +24,17 @@
 //! 20-80 ms seek (and a 2-120 ms open) on the drawing path; a jump the page
 //! knows about ahead of time (`hint`) is warmed the same way.
 //!
+//! It plays at a speed (`set_rate`, 0.25–4; Script mode's 2×): the mixer
+//! still mixes the timeline as it is, each window is made shorter or longer
+//! with its pitch kept on its way to the speaker (`crate::tempo`), the clock
+//! is the speaker's count times the speed, and the picture is drawn a stride
+//! of frames at a time (every other one at 2×). A change while playing keeps
+//! playing: the sound at the speed before plays on while a second mixer gets
+//! the new speed's ready, which then takes the speaker over a tenth of a
+//! second ahead of what's playing (`Feed::join`), so however long a file
+//! takes to open there's no silence between. How loud (`set_volume`) is the
+//! speaker's own, so it's heard at once.
+//!
 //! The page sends the edit whole once (`set_project`) and then only what
 //! changed (`apply_patch`, the page's lib/patch.ts): a drag on Cops Realize
 //! sent its 2.4 MB ten times a second, 26 MB/s through the window's IPC, each
@@ -46,7 +57,10 @@ use serde_json::Value;
 
 use crate::mac_media::Speaker;
 use crate::mix::{self, Part, RATE};
-use crate::render::{decode_stats, feed_peaks, heard_segments, PreviewPictures};
+use crate::render::{
+    decode_stats, feed_peaks, heard_segments, PreviewPictures, READERS, READERS_A_FILE,
+};
+use crate::tempo::{self, Clock, Tempo};
 
 /// Each call and draw said on stderr (`EDIT_PREVIEW_TRACE=1`), to see what the preview does without looking.
 pub fn trace(what: impl FnOnce() -> String) {
@@ -61,6 +75,12 @@ const AHEAD_SECONDS: f64 = 3.0;
 /// Sound mixed ahead of the speaker, and each window handed to it (seconds).
 const SOUND_AHEAD_SECONDS: f64 = 2.0;
 const SOUND_WINDOW_SECONDS: f64 = 0.25;
+/// The speed changed while playing: the new speed's sound joins this far
+/// ahead of what the speaker is playing (frames, a tenth of a second: well
+/// clear of what the output is reading).
+const JOIN_AHEAD: usize = RATE / 10;
+/// Sound joining fades in over this many frames (5 ms), as the sound before it fades out.
+const JOIN_FRAMES: usize = 240;
 /// A frame drawn slower than this is counted as slow (two frames at 60 fps).
 const SLOW_MS: f64 = 33.0;
 
@@ -103,19 +123,24 @@ pub struct Player {
     report: Report,
     /// The speaker's starved count when the page last asked.
     starved_before: u64,
+    /// The speed it plays at (1: as the edit is) and how loud (0–1), kept until changed.
+    rate: f64,
+    volume: f32,
 }
 
-/// What's playing: the clock started at `from` seconds of the timeline with
-/// the speaker's count at `played_at_start`, and stops at frame `until`.
+/// What's playing: the clock's sound starts at the speaker's count
+/// `played_at_start` (ahead of what it has played, after a change of speed:
+/// the sound kept comes first), and it stops at frame `until`.
 struct Playing {
-    from: f64,
+    clock: Clock,
     until: i64,
     played_at_start: u64,
 }
 
-/// A mixer thread filling the speaker from `from` seconds of the timeline.
+/// A mixer thread filling the speaker from `from` seconds of the timeline at `rate`.
 struct Mixer {
     from: f64,
+    rate: f64,
     cancel: Arc<AtomicBool>,
 }
 
@@ -149,6 +174,84 @@ impl Feed {
         self.speaker.flush();
         self.generation.fetch_add(1, Ordering::AcqRel) + 1
     }
+
+    /// A mixer at a new speed has `frames` of the timeline from `start`
+    /// seconds ready (`joining`: the change it's for). The sound before plays
+    /// on to a tenth of a second ahead of the speaker, the rest of it is
+    /// dropped, and this mixer's follows from the same moment of the
+    /// timeline: how many of its frames to pass over first, and its
+    /// generation. Or the speaker is already past all of them (`Later`:
+    /// they're passed over whole), or the change was called off.
+    fn join(&self, joining: &Joining, start: f64, frames: usize, cancel: &AtomicBool) -> Joined {
+        let _guard = self.writing.lock();
+        if cancel.load(Ordering::Acquire) {
+            return Joined::CalledOff;
+        }
+        let end = start + frames as f64 / RATE as f64;
+        let state = self.speaker.state();
+        let ahead = (state.played + JOIN_AHEAD as u64).min(state.played + state.buffered);
+        if joining.timeline(ahead) >= end {
+            return Joined::Later;
+        }
+        let boundary = self.speaker.keep(JOIN_AHEAD);
+        let pass = ((joining.timeline(boundary) - start) * RATE as f64).round();
+        let pass = (pass.max(0.0) as usize).min(frames);
+        *joining.landed.lock() = Some(Landed {
+            boundary,
+            from: start + pass as f64 / RATE as f64,
+        });
+        Joined::Now {
+            pass,
+            generation: self.generation.fetch_add(1, Ordering::AcqRel) + 1,
+        }
+    }
+
+    /// Seconds of sound the speaker has taken since `playing`'s started (under 0: it's still on the sound kept before it).
+    fn taken(&self, playing: &Playing) -> f64 {
+        (self.speaker.state().played as f64 - playing.played_at_start as f64) / RATE as f64
+    }
+}
+
+/// A change of speed while playing, for the mixer that will take the
+/// speaker over: the clock of the sound playing when it was asked (and the
+/// speaker's count that clock starts at), and where it says it landed.
+struct Joining {
+    clock: Clock,
+    played_at_start: u64,
+    landed: Arc<Mutex<Option<Landed>>>,
+}
+
+impl Joining {
+    /// The timeline's seconds of the sound at the speaker's `count`, by the clock before the change.
+    fn timeline(&self, count: u64) -> f64 {
+        self.clock
+            .at((count as f64 - self.played_at_start as f64) / RATE as f64)
+    }
+}
+
+/// Where a new speed's sound took over: the speaker's count it starts at, and the timeline's seconds there.
+#[derive(Clone, Copy)]
+struct Landed {
+    boundary: u64,
+    from: f64,
+}
+
+enum Joined {
+    Now { pass: usize, generation: u64 },
+    Later,
+    CalledOff,
+}
+
+/// How a mixer starts: on a speaker flushed for it, or joining sound that's playing.
+enum Start {
+    Flushed(u64),
+    Joining(Joining),
+}
+
+/// A change of speed on its way: its mixer, getting sound ready beside the one playing.
+struct Change {
+    mixer: Mixer,
+    landed: Arc<Mutex<Option<Landed>>>,
 }
 
 /// The player's sound: the speaker, opened on the first play, and the mixer feeding it.
@@ -158,6 +261,8 @@ struct Sound {
     /// The speaker couldn't open: playing runs on a clock of its own, silent.
     refused: bool,
     mixer: Option<Mixer>,
+    /// The speed was changed while playing, and the new speed's sound isn't in the speaker yet.
+    change: Option<Change>,
     /// A clock with no speaker: when it started and from where.
     silent: Option<Instant>,
 }
@@ -258,6 +363,8 @@ impl Player {
             warmed_from: None,
             report: Report::default(),
             starved_before: 0,
+            rate: 1.0,
+            volume: 1.0,
         })
     }
 
@@ -299,6 +406,7 @@ impl Player {
             self.pictures.clear();
         }
         if sounds != self.sounds {
+            self.land(true);
             self.sound.disarm();
         }
         self.sources = sources;
@@ -482,10 +590,12 @@ impl Player {
     pub fn warm_ahead(&mut self, frame: i64, jump: bool) {
         let Some(project) = &self.project else { return };
         let fps = project.fps();
+        // Seconds of playing, not of the edit: at 2× the cuts come twice as soon.
+        let reach = self.rate.max(1.0);
         if !jump
             && self
                 .warmed_from
-                .is_some_and(|from| frame >= from && (frame - from) as f64 <= fps / 2.0)
+                .is_some_and(|from| frame >= from && (frame - from) as f64 <= fps / 2.0 * reach)
         {
             return;
         }
@@ -497,7 +607,7 @@ impl Player {
             .filter(|track| track.hidden)
             .map(|track| track.id.as_str())
             .collect();
-        let until = frame + (AHEAD_SECONDS * fps).ceil() as i64;
+        let until = frame + (AHEAD_SECONDS * fps * reach).ceil() as i64;
         let mut cuts: Vec<i64> = project
             .clips
             .iter()
@@ -514,6 +624,20 @@ impl Player {
         }
         cuts.sort_unstable();
         cuts.dedup();
+        // The pool keeps a dozen readers, a few a file: so the nearest cuts first, and no more
+        // (of a file, and in all) than it keeps beside the readers playing now. At 2× twice as
+        // many cuts are in reach, and a farther cut's reader pushed the next cut's out: a seek on
+        // the frame of the cut.
+        let mut readers: HashMap<String, usize> = HashMap::new();
+        let mut in_all = 0;
+        if !jump {
+            for layer in &evaluate_seen(project, frame).layers {
+                if let Layer::Video { media, .. } = layer {
+                    *readers.entry(media.clone()).or_default() += 1;
+                    in_all += 1;
+                }
+            }
+        }
         for cut in cuts {
             let scene = evaluate_seen(project, cut);
             for layer in &scene.layers {
@@ -521,6 +645,12 @@ impl Player {
                     media, source_time, ..
                 } = layer
                 {
+                    let held = readers.entry(media.clone()).or_default();
+                    if *held >= READERS_A_FILE || in_all >= READERS {
+                        continue;
+                    }
+                    *held += 1;
+                    in_all += 1;
                     self.pictures
                         .warm(project, media, *source_time, shown, &self.sources);
                 }
@@ -567,7 +697,11 @@ impl Player {
             .as_ref()
             .map_or(0, |feed| feed.speaker.state().played);
         self.playing = Some(Playing {
-            from,
+            clock: Clock {
+                from,
+                rate: self.rate,
+                lead: 0.0,
+            },
             until,
             played_at_start,
         });
@@ -578,7 +712,8 @@ impl Player {
         self.warmed_from = None;
         trace(|| {
             format!(
-                "play from {frame} to {until}, sound {} in {:.1} ms",
+                "play from {frame} to {until} at {}×, sound {} in {:.1} ms",
+                self.rate,
                 if self.sound.feed.is_some() {
                     "on the speaker"
                 } else {
@@ -597,25 +732,24 @@ impl Player {
         if let Some(feed) = &self.sound.feed {
             feed.speaker.run(false);
         }
+        // A change of speed that hasn't reached the speaker is off (the next play arms at the new speed).
+        self.land(true);
         // The mix goes on from where the speaker's ring stopped (what's buffered is the sound from
         // there), which is a speaker's latency ahead of what was heard.
-        let resumed = self.playing.take().map(|playing| {
-            let played = self.sound.feed.as_ref().map_or_else(
-                || self.played_seconds(&playing),
-                |feed| {
-                    feed.speaker
-                        .state()
-                        .played
-                        .saturating_sub(playing.played_at_start) as f64
-                        / RATE as f64
-                },
-            );
-            playing.from + played
-        });
-        self.sound.silent = None;
-        if let (Some(from), Some(mixer)) = (resumed, self.sound.mixer.as_mut()) {
-            mixer.from = from;
+        if let Some(playing) = self.playing.take() {
+            let taken = match &self.sound.feed {
+                Some(feed) => feed.taken(&playing),
+                None => self.heard(&playing),
+            };
+            if taken < 0.0 {
+                // Stopped on the sound kept from before a change of speed: what's buffered is at
+                // two speeds, so the next play mixes anew.
+                self.sound.disarm();
+            } else if let Some(mixer) = self.sound.mixer.as_mut() {
+                mixer.from = playing.clock.at(taken);
+            }
         }
+        self.sound.silent = None;
         if let Some(at) = at {
             trace(|| format!("paused at {at}"));
         }
@@ -628,16 +762,117 @@ impl Player {
         }
     }
 
-    /// Seconds of sound played since the clock started.
-    fn played_seconds(&self, playing: &Playing) -> f64 {
-        match (&self.sound.feed, self.sound.silent) {
-            (Some(feed), _) => {
-                let state = feed.speaker.state();
-                let played =
-                    state.played.saturating_sub(playing.played_at_start) as f64 / RATE as f64;
-                // What's heard now left the ring a moment ago.
-                (played - feed.speaker.latency().clamp(0.0, 0.2)).max(0.0)
+    /// The speed it plays at: 1 as the edit is, 2 twice as fast with the
+    /// sound's pitch kept (held within 0.25–4), until changed. Playing, it
+    /// plays on from where it is with no stop: the sound at the speed before
+    /// goes on until the new speed's is ready and joins it.
+    pub fn set_rate(&mut self, rate: f64) {
+        let rate = tempo::speed(rate);
+        if (rate - self.rate).abs() < 1e-9 {
+            return;
+        }
+        self.rate = rate;
+        self.warmed_from = None;
+        // A change before this one: landed it stands, still on its way it's off.
+        self.land(true);
+        let Some(playing) = self.playing.as_mut() else {
+            // At rest: the sound armed is at the speed before.
+            self.sound.disarm();
+            trace(|| format!("speed {rate}×"));
+            return;
+        };
+        if (playing.clock.rate - rate).abs() < 1e-9 {
+            // Changed and changed back before the first reached the speaker: what's playing is right.
+            return;
+        }
+        let (clock, played_at_start, until) =
+            (playing.clock, playing.played_at_start, playing.until);
+        let Some(feed) = self.sound.feed.clone() else {
+            // No speaker: the clock is the wall's, and goes on from here at the new speed.
+            let from = clock.at(self
+                .sound
+                .silent
+                .map_or(0.0, |since| since.elapsed().as_secs_f64()));
+            self.sound.silent = Some(Instant::now());
+            if let Some(playing) = self.playing.as_mut() {
+                playing.clock = Clock {
+                    from,
+                    rate,
+                    lead: 0.0,
+                };
             }
+            trace(|| format!("speed {rate}× while playing (no speaker), from {from:.3} s"));
+            return;
+        };
+        // The new speed's mixer starts where the speaker is now and joins once it has sound ready.
+        let landed = Arc::new(Mutex::new(None));
+        let joining = Joining {
+            clock,
+            played_at_start,
+            landed: Arc::clone(&landed),
+        };
+        let from = joining.timeline(feed.speaker.state().played);
+        if let Some(mixer) = self.mix(feed, Start::Joining(joining), from, until) {
+            self.sound.change = Some(Change { mixer, landed });
+        }
+        trace(|| format!("speed {rate}× while playing, its sound mixed from {from:.3} s"));
+    }
+
+    /// A change of speed whose sound has taken the speaker over becomes the
+    /// clock: the playhead runs at the new speed from where that sound
+    /// starts. `call_off`, one still on its way is stopped.
+    fn land(&mut self, call_off: bool) {
+        let Some(change) = &self.sound.change else {
+            return;
+        };
+        if !call_off && change.landed.lock().is_none() {
+            return;
+        }
+        let Some((landed, mut mixer)) = self.sound.end_change() else {
+            return;
+        };
+        if let Some(playing) = self.playing.as_mut() {
+            playing.clock = Clock {
+                from: landed.from,
+                rate: mixer.rate,
+                // What's still coming out is at the speed before (or, changed twice within a moment, the one before that).
+                lead: if landed.boundary >= playing.played_at_start {
+                    playing.clock.rate
+                } else {
+                    playing.clock.lead
+                },
+            };
+            playing.played_at_start = landed.boundary;
+        }
+        mixer.from = landed.from;
+        trace(|| {
+            format!(
+                "speed {}× on the clock, from {:.3} s",
+                mixer.rate, landed.from
+            )
+        });
+        self.sound.mixer = Some(mixer);
+    }
+
+    /// How loud it plays, 0 (silent) to 1, from now and until changed.
+    pub fn set_volume(&mut self, level: f64) {
+        let level = if level.is_finite() {
+            level.clamp(0.0, 1.0) as f32
+        } else {
+            1.0
+        };
+        self.volume = level;
+        if let Some(feed) = &self.sound.feed {
+            feed.speaker.volume(level);
+        }
+        trace(|| format!("volume {level}"));
+    }
+
+    /// Seconds of the clock's own sound heard (under 0: the sound before it is still coming out).
+    fn heard(&self, playing: &Playing) -> f64 {
+        match (&self.sound.feed, self.sound.silent) {
+            // What's heard now left the ring a moment ago.
+            (Some(feed), _) => feed.taken(playing) - feed.speaker.latency().clamp(0.0, 0.2),
             (None, Some(since)) => since.elapsed().as_secs_f64(),
             (None, None) => 0.0,
         }
@@ -646,7 +881,7 @@ impl Player {
     /// The timeline position the clock says, in frames (a fraction too).
     fn clock_position(&self) -> Option<f64> {
         let (playing, project) = (self.playing.as_ref()?, self.project.as_ref()?);
-        Some((playing.from + self.played_seconds(playing)) * project.fps())
+        Some(playing.clock.at(self.heard(playing)) * project.fps())
     }
 
     fn clock_frame(&self) -> i64 {
@@ -656,10 +891,17 @@ impl Player {
     /// Playing: draws the clock's frame when it moved on, stops at the end;
     /// how long until the next frame is due (None: not playing).
     pub fn tick(&mut self) -> Option<Duration> {
-        let (at, until, fps) = {
+        self.land(false);
+        let (at, until, fps, rate) = {
             let playing = self.playing.as_ref()?;
             let fps = self.project.as_ref()?.fps();
-            (self.clock_position()?, playing.until, fps)
+            let heard = self.heard(playing);
+            (
+                playing.clock.at(heard) * fps,
+                playing.until,
+                fps,
+                playing.clock.speed(heard),
+            )
         };
         let frame = at.floor() as i64;
         if frame >= until {
@@ -669,9 +911,15 @@ impl Player {
             self.report.ended = true;
             return None;
         }
-        if self.drawn != Some(frame) {
-            if let Some(drawn) = self.drawn.filter(|drawn| frame > *drawn + 1) {
-                self.report.skipped += (frame - drawn - 1) as u64;
+        // The next picture is a stride on from the one on screen (every other frame at 2×); now,
+        // when the edit changed under it.
+        let stride = tempo::stride(rate);
+        if self
+            .drawn
+            .is_none_or(|drawn| frame >= drawn + stride || frame < drawn)
+        {
+            if let Some(drawn) = self.drawn {
+                self.report.skipped += tempo::missed(drawn, frame, stride);
             }
             let started = Instant::now();
             let drawn = self.draw(frame);
@@ -686,13 +934,18 @@ impl Player {
             trace(|| describe_draw(frame, ms, &drawn, self.last));
             self.warm_ahead(frame, false);
         }
-        // Until the next frame boundary (a touch after it, so the clock has moved on).
-        let next = ((frame + 1) as f64 / fps - at / fps) * 1000.0 + 0.5;
+        // Until the next picture's frame begins (a touch after it, so the clock has moved on).
+        let due = self
+            .drawn
+            .map_or(frame + 1, |drawn| drawn + stride)
+            .max(frame + 1);
+        let next = (due as f64 - at) / fps / rate * 1000.0 + 0.5;
         Some(Duration::from_secs_f64(next.clamp(1.0, 50.0) / 1000.0))
     }
 
     /// Where the player is, and how playing went since the last ask.
     pub fn position(&mut self) -> Position {
+        self.land(false);
         let frame = self
             .clock_position()
             .unwrap_or_else(|| self.drawn.unwrap_or(0) as f64);
@@ -748,6 +1001,7 @@ impl Player {
             .sound
             .mixer
             .as_ref()
+            .filter(|mixer| (mixer.rate - self.rate).abs() < 1e-9)
             .map(|mixer| mixer.from)
             .filter(|armed| (armed - from).abs() < 1.5 / fps)
         {
@@ -756,6 +1010,7 @@ impl Player {
         if self.sound.feed.is_none() {
             match Speaker::open((SOUND_AHEAD_SECONDS * RATE as f64) as usize) {
                 Ok(speaker) => {
+                    speaker.volume(self.volume);
                     self.sound.feed = Some(Arc::new(Feed {
                         speaker,
                         generation: AtomicU64::new(0),
@@ -772,8 +1027,17 @@ impl Player {
         let Some(feed) = self.sound.feed.clone() else {
             return from;
         };
-        self.sound.mixer = None;
+        self.sound.disarm();
         let generation = feed.flush();
+        self.sound.mixer = self.mix(feed, Start::Flushed(generation), from, until);
+        from
+    }
+
+    /// Starts a mixer: the timeline from `from` seconds to frame `until` at
+    /// the player's speed, into the speaker as `start` says.
+    fn mix(&self, feed: Arc<Feed>, start: Start, from: f64, until: i64) -> Option<Mixer> {
+        let project = self.project.as_ref()?;
+        let (fps, rate) = (project.fps(), self.rate);
         let from_frame = (from * fps).floor() as i64;
         let seconds = (until as f64 / fps - from).max(0.0);
         let total = (seconds * RATE as f64).round() as usize;
@@ -803,11 +1067,10 @@ impl Player {
             .name("edit preview sound".to_owned())
             .spawn(move || {
                 crate::util::utility_thread();
-                mix_into(&feed, generation, parts, total, &stop);
+                mix_into(&feed, start, parts, (from, total), rate, &stop);
             });
-        self.sound.mixer = Some(Mixer { from, cancel });
-        trace(|| format!("sound armed from {from:.3} s, {count} parts, {seconds:.1} s"));
-        from
+        trace(|| format!("sound armed from {from:.3} s at {rate}×, {count} parts, {seconds:.1} s"));
+        Some(Mixer { from, rate, cancel })
     }
 }
 
@@ -832,18 +1095,59 @@ pub fn describe_draw(
 
 impl Sound {
     fn disarm(&mut self) {
+        self.end_change();
         self.mixer = None;
+    }
+
+    /// Ends a change of speed on its way. Its sound already in the speaker,
+    /// it stands: where it landed, and its mixer. Else it's called off, and
+    /// the sound before plays on. Under the speaker's writing lock, as the
+    /// landing is, so it's one or the other.
+    fn end_change(&mut self) -> Option<(Landed, Mixer)> {
+        let change = self.change.take()?;
+        let feed = self.feed.as_ref()?;
+        let _guard = feed.writing.lock();
+        let landed = change.landed.lock().take();
+        match landed {
+            Some(landed) => Some((landed, change.mixer)),
+            None => {
+                change.mixer.cancel.store(true, Ordering::Release);
+                None
+            }
+        }
     }
 }
 
 /// The mixer's thread: `parts` mixed as the export mixes them, a window at a
-/// time into the speaker, held back while it's full. A part that won't
-/// decode is logged and the rest of its window is silence, so the clock
-/// never holds on a broken file.
-fn mix_into(feed: &Feed, generation: u64, parts: Vec<Part>, total: usize, cancel: &AtomicBool) {
+/// time, each made `rate` times as fast with its pitch kept (`Tempo`; at 1×
+/// it goes through as it is) and written to the speaker, held back while
+/// it's full. A part that won't decode is logged and the rest is silence, so
+/// the clock never holds on a broken file. `span` is the timeline's seconds
+/// the mix starts at and its frames; what the speaker gets is that ÷ the
+/// speed. Joining sound that's playing (a change of speed), nothing is
+/// written until `Feed::join` says where this sound takes over.
+fn mix_into(
+    feed: &Feed,
+    start: Start,
+    parts: Vec<Part>,
+    span: (f64, usize),
+    rate: f64,
+    cancel: &AtomicBool,
+) {
+    let asked = Instant::now();
+    let (from, total) = span;
     let window = (SOUND_WINDOW_SECONDS * RATE as f64) as usize;
+    let (generation, joining) = match start {
+        Start::Flushed(generation) => (std::cell::Cell::new(Some(generation)), None),
+        Start::Joining(joining) => (std::cell::Cell::new(None), Some(joining)),
+    };
+    // Frames of the timeline taken from the mixer, and of them passed over before joining.
+    let (taken, passed) = (std::cell::Cell::new(0_usize), std::cell::Cell::new(0_usize));
     let written = std::cell::Cell::new(0_usize);
-    let mut push = |samples: &[f32]| -> Result<(), String> {
+    let write = |samples: &[f32]| -> Result<(), String> {
+        let Some(generation) = generation.get() else {
+            return Err("cancelled".to_owned());
+        };
         let mut rest = samples;
         while !rest.is_empty() {
             if cancel.load(Ordering::Acquire) {
@@ -855,22 +1159,74 @@ fn mix_into(feed: &Feed, generation: u64, parts: Vec<Part>, total: usize, cancel
                 Some(frames) => rest = rest.get(frames * 2..).unwrap_or_default(),
             }
         }
+        if written.get() == 0 && !samples.is_empty() {
+            trace(|| {
+                format!(
+                    "sound at {rate}× in the speaker {:.1} ms after it was asked for, from {:.3} s",
+                    asked.elapsed().as_secs_f64() * 1000.0,
+                    from + passed.get() as f64 / RATE as f64
+                )
+            });
+        }
         written.set(written.get() + samples.len() / 2);
         Ok(())
     };
+    let mut tempo = Tempo::new(rate);
+    let mut sped: Vec<f32> = Vec::new();
+    let mut fading = 0;
+    let mut push = |samples: &[f32]| -> Result<(), String> {
+        let mut samples = samples;
+        let before = taken.get();
+        taken.set(before + samples.len() / 2);
+        if let (None, Some(joining)) = (generation.get(), &joining) {
+            let start = from + before as f64 / RATE as f64;
+            match feed.join(joining, start, samples.len() / 2, cancel) {
+                Joined::CalledOff => return Err("cancelled".to_owned()),
+                Joined::Later => {
+                    passed.set(taken.get());
+                    return Ok(());
+                }
+                Joined::Now {
+                    pass,
+                    generation: mine,
+                } => {
+                    generation.set(Some(mine));
+                    passed.set(before + pass);
+                    samples = samples.get(pass * 2..).unwrap_or_default();
+                    fading = JOIN_FRAMES;
+                }
+            }
+        }
+        sped.clear();
+        tempo.push(samples, &mut sped);
+        if fading > 0 {
+            for [left, right] in sped.as_chunks_mut::<2>().0.iter_mut().take(fading) {
+                let gain = 1.0 - fading as f32 / JOIN_FRAMES as f32;
+                *left *= gain;
+                *right *= gain;
+                fading -= 1;
+            }
+        }
+        write(&sped)
+    };
     let mixed = mix::mix_live(&parts, total, window, cancel, &mut push);
     match mixed {
-        Ok(()) => {}
+        Ok(()) => {
+            let mut rest = Vec::new();
+            tempo.flush(&mut rest);
+            let _ = write(&rest);
+        }
         Err(error) if error == "cancelled" => {}
         Err(error) => {
             crate::log::warn(
                 "preview",
                 format!("the player's sound: {error}; silent from there"),
             );
+            let out_total = ((total - passed.get().min(total)) as f64 / rate).round() as usize;
             let silence = vec![0.0_f32; window * 2];
-            while written.get() < total {
-                let frames = (total - written.get()).min(window);
-                if push(silence.get(..frames * 2).unwrap_or_default()).is_err() {
+            while written.get() < out_total {
+                let frames = (out_total - written.get()).min(window);
+                if write(silence.get(..frames * 2).unwrap_or_default()).is_err() {
                     return;
                 }
             }

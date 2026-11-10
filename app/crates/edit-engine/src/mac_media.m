@@ -711,6 +711,36 @@ void edit_speaker_flush(void *handle) {
     atomic_store(&s.ring->starved, 0);
 }
 
+// The speed changed while playing: what's buffered beyond the next `frames` is dropped, to be
+// mixed again at the new speed, and the sound goes on playing meanwhile. The last 5 ms kept fade
+// out, where the new sound joins. Returns the frames written in all now: where the next write lands.
+uint64_t edit_speaker_keep(void *handle, size_t frames) {
+    EditSpeaker *s = (__bridge EditSpeaker *)handle;
+    EditRing *ring = s.ring;
+    uint64_t written = atomic_load(&ring->written);
+    uint64_t end = atomic_load(&ring->played) + frames;
+    // Less than that buffered: all of it stays. The output is far behind what's touched below
+    // (the caller keeps a tenth of a second or more).
+    if (end >= written) return written;
+    size_t fade = frames < 240 ? frames : 240;
+    for (size_t i = 0; i < fade; i++) {
+        size_t at = (size_t)((end - 1 - i) % ring->capacity) * 2;
+        float gain = (float)i / (float)fade;
+        ring->ring[at] *= gain;
+        ring->ring[at + 1] *= gain;
+    }
+    atomic_store(&ring->written, end);
+    return end;
+}
+
+// How loud it plays, 0 to 1: the engine's own mixer, after the ring, so it's heard at once.
+void edit_speaker_volume(void *handle, float level) {
+    @autoreleasepool {
+        EditSpeaker *s = (__bridge EditSpeaker *)handle;
+        s.engine.mainMixerNode.outputVolume = level < 0 ? 0 : level > 1 ? 1 : level;
+    }
+}
+
 // Frames played in all, frames buffered and not yet played, and render calls that ran short.
 void edit_speaker_state(void *handle, uint64_t *played, uint64_t *buffered, uint64_t *starved) {
     EditSpeaker *s = (__bridge EditSpeaker *)handle;

@@ -12,6 +12,9 @@
 //! the frames as they come due and says where it is when the page asks
 //! (`preview_position`, once an animation frame); `preview_hint` names a
 //! frame the playhead is about to land on, so its pictures are made ready.
+//! `preview_rate` is the speed it plays at (Script mode's 2×, the sound's
+//! pitch kept) and `preview_volume` how loud, both kept until changed and 1
+//! in a preview just opened.
 //! The page turns see-through over its viewer while the
 //! layer shows (the webview stops drawing its own background), so everything
 //! the page draws over the picture (notes, menus, dialogs, loaders) stays on
@@ -82,6 +85,12 @@ enum Command {
     },
     Hint {
         frame: i64,
+    },
+    Rate {
+        rate: f64,
+    },
+    Volume {
+        level: f64,
     },
     Rest,
 }
@@ -183,7 +192,11 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                     Command::Position { reply } => {
                         let _ = reply.send(Err(error.clone()));
                     }
-                    Command::Resize { .. } | Command::Rest | Command::Hint { .. } => {}
+                    Command::Resize { .. }
+                    | Command::Rest
+                    | Command::Hint { .. }
+                    | Command::Rate { .. }
+                    | Command::Volume { .. } => {}
                 }
             }
             return;
@@ -259,6 +272,8 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                 Command::Resize { width, height } => player.resize(width, height),
                 Command::Rest => player.rest(),
                 Command::Hint { frame } => player.hint(frame),
+                Command::Rate { rate } => player.set_rate(rate),
+                Command::Volume { level } => player.set_volume(level),
                 Command::Play { frame, reply } => {
                     let _ = reply.send(player.play(frame));
                 }
@@ -579,6 +594,24 @@ pub async fn preview_position(previews: State<'_, Previews>) -> Result<Where, St
 pub fn preview_hint(previews: State<'_, Previews>, frame: i64) -> Result<(), String> {
     commands(&previews)?
         .send(Command::Hint { frame })
+        .map_err(|_| "the preview stopped".to_owned())
+}
+
+/// The speed it plays at, from now until changed: 1 as the edit is, 2 twice
+/// as fast with the sound's pitch kept (held within 0.25–4). Playing, it
+/// plays on from where it is at the new speed.
+#[tauri::command]
+pub fn preview_rate(previews: State<'_, Previews>, rate: f64) -> Result<(), String> {
+    commands(&previews)?
+        .send(Command::Rate { rate })
+        .map_err(|_| "the preview stopped".to_owned())
+}
+
+/// How loud it plays, 0 (silent) to 1, at once and until changed.
+#[tauri::command]
+pub fn preview_volume(previews: State<'_, Previews>, level: f64) -> Result<(), String> {
+    commands(&previews)?
+        .send(Command::Volume { level })
         .map_err(|_| "the preview stopped".to_owned())
 }
 

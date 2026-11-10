@@ -102,6 +102,8 @@ fn run(url: &str, server: Option<(Server, u16)>, watch_stdin: bool) -> ! {
                 preview::preview_pause,
                 preview::preview_position,
                 preview::preview_hint,
+                preview::preview_rate,
+                preview::preview_volume,
                 preview::preview_close,
                 notices::notices_status,
                 notices::notices_allow,

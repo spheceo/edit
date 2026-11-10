@@ -173,10 +173,11 @@ test.skipIf(ffmpeg === null)("read from the cloud, each stretch is sought where 
     const dest = `${root}/remote.mp4`;
     await media.joinStretched(remote, dest, `${root}/remote.stretches`, () => {}, undefined, STRETCH);
     // Read from the start, every opening's footage would be read from the file's head on (only its index, at the end, apart).
-    // Sought, the later stretches' openings (picture and sound apart, two each) start reading part-way through.
+    // Sought, each of the four later stretches starts reading part-way through: FFmpeg on Linux opens it twice
+    // (picture and sound apart), the Mac's once (CI, Nov 10: 4 there, 8 here), so at least one read each.
     const partWay = starts.filter((at) => at > 0.25 && at < 0.9);
     console.log(`read from a URL: ${starts.length} reads, ${partWay.length} starting part-way through the file (${partWay.map((at) => `${Math.round(at * 100)}%`).join(", ")})`);
-    expect(partWay.length).toBeGreaterThanOrEqual(6);
+    expect(partWay.length).toBeGreaterThanOrEqual(4);
     expect(Math.abs((await media.streams(dest)).durationMs - 20_000)).toBeLessThanOrEqual(50);
     expect(worstMatch(dest).worst).toBeGreaterThan(0.99);
     expect(worstFrame(dest)).toBeGreaterThan(0.95);

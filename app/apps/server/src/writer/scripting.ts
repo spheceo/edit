@@ -134,7 +134,7 @@ export async function buildOnce(app: App, data: string, id: string, note: string
   // The sound, so pauses with speech the transcript missed are kept.
   const peaks = await peaksOf(dir, script, job.signal);
   job.stage("Writing the script");
-  chat.add(dir, "producer", note.trim() === "" ? "Build the script." : `Build the script. ${note.trim()}`);
+  chat.asked(dir, note.trim() === "" ? "Build the script." : `Build the script. ${note.trim()}`, job.resumed);
   let built: build.Built;
   try {
     built = await (build.fastChosen() ? build.buildFast : build.build)(script, note, found, peaks, job.signal, job.stage);
@@ -208,10 +208,17 @@ export async function withNoteDocs(note: string, found: Research, id: string, ti
   return { ...found, articles };
 }
 
-/** A build, then (unless asked not to) the fresh read. */
+/**
+ * A build, then (unless asked not to) the fresh read. A build is saved only
+ * at its end, so one a restart cut off is written again whole; once it's
+ * saved, it's kept (`built`), and a restart during the fresh read carries on
+ * with the fresh read alone.
+ */
 export async function buildAndReview(app: App, data: string, id: string, note: string, kind: Kind | undefined, review: boolean, job: Job): Promise<Outcome> {
-  const [report, cost] = await buildOnce(app, data, id, note, kind, job);
+  const saved = job.resumed ? (job.kept?.built as { report?: unknown; cost?: unknown } | undefined) : undefined;
+  const [report, cost]: Outcome = typeof saved?.report === "string" && typeof saved.cost === "number" ? [saved.report, saved.cost] : await buildOnce(app, data, id, note, kind, job);
   if (!review) return [report, cost];
+  job.keep?.({ built: { report, cost } });
   checkStopped(job);
   job.stage("Reading it with fresh eyes");
   try {
@@ -309,7 +316,7 @@ export async function reviseWith(data: string, id: string, request: string, said
   if (script.commentary) return reviseCommentary(data, dir, script, request, said, job);
   if (!script.clips.some((clip) => clip.kind === "cut-in")) throw new Error("Build the script first; then ask for changes.");
   const earlier = chat.recent(dir);
-  chat.add(dir, "producer", said);
+  chat.asked(dir, said, job.resumed);
   script = await pickReused(dir, script, job);
   const peaks = await peaksOf(dir, script, job.signal);
   const found = casefiles.withDocuments(dir, research.load(dir) ?? { articles: [], queries: [], at: 0 });
@@ -353,7 +360,7 @@ export async function reviseCommentary(data: string, dir: string, given: Script,
   // Edits name paragraphs by id: a script never shared gets them now.
   const script = structuredClone(given);
   if (script.commentary?.draft && ensureIds(script.commentary.draft)) store.write(dir, script);
-  chat.add(dir, "producer", said);
+  chat.asked(dir, said, job.resumed);
   let done: commentary.Revised;
   try {
     done = await commentary.revise(dir, script, request, lessonsText(data), job.signal);

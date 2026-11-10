@@ -167,8 +167,9 @@ test("remote updates recheck activity at restart, including work begun during do
   try {
     await f.send();
     expect(f.cloud.canRestart?.()).toBe(true);
+    // An export carries on after the update (Nov 10): it doesn't hold it.
     f.app.exports.running = () => true;
-    expect(f.cloud.canRestart?.()).toBe(false);
+    expect(f.cloud.canRestart?.()).toBe(true);
     f.app.exports.running = () => false;
     Object.assign(f.app.agents, { hasRunningTurns: () => true });
     expect(f.cloud.canRestart?.()).toBe(false);

@@ -159,8 +159,10 @@ test("an export goes up through a resumable session, is shared by link and linke
         headers: { location: `${server.url}/www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=xyz` },
       });
     });
-    // A busy Drive the first time: the file is sent again.
-    mock.on("PUT", "/www.googleapis.com/upload/drive/v3/files", () => Response.json({ id: "file1" }));
+    // A busy Drive the first time: the session is asked how much it has (nothing), and the file is sent again in it.
+    mock.on("PUT", "/www.googleapis.com/upload/drive/v3/files", (request) =>
+      (request.headers.get("content-range") ?? "").startsWith("bytes */") ? new Response(null, { status: 308 }) : Response.json({ id: "file1" }),
+    );
     mock.on("PUT", "/www.googleapis.com/upload/drive/v3/files", () => new Response("busy", { status: 503 }), 1);
     mock.on("POST", "/www.googleapis.com/drive/v3/files/file1/permissions", () => Response.json({ id: "anyone" }));
     const events: Record<string, unknown>[] = [];

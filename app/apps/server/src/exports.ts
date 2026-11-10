@@ -261,13 +261,20 @@ export async function archiveExportFile(
   io: typeof exportCloud = exportCloud,
   room: (path: string) => number = freeBytes,
   signal?: AbortSignal,
+  carriedOn = false,
 ): Promise<boolean> {
   let size: number;
   try { size = fs.statSync(output).size; } catch { return false; }
   try {
-    await io.upload(output, key, signal);
-    const found = await io.head(key);
-    if (found === null || found.size !== size) return false;
+    // Carried on after a restart and up already (the restart came after the upload, before its job ended): not sent
+    // again (Sphe, Nov 10: an update goes through at any time, and nothing it cuts is uploaded twice). Only then: right
+    // after an export, what's under its name is the one it writes over, whose size could happen to be the same.
+    const there = carriedOn ? await io.head(key).catch(() => null) : null;
+    if (there === null || there.size !== size) {
+      await io.upload(output, key, signal);
+      const found = await io.head(key);
+      if (found === null || found.size !== size) return false;
+    }
   } catch { return false; }
   // Stopped for a newer export of this file: that one is written here now, and goes up itself.
   if (signal?.aborted) return false;
@@ -288,10 +295,21 @@ export async function archiveExportFile(
  * `archive` job). A file gone meanwhile is said, never exported again here.
  */
 export async function archiveFinished(home: string, id: string, output: string, key: string, record: ExportRecord, signal?: AbortSignal): Promise<void> {
-  if (!fs.existsSync(output)) throw new Error(`${output} is gone`);
+  if (!fs.existsSync(output)) {
+    // Archived and deleted here before a restart crossed its job off: listed in the cloud, and done.
+    const there = record.bytes === null ? null : await exportCloud.head(key).catch(() => null);
+    if (there !== null && there.size === record.bytes) {
+      remember(home, id, { ...record, cloudKey: key });
+      return;
+    }
+    // Nothing to send: the job is crossed off, not tried at every start until it's given up.
+    throw new jobs.Gone(`${output} is gone`);
+  }
   // Short of room: the older copies kept while there was some go first, so this one may stay.
   dropKept(home, output);
-  if (await archiveExportFile(output, key, exportCloud, freeBytes, signal)) {
+  // Its job begun by an earlier run: carried on after a restart.
+  const carriedOn = (jobs.get(home, jobs.keyOf("archive", id))?.started_ms ?? Infinity) < performance.timeOrigin;
+  if (await archiveExportFile(output, key, exportCloud, freeBytes, signal, carriedOn)) {
     try {
       remember(home, id, record);
     } catch { /* the list keeps the local-only record */ }
@@ -466,6 +484,21 @@ const KEEP_LISTED = 30;
  */
 function snapshotFile(home: string, id: string): string {
   return join(home, "jobs", `export-${id}.json`);
+}
+
+/**
+ * A kept timeline the last run left for an export its share carries on (the
+ * share keeps its own): removed. One this run wrote (that share's export,
+ * started again under the same name) is newer than this process, and stays.
+ */
+export function dropLeftSnapshot(home: string, id: string, args: Record<string, unknown>): void {
+  const path = args.snapshot;
+  if (typeof path !== "string" || path !== snapshotFile(home, id)) return;
+  try {
+    if (fs.statSync(path).mtimeMs < performance.timeOrigin) fs.rmSync(path, { force: true });
+  } catch {
+    // Gone already.
+  }
 }
 
 /** The project an export a restart cut short was started with, if it was kept. */

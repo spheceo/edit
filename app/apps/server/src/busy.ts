@@ -27,20 +27,10 @@ export function scriptKey(id: string): string {
  * any time"). A kind leaves this list once it carries on.
  */
 export function wouldLose(_app: App): string[] {
-  let uploading = false;
-  try {
-    uploading = seams.drive.uploading();
-  } catch (error) {
-    if (!seams.isUnavailable(error)) throw error;
-  }
-  const said = [
-    uploading ? "an upload to Drive" : "",
-    importing() ? "footage coming in from Drive" : "",
-    writerJobs.runningList().length > 0 ? "Claude on a script" : "",
-    thumbnailRuns.anyRunning() ? "Claude on a thumbnail" : "",
-    ideaRuns.anyRunning() ? "Claude on an idea" : "",
-  ];
-  return [...new Set(said.filter(Boolean))];
+  // Nothing, since Nov 10: an upload to Drive carries on from its kept session (drive.ts), footage from a Drive link
+  // from its job (drive_import.ts), Claude on a script, an idea or a thumbnail from what its job kept (writer/work.ts,
+  // ideas/run.ts, thumbnails/run.ts). A new kind of work that can't carry on is said here.
+  return [];
 }
 
 /** Others' work this computer is doing (reviews' fixes): each says what runs, or nothing. */

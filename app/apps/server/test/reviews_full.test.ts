@@ -2,7 +2,7 @@
 // while it goes up, so a restart carries on with it: Nov 7, Predator Teacher,
 // Edit restarted on JJ's Mac with 0.7 of v3's 4.9 GB up and nothing sent the rest.
 
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,6 +11,10 @@ import * as cloud from "../src/cloud.ts";
 import { fullBehind } from "../src/reviews.ts";
 
 const spies: { mockRestore(): void }[] = [];
+// Nothing up yet (fullBehind asks the cloud first).
+beforeEach(() => {
+  spies.push(spyOn(cloud, "head").mockImplementation(async () => null));
+});
 afterEach(() => {
   for (const spy of spies.splice(0)) spy.mockRestore();
 });

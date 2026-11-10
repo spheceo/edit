@@ -470,13 +470,18 @@ export function fullBehind(home: string, projectId: string, name: string, path: 
       // Said at once, before a part's gone (a run that carries on a restart says how far it is with its first part).
       if (attempt === 1) void tell({ fullUpload: { ...last, at: Date.now(), since: Date.now(), from: last.sent } }).catch(() => undefined);
       try {
-        await cloud.uploadFile(path, key, (sent, total) => {
-          // Parts going up this run: the restarts before don't count against it.
-          if (!moved) jobs.progressed(home, job);
-          moved = true;
-          if (run === null || Date.now() - toldAt >= fullUpload.tellMs) say(sent, total);
-          else last = { sent, total };
-        });
+        // Up already (a restart came after its last part, before the cloud was told): straight to telling it, not sent
+        // again (Sphe, Nov 10: an update goes through at any time, and nothing it cuts is uploaded twice).
+        const there = attempt === 1 ? await cloud.head(key).catch(() => null) : null;
+        if (there === null || there.size !== last.total || last.total === 0) {
+          await cloud.uploadFile(path, key, (sent, total) => {
+            // Parts going up this run: the restarts before don't count against it.
+            if (!moved) jobs.progressed(home, job);
+            moved = true;
+            if (run === null || Date.now() - toldAt >= fullUpload.tellMs) say(sent, total);
+            else last = { sent, total };
+          });
+        }
         // Named in its version only now: named at the publish, the page's Download button was there hours before the
         // file (Nov 8, Killer Pastor's v3: its 4.6 GB export still going up, and Download saved "media.json", the 404).
         if (version !== undefined) {

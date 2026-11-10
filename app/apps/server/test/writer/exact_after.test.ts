@@ -114,3 +114,22 @@ test("a second revision while one is heard is heard after it", async () => {
   await idle(ID);
   expect(pending(data, ID)).toBe(false);
 });
+
+// Nov 10: a pass was in memory alone, so an update or a crash in the middle of it lost it. It's written down in the
+// job table while it runs (as its wait for credit is), and serve.ts's resumer hears it again after a restart.
+test("a pass is written down while it runs, and crossed off once it lands", async () => {
+  const { data, dir } = made();
+  const table = await import("../../src/jobs.ts");
+  const home = join(data, "..");
+  const key = table.keyOf("script", ID, "exact");
+  let release = () => {};
+  hearing = new Promise<void>((resolve) => (release = resolve));
+  store.update(dir, (script) => void script.clips.push({ id: "c2", startMs: 60_000, endMs: 60_900 }));
+  soon(data, ID);
+  expect(table.get(home, key)).toMatchObject({ state: "running", args: { waiting_on: "exact" } });
+  release();
+  hearing = Promise.resolve();
+  await idle(ID);
+  await Bun.sleep(20);
+  expect(table.get(home, key)).toBeUndefined();
+});

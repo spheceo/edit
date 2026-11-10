@@ -471,9 +471,11 @@ async function updateInstall({ app }: Context): Promise<Response> {
 
 /** Shared by the local update route and an explicitly enabled remote request. */
 export async function installUpdate(app: App, remote = false) {
-  // Only what wouldn't carry on after the restart holds an update (busy.wouldLose); exports, imports, shares,
-  // fixes and agent turns pick up where they were. From afar (remote support), it still waits for an idle Mac.
-  const busy = () => (remote ? remoteActions.busyWith(app, true) : busyNow.wouldLose(app));
+  // Only what wouldn't carry on after the restart holds an update (busy.wouldLose), asked here or from afar
+  // (Sphe, Nov 10: "be able to update mid import"): exports, imports, shares, fixes and agent turns pick up where they were.
+  // From afar it also waits for an agent turn, which someone may be watching as it's written.
+  const turns = () => (app.agents as { hasRunningTurns?: () => boolean }).hasRunningTurns?.() === true;
+  const busy = () => [...busyNow.wouldLose(app), ...(remote && turns() ? ["an agent turn"] : [])];
   const now = busy();
   if (now.length > 0) throw new ApiError(409, `${now.join(", ")} ${now.length === 1 ? "is" : "are"} running; update when it's done`);
   try {
@@ -691,20 +693,13 @@ async function importDriveMedia(context: Context): Promise<Response> {
   liveOr404(context.app, id);
   let imported;
   try {
+    // A job of its own (drive_import.ts), which notes what was added before it ends, so a restart meanwhile carries it on.
     imported = await importDrive(context.app, id, url, place, origin);
   } catch (error) {
     throw bad(diag.messageOf(error));
   }
   const [rev, added, errors] = imported;
-  const project = context.app.store.get(id)?.project ?? null;
-  // What the person added, for the agent's context (uploads.ts).
-  try {
-    const dir = context.app.store.uploadsDir(id);
-    for (const mediaId of added) uploads.remember(dir, { at: Date.now(), name: project?.media.find((one) => one.id === mediaId)?.name ?? mediaId, media: mediaId, file: null });
-  } catch (error) {
-    diag.warn("upload", `noting what was added: ${diag.messageOf(error)}`);
-  }
-  return json({ rev, added, errors, project });
+  return json({ rev, added, errors, project: context.app.store.get(id)?.project ?? null });
 }
 
 /** An upload that sends nothing for this long is abandoned. */

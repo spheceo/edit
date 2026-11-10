@@ -131,7 +131,8 @@ describe("update when idle, and probing an import (Nov 1)", () => {
     expect(idleNow(mac(), now).why).toContain("5 min ago");
     presence.used(now - IDLE_MS - 1000);
     expect(idleNow(mac(), now)).toEqual({ idle: true, why: "idle" });
-    expect(idleNow(mac(true), now).why).toContain("an export");
+    // An export (or an import) carries on after the update: it doesn't keep the Mac from being idle (Nov 10).
+    expect(idleNow(mac(true), now)).toEqual({ idle: true, why: "idle" });
     const app = mac();
     expect(updateWhenIdle(app)).toContain("will update once idle");
     expect(fs.existsSync(join(app.store.home, "update-when-idle.json"))).toBe(true);

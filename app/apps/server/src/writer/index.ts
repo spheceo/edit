@@ -1,12 +1,20 @@
 // Script mode (Writer, merged into Edit on Oct 29 2026): starting it with the
 // server. The first start copies this Mac's Writer scripts in (Writer's own
-// folder stays as it was, so Writer still opens them); every start marks
-// imports and jobs that died with the server as stopped.
+// folder stays as it was, so Writer still opens them); every start carries on
+// the imports and Claude's jobs that died with the server (an update, a crash),
+// and before Edit restarts itself the jobs are stopped where they are, to
+// carry on after it.
 
 import * as fs from "node:fs";
 
+import type { ImportProgress } from "@edit/types/writer";
+
+import * as accounts from "../accounts.ts";
 import type { App } from "../app.ts";
 import * as diag from "../diag.ts";
+import * as paid from "../paid.ts";
+import * as service from "../effect/service.ts";
+import * as update from "../update.ts";
 import * as scriptSync from "../script_sync.ts";
 import * as archive from "./archive.ts";
 import * as build from "./build.ts";
@@ -37,6 +45,9 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   // scripts saved before that (Nov 4) are named once now, before anything else writes them.
   store.hooks.withSharedKeys = handoff.withSharedKeys;
   handoff.stampAll(data);
+  // Claude's jobs are written down in Edit's job table, so a restart carries them on (work.ts), and stopped where they are before Edit restarts itself.
+  jobs.useHome(app.store.home);
+  holdBeforeRestart();
   // A trial server (EDIT_TRIALS=1) writes and builds scripts as any Edit does, but takes
   // none of the team's work: no Writer folder adopted, no review notes fixed, no archives
   // acted on (Oct 31: with Script mode off there, a script's builds called the tools on :7700
@@ -78,31 +89,91 @@ export function start(app: App, options: { trials?: boolean } = {}): void {
   }
 }
 
-/** How long after a start the imports a restart cut off are started again (the cloud and sign-in up first). */
-export const CARRY_ON_MS = 15_000;
+/** How long paid requests in flight get to be answered before the jobs are stopped for a restart (serve.ts waits as long). */
+const PAID_WAIT_MS = 120_000;
+
+let holding = false;
+
+/**
+ * Before Edit restarts itself (an update, remote support's restart): once the
+ * paid requests in flight are answered and kept, Claude's jobs on scripts are
+ * stopped where they are, each left running in the job table and on its
+ * script, so the next run carries it on (work.ts) and none says it failed.
+ * Runs before serve.ts's own preparing, which stops the imports and every
+ * program Edit started.
+ */
+function holdBeforeRestart(): void {
+  if (holding) return;
+  holding = true;
+  update.onPrepare(async () => {
+    await paid.settle(PAID_WAIT_MS);
+    const held = await jobs.holdForRestart();
+    if (held.length > 0) diag.info("update", `stopped Claude on ${held.length} script(s) before restarting: they carry on after it`);
+  });
+}
+
+/** How long a carry-on waits for the sign-in to be back, and how long between its tries after a passing failure. */
+export const carrying = { signInMs: 60_000, retryMs: [30_000, 120_000, 300_000] };
+
+/** Imports cut off by the restart and not started again yet, as the page follows them (routes.ts `/api/writer/progress`). */
+const waiting = new Map<string, ImportProgress>();
+
+/** The imports about to carry on after a restart: still importing, and saying so. */
+export const carryingOn = (): ImportProgress[] => [...waiting.values()];
 
 /**
  * Imports a restart or an update cut off carry on by themselves, from what
  * they kept, as Retry would: they waited for someone to press it, and a dev
  * server reloaded by a saved file left the Kroger import stopped at its
- * transcription (Oct 31). A failure after that stops it as any other would.
+ * transcription (Oct 31). Each stays importing meanwhile ("Carrying on after
+ * the update"), starts once the sign-in is back (a Drive import asked for its
+ * token before it, after a fixed 15 s, and stopped for a person to retry), and
+ * a passing failure after it (the relay busy, a dropped connection) is tried
+ * again a few times. Another failure stops it as any other would.
  */
-function carryOn(app: App, data: string, cut: string[]): void {
+export function carryOn(app: App, data: string, cut: string[]): void {
   if (cut.length === 0) return;
-  setTimeout(() => {
-    void (async () => {
-      const imports = await import("./imports.ts");
-      // Side by side, as they were running: each resume lasts its whole import.
-      await Promise.all(cut.map(async (id) => {
-        try {
-          diag.info("writer", `${id}: carrying on the import a restart cut off`);
-          await imports.resume(app, data, id, { kind: "retry" });
-        } catch (error) {
-          diag.warn("writer", `${id}: the import a restart cut off didn't carry on: ${diag.messageOf(error)}`);
-        }
-      }));
-    })();
-  }, CARRY_ON_MS);
+  for (const id of cut) {
+    try {
+      const script = store.read(store.scriptDir(data, id));
+      waiting.set(id, { id, title: script.title, stage: script.stage, percent: script.progress, detail: jobs.CARRYING_ON });
+    } catch {
+      // Unreadable: its resume says why.
+    }
+  }
+  void (async () => {
+    await Promise.race([accounts.tokenWhenReady().catch(() => null), Bun.sleep(carrying.signInMs)]);
+    const imports = await import("./imports.ts");
+    // Side by side, as they were running: each resume lasts its whole import.
+    await Promise.all(cut.map((id) => carryOnImport(app, data, id, imports)));
+  })();
+}
+
+async function carryOnImport(app: App, data: string, id: string, imports: typeof import("./imports.ts")): Promise<void> {
+  for (let tries = 0; ; tries++) {
+    try {
+      diag.info("writer", `${id}: carrying on the import a restart cut off${tries > 0 ? ` (try ${tries + 1})` : ""}`);
+      waiting.delete(id);
+      await imports.resume(app, data, id, { kind: "retry" });
+      return;
+    } catch (error) {
+      const wait = carrying.retryMs[tries];
+      // Started by someone meanwhile, or stopped for Edit to restart (it stays importing, for the next run): not this carry-on's to say.
+      if (imports.importing(id) || jobs.restartUnderWay()) return;
+      if (wait === undefined || !service.isTemporary(error)) {
+        // A failure the import said stays on the script; one before it started leaves it stopped, for Retry.
+        store.markStopped(data, id);
+        diag.warn("writer", `${id}: the import a restart cut off didn't carry on: ${diag.messageOf(error)}`);
+        return;
+      }
+      // Still importing while it waits to try again, not stopped for a person.
+      const dir = store.scriptDir(data, id);
+      const script = store.update(dir, (one) => Object.assign(one, { status: "processing", error: null }), true);
+      waiting.set(id, { id, title: script.title, stage: script.stage, percent: script.progress, detail: `Trying again in a moment: ${diag.messageOf(error)}` });
+      diag.warn("writer", `${id}: the import a restart cut off failed for now (${diag.messageOf(error)}); trying again in ${Math.round(wait / 1000)} s`);
+      await Bun.sleep(wait);
+    }
+  }
 }
 
 /** Writer's scripts, its cloud record and its review notes, taken into Script mode. */

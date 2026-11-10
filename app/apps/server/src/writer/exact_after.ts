@@ -113,6 +113,10 @@ export function soon(data: string, id: string): void {
     return;
   }
   if (!pending(data, id)) return;
+  // Written down while it runs (the job table, as its wait for credit is), so a restart or an update that cuts it
+  // off hears it again after (serve.ts's resumer for `script:<id>:exact`): it was in memory alone, and lost.
+  const home = homeOf(data);
+  table.begin(home, "script", id, { waiting_on: "exact" }, "exact", "hearing");
   const run = (async () => {
     do {
       again.delete(id);
@@ -120,7 +124,11 @@ export function soon(data: string, id: string): void {
     } while (again.has(id));
   })()
     .catch((error: unknown) => diag.warn("writer", `${id.slice(0, 8)}: its new footage wasn't heard exactly: ${unsigned(diag.messageOf(error))}`))
-    .finally(() => going.delete(id));
+    .finally(() => {
+      going.delete(id);
+      // Heard, or failed for good: crossed off. Waiting for the plan's credit (`afterCredit`): kept, to be woken.
+      if (table.get(home, creditKey(id))?.state === "running") table.end(home, creditKey(id));
+    });
   going.set(id, run);
 }
 
@@ -160,7 +168,7 @@ async function once(data: string, id: string): Promise<void> {
     if (whyOf(error) === "quota") afterCredit(data, id);
     throw error;
   }
-  creditBack(data, id);
+  // The credit's wait, if it had one, is over when the pass ends (`soon`): until it lands, a restart hears it again.
   // A job or an import on the script writes it when it ends: the pass lands after it.
   const until = Date.now() + WAIT_MS;
   while (jobs.running(id) || importing(id)) {

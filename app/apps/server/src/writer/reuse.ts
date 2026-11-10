@@ -298,7 +298,7 @@ function withoutTime(url: string): string {
  */
 export async function importReused(app: App, data: string, id: string, given: string[], job: Job): Promise<Outcome> {
   const dir = store.scriptDir(data, id);
-  chat.add(dir, "producer", REQUEST);
+  chat.asked(dir, REQUEST, job.resumed);
   try {
     const outcome = await bringIn(app, dir, given, job);
     chat.add(dir, "editor", outcome[0], outcome[1]);

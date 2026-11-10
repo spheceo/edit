@@ -52,7 +52,7 @@ test("a range to the object's end is sent a block at a time, whole; a reader tha
     expect(answer.headers.get("content-range")).toBe(`bytes 10-${size - 1}/${size}`);
     expect(new Uint8Array(await answer.arrayBuffer())).toEqual(object.subarray(10));
   } finally {
-    edit.stop(true);
+    void edit.stop(true);
   }
   expect(reads.length - before).toBe(6);
   // Another object, read only as far as its first block: the rest isn't fetched (its next two ahead at most).

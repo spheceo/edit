@@ -136,6 +136,19 @@ const lowered = (command: string, args: string[]): [string, string[]] => (NICE ?
 export const PACE = { afterMs: 5 * 60_000, everyMs: 30_000 };
 
 /**
+ * A piece made in stretches (`joinStretched`) is judged by its pace across
+ * them all, as the one encode it replaces was: each stretch alone is too short
+ * to be judged, and a crawl would otherwise run on stretch after stretch.
+ * `totalMs` is what this run has to make; `ranMs` and `doneMs` add up as
+ * stretches finish.
+ */
+interface Paced {
+  totalMs: number;
+  ranMs: number;
+  doneMs: number;
+}
+
+/**
  * Runs an ffmpeg encode, reporting 0–100 of `totalMs` from its progress clock;
  * a failed one leaves no file. At a lower priority (nice 10): an import's
  * encode is background work, and at full priority a long libx264 join held the
@@ -147,8 +160,9 @@ export const PACE = { afterMs: 5 * 60_000, everyMs: 30_000 };
  * crawled, and its piece, the libx264 try and the whole preview each ran
  * their full time, 3 h 30 min before the import said anything.
  */
-async function encode(args: string[], dest: string, totalMs: number, onPercent: (percent: number) => void, signal?: AbortSignal): Promise<void> {
-  const limitMs = toolTime(totalMs);
+async function encode(args: string[], dest: string, totalMs: number, onPercent: (percent: number) => void, signal?: AbortSignal, paced?: Paced): Promise<void> {
+  const judgedMs = paced?.totalMs ?? totalMs;
+  const limitMs = toolTime(judgedMs);
   const began = Date.now();
   let doneMs = 0;
   const slow = new AbortController();
@@ -163,20 +177,22 @@ async function encode(args: string[], dest: string, totalMs: number, onPercent: 
     if (encoder.shared(hold.token)) sharedMs += now - lastLook;
     lastLook = now;
     if (encoder.shared(hold.token)) return;
-    const ran = now - began - sharedMs;
-    if (totalMs <= 0 || ran < PACE.afterMs) return;
-    const projected = doneMs <= 0 ? Number.POSITIVE_INFINITY : (ran * totalMs) / doneMs;
+    const ran = (paced?.ranMs ?? 0) + now - began - sharedMs;
+    const done = (paced?.doneMs ?? 0) + doneMs;
+    if (judgedMs <= 0 || ran < PACE.afterMs) return;
+    const projected = done <= 0 ? Number.POSITIVE_INFINITY : (ran * judgedMs) / done;
     // Half again its time to spare: a start slowed by a busy Mac or a slow first read isn't judged as its pace.
     if (projected <= limitMs * 1.5) return;
     why =
-      doneMs <= 0
+      done <= 0
         ? `FFmpeg made no progress in ${Math.round(ran / 60_000)} min and was stopped.`
-        : `FFmpeg was going too slowly to finish (${Math.round((doneMs / totalMs) * 100)}% in ${Math.round(ran / 60_000)} min, about ${Math.round(projected / 60_000)} min in all) and was stopped.`;
+        : `FFmpeg was going too slowly to finish (${Math.round((done / judgedMs) * 100)}% in ${Math.round(ran / 60_000)} min, about ${Math.round(projected / 60_000)} min in all) and was stopped.`;
     slow.abort();
   }, PACE.everyMs);
   try {
     await run(...lowered(ffmpeg(), args), {
-      timeoutMs: limitMs,
+      // A stretch has its own length's time, as any encode; the whole piece's pace is the judge's.
+      timeoutMs: toolTime(totalMs),
       signal: signal ? AbortSignal.any([signal, slow.signal]) : slow.signal,
       onLine: (line) => {
         const micros = /^out_time_(?:us|ms)=(\d+)/.exec(line)?.[1];
@@ -194,6 +210,10 @@ async function encode(args: string[], dest: string, totalMs: number, onPercent: 
     hold.release();
   }
   if (!fs.existsSync(dest)) throw new Error("The footage was not written.");
+  if (paced !== undefined) {
+    paced.ranMs += Date.now() - began - sharedMs;
+    paced.doneMs += totalMs;
+  }
 }
 
 const seconds = (ms: number) => (ms / 1000).toFixed(3);
@@ -210,10 +230,12 @@ const seconds = (ms: number) => (ms / 1000).toFixed(3);
  * preview stopped at their hour, twice. Opened twice, 45 s. A file here jumps
  * for nothing, so it's opened once.
  */
-export function inputsOf(part: JoinPart, first: number, decode: string[] = []): { args: string[]; video: string; audio: string; count: number } {
-  const one = [...decode, ...input(part.path), "-i", part.path];
+export function inputsOf(part: JoinPart, first: number, decode: string[] = [], fromMs = 0): { args: string[]; video: string; audio: string; count: number } {
+  // Each opening is sought on its own (a stretch of a long recording), before its `-i`.
+  const seek = fromMs > 0 ? ["-ss", seconds(fromMs)] : [];
+  const one = [...decode, ...seek, ...input(part.path), "-i", part.path];
   if (!isUrl(part.path) || !part.streams.video || !part.streams.audio) return { args: one, video: `${first}:v`, audio: `${first}:a`, count: 1 };
-  return { args: [...one, ...input(part.path), "-i", part.path], video: `${first}:v`, audio: `${first + 1}:a`, count: 2 };
+  return { args: [...one, ...seek, ...input(part.path), "-i", part.path], video: `${first}:v`, audio: `${first + 1}:a`, count: 2 };
 }
 
 async function joinHardware(part: JoinPart, dest: string, onPercent: (percent: number) => void, signal?: AbortSignal): Promise<void> {
@@ -249,6 +271,174 @@ async function joinOne(part: JoinPart, dest: string, onPercent: (percent: number
   }
   await joinSized([part], dest, onPercent, 854, 480, "27", signal);
   return "libx264";
+}
+
+/**
+ * How much of a long recording each stretch of its piece covers. A piece
+ * made in one go was thrown away whole when Edit restarted (JJ's Mac, Nov
+ * 10: a 1 h 43 min interview read from the cloud at 1-2× real time, cut by two
+ * updates, 20-30 minutes lost each time), so a long one is made a stretch at
+ * a time, each kept once it's whole, and a restart redoes one stretch at most.
+ * 320 s is 9,600 frames at 30 fps and a multiple of 0.32 s, which lands on a
+ * sample at every usual rate (48, 44.1, 32, 22.05, 16 kHz…): every stretch is
+ * resampled from the same instants as one encode would be (proxy_pieces.ts
+ * found a tick at each join otherwise).
+ */
+export const STRETCH_MS = 320_000;
+/** A piece longer than this is made in stretches; a shorter one is quick enough to make again. */
+export const STRETCHED_OVER_MS = 2 * STRETCH_MS;
+/** Read before each stretch and dropped, so the sound's decoder and resampler have settled by its first sample (on the 0.32 s grid too). */
+const LEAD_MS = 3_200;
+/** A stretch's sound, kept as it is until the piece is joined (`joinStretched`). */
+const STRETCH_SOUND = ["-c:a", "pcm_s16le"];
+
+/** The picture's encoder for a stretch: the video hardware, or libx264 as `joinSized` encodes. */
+function stretchVideo(kind: Encoder): { decode: string[]; encode: string[] } {
+  return kind === "the video hardware"
+    ? { decode: HARDWARE_DECODE(), encode: hardwareEncode() }
+    : { decode: [], encode: ["-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-g", "30", "-color_range", "tv"] };
+}
+
+/** Names a stretch's file by how it's made, so a stretch made another way (an update that changed the encoding, the other encoder) is never joined with this run's. */
+function stretchKey(kind: Encoder, stretchMs: number): string {
+  const how = JSON.stringify([kind, stretchVideo(kind).encode, hardwarePicture(854, 480), STRETCH_SOUND, stretchMs, LEAD_MS]);
+  return `${kind === "the video hardware" ? "hw" : "x264"}-${Bun.hash(how).toString(36).slice(0, 8)}`;
+}
+
+/**
+ * One video's 480p piece, as `join` makes it, made a stretch of `stretchMs`
+ * at a time in `work` (a folder of its own): each stretch is written under a
+ * name of this run's and renamed whole, so what a restart left there is
+ * either whole, and kept, or a partial, and removed. The stretches are then
+ * copied end to end into `dest`.
+ *
+ * Their sound is kept as samples (PCM) and encoded to AAC once, over the
+ * whole piece, as it's joined: AAC encoded stretch by stretch would add the
+ * encoder's delay and a padded last frame at every join (a gap and a jump,
+ * and the sound drifting from the picture join by join). Each stretch is read
+ * from `LEAD_MS` before it (sought, so a cloud original isn't read from the
+ * start) and both picture and sound are trimmed to it, so its samples are
+ * those one encode would give and the joins are seamless. The whole piece is
+ * on one encoder: the video hardware, else libx264 for every stretch.
+ */
+export async function joinStretched(
+  part: JoinPart,
+  dest: string,
+  work: string,
+  onPercent: (percent: number) => void = () => {},
+  signal?: AbortSignal,
+  stretchMs = STRETCH_MS,
+): Promise<{ encoder: Encoder; stretches: number; kept: number }> {
+  const total = part.streams.durationMs;
+  if (total === 0 || total > MAX_CASE_MS) throw new Error("Use footage between a second and twenty hours in all.");
+  if (!part.streams.video) throw new Error("only a video is made in stretches");
+  fs.mkdirSync(work, { recursive: true });
+  const count = Math.ceil(total / stretchMs);
+  const whole = (kind: Encoder, n: number) => `${work}/${stretchKey(kind, stretchMs)}-${String(n).padStart(4, "0")}.mov`;
+  // A run whose hardware failed went on with libx264: so does this one, from what it made.
+  const fellBack = fs.readdirSync(work).some((name) => name.startsWith(`${stretchKey("libx264", stretchMs)}-`) && /-\d{4}\.mov$/.test(name));
+  const kinds: Encoder[] = hardwareEncoder() !== null && !fellBack ? ["the video hardware", "libx264"] : ["libx264"];
+  for (const kind of kinds) {
+    try {
+      const kept = await makeStretches(part, kind, work, (n) => whole(kind, n), count, stretchMs, onPercent, signal);
+      await joinStretches(Array.from({ length: count }, (_, n) => whole(kind, n)), dest, total, work, signal);
+      onPercent(100);
+      return { encoder: kind, stretches: count, kept };
+    } catch (error) {
+      fs.rmSync(dest, { force: true });
+      if (signal?.aborted || kind === "libx264") throw error;
+      diag.warn("writer", `the video hardware couldn't encode ${shown(part.path)} in stretches, so libx264 does: ${diag.scrub(diag.messageOf(error))}`);
+    }
+  }
+  throw new Error("no encoder made the piece");
+}
+
+/** Makes the stretches not already whole in `work` (anything else there is removed); how many were kept. */
+async function makeStretches(part: JoinPart, kind: Encoder, work: string, whole: (n: number) => string, count: number, stretchMs: number, onPercent: (percent: number) => void, signal?: AbortSignal): Promise<number> {
+  const total = part.streams.durationMs;
+  const wanted = new Set(Array.from({ length: count }, (_, n) => whole(n).slice(work.length + 1)));
+  // Partials of a cut run, and stretches made another way, are never joined: removed.
+  for (const name of fs.readdirSync(work)) if (!wanted.has(name)) fs.rmSync(`${work}/${name}`, { recursive: true, force: true });
+  const lengthOf = (n: number) => Math.min(stretchMs, total - n * stretchMs);
+  const todo: number[] = [];
+  for (let n = 0; n < count; n++) {
+    const file = whole(n);
+    // Renamed into place only once whole; read again in case the disk lost it.
+    const ok = isFile(file) && (await streams(file).then((found) => found.video && found.audio && Math.abs(found.durationMs - lengthOf(n)) <= 100, () => false));
+    if (ok) continue;
+    fs.rmSync(file, { force: true });
+    todo.push(n);
+  }
+  const kept = count - todo.length;
+  const todoMs = todo.reduce((sum, n) => sum + lengthOf(n), 0);
+  const paced: Paced = { totalMs: todoMs, ranMs: 0, doneMs: 0 };
+  const { decode, encode: video } = stretchVideo(kind);
+  for (const n of todo) {
+    const startMs = n * stretchMs;
+    const lengthMs = lengthOf(n);
+    const fromMs = Math.max(0, startMs - LEAD_MS);
+    const lead = startMs - fromMs;
+    const read = inputsOf(part, 0, decode, fromMs);
+    const trim = (filter: "trim" | "atrim") => `${filter}=${lead > 0 ? `start=${seconds(lead)}:` : ""}duration=${seconds(lengthMs)}`;
+    const picture = `[${read.video}]${hardwarePicture(854, 480)},${trim("trim")},setpts=PTS-STARTPTS[v]`;
+    // On the case's clock from the file's start (first_pts=0): a sound that starts late is padded, as the stretch before it would have it.
+    const sound = part.streams.audio
+      ? `[${read.audio}]aresample=48000:async=1:first_pts=0,aformat=channel_layouts=stereo,apad,${trim("atrim")},asetpts=PTS-STARTPTS[a]`
+      : `anullsrc=r=48000:cl=stereo,atrim=duration=${seconds(lengthMs)}[a]`;
+    const file = whole(n);
+    // This run's own name, as the store knows a partial (`store.inTheMaking`): no two runs ever write one file.
+    const partial = file.replace(/\.mov$/, `.${crypto.randomUUID().slice(0, 8)}.partial.mov`);
+    const before = paced.doneMs;
+    try {
+      await encode(
+        ["-hide_banner", "-y", ...read.args, "-filter_complex", `${picture};${sound}`, "-map", "[v]", "-map", "[a]", ...video, ...STRETCH_SOUND, "-progress", "pipe:1", "-nostats", partial],
+        partial,
+        lengthMs,
+        (percent) => onPercent(Math.min(99, Math.floor(((kept * stretchMs + before + (percent * lengthMs) / 100) * 100) / total))),
+        signal,
+        paced,
+      );
+      fs.renameSync(partial, file);
+    } finally {
+      fs.rmSync(partial, { force: true });
+    }
+  }
+  return kept;
+}
+
+/** A picture's decoder setup, hashed; null when unreadable. */
+async function setupOf(path: string): Promise<string | null> {
+  try {
+    const text = (await run(ffprobe(), ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=extradata_hash", "-show_data_hash", "SHA256", "-of", "csv=p=0", path], { timeoutMs: 60_000 })).trim();
+    return text === "" ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+/** Copies the stretches' pictures end to end into `dest` and encodes their sound to AAC in one go, as `join` encodes a piece's. */
+async function joinStretches(files: string[], dest: string, totalMs: number, work: string, signal?: AbortSignal): Promise<void> {
+  // The decoder's setup (SPS and PPS) too: a copy keeps the first stretch's, so one made with another would play broken.
+  const formats = await Promise.all(files.map(async (file) => `${await formatOf(file)}${await setupOf(file)}`));
+  if (formats.some((format) => format.startsWith("null") || format.endsWith("null") || format !== formats[0])) throw new Error("the stretches came out in different formats");
+  const list = `${work}/join-${crypto.randomUUID().slice(0, 8)}.txt`;
+  fs.writeFileSync(list, files.map((file) => `file '${file.replaceAll("'", "'\\''")}'\n`).join(""));
+  try {
+    await run(...lowered(ffmpeg(), ["-hide_banner", "-y", "-f", "concat", "-safe", "0", "-i", list, "-map", "0:v", "-map", "0:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", dest]), {
+      timeoutMs: toolTime(totalMs),
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    fs.rmSync(dest, { force: true });
+    throw error;
+  } finally {
+    fs.rmSync(list, { force: true });
+  }
+  const found = await streams(dest).catch(() => null);
+  if (found === null || !found.video || !found.audio || Math.abs(found.durationMs - totalMs) > 1_000) {
+    fs.rmSync(dest, { force: true });
+    throw new Error(`the stretches joined came out ${found === null ? "unreadable" : `${Math.round(found.durationMs / 1000)} s long, not ${Math.round(totalMs / 1000)} s`}`);
+  }
 }
 
 /**

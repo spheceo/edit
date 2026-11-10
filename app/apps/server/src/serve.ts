@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 
 import * as accounts from "./accounts.ts";
 import { keepAwakeWhile } from "./awake.ts";
-import { importing } from "./drive_import.ts";
+import { importing, resumeImport } from "./drive_import.ts";
 import { createApp, hostname, type App } from "./app.ts";
 import { pauseForExports, setListening, smoothsFast } from "./broll.ts";
 import { makeRoom, startCleaning } from "./cache_cleanup.ts";
@@ -22,7 +22,7 @@ import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
 import * as scriptSync from "./script_sync.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
-import { archiveGoing, ExportRegistry, room as exportRoom, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
+import { archiveGoing, dropLeftSnapshot, ExportRegistry, room as exportRoom, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
 import * as encoder from "./encoder.ts";
 import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
@@ -373,6 +373,11 @@ export function start(home: string, host: string | null, port: number): { app: A
     } catch (error) {
       diag.warn("agent", `before the update: ${diag.messageOf(error)}`);
     }
+    // Script imports interrupted, so they stay importing and carry on at the next start (writer/imports.ts stopAll);
+    // then the job table kept as it is, so nothing the stop below makes fail is written down as failed (jobs.freeze).
+    const imports = await writerImports.stopAll().catch((error: unknown) => (diag.warn("writer", `stopping the imports before the update: ${diag.messageOf(error)}`), 0));
+    if (imports > 0) diag.info("update", `${imports} script import(s) stopped before restarting: they carry on after it`);
+    jobs.freeze();
     // Saves pushed and locks let go, within the quit's budget.
     await Promise.race([Promise.all([seams.cloudProjects.shutdown(), writerLocks.releaseAll()]).catch(() => undefined), Bun.sleep(TIMING.QUIT_BUDGET)]);
     // Every program this run started stops before the new run starts its own on the same files.
@@ -473,7 +478,11 @@ function resumeJobs(app: App): void {
       // A share's export is its share's: the share job carries it on (and starts it again under this key).
       if (share === true) {
         const owner = jobs.get(app.store.home, jobs.keyOf("share", job.project));
-        if (owner !== undefined && jobs.live(owner)) throw new jobs.Gone("its share carries it on");
+        if (owner !== undefined && jobs.live(owner)) {
+          // Its kept timeline goes with it (the share keeps its own), where it stayed in jobs/ for good.
+          dropLeftSnapshot(app.store.home, job.project, job.args);
+          throw new jobs.Gone("its share carries it on");
+        }
         // From a build before shares were jobs: listed as a share now, at its export.
         void reviews
           .resumeShare(app, job.project, asked, options, { ...(replace === true ? { replace } : {}), ...(note === undefined ? {} : { note }), ...(watermark === undefined ? {} : { watermark }) })
@@ -486,6 +495,8 @@ function resumeJobs(app: App): void {
       // The export finished before the restart: only its upload is done again.
       const { output, key, record } = job.args as { output: string; key: string; record: ExportRecord };
       await (app.exports.sendUp?.(app.store.home, job.project, output, key, record) ?? archiveGoing(app.store.home, job.project, output, key, record));
+      // Crossed off however it went, as after its export (ExportRegistry.archive): left listed, it was sent again at every start.
+      jobs.end(app.store.home, job.key);
     },
     drive: (job) => {
       const { path } = job.args as { path: string };
@@ -529,8 +540,16 @@ function resumeJobs(app: App): void {
       jobs.end(app.store.home, job.key);
       void writerImports.resume(app, data, job.project, { kind: "retry" }).catch((error: unknown) => diag.warn("writer", `trying ${job.project}'s import again: ${diag.messageOf(error)}`));
     },
+    // Claude on a Writer script (a build, a revision, review fixes…): started again from what it was started with and kept.
+    writer: async (job) => (await import("./writer/work.ts")).carryOn(app, job),
     idea: (job) => ideas.resumeRun(app, job),
     thumbnail: (job) => thumbnails.resumeRun(app, job),
+    // Footage from a Drive link into an edit: downloaded on from what came down, then added.
+    // From its last step (drive_import.resumeImport): what the cut import already put on the timeline isn't put there twice.
+    footage: (job) => {
+      project(job.project);
+      resumeImport(app, job);
+    },
     // Smooth playback renders are made again when wanted; listed only so a restart or an update waits for them.
     playback: () => {
       throw new jobs.Gone("made again when it's wanted");

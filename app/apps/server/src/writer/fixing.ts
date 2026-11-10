@@ -67,7 +67,10 @@ const everywhere = (note: reviews.Note): boolean => note.scope === "everywhere";
 /** Runs as a job: the report the page shows, and what it cost. `ready`: the review whose "Ready for changes" asked for it: its page hears how it's going, and the next version is shared after. */
 export async function run(app: App, data: string, id: string, noteIds: string[], ready: string | null, job: jobs.Job): Promise<jobs.Outcome> {
   if (ready === null) return fixNotes(data, id, noteIds, null, job);
-  const before = store.read(store.scriptDir(data, id)).revision;
+  // The script as the fix found it, kept: one carried on after a restart shares if anything changed since the first start.
+  const first = job.resumed ? job.kept?.revision : undefined;
+  const before = typeof first === "number" ? first : store.read(store.scriptDir(data, id)).revision;
+  job.keep?.({ revision: before });
   let report: string;
   let cost: number;
   try {
@@ -100,19 +103,46 @@ export async function run(app: App, data: string, id: string, noteIds: string[],
   }
 }
 
+/** What a fixing run kept as it went (`Job.keep`): a restart carries on from here, with the notes it took and those it got to. */
+interface Kept {
+  claimed?: string[];
+  handled?: string[];
+  fixed?: number;
+  cost?: number;
+  lines?: string[];
+}
+
+const strings = (value: unknown): string[] | undefined => (Array.isArray(value) ? value.filter((one): one is string => typeof one === "string") : undefined);
+
 async function fixNotes(data: string, id: string, noteIds: string[], ready: string | null, job: jobs.Job): Promise<jobs.Outcome> {
   const dir = store.scriptDir(data, id);
-  job.stage("Taking the review notes");
-  const taken = await reviews.claim(noteIds, ready === null);
-  reviews.markTried(data, noteIds);
+  // Carried on after a restart: the notes it took are still this Mac's (taking them again would find them taken), and those it got to aren't done again.
+  const kept: Kept = job.resumed ? (job.kept ?? {}) : {};
+  let taken = strings(kept.claimed);
+  if (taken === undefined) {
+    job.stage("Taking the review notes");
+    taken = await reviews.claim(noteIds, ready === null);
+    reviews.markTried(data, noteIds);
+    job.keep?.({ claimed: taken });
+  }
   const notes = taken.flatMap((one) => reviews.note(data, one) ?? []).sort((a, b) => a.createdAt - b.createdAt);
   if (notes.length === 0) return [`Those notes were already taken, on ${ANOTHER_MACHINE} or by an earlier run.`, 0];
-  let [fixed, cost] = [0, 0];
-  const lines: string[] = [];
-  const handled = new Set<string>();
+  let fixed = typeof kept.fixed === "number" ? kept.fixed : 0;
+  let cost = typeof kept.cost === "number" ? kept.cost : 0;
+  const lines: string[] = strings(kept.lines) ?? [];
+  const handled = new Set<string>(strings(kept.handled) ?? []);
+  // One marked fixed before the restart could note it: done, not fixed twice.
+  for (const note of job.resumed ? notes : []) {
+    if (note.status !== "done" || handled.has(note.id)) continue;
+    handled.add(note.id);
+    fixed++;
+  }
+  const keepSoFar = () => job.keep?.({ handled: [...handled], fixed, cost, lines });
   for (const [index, note] of notes.entries()) {
     // One edit spanning blocks goes as one, when its first note comes up.
     if (handled.has(note.id)) continue;
+    // The notes before this one are done: a restart carries on from here.
+    keepSoFar();
     const members = note.group ? notes.filter((other) => other.group === note.group) : [note];
     for (const member of members) handled.add(member.id);
     // Approved meanwhile: the rest are let go, unfixed.
@@ -189,6 +219,7 @@ async function fixNotes(data: string, id: string, noteIds: string[], ready: stri
       lines.push(`Left ${note.author}'s note open: ${said}`);
     }
   }
+  keepSoFar();
   reviews.pollSoon();
   return [`Fixed ${fixed} of ${notes.length} review ${notes.length === 1 ? "note" : "notes"}.\n${lines.join("\n")}`, cost];
 }

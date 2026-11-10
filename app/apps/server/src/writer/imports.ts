@@ -74,7 +74,7 @@ export const anyImporting = (): boolean => running.size > 0;
  * still running", and an import has no other stop (JJ, Nov 10: a 23-recording
  * Drive import he no longer wanted held off nightly-70's update).
  */
-export async function stop(id: string): Promise<boolean> {
+export async function stop(id: string, why = "as its script is deleted"): Promise<boolean> {
   const fiber = fibers.get(id);
   if (fiber === undefined) return false;
   await runtime.runPromise(Fiber.interrupt(fiber));
@@ -83,8 +83,21 @@ export async function stop(id: string): Promise<boolean> {
   latest.delete(id);
   started.delete(id);
   stages.delete(id);
-  diag.info("writer", `${id.slice(0, 8)}: its import stopped, as its script is deleted`);
+  diag.info("writer", `${id.slice(0, 8)}: its import stopped, ${why}`);
   return true;
+}
+
+/**
+ * Every import here stopped before Edit restarts itself (an update): each is
+ * interrupted, so it says nothing of how it ended and stays importing on
+ * disk, and the next start carries it on from what it kept (index.ts
+ * `carryOn`). Left to the restart, its FFmpeg was killed under it and it
+ * stopped as failed, which nothing carries on.
+ */
+export async function stopAll(): Promise<number> {
+  const ids = [...fibers.keys()];
+  await Promise.all(ids.map((id) => stop(id, "for Edit to update; it carries on once Edit is back")));
+  return ids.length;
 }
 
 /** Every import running now, so the page can follow them. */
@@ -450,7 +463,9 @@ export async function resume(app: App, data: string, id: string, choice: Choice,
     const dir = store.scriptDir(data, id);
     const script = store.read(dir);
     const wordsMissing = script.status === "ready" && script.words.length === 0 && !script.noSpeech;
-    if (!(script.status === "error" || script.status === "needs_choice" || wordsMissing)) throw new Error("This import isn't waiting on anything.");
+    // Still importing on disk with none running here (`busy` said so): one a restart cut off, carried on (index.ts `carryOn`).
+    const cut = script.status === "processing";
+    if (!(script.status === "error" || script.status === "needs_choice" || wordsMissing || cut)) throw new Error("This import isn't waiting on anything.");
     const decision = script.decision;
     if (choice.kind === "dismiss") {
       script.dismissedAt = Date.now();
@@ -745,7 +760,8 @@ const pipeline = Effect.fn("writer.import.pipeline")(function* (app: App, dir: s
       yield* tell;
       yield* Fiber.join(preview).pipe(Effect.raceFirst(Effect.forever(Effect.sleep(2000).pipe(Effect.andThen(tell))).pipe(Effect.andThen(Effect.never))));
     });
-  const said = yield* Effect.tryPromise({ try: () => words(app, dir, script, (text) => runPromise(waitOn(text))), catch: (error) => error as Error });
+  // Its signal ends with the import: a stopped one (deleted, or Edit updating) asks the transcriber for nothing more.
+  const said = yield* Effect.tryPromise({ try: (signal) => words(app, dir, script, (text) => runPromise(waitOn(text)), signal), catch: (error) => error as Error });
   if (said === "paused") return "paused" as const;
   // Ready once its preview is: the words were heard beside it.
   if (preview.pollUnsafe() === undefined) {
@@ -770,7 +786,7 @@ const pipeline = Effect.fn("writer.import.pipeline")(function* (app: App, dir: s
 });
 
 /** The case's PDFs, the words and who says them, while `preview` is made. */
-async function words(app: App, dir: string, script: Script, waitOn: (words: string) => Promise<void>): Promise<"done" | "paused"> {
+async function words(app: App, dir: string, script: Script, waitOn: (words: string) => Promise<void>, signal?: AbortSignal): Promise<"done" | "paused"> {
   // A Drive case folder's PDFs (reports, court papers), read for the case's facts before the footage is heard: their names are what the transcriber listens for.
   if (script.sourceKind === "drive") {
     const link = drive.parse(script.sourceUrl);
@@ -811,7 +827,7 @@ async function words(app: App, dir: string, script: Script, waitOn: (words: stri
       script,
       dir,
       (done, count) => say(script, `Transcribing: ${Math.floor((done * 100) / Math.max(count, 1))}%.`, "transcribing", 60 + Math.floor((done * 30) / Math.max(count, 1))),
-      undefined,
+      signal,
       // Apple's model coming down on a Mac's first import, named rather than waited through.
       (text) => say(script, text, "transcribing"),
     );
@@ -820,13 +836,15 @@ async function words(app: App, dir: string, script: Script, waitOn: (words: stri
     if (diag.messageOf(error) === transcription.NO_WORDS) return pause(dir, script, { kind: "no_speech", summary: "Speech to text heard no words in this footage. Open it without a transcript to cut it by time, or cancel.", reason: "no_words" });
     throw error;
   }
+  signal?.throwIfAborted();
   // The transcript is kept before the optional visual check, so a stopped import has its words on disk too.
   store.write(dir, script);
   // Who says each line, read from the conversation by Opus (caption_turns.ts), for every import: the voices
   // transcription heard and YouTube's caption turns alike. Not watched: Gemini watching every minute of the
   // footage cost about $0.70 an hour of it, $17 on Oct 30 for scripts that use well under an hour each (the
   // user: "we can still replace this with just opus"). A failure is a note: the voices stay as heard.
-  await readTurns(script, dir, (detail, percent) => say(script, detail, "transcribing", percent));
+  await readTurns(script, dir, (detail, percent) => say(script, detail, "transcribing", percent), signal);
+  signal?.throwIfAborted();
   // Words that spilled across a change of speaker go back to who said them.
   say(script, "Putting each word with its speaker.");
   await fixSpills(script, dir).catch((error: unknown) => diag.warn("writer", `${script.title}: spilled words weren't fixed: ${diag.messageOf(error)}`));
@@ -1181,18 +1199,50 @@ async function encodePiece(dir: string, source: string, label: string): Promise<
   const piece = piecePath(dir, source);
   if (await previewFits(piece, held)) return;
   const began = Date.now();
-  const partial = piece.replace(/\.[^./]+$/, ".partial.mp4");
+  // A long recording's piece is made in stretches kept in a folder of its own (`media.joinStretched`), so
+  // a restart redoes one stretch, not the piece (JJ's Mac, Nov 10: two updates each threw away 20-30 minutes
+  // of a 1 h 43 min interview's piece). The folder is named by the length, so a recording replaced by another
+  // isn't joined from the first one's stretches. A partial is named by its run, so no two runs write one file;
+  // what a cut run left (its partial, another length's stretches) is removed.
+  const stem = piece.slice(piece.lastIndexOf("/") + 1).replace(/\.[^./]+$/, "");
+  const stretches = join(dir, "pieces", `${stem}.stretches-${held}`);
+  const partial = join(dir, "pieces", `${stem}.${crypto.randomUUID().slice(0, 8)}.partial.mp4`);
+  const leftover = (name: string) => name.startsWith(`${stem}.`) && /^(\.[0-9a-f]{8})?\.partial\.mp4$/.test(name.slice(stem.length));
+  const signal = importSignal(dir);
   try {
     fs.mkdirSync(join(dir, "pieces"), { recursive: true });
-    const encoder = await media.join([{ path: source, streams: { ...found, durationMs: held } }], partial);
+    for (const name of fs.readdirSync(join(dir, "pieces"))) {
+      if (leftover(name) || (name.startsWith(`${stem}.stretches-`) && join(dir, "pieces", name) !== stretches)) fs.rmSync(join(dir, "pieces", name), { recursive: true, force: true });
+    }
+    const part = { path: source, streams: { ...found, durationMs: held } };
+    const made = found.video && held > media.STRETCHED_OVER_MS ? await media.joinStretched(part, partial, stretches, () => {}, signal) : { encoder: await media.join([part], partial, () => {}, signal), stretches: 1, kept: 0 };
     fs.renameSync(partial, piece);
+    fs.rmSync(stretches, { recursive: true, force: true });
     const took = Math.max(1, Date.now() - began);
+    const kept = made.kept > 0 ? `, ${made.kept} of its ${made.stretches} stretches kept from before` : "";
     // Which encoder and how fast: a piece at a few times real time is libx264, or a slow read from the cloud.
-    diag.info("writer", `${label}: its preview piece (${clock(held)}) encoded in ${Math.round(took / 1000)} s on ${encoder}, ${(held / took).toFixed(1)}× real time${media.isRemote(source) ? ", read from the cloud" : ""}`);
+    diag.info("writer", `${label}: its preview piece (${clock(held)}) encoded in ${Math.round(took / 1000)} s on ${made.encoder}, ${(held / took).toFixed(1)}× real time${media.isRemote(source) ? ", read from the cloud" : ""}${kept}`);
   } catch (error) {
     fs.rmSync(partial, { force: true });
-    diag.warn("writer", `${label}: its preview piece couldn't be encoded, so the preview is encoded whole: ${diag.messageOf(error)}`);
+    if (signal?.aborted) diag.info("writer", `${label}: its preview piece stopped with the import; its whole stretches are kept for when it carries on`);
+    else diag.warn("writer", `${label}: its preview piece couldn't be encoded, so the preview is encoded whole: ${diag.messageOf(error)}`);
   }
+}
+
+/**
+ * Aborted once the import running in `dir` ends, so a stopped import (a
+ * deleted script, Edit restarting for an update) starts no more of its
+ * piece's FFmpegs: an interrupted import's fiber ends at once while its
+ * piece's encode ran on, and the next stretch could start after the restart's
+ * sweep of FFmpegs (serve.ts `stopChildren`), a second writer beside the new
+ * run's. None when no import holds `dir`.
+ */
+function importSignal(dir: string): AbortSignal | undefined {
+  const fiber = fibers.get(dir.slice(dir.lastIndexOf("/") + 1));
+  if (fiber === undefined) return undefined;
+  const controller = new AbortController();
+  fiber.addObserver(() => controller.abort());
+  return controller.signal;
 }
 
 /**

@@ -133,7 +133,12 @@ export function start(store: Store, library: Library, project: Project, path: st
   const into = folder(subtitleVideo(project));
   nextUpload += 1;
   const number = nextUpload;
-  const job = jobs.begin(store.home, "drive", id, { path });
+  // The upload session a restart cut short, kept with its job: carried on from what Drive has (Sphe, Nov 10: an update
+  // goes through at any time; the whole file was sent again, and a first upload cut after Drive had it made a second file).
+  const listed = jobs.get(store.home, jobs.keyOf("drive", id));
+  const saved = listed !== undefined && listed.args.path === path ? keptSession(listed.args.session) : null;
+  const job = jobs.begin(store.home, "drive", id, { path, ...(saved === null ? {} : { session: saved }) });
+  const keep = { saved, save: (session: Session | null) => jobs.patch(store.home, job, { session }) };
   uploads.set(id, number);
   const emit = (state: string, extra: Record<string, unknown>) => {
     // Keys sorted, as events always were.
@@ -148,7 +153,7 @@ export function start(store: Store, library: Library, project: Project, path: st
     try {
       file = await diag.timeOnAsync("drive", "drive upload", subject, () =>
         catchBugsAsync("the Drive upload", () =>
-          upload(library, path, name, into, replacing, (progress) => emit("uploading", { progress })),
+          upload(library, path, name, into, replacing, (progress) => emit("uploading", { progress }), keep),
         ),
       );
       if (uploads.get(id) === number) {
@@ -172,10 +177,35 @@ export function start(store: Store, library: Library, project: Project, path: st
   })();
 }
 
+/** A resumable upload session, kept with its job so a restart carries it on: for this file as it was (size, mtime). */
+export interface Session {
+  uri: string;
+  size: number;
+  mtime_ms: number;
+  /** The file the session sends new contents to, or null for a new file in the folder. */
+  replacing: string | null;
+}
+
+/** A session kept in a job's args, when it reads as one. */
+function keptSession(value: unknown): Session | null {
+  const session = value as Partial<Session> | null | undefined;
+  if (typeof session?.uri !== "string" || typeof session.size !== "number" || typeof session.mtime_ms !== "number") return null;
+  return { uri: session.uri, size: session.size, mtime_ms: session.mtime_ms, replacing: typeof session.replacing === "string" ? session.replacing : null };
+}
+
+/** Where an upload's session is kept: the one a restart cut short, and how a new one is noted (null: none to carry on). */
+export interface Keep {
+  saved: Session | null;
+  save(session: Session | null): void;
+}
+
 /**
  * Drive's resumable upload: a session for the file in the folder (or for new
  * contents of `replacing`, keeping its link; a new file if that one is gone),
- * then its bytes streamed from disk, then a link anyone can view.
+ * then its bytes streamed from disk, then a link anyone can view. The session
+ * is kept (`keep`) as soon as Drive gives it, and asked first after a cut
+ * (a restart, a dropped connection): an upload Drive finished isn't sent
+ * again, nor made a second file, and one part-way carries on from what Drive has.
  */
 export async function upload(
   library: Library,
@@ -184,10 +214,14 @@ export async function upload(
   into: string,
   replacing: string | null,
   progress: (share: number) => void,
+  keep: Keep = { saved: null, save: () => {} },
 ): Promise<DriveFile> {
   let size: number;
+  let mtime: number;
   try {
-    size = fs.statSync(path).size;
+    const stat = fs.statSync(path);
+    size = stat.size;
+    mtime = stat.mtimeMs;
   } catch (error) {
     throw new Error(`can't read ${path}: ${ioMessage(error)}`);
   }
@@ -211,31 +245,60 @@ export async function upload(
     return [code, new TextDecoder().decode(answer)];
   };
   let replaced = replacing !== null;
-  // A dropped connection or a busy Drive mid-upload starts a new session and
-  // sends the file again (a few times), rather than failing the export and
-  // leaving the user to upload by hand.
+  // The session kept for this very file (a restart cut it short), else none yet.
+  let current = keep.saved !== null && keep.saved.size === size && keep.saved.mtime_ms === mtime ? keep.saved : null;
+  // A dropped connection or a busy Drive mid-upload carries on in the same
+  // session from what Drive has (a few times), rather than failing the export
+  // and leaving the user to upload by hand.
   let tries = 0;
-  let code: number;
-  let body: string;
+  let code = 0;
+  let body = "";
   for (;;) {
     tries += 1;
-    let [answered, answer] = await session(replaced ? replacing : null);
-    if (replaced && answered === 404) {
-      // Deleted on Drive since: a new file, and a new link.
-      [answered, answer] = await session(null);
-      replaced = false;
-    }
-    if (answered !== 200) throw new Error(driveError(answered, bodyOf(answer)));
-    const address = location(answer);
-    if (address === null) throw new Error("Google Drive didn't start the upload");
     let sent: [number, string] | null = null;
     let error: unknown = null;
     try {
-      sent = await put(address, path, type, progress);
+      let from = 0;
+      let address: string | null = null;
+      if (current !== null) {
+        const where = await ask(current.uri, size);
+        if ("done" in where) {
+          // Drive has it all: its answer is the upload's, and nothing is sent again.
+          replaced = current.replacing !== null;
+          sent = where.done;
+        } else if (where.from !== null && where.from < size) {
+          replaced = current.replacing !== null;
+          address = current.uri;
+          from = where.from;
+        } else {
+          current = null;
+          keep.save(null);
+        }
+      }
+      if (sent === null && address === null) {
+        let [answered, answer] = await session(replaced ? replacing : null);
+        if (replaced && answered === 404) {
+          // Deleted on Drive since: a new file, and a new link.
+          [answered, answer] = await session(null);
+          replaced = false;
+        }
+        if (answered !== 200) throw new Fatal(driveError(answered, bodyOf(answer)));
+        address = location(answer);
+        if (address === null) throw new Fatal("Google Drive didn't start the upload");
+        // Kept before a byte goes, so a restart from here asks this session and never starts a second file.
+        current = { uri: address, size, mtime_ms: mtime, replacing: replaced ? replacing : null };
+        keep.save(current);
+      }
+      if (sent === null && address !== null) {
+        if (from > 0) diag.info("drive", `uploading ${name}: carrying on from ${from} of ${size} bytes`);
+        sent = await put(address, path, type, progress, from);
+      }
     } catch (thrown) {
+      if (thrown instanceof Fatal) throw new Error(thrown.message);
       error = thrown;
     }
-    const retry = sent === null || sent[0] === 429 || sent[0] >= 500 || sent[0] === 0;
+    // 308: Drive has only part of it; the next try asks the session how much.
+    const retry = sent === null || sent[0] === 429 || sent[0] >= 500 || sent[0] === 0 || sent[0] === 308;
     if (!retry || tries >= 3) {
       if (sent === null) throw error;
       [code, body] = sent;
@@ -266,6 +329,39 @@ export async function upload(
   return { file_id: fileId, url: viewUrl(fileId), name, uploaded_ms: nowMs() };
 }
 
+/** What fails an upload at once: Drive refused to start it (not tried again). */
+class Fatal extends Error {}
+
+/**
+ * Where a kept upload session is (Drive's status check: an empty PUT saying
+ * only the size): done, with Drive's answer (the file); part-way, from the
+ * byte Drive has up to (`from`); or `from: null`: gone (expired, a week on)
+ * or not one Drive knows, so a new session starts. Throws when Drive can't
+ * be asked now (offline, busy): tried again like a dropped upload.
+ */
+async function ask(uri: string, size: number): Promise<{ done: [number, string] } | { from: number | null }> {
+  const config =
+    `url = ${quote(uri)}\n` +
+    `header = ${quote(`Content-Range: bytes */${size}`)}\n` +
+    `data-binary = ${quote("")}\n`;
+  const [code, raw] = await curl(config, ["--max-time", "60", "-X", "PUT", "-D", "-"]);
+  const answer = new TextDecoder().decode(raw);
+  if (code === 200 || code === 201) return { done: [code, bodyOf(answer)] };
+  if (code === 308) return { from: received(answer) };
+  if (code === 429 || code >= 500 || code === 0) throw new Error(driveError(code, bodyOf(answer)));
+  return { from: null };
+}
+
+/** How many bytes Drive has, from a 308's `Range: bytes=0-<last>` (none: nothing yet). */
+export function received(answer: string): number {
+  const head = answer.split("\r\n\r\n")[0] ?? "";
+  for (const line of head.split("\n")) {
+    const found = /^\s*range\s*:\s*bytes=0-(\d+)\s*$/i.exec(line);
+    if (found !== null) return Number(found[1]) + 1;
+  }
+  return 0;
+}
+
 /** Lets anyone with the link view the file. */
 async function share(library: Library, fileId: string): Promise<void> {
   const config =
@@ -279,9 +375,10 @@ async function share(library: Library, fileId: string): Promise<void> {
 
 /**
  * PUTs the file to the upload session (the session's address is all the
- * sign-in it needs), calling `progress` as it goes. Returns the status and body.
+ * sign-in it needs), from byte `from` on (curl's `-C` says where in its
+ * Content-Range), calling `progress` as it goes. Returns the status and body.
  */
-async function put(session: string, path: string, type: string, progress: (share: number) => void): Promise<[number, string]> {
+async function put(session: string, path: string, type: string, progress: (share: number) => void, from = 0): Promise<[number, string]> {
   const config =
     `url = ${quote(session)}\n` +
     `header = ${quote(`Content-Type: ${type}`)}\n` +
@@ -290,7 +387,7 @@ async function put(session: string, path: string, type: string, progress: (share
   let child: Bun.Subprocess<"pipe", "pipe", "pipe">;
   try {
     child = Bun.spawn(
-      ["curl", "-#", "-S", "--proto", googleProto(), "--config", "-", "--connect-timeout", "30", "-w", "\n%{http_code}", "--upload-file", path],
+      ["curl", "-#", "-S", "--proto", googleProto(), "--config", "-", "--connect-timeout", "30", "-w", "\n%{http_code}", ...(from > 0 ? ["-C", String(from)] : []), "--upload-file", path],
       { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
     );
   } catch (error) {
@@ -304,7 +401,9 @@ async function put(session: string, path: string, type: string, progress: (share
     written = false;
   }
   const reading = new Response(child.stdout).text();
-  // curl's progress bar: "######     45.2%" lines ended by carriage returns.
+  // curl's progress bar: "######     45.2%" lines ended by carriage returns; of the whole file, carried on or not.
+  // Carried on, its first line says 100% before a byte's gone: read only once it says less.
+  let started = from === 0;
   let said = "";
   let line: number[] = [];
   let last = -1.0;
@@ -318,7 +417,9 @@ async function put(session: string, path: string, type: string, progress: (share
       const text = decoder.decode(new Uint8Array(line));
       line = [];
       const share = percent(text);
+      if (share !== null && !started && share < 1.0) started = true;
       if (share !== null) {
+        if (!started) continue;
         if (f32(share - last) >= f32(0.01) || (share >= 1.0 && last < 1.0)) {
           last = share;
           progress(share);

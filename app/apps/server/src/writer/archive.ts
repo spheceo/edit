@@ -105,6 +105,13 @@ export function startRestore(app: App, data: string, id: string): import("@edit/
   return jobs.start(data, id, title, { kind: "restore" }, (job) => restore(app, data, id, job));
 }
 
+/** A restore a restart cut off, carried on (work.ts): shown restoring again, unless it's back already. */
+export async function restoreAgain(app: App, data: string, id: string, job: jobs.Job): Promise<jobs.Outcome> {
+  if (state(data, id) === null) return ["The footage is back.", 0];
+  changeLocal(data, id, (local) => void (local.restoring = true));
+  return restore(app, data, id, job);
+}
+
 /** Brings an archived script's footage back, as a job. */
 async function restore(app: App, data: string, id: string, job: jobs.Job): Promise<jobs.Outcome> {
   let missing: string[];

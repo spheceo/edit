@@ -54,7 +54,11 @@ export type Kind =
   /** A smooth playback render (playback_render.ts): listed so `busyWith` sees it; not resumed. */
   | "playback"
   /** A Writer script's import (writer/imports.ts), or its chosen footage's exact hearing (`script:<id>:exact`, writer/exact_after.ts), waiting on the transcription plan's credit: woken to try again. */
-  | "script";
+  | "script"
+  /** Footage from a Drive link into an edit (drive_import.ts): downloaded (resuming) and added again after a restart. */
+  | "footage"
+  /** Claude on a Writer script (writer/jobs.ts: a build, a revision, review fixes…), with what it was started with and kept: carried on from it after a restart (writer/work.ts). */
+  | "writer";
 
 export type State = "queued" | "running" | "waiting" | "done" | "failed" | "given_up";
 
@@ -127,7 +131,20 @@ function read(home: string): Job[] {
   return load(home);
 }
 
+/**
+ * Set once Edit is about to restart itself (an update), before it stops the
+ * programs its work runs: what that stop makes the work say (failed, ended)
+ * isn't written, so the table stays as it was and the next start carries
+ * every job on. Written, an import whose FFmpeg was killed under it was
+ * listed failed, which nothing carries on.
+ */
+let frozen = false;
+export function freeze(on = true): void {
+  frozen = on;
+}
+
 function write(home: string, jobs: Job[]): void {
+  if (frozen) return;
   const now = nowMs();
   // Failed exports and shares stay until they're done again (a new build retries them); other ended jobs go after a while.
   const kept = jobs.filter((job) => live(job) || job.state === "given_up" || (job.state === "failed" && (job.kind === "export" || job.kind === "share")) || now - job.updated_ms < KEEP_ENDED_MS);

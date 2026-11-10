@@ -37,6 +37,18 @@ export function add(dir: string, role: ChatTurn["role"], text: string, costUsd: 
   }
 }
 
+/**
+ * The producer's request, said once: a job carried on after a restart
+ * (`resumed`) said it already when it was cut off, so it isn't said again
+ * when it's still the last thing in the chat (Nov 10: updates go through
+ * while Claude writes, and its job starts again after).
+ */
+export function asked(dir: string, text: string, resumed = false): void {
+  const last = resumed ? read(dir).at(-1) : undefined;
+  if (last?.role === "producer" && last.text === text.trim()) return;
+  add(dir, "producer", text);
+}
+
 /** Claude's answer asking to start the script over, waiting for the producer; an earlier ask still waiting is declined. */
 export function askReset(dir: string, text: string, costUsd: number | null): void {
   const turns = read(dir).map((turn): ChatTurn => (turn.reset === "pending" ? { ...turn, reset: "declined" } : turn));

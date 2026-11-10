@@ -25,7 +25,6 @@ import * as docs from "./docs.ts";
 import * as edits from "./edits.ts";
 import * as feedback from "./feedback.ts";
 import { lessons } from "./lessons.ts";
-import * as fixing from "./fixing.ts";
 import * as handoff from "./handoff.ts";
 import { projectFor } from "../writer_handoff.ts";
 import * as footage from "./footage.ts";
@@ -42,6 +41,8 @@ import * as store from "./store.ts";
 import * as trello from "./trello.ts";
 import * as versions from "./versions.ts";
 import * as watch from "./watch.ts";
+import { begin as beginJob } from "./work.ts";
+import { carryingOn } from "./index.ts";
 
 type Context = RouteContext<App>;
 
@@ -277,7 +278,7 @@ export function routes(router: Router<App>): void {
     .post("/api/writer/scripts/{id}/build/stop", (context) =>
       answer(() => {
         readFor(dataOf(context.app), id(context));
-        jobs.stop(id(context));
+        jobs.stop(id(context), dataOf(context.app));
         return { ok: true };
       }),
     )
@@ -310,10 +311,10 @@ export function routes(router: Router<App>): void {
       });
     })
     .post("/api/writer/scripts/{id}/complete-transcription", (context) =>
-      answer(() => startJob(context.app, id(context), { kind: "transcribe" }, (job) => imports.complete(context.app, dataOf(context.app), id(context), job))),
+      answer(() => startJob(context.app, id(context), { kind: "transcribe" })),
     )
     .post("/api/writer/scripts/{id}/speakers/retry", (context) =>
-      answer(() => startJob(context.app, id(context), { kind: "speakers" }, (job) => imports.retrySpeakers(context.app, dataOf(context.app), id(context), job))),
+      answer(() => startJob(context.app, id(context), { kind: "speakers" })),
     )
     // A compilation's reused cases' videos, brought in for its opening's intro clips.
     .post("/api/writer/scripts/{id}/reuses", async (context) => {
@@ -322,7 +323,7 @@ export function routes(router: Router<App>): void {
         const script = readFor(dataOf(context.app), id(context));
         const urls = Array.isArray(given.urls) && given.urls.length > 0 ? given.urls.map(String) : reuse.missing(script);
         if (urls.length === 0) throw new Error("Every reused case is already imported.");
-        return startJob(context.app, id(context), { kind: "reuse", urls }, (job) => reuse.importReused(context.app, dataOf(context.app), id(context), urls, job));
+        return startJob(context.app, id(context), { kind: "reuse", urls });
       });
     })
     // Sharing for review on feedback.spheceo.com, and the notes reviewers leave there.
@@ -387,7 +388,7 @@ export function routes(router: Router<App>): void {
         const notes = reviews.openNotes(data, id(context));
         if (notes.length === 0) throw new Error("No notes are open.");
         reviews.markTried(data, notes);
-        return startJob(context.app, id(context), { kind: "review", notes, ready: null }, (job) => fixing.run(context.app, data, id(context), notes, null, job));
+        return startJob(context.app, id(context), { kind: "review", notes, ready: null });
       }),
     )
     .get("/api/writer/scripts/{id}/review/fix", (context) =>
@@ -459,7 +460,7 @@ export function routes(router: Router<App>): void {
         const script = readFor(dataOf(context.app), id(context));
         if (!script.commentary) throw new Error("Clips are found for a commentary script.");
         if (!script.commentary.sources.some((source) => source.role === "brief")) throw new Error("Add the producer's brief first: the search starts from it.");
-        return startJob(context.app, id(context), { kind: "find" }, (job) => scout.find(context.app, dataOf(context.app), id(context), job));
+        return startJob(context.app, id(context), { kind: "find" });
       }),
     )
     .get("/api/writer/scripts/{id}/finds", (context) =>
@@ -523,7 +524,7 @@ export function routes(router: Router<App>): void {
         const data = dataOf(context.app);
         readFor(data, id(context));
         feedback.ready(store.scriptDir(data, id(context)), step);
-        return startJob(context.app, id(context), { kind: "learn", step }, (job) => feedback.run(data, id(context), step, job));
+        return startJob(context.app, id(context), { kind: "learn", step });
       });
     })
     .post("/api/writer/scripts/{id}/feedback/keep", (context) =>
@@ -560,7 +561,12 @@ export function routes(router: Router<App>): void {
       if (path === null) throw notFound("No such clip.");
       return serveFile(context.request, path);
     })
-    .get("/api/writer/progress", ({ app }) => json(imports.progress().filter((one) => seesScript(dataOf(app), one.id))))
+    // With the imports a restart cut off, until they're started again: still importing, carrying on.
+    .get("/api/writer/progress", ({ app }) => {
+      const now = imports.progress();
+      const all = [...now, ...carryingOn().filter((one) => !now.some((going) => going.id === one.id) && !imports.importing(one.id))];
+      return json(all.filter((one) => seesScript(dataOf(app), one.id)));
+    })
     .get("/api/writer/cloud", () => json(cloud.statusNow()))
     .get("/api/writer/activity", ({ app }) => json(activity.list().filter((one) => one.script === null || seesScript(dataOf(app), one.script))))
     // Brings an archived script's footage back; followed as a build.
@@ -605,7 +611,7 @@ export function routes(router: Router<App>): void {
         if (given.kind !== undefined) can.requireKind(script, given.kind);
         const note = String(given.note ?? "");
         const review = scripting.scriptFreshEyes(given.review);
-        return startJob(context.app, id(context), { kind: "build", note, ...(given.kind ? { format: given.kind } : {}) }, (job) => scripting.buildAndReview(context.app, dataOf(context.app), id(context), note, given.kind, review, job));
+        return startJob(context.app, id(context), { kind: "build", note, ...(given.kind ? { format: given.kind } : {}), review });
       });
     })
     .post("/api/writer/scripts/{id}/revise", async (context) => {
@@ -615,11 +621,11 @@ export function routes(router: Router<App>): void {
         if (request === "") throw new Error("Say what to change.");
         if ([...request].length > 8_000) throw new Error("Keep the request under 8,000 characters.");
         const focus = given.focus ?? NO_FOCUS;
-        return startJob(context.app, id(context), { kind: "revise", request, focus }, (job) => scripting.reviseWith(dataOf(context.app), id(context), request, request, focus, false, job));
+        return startJob(context.app, id(context), { kind: "revise", request, focus });
       });
     })
     .post("/api/writer/scripts/{id}/exact", (context) =>
-      answer(() => startJob(context.app, id(context), { kind: "exact" }, (job) => scripting.exactOnce(context.app, dataOf(context.app), id(context), job))),
+      answer(() => startJob(context.app, id(context), { kind: "exact" })),
     )
     .get("/api/writer/scripts/{id}/research", (context) =>
       answer(() => {
@@ -744,17 +750,12 @@ const firstBuild = (build: unknown): { note: string } | null => (typeof build ==
 
 // A script made with a first build is built once its import is ready, as the Build button would.
 imports.hooks.build = (app, id, note) => {
-  startJob(app, id, { kind: "build", note }, (job) => scripting.buildAndReview(app, dataOf(app), id, note, undefined, scripting.scriptFreshEyes(undefined), job));
+  startJob(app, id, { kind: "build", note, review: scripting.scriptFreshEyes(undefined) });
 };
 
-export function startJob(app: App, scriptId: string, work: jobs.Work, run: (job: jobs.Job) => Promise<jobs.Outcome>, after?: () => void): BuildStatus {
-  const data = dataOf(app);
-  const script = readFor(data, scriptId);
+/** Starts `work` on a script the person may see, made by work.ts from what it's given (as a restart carries it on); its first status. */
+export function startJob(app: App, scriptId: string, work: jobs.Work): BuildStatus {
+  const script = readFor(dataOf(app), scriptId);
   idle(scriptId);
-  // A commentary's clips may have changed: their footage comes down after.
-  const footageAfter = ["restore", "speakers", "transcribe"].includes(work.kind) ? undefined : () => void footage.now(app, data, scriptId);
-  return jobs.start(data, scriptId, script.title, work, run, () => {
-    footageAfter?.();
-    after?.();
-  });
+  return beginJob(app, scriptId, script.title, work);
 }

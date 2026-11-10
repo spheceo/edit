@@ -9,7 +9,8 @@ import * as store from "../../src/writer/store.ts";
 
 // Oct 31: a dev server reloaded by a saved file left the Kroger import
 // stopped ("The import stopped when Edit closed. Retry") until someone pressed
-// Retry. The imports a restart cut off are named, so Edit carries them on.
+// Retry. The imports a restart cut off are named, so Edit carries them on, and
+// they stay importing until it does (Nov 10).
 test("a restart names the imports it cut off and leaves the others alone", () => {
   const data = fs.mkdtempSync(join(os.tmpdir(), "edit-interrupted-"));
   const make = (id: string, status: Script["status"]) => {
@@ -22,7 +23,10 @@ test("a restart names the imports it cut off and leaves the others alone", () =>
   make(running, "processing");
   make(ready, "ready");
   expect(store.markInterrupted(data)).toEqual([running]);
-  expect(store.read(store.scriptDir(data, running)).status).toBe("error");
+  expect(store.read(store.scriptDir(data, running)).status).toBe("processing");
   expect(store.read(store.scriptDir(data, ready)).status).toBe("ready");
+  // One that didn't carry on is stopped, for Retry.
+  store.markStopped(data, running);
+  expect(store.read(store.scriptDir(data, running)).status).toBe("error");
   expect(store.markInterrupted(data)).toEqual([]);
 });

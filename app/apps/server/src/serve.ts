@@ -20,6 +20,7 @@ import * as diag from "./diag.ts";
 import * as modelChoice from "./model_choice.ts";
 import * as lastRun from "./last_run.ts";
 import { agentHooks } from "./agent.ts";
+import * as scriptSync from "./script_sync.ts";
 import { registerEditingTools, unfinishedNote } from "./edit_tools.ts";
 import { archiveGoing, ExportRegistry, room as exportRoom, resumeSnapshot, type ExportRecord, type StartExtra } from "./exports.ts";
 import * as encoder from "./encoder.ts";
@@ -241,6 +242,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   registerMediaTools();
   // A whole edit that ends with fixable flags gets one follow-up from Edit.
   agentHooks.unfinished = (project) => unfinishedNote(app, project);
+  // The script's comments, written on any Mac, reach the edit before each agent turn.
+  agentHooks.beforeTurn = (project) => scriptSync.catchUpComments(app, project);
   seams.speakers.watch(app);
   // Cloud projects (on with the built-in token): sync, locks, and letting them go on the way out.
   // Signed in before: the access token renewed quietly, before the cloud's first call.

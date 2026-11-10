@@ -454,6 +454,29 @@ export async function fromScript(app: App, scriptId: string): Promise<void> {
   diag.info("script", `${link.project}: the edit follows its script (${said.join(", ")})${done.skipped.length ? `; not followed: ${done.skipped.join(", ")}` : ""}`);
 }
 
+/**
+ * The edit's comments brought up to the script as this Mac has it, before an
+ * agent turn on the edit: a comment written on another Mac comes here by the
+ * script's cloud pull, which runs no sync, and a Mac that saved the script
+ * while another held the edit couldn't write it there.
+ */
+export async function catchUpComments(app: App, projectId: string): Promise<void> {
+  const live = app.store.get(projectId);
+  const source = live?.project.script?.source ?? "";
+  if (live === null || !source.startsWith("writer:")) return;
+  let script: Script;
+  try {
+    script = writerStore.read(writerStore.scriptDir(writerStore.dataDir(app.store.home), source.slice("writer:".length)));
+  } catch {
+    return;
+  }
+  const link = script.edit;
+  if (link === undefined || link.project !== projectId || link.outOfStep !== undefined || !follows(script)) return;
+  if (!syncComments(structuredClone(live.project), script)) return;
+  await app.store.update(projectId, ORIGIN, (project) => void syncComments(project, script));
+  diag.info("script", `${projectId}: the edit has its script's comments, before the agent's turn`);
+}
+
 /** The edit saved on this Mac (not by the sync, not a cloud pull): its script follows. */
 export async function fromEdit(app: App, projectId: string): Promise<void> {
   const live = app.store.get(projectId);

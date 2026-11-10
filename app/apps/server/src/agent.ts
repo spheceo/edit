@@ -223,6 +223,8 @@ const SETTLE_MS = 3_000;
  */
 export const agentHooks = {
   unfinished: (_project: string): { note: string; count: number } | null => null,
+  /** Before a turn: the edit's script comments brought up to its script (script_sync.catchUpComments). */
+  beforeTurn: async (_project: string): Promise<void> => {},
   /** The fresh-eyes final pass after a whole edit (off on a trial server: the teaching loop runs it as its own step). */
   freshEyes: process.env.EDIT_TRIALS !== "1",
 };
@@ -742,6 +744,8 @@ export class Agents implements seams.AgentPanel {
       // Who answers this turn, as the composer shows it (it rolls over from Opus to Sonnet once the edit is built).
       this.emit(project, { event: "model", model_name: nameOf(chat.model ?? this.turnModel(project, text)), revising: this.revising(project, text) });
       try {
+        // A failure here leaves the edit as it was; the turn goes on.
+        await agentHooks.beforeTurn(projectOf(project)).catch((error: unknown) => diag.warn("agent", `${project}: before the turn: ${diag.messageOf(error)}`));
         await this.prepareTurn(project, text, model, effort, current, replay, context, attached);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);

@@ -40,6 +40,15 @@ afterAll(() => {
 });
 
 const ffmpegsFor = (path: string) => Bun.spawnSync(["pgrep", "-f", path]).stdout.toString().trim().split("\n").filter(Boolean).length;
+/**
+ * The FFmpegs still running on `path` once they've had up to 5 s to go: a stop
+ * kills them at once, but a loaded CI runner can take past half a second to reap
+ * one (Nov 10: Check red on Linux, 1 still there at 500 ms; 25 of 25 passed on a desk).
+ */
+async function ffmpegsLeft(path: string): Promise<number> {
+  for (let waited = 0; waited < 5_000 && ffmpegsFor(path) > 0; waited += 100) await Bun.sleep(100);
+  return ffmpegsFor(path);
+}
 
 test.skipIf(ffmpeg === null)("an import whose words fail stops its preview too, and says the failure with its kind", async () => {
   const { dir, app, cleanup } = fixtureHome("import-stops");
@@ -59,8 +68,7 @@ test.skipIf(ffmpeg === null)("an import whose words fail stops its preview too, 
     expect(script.status).toBe("error");
     expect(script.stuckOn).toBeUndefined();
     // The preview's FFmpeg is gone, and no half-made preview is left.
-    await Bun.sleep(500);
-    expect(ffmpegsFor(scriptDir)).toBe(0);
+    expect(await ffmpegsLeft(scriptDir)).toBe(0);
     expect(fs.existsSync(store.proxyPath(scriptDir))).toBe(false);
   } finally {
     cleanup();
@@ -212,7 +220,7 @@ test.skipIf(ffmpeg === null)("deleting a script stops its import first; Claude o
         // Nothing of it comes back, and no build starts.
         await Bun.sleep(500);
         expect(fs.existsSync(store.scriptDir(data, script.id))).toBe(false);
-        expect(ffmpegsFor(store.scriptDir(data, script.id))).toBe(0);
+        expect(await ffmpegsLeft(store.scriptDir(data, script.id))).toBe(0);
         expect(built).toEqual([]);
       } finally {
         imports.hooks.build = hook;

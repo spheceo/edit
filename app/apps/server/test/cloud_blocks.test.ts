@@ -40,6 +40,32 @@ test("a range comes from 2 MiB blocks read once, the next two read ahead, pictur
   expect(await bytes(end)).toEqual(object.subarray(size - 5));
 });
 
+test("a range to the object's end is sent a block at a time, whole; a reader that stops stops the reads (Nov 10: a long script preview was \"Out of memory\")", async () => {
+  const key = "edit/proxies/whole.mp4";
+  const before = reads.length;
+  // Through a server, as the page gets it: the length said, every byte there.
+  const edit = Bun.serve({ port: 0, fetch: async (request) => (await serve(root, key, request.headers.get("range"), url))! });
+  try {
+    const answer = await fetch(`http://127.0.0.1:${edit.port}/`, { headers: { range: `bytes=10-${size - 1}` } });
+    expect(answer.status).toBe(206);
+    // Bun sends a stream chunked, as it does R2's own body on the way through.
+    expect(answer.headers.get("content-range")).toBe(`bytes 10-${size - 1}/${size}`);
+    expect(new Uint8Array(await answer.arrayBuffer())).toEqual(object.subarray(10));
+  } finally {
+    edit.stop(true);
+  }
+  expect(reads.length - before).toBe(6);
+  // Another object, read only as far as its first block: the rest isn't fetched (its next two ahead at most).
+  const other = "edit/proxies/stopped.mp4";
+  const started = reads.length;
+  const response = await serve(root, other, `bytes=0-${size - 1}`, url);
+  const reader = response!.body!.getReader();
+  expect((await reader.read()).value!.length).toBe(BLOCK);
+  await reader.cancel();
+  await Bun.sleep(50);
+  expect(reads.length - started).toBeLessThanOrEqual(3);
+});
+
 test("an open-ended or odd ask isn't served from blocks; one past the end is refused", async () => {
   expect(await serve(root, "edit/proxies/a.mp4", "bytes=100-", url)).toBeNull();
   expect(await serve(root, "edit/proxies/a.mp4", null, url)).toBeNull();

@@ -180,22 +180,39 @@ export async function serve(root: string, key: string, range: string | null, url
   if (from >= meta.size) return new Response(null, { status: 416, headers: { "content-range": `bytes */${meta.size}` } });
   to = Math.min(to, meta.size - 1);
   const last = Math.floor(to / BLOCK);
-  const blocks = [opening, ...(await Promise.all(Array.from({ length: last - first }, (_, n) => block(root, key, first + 1 + n, url, true))))];
-  const out = new Uint8Array(to - from + 1);
-  let written = 0;
-  blocks.forEach((bytes, n) => {
-    const base = (first + n) * BLOCK;
-    const slice = bytes.subarray(Math.max(from - base, 0), Math.min(to - base + 1, bytes.length));
-    out.set(slice, written);
-    written += slice.length;
-  });
+  const size = meta.size;
+  const end = to;
   // What's next, read while this plays.
-  for (let n = 1; n <= AHEAD; n++) {
-    const next = last + n;
-    if (next * BLOCK < meta.size) void block(root, key, next, url).catch((error: unknown) => diag.warn("cloud", `reading ahead in ${key}: ${diag.messageOf(error)}`));
-  }
-  return new Response(out, {
+  const ahead = (after: number) => {
+    for (let n = 1; n <= AHEAD; n++) {
+      const next = after + n;
+      if (next * BLOCK < size) void block(root, key, next, url).catch((error: unknown) => diag.warn("cloud", `reading ahead in ${key}: ${diag.messageOf(error)}`));
+    }
+  };
+  // Answered as it's read, a block at a time: a player asks a long preview
+  // for a range to its end (AVFoundation does), and held whole it was
+  // gigabytes, refused as "Out of memory" every time (JJ's Mac, Nov 10:
+  // a script's preview that wouldn't play). A reader that stops early
+  // stops the reads.
+  let index = first;
+  const body = new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        if (index > last) {
+          controller.close();
+          return;
+        }
+        const bytes = index === first ? opening : await block(root, key, index, url, true);
+        const base = index * BLOCK;
+        controller.enqueue(bytes.subarray(Math.max(from - base, 0), Math.min(end - base + 1, bytes.length)));
+        ahead(index);
+        index++;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return new Response(body, {
     status: 206,
-    headers: { "content-type": meta.type, "content-length": String(out.length), "content-range": `bytes ${from}-${to}/${meta.size}`, "accept-ranges": "bytes", "cache-control": "no-cache" },
+    headers: { "content-type": meta.type, "content-range": `bytes ${from}-${to}/${meta.size}`, "accept-ranges": "bytes", "cache-control": "no-cache" },
   });
 }

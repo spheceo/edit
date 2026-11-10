@@ -267,6 +267,21 @@ describe("the script's cut on the window's player", () => {
     expect(lost).toEqual([]);
   });
 
+  it("a window whose sound went silent (the recording gone from under it) hands the cut back at once, not after three asks", async () => {
+    const { player, playhead } = await started();
+    player.play(3_000);
+    await page.settle();
+    page.fake.frame = 150;
+    await page.frames();
+    expect([playhead.ms, lost]).toEqual([5_000, []]);
+    // Its pictures still come (the file it had open), its mixer can't open the sound: said with the next position.
+    page.fake.problem = "could not decode the sound of /scripts/s/proxy.mp4";
+    await page.frames();
+    expect(lost).toEqual(["its sound: could not decode the sound of /scripts/s/proxy.mp4"]);
+    // Where it had got to stays in the playhead for the player that takes over.
+    expect([playhead.ms, playhead.playing]).toEqual([5_000, true]);
+  });
+
   it("a cut with nothing in it yet, and a play at its end, ask the window for nothing it would refuse", async () => {
     const { player, playhead } = await started([]);
     player.play();

@@ -394,6 +394,12 @@ export class WindowPlayer implements Player {
     for (const ms of at.draws) recordTiming("script preview: window draw", ms);
     if (at.skipped > 0) recordTiming("script preview: window skipped frames", at.skipped);
     if (at.starved > 0) recordTiming("script preview: window sound starved", at.starved);
+    if (at.problem) {
+      // Its sound won't open (the recording gone from this Mac under it): the picture played on in
+      // silence with nothing said (Nov 10). The page's player takes the cut, from wherever the footage is.
+      this.lost(`its sound: ${at.problem}`);
+      return;
+    }
     if (at.ended) {
       this.playingThere = false;
       this.finish();

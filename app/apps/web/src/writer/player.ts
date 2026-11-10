@@ -11,6 +11,14 @@
  * preview that was coming down has landed: the cut moves to the other player
  * where it rests, at the same moment. A window that can't go on hands the cut
  * back to the page's player for the rest of the visit.
+ *
+ * Nothing is asked of the server or the window until the monitor's canvas is
+ * here, and a player disposed and then used again lives again: in development
+ * React's StrictMode makes every player twice (one is never shown) and
+ * unmounts the one it keeps once before mounting it for good. In Edit.app
+ * (Nov 10) the one never shown had opened the window's preview and the kept
+ * one's dispose closed it, so `just dev` showed "the preview isn't open" and
+ * a page player that never drew.
  */
 
 import { note, recordTiming } from "../lib/diagnostics";
@@ -27,9 +35,13 @@ const AGAIN_MS = 15_000;
 export function newPlayer(clips: Item[], playhead: Playhead, src = "", durationMs = 0): Player {
   const player = nativeAvailable() ? new EitherPlayer(clips, playhead) : new ScriptPlayer(clips, playhead);
   player.setSource(src, durationMs);
-  // For checks with nobody at the keys (the window's EDIT_PREVIEW_JS steps): the player on screen and which one draws.
-  (window as unknown as { __editScript?: unknown }).__editScript = { player, playhead, drawnBy: () => (player instanceof EitherPlayer ? player.drawnBy : "page") };
+  onScreen(player, playhead);
   return player;
+}
+
+/** For checks with nobody at the keys (the window's EDIT_PREVIEW_JS steps): the player on screen and which one draws. */
+function onScreen(player: Player, playhead: Playhead) {
+  (window as unknown as { __editScript?: unknown }).__editScript = { player, playhead, drawnBy: () => (player instanceof EitherPlayer ? player.drawnBy : "page") };
 }
 
 export class EitherPlayer implements Player {
@@ -107,9 +119,16 @@ export class EitherPlayer implements Player {
     return [...srcs];
   }
 
-  /** Chooses again when what the cut plays from changed (or `anew`); one choice at a time, the newest state last. */
+  /** Disposed and used again (StrictMode's second mount): alive, with everything to choose anew. */
+  private revive() {
+    if (!this.disposed) return;
+    this.disposed = false;
+    this.asked = null;
+  }
+
+  /** Chooses again when what the cut plays from changed (or `anew`); one choice at a time, the newest state last. Not before the monitor's canvas is here: a player nobody sees asks for nothing. */
   private choose(anew = false) {
-    if (this.disposed) return;
+    if (this.disposed || this.canvas === null) return;
     if (anew) this.asked = null;
     if (this.choosing) {
       this.stale = true;
@@ -228,10 +247,14 @@ export class EitherPlayer implements Player {
   attach(element: HTMLCanvasElement | null) {
     this.canvas = element;
     this.inner?.attach(element);
-    if (element !== null) this.choose();
+    if (element === null) return;
+    this.revive();
+    onScreen(this, this.playhead);
+    this.choose();
   }
 
   setSource(url: string, durationMs = 0) {
+    this.revive();
     this.src = url;
     this.mediaMs = durationMs;
     this.inner?.setSource(url, durationMs);
@@ -239,6 +262,7 @@ export class EitherPlayer implements Player {
   }
 
   update(clips: Item[]) {
+    this.revive();
     this.clips = clips;
     this.inner?.update(clips);
     this.choose();

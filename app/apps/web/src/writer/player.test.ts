@@ -172,6 +172,42 @@ describe("the script's player, chosen where it runs", () => {
     expect(player.drawnBy).toBe("page");
   });
 
+  it("a player nobody sees asks for nothing: no canvas, no question to the server, no window", async () => {
+    const player = players.newPlayer(clips, new playback.Playhead(), SRC, 600_000) as InstanceType<typeof players.EitherPlayer>;
+    player.update(clips);
+    player.setSource(SRC, 600_000);
+    await page.settle();
+    expect(sources.ask).not.toHaveBeenCalled();
+    expect(page.fake.calls).toEqual([]);
+    expect(player.drawnBy).toBe("choosing");
+  });
+
+  it("disposed and used again (React's StrictMode in development) it's the window's again, at the same moment", async () => {
+    // StrictMode makes the player twice; the one it keeps is unmounted once and mounted again.
+    const never = players.newPlayer(clips, new playback.Playhead(), SRC, 600_000);
+    const { player, playhead, screen } = opened();
+    await page.settle();
+    expect(player.drawnBy).toBe("window");
+    player.attach(null);
+    player.dispose();
+    expect(page.fake.of("preview_close")).toHaveLength(1);
+    player.attach(screen.canvas);
+    player.update(clips);
+    player.setSource(SRC, 600_000);
+    await page.settle();
+    expect(player.drawnBy).toBe("window");
+    expect(page.fake.of("preview_open")).toHaveLength(2);
+    expect(screen.panel.attributes.has("data-window")).toBe(true);
+    player.seek(8_000);
+    await page.settle();
+    expect(page.fake.last("preview_frame")).toEqual({ frame: 240 });
+    expect(playhead.ms).toBe(8_000);
+    // What checks drive is the player on screen, not the one never shown.
+    expect((window as unknown as { __editScript: { player: unknown } }).__editScript.player).toBe(player);
+    expect(sources.ask.mock.calls.every(([srcs]) => srcs.length === 1)).toBe(true);
+    never.dispose();
+  });
+
   it("a window that can't open its layer leaves the page's player", async () => {
     page.fake.refuse = (command) => (command === "preview_open" ? "no GPU for the preview" : null);
     const { player } = opened();

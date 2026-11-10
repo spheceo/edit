@@ -81,6 +81,13 @@ const SOUND_WINDOW_SECONDS: f64 = 0.25;
 const JOIN_AHEAD: usize = RATE / 10;
 /// Sound joining fades in over this many frames (5 ms), as the sound before it fades out.
 const JOIN_FRAMES: usize = 240;
+/// Silence written after the sound's end (frames, a quarter second: more than
+/// the most the speaker's latency is taken to be). The playhead is what the
+/// speaker has played less its latency, so with nothing after the last sound
+/// it stopped that much short of the end, on the frame before it, playing
+/// for good: a cut played to its end never ended (Nov 10, in Script mode and
+/// the editor both).
+const END_SILENCE: usize = RATE / 4;
 /// A frame drawn slower than this is counted as slow (two frames at 60 fps).
 const SLOW_MS: f64 = 33.0;
 
@@ -113,6 +120,8 @@ pub struct Player {
     cache: PathBuf,
     /// The frame on screen, and whether the project or size changed since.
     drawn: Option<i64>,
+    /// The frame the playhead is on: the last one asked for or played, kept while the decoders rest.
+    at: Option<i64>,
     /// The last frame drawn's timings (None when the last ask needed no drawing).
     pub last: Option<DrawTimes>,
     sound: Sound,
@@ -157,6 +166,8 @@ struct Feed {
     speaker: Speaker,
     generation: AtomicU64,
     writing: Mutex<()>,
+    /// Why the mixer now feeding it went silent (a file whose sound won't open), until the page is told.
+    problem: Mutex<Option<String>>,
 }
 
 impl Feed {
@@ -279,6 +290,8 @@ pub struct Report {
     pub starved: u64,
     /// Playing reached its end (the edit's, or the out point) since the last ask.
     pub ended: bool,
+    /// The sound went silent since the last ask, and why (a file that won't open: gone from this Mac).
+    pub problem: Option<String>,
 }
 
 /// Where the player is: the playhead (a frame and a fraction), whether it's
@@ -357,6 +370,7 @@ impl Player {
             sounds: HashMap::new(),
             cache: PathBuf::new(),
             drawn: None,
+            at: None,
             last: None,
             sound: Sound::default(),
             playing: None,
@@ -459,6 +473,7 @@ impl Player {
             self.renderer.clear_peaks();
             self.pictures.clear();
             self.stop();
+            self.at = None;
         }
         self.renderer
             .resize(project.settings.width, project.settings.height);
@@ -479,20 +494,47 @@ impl Player {
         }
     }
 
-    /// The layer's size in pixels changed.
+    /// The layer's size in pixels (said each time the page places it in
+    /// sight). At rest with nothing on screen (a new size, a layer back in
+    /// sight or back from resting) the playhead's frame is drawn now, not
+    /// when the page next asks: a panel dragged or a view changed showed the
+    /// old picture stretched until it did, and a page that had asked for its
+    /// frame before its layer had a place never asked again (the editor
+    /// opened from a script: black until Play). A layer of a pixel or two is
+    /// out of sight (`out_of_sight`), and keeps the surface it had.
     pub fn resize(&mut self, width: u32, height: u32) {
         let (width, height) = (width.max(1), height.max(1));
-        if (width, height) == (self.config.width, self.config.height) {
-            return;
+        if (width, height) != (self.config.width, self.config.height) {
+            self.config.width = width;
+            self.config.height = height;
+            self.warmed_from = None;
+            if !self.out_of_sight() {
+                self.surface.configure(self.renderer.device(), &self.config);
+                self.drawn = None;
+            }
         }
-        self.config.width = width;
-        self.config.height = height;
-        self.surface.configure(self.renderer.device(), &self.config);
-        self.drawn = None;
-        self.warmed_from = None;
+        if !self.out_of_sight() && self.playing.is_none() && self.drawn.is_none() {
+            if let Some(frame) = self.at {
+                let started = Instant::now();
+                let drawn = self.draw(frame);
+                let ms = started.elapsed().as_secs_f64() * 1000.0;
+                trace(|| describe_draw(frame, ms, &drawn, self.last));
+            }
+        }
     }
 
-    /// Pictures are decoded no bigger than they're shown: the edit's size fitted into the layer.
+    /// The layer is a pixel or two: where the page puts it to keep a cut
+    /// playing with its monitor away (Script mode's Script view). Nothing is
+    /// decoded or drawn for it; the clock and the sound go on.
+    fn out_of_sight(&self) -> bool {
+        self.config.width <= 2 && self.config.height <= 2
+    }
+
+    /// Pictures are decoded no bigger than they're shown: the edit's size
+    /// fitted into the layer, to the eighth of it above. A reader is kept by
+    /// its file and size, so a size for every pixel of a dragged panel was a
+    /// new decoder each, opened and seeked on the drawing path (1–2 s a frame
+    /// on a script's long preview, the picture stretched meanwhile).
     fn shown(&self, project: &Project) -> (u32, u32) {
         let (width, height) = (
             project.settings.width.max(1),
@@ -501,6 +543,7 @@ impl Player {
         let fit = (self.config.width as f32 / width as f32)
             .min(self.config.height as f32 / height as f32)
             .min(1.0);
+        let fit = (fit * 8.0).ceil().max(1.0) / 8.0;
         (
             ((width as f32 * fit).round() as u32).max(2),
             ((height as f32 * fit).round() as u32).max(2),
@@ -510,12 +553,18 @@ impl Player {
     /// Draws `frame`, unless it's on screen already (nothing changed since).
     pub fn draw(&mut self, frame: i64) -> Result<(), String> {
         self.last = None;
+        self.at = Some(frame);
         if self.drawn == Some(frame) {
             return Ok(());
         }
         let Some(project) = &self.project else {
             return Err("no edit to draw yet".to_owned());
         };
+        if self.out_of_sight() {
+            // The playhead is on this frame; its picture is drawn when the layer is back in sight.
+            self.drawn = Some(frame);
+            return Ok(());
+        }
         let ms = |since: Instant| since.elapsed().as_secs_f64() * 1000.0;
         let mut times = DrawTimes::default();
         let started = Instant::now();
@@ -589,6 +638,9 @@ impl Player {
     /// once per half second of playhead, and again when the edit changes.
     pub fn warm_ahead(&mut self, frame: i64, jump: bool) {
         let Some(project) = &self.project else { return };
+        if self.out_of_sight() {
+            return;
+        }
         let fps = project.fps();
         // Seconds of playing, not of the edit: at 2× the cuts come twice as soon.
         let reach = self.rate.max(1.0);
@@ -954,6 +1006,15 @@ impl Player {
             let starved = feed.speaker.state().starved;
             report.starved = starved.saturating_sub(self.starved_before);
             self.starved_before = starved;
+            report.problem = feed.problem.lock().take();
+        }
+        if report.starved > 0 || report.skipped > 0 {
+            trace(|| {
+                format!(
+                    "since the last ask: {} pictures missed, the speaker short {} times",
+                    report.skipped, report.starved
+                )
+            });
         }
         Position {
             frame,
@@ -1015,6 +1076,7 @@ impl Player {
                         speaker,
                         generation: AtomicU64::new(0),
                         writing: Mutex::new(()),
+                        problem: Mutex::new(None),
                     }));
                 }
                 Err(error) => {
@@ -1037,6 +1099,8 @@ impl Player {
     /// the player's speed, into the speaker as `start` says.
     fn mix(&self, feed: Arc<Feed>, start: Start, from: f64, until: i64) -> Option<Mixer> {
         let project = self.project.as_ref()?;
+        // What the mixer before it couldn't read is its own trouble.
+        feed.problem.lock().take();
         let (fps, rate) = (project.fps(), self.rate);
         let from_frame = (from * fps).floor() as i64;
         let seconds = (until as f64 / fps - from).max(0.0);
@@ -1214,6 +1278,7 @@ fn mix_into(
         Ok(()) => {
             let mut rest = Vec::new();
             tempo.flush(&mut rest);
+            rest.resize(rest.len() + END_SILENCE * 2, 0.0);
             let _ = write(&rest);
         }
         Err(error) if error == "cancelled" => {}
@@ -1222,7 +1287,11 @@ fn mix_into(
                 "preview",
                 format!("the player's sound: {error}; silent from there"),
             );
-            let out_total = ((total - passed.get().min(total)) as f64 / rate).round() as usize;
+            // Said to the page at its next ask: Script mode hands the cut to its own player, which
+            // reads the footage from wherever it is, where this one played on without a sound.
+            *feed.problem.lock() = Some(error.clone());
+            let out_total =
+                ((total - passed.get().min(total)) as f64 / rate).round() as usize + END_SILENCE;
             let silence = vec![0.0_f32; window * 2];
             while written.get() < out_total {
                 let frames = (out_total - written.get()).min(window);

@@ -46,7 +46,8 @@ export interface NativeDrawn {
 /**
  * Where the window's player is: the playhead (a frame and a fraction), whether it's playing and whether it
  * reached the end since the last ask, and how playing went since then: frames drawn, frames the clock passed
- * undrawn, slow draws (over 33 ms), their times (ms), and the speaker's output calls that ran short of sound.
+ * undrawn, slow draws (over 33 ms), their times (ms), the speaker's output calls that ran short of sound, and
+ * why the sound went silent when it did.
  */
 export interface NativeWhere {
   frame: number;
@@ -57,6 +58,8 @@ export interface NativeWhere {
   slow: number;
   draws: number[];
   starved: number;
+  /** The sound went silent since the last ask, and why (a file that won't open: gone from this Mac). */
+  problem?: string;
 }
 
 /**

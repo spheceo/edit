@@ -37,7 +37,9 @@ use objc2_app_kit::{NSView, NSWindowOrderingMode};
 use objc2_core_foundation::{CGFloat, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{kCGColorSpaceSRGB, CGColor, CGColorSpace};
 use objc2_foundation::{NSNumber, NSString};
-use objc2_quartz_core::{CACornerMask, CALayer, CAMetalLayer, CATransaction};
+use objc2_quartz_core::{
+    kCAGravityResizeAspect, CACornerMask, CALayer, CAMetalLayer, CATransaction,
+};
 use tauri::{State, WebviewWindow};
 
 use edit_engine::excerpts::Excerpt;
@@ -98,7 +100,8 @@ enum Command {
 /// Where the player is: the playhead (a frame and a fraction), whether it's
 /// playing and whether it reached the end since the last ask, and how playing
 /// went since then: frames drawn, frames the clock passed undrawn, slow draws
-/// (over 33 ms), their times, and the speaker's output calls that ran short.
+/// (over 33 ms), their times, the speaker's output calls that ran short, and
+/// why the sound went silent when it did (a file that won't open).
 #[derive(serde::Serialize, Clone, Default)]
 pub struct Where {
     frame: f64,
@@ -109,6 +112,8 @@ pub struct Where {
     slow: u64,
     draws: Vec<f64>,
     starved: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    problem: Option<String>,
 }
 
 /// A frame's answer to the page: the revision it shows, whether it was drawn
@@ -204,6 +209,8 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
     };
     let mut wait = SETTLE;
     let mut settled = false;
+    // When the last command was done with: the playhead has rested since.
+    let mut rested = std::time::Instant::now();
     loop {
         let first = match commands.recv_timeout(wait) {
             Ok(command) => Some(command),
@@ -212,9 +219,7 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
         };
         let mut waiting: Vec<Command> = first.into_iter().collect();
         waiting.extend(commands.try_iter());
-        if !waiting.is_empty() {
-            settled = false;
-        }
+        let asked = !waiting.is_empty();
         let newest = waiting
             .iter()
             .rposition(|command| matches!(command, Command::Draw { .. }));
@@ -291,6 +296,7 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                         slow: at.report.slow,
                         draws: at.report.draws,
                         starved: at.report.starved,
+                        problem: at.report.problem,
                     }));
                 }
                 Command::Draw { frame, reply } => {
@@ -316,15 +322,26 @@ fn player_thread(layer: usize, commands: mpsc::Receiver<Command>) {
                 }
             }
         }
+        if asked {
+            settled = false;
+            rested = std::time::Instant::now();
+        }
         if player.is_playing() {
             wait = player.tick().unwrap_or(SETTLE);
+        } else if settled {
+            wait = SETTLE;
         } else {
-            if !settled {
-                // A moment with no command: the playhead rests here.
+            // Settled only once it has rested: after every command, a drag armed its sound at each
+            // frame it passed (a mixer started and stopped thirty times a second, and the pictures
+            // fell from 24 a second to 5 behind them).
+            let quiet = rested.elapsed();
+            if quiet >= SETTLE {
                 player.settle();
                 settled = true;
+                wait = SETTLE;
+            } else {
+                wait = SETTLE - quiet;
             }
-            wait = SETTLE;
         }
     }
 }
@@ -367,6 +384,7 @@ pub async fn preview_open(
         .map_err(|error| error.to_string())?
         .is_some()
     {
+        trace(|| "open: already open".to_owned());
         return Ok(true);
     }
     let made = on_main(&window, |webview, _| {
@@ -382,6 +400,9 @@ pub async fn preview_open(
                 layer.setColorspace(Some(&space));
             }
             layer.setOpaque(true);
+            // Between a new size and the frame drawn at it, the old picture is fitted into the
+            // new shape, not stretched to it (a view changed, a panel dragged: the picture squashed).
+            layer.setContentsGravity(kCAGravityResizeAspect);
             let black = CGColor::new_generic_gray(0.0, 1.0);
             layer.setBackgroundColor(Some(&black));
             let view = NSView::initWithFrame(
@@ -624,6 +645,7 @@ pub async fn preview_close(
     let Some(open) = previews.0.lock().map_err(|error| error.to_string())?.take() else {
         return Ok(());
     };
+    trace(|| "closed".to_owned());
     let Open {
         commands,
         thread,
@@ -636,10 +658,20 @@ pub async fn preview_close(
         .await
         .map_err(|error| error.to_string())?
         .map_err(|_| "the preview's thread failed".to_owned())?;
+    let app = tauri::Manager::app_handle(&window).clone();
     on_main(&window, move |_, _| {
+        // Opened again while this one's thread was ending (the script page left for the editor, each
+        // with its own player): the page stays see-through for the new one. Its background given back
+        // here would paint over the new picture.
+        let open_again = tauri::Manager::state::<Previews>(&app)
+            .0
+            .lock()
+            .is_ok_and(|open| open.is_some());
         // SAFETY: on the main thread; the view was retained by `preview_open` and is let go of here, once.
         unsafe {
-            draws_background(webview, true);
+            if !open_again {
+                draws_background(webview, true);
+            }
             let view = Retained::from_raw(view as *mut NSView);
             if let Some(view) = view {
                 view.removeFromSuperview();
@@ -655,7 +687,8 @@ pub async fn preview_close(
 pub fn check(app: &tauri::AppHandle) {
     use tauri::Manager;
     // A scripted run instead (`EDIT_PREVIEW_JS=<file>`): the file's steps run in
-    // the page in turn, a line `--- wait <seconds>` between them.
+    // the page in turn, a line `--- wait <seconds>` between them; a line
+    // `--- shot <file.png>` saves the window's own picture then.
     if let Ok(file) = std::env::var("EDIT_PREVIEW_JS") {
         let Ok(text) = std::fs::read_to_string(&file) else {
             eprintln!("edit: EDIT_PREVIEW_JS: can't read {file}");
@@ -678,6 +711,22 @@ pub fn check(app: &tauri::AppHandle) {
                     let seconds = seconds.trim().parse::<f64>().unwrap_or(1.0);
                     trace(|| format!("script: wait {seconds} s"));
                     std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+                } else if let Some(path) = line.strip_prefix("--- shot ") {
+                    // The window as it is now (the page and the layer under it) into a PNG.
+                    run(&step);
+                    step.clear();
+                    let path = path.trim().to_owned();
+                    if let Some(window) = app.get_webview_window("main") {
+                        let file = path.clone();
+                        let shot = on_main(&window, move |_, ns_window| {
+                            // SAFETY: on the main thread with the app's own window.
+                            let number: isize =
+                                unsafe { msg_send![ns_window as *mut AnyObject, windowNumber] };
+                            // SAFETY: plain CoreGraphics / ImageIO calls on values made here.
+                            unsafe { shoot(number, &file) }
+                        });
+                        trace(|| format!("script: shot {path}: {shot:?}"));
+                    }
                 } else {
                     step.push_str(line);
                     step.push('\n');

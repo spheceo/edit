@@ -45,8 +45,36 @@ One player for both: Script mode hands its cut to the same window player the edi
 - **2, a `Player` for Edit.app:** `apps/web/src/writer/window-player.ts`, chosen by `writer/player.ts` (the window's when every recording is a file here, else the page's; the cut moves between them where it rests). The window's layer goes under the monitor's screen. No patches: a cut is small, so it goes whole when it changes.
 - **3, script footage on the Mac:** `POST /api/writer/window-sources` (`apps/server/src/writer/window_sources.ts`). The preview file where it's here; one only in the cloud comes down whole when the scripts' budget has room, and plays on the page's player until then. Not built: the piece under the playhead first. A streamed preview stays on the page's player, which reads it in blocks; the window would open it through FFmpeg at every jump.
 - **4, speed and volume:** `preview_rate` / `preview_volume` in the window's player, built on the Mac (the engine only compiles there).
-- **5, measured:** not yet. To do on a Mac with a real script, with the harness and marks above.
+- **5, measured:** Nov 10 on Sphe's M1, below, with what the check found and fixed.
 - **6, kept together:** acceptance opens a script in headless Chrome (first picture, a play across a cut, a drag, a source moment, no error), which is the page's player. The window's (`--native`) still can't sign in, so it isn't run for either mode.
+
+## Measured (step 5, Nov 10, Sphe's M1)
+
+A real script in a home of its own, reaching no cloud: Cops Realize's 230 clips (191 of footage, 39 cut-ins, 61 minutes of cut) and its words, re-timed onto the 103 minutes of its footage that were on the Mac, joined into one preview the way Script mode makes them (854×480, 30 fps, a key frame a second). The window's player in a dev build of Edit.app's window, the page's in headless Chrome, the same step file through both (`EDIT_PREVIEW_JS`, with `--- shot <file.png>` for the window's own picture). Other sessions were building and running windows on the Mac through most of it; the numbers are from the quiet stretches, and say where they aren't.
+
+| | The window's player | The page's player (Chrome) |
+|---|---|---|
+| Cold open to the first picture | 1.0–1.5 s after the page began (four opens; 2.1–2.5 s on three earlier ones) | 2.6 s and 6.4 s (two opens) |
+| A play across 30 cuts at 1× (271 s) | 1.000 s of the cut a second. A replay of its first 100 s alone: 2,999 of 2,999 frames, none slow, none missed, the speaker never short. The full run, with other windows playing on the Mac: 28.7 pictures a second, 22 slow, 365 missed in one 80 s stretch, the speaker never short | 0.999 s of the cut a second; 28.3 pictures a second in all (the cards draw none); 5 frames passed undrawn; one gap over 100 ms |
+| The same at 2× (136 s) | 2.000 s of the cut a second; 30.0 pictures a second (every other frame, by design); none slow, 1 missed, the speaker never short, no seek | 1.999 s of the cut a second; 51 pictures a second; 744 frames passed undrawn; three gaps over 100 ms |
+| 40 jumps | all drawn; p50 33 ms, p95 39, worst 39 | all drawn; p50 54 ms, p95 89, worst 92 |
+| A drag (240 positions in 8 s) | 240 pictures, 30 a second, the longest gap 56 ms | 59 pictures, 7.4 a second |
+| A word clicked in the transcript to its picture (six) | 27–35 ms | 50–95 ms |
+
+Before the fix to when the playhead settles (below), the window's drag was 47 pictures, 5.4 a second, and its jumps p95 102 ms, worst 223. Nobody listened to either player, and the page's sound wasn't measured (it has no count of its own).
+
+Found and fixed:
+
+- **In development the window lost the script at once** ("the preview isn't open", then a page player that never drew): React's StrictMode makes the player twice and unmounts the kept one once, and the one never shown had opened the window's preview. The player asks for nothing until its canvas is there, and lives again when used after a dispose.
+- **A view changed or the split dragged left the picture stretched for a second or two**: every size was a new decoder (opened and seeked), and the old picture was scaled to the new shape meanwhile. Sizes are in eighths of the edit's now, the layer keeps a stale picture's shape, and a resize at rest draws at once.
+- **The Script view decoded and drew every frame for a monitor nobody sees.** Nothing is, now.
+- **A cut played to its end never ended** (the editor's player too): the clock stopped a speaker's latency short of the last frame, playing for good.
+- **Start the edit (and Open the edit) landed on Home**, since Oct 30: Script mode, still there while it fades out, took the edit's address for its own list.
+- **The editor opened after a script showed black until Play**, from this change's own out-of-sight rule, caught and fixed the same day: the playhead's frame is drawn when its layer comes into sight.
+- **A drag armed the sound at every frame it passed** (the editor's too): a mixer started and stopped thirty times a second. The playhead settles once it has rested a quarter second.
+- **A preview moved from under an open script played on in silence**, the picture still right (the file was open), nothing said. The window says the sound won't open, and the page's player takes the cut: it says why it can't (the file's gone) and plays again once it's back.
+
+Not fixed, to know about: pausing a source audition and pressing Space again goes on from where it paused on the window's player, and starts again from the word on the page's; in the window, switching to the Script view while playing held the page's playhead for about 1.5 s twice (seen with the Mac at load 40, not measured quiet; the sound and the clock went on); with the preview gone, the window still draws at rest (its file is open) and hands over only once a play finds the sound won't open.
 
 ## What was decided for the open questions
 

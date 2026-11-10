@@ -68,6 +68,25 @@ Speed (1× and 2×, the sound's pitch kept) and volume are the window's
 page's `player`, its `playhead` and `drawnBy()` ("window", "page" or
 "choosing").
 
+Checked in the real window on a real script (Nov 10; the measurements are in the
+plan, "Measured"), and what that found is how it works now. A layer that changes
+size at rest (a view changed, the split dragged, the editor opened after a script)
+draws the playhead's frame again at once, and shows the old picture fitted, never
+stretched, until it has (`Player::resize`, the layer's `contentsGravity`); pictures
+are decoded at the eighth of the edit's size above what's shown, so a dragged
+panel isn't a new decoder for every pixel. A layer of a pixel or two (the Script
+view: the monitor away, the cut playing on) has nothing decoded or drawn for it.
+The playhead is settled (its sound armed, its cuts warmed) only once it has rested
+a quarter second, not after every frame of a drag. A quarter second of silence
+follows the sound's end, so the clock, which runs a speaker's latency behind what's
+been played, reaches the last frame and a cut played to its end ends (the editor's
+too). A mix that can't open its sound (the recording gone from this Mac under an
+open script) says so with the next position (`problem`), and Script mode hands the
+cut to the page's player, where the window played on in silence. Going from a
+script straight to an edit (Start the edit) stays on the edit. In development
+(`just dev`, React's StrictMode) the script's player asks for nothing until its
+canvas is there and lives again after the unmount StrictMode stages.
+
 **The editor plays at 2× as well** (Nov 10; JJ: "a button where we can speed
 up when watching the video. like in premiere"): the viewer's 1× / 2× button,
 the one Script mode's monitor has, and L while it plays. `preview.setSpeed`
@@ -111,7 +130,9 @@ draw on stderr; `EDIT_PREVIEW_CHECK=<frame>` has the window seek there, scrub,
 play and pause by itself, and `EDIT_PREVIEW_SHOT=<file.png>` then saves the
 window's own picture (an app may capture its own windows without permission);
 `EDIT_PREVIEW_JS=<file>` runs a file's steps in the page instead (a line
-`--- wait <seconds>` between them), for scripted measurements.
+`--- wait <seconds>` between them, `--- shot <file.png>` for the window's picture
+then), for scripted measurements; the trace says each open and close, and what
+playing missed (pictures, the speaker short) since the page last asked.
 
 ## Smooth playback
 

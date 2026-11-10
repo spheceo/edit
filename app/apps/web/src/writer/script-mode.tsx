@@ -254,10 +254,13 @@ export function ScriptMode() {
 
   // Back from a script goes to Home, where scripts are listed with the edits (one app, Oct 30).
   const home = () => navigate("/");
-  // Script mode's own list is Home's now (scripts and edits in one list, by stage).
+  // Script mode's own list is Home's now (scripts and edits in one list, by stage). Only its own
+  // address: this screen is still here for a moment while it fades out for the next one, and it took
+  // the edit's address (Start the edit, Open the edit) for its list and sent the person Home instead.
+  const listing = route.name === "library" && path.startsWith("/scripts");
   useEffect(() => {
-    if (route.name === "library") navigate("/", true);
-  }, [route.name]);
+    if (listing) navigate("/", true);
+  }, [listing]);
   // Who's signed in decides which scripts they see (can.rs): list them again when that changes.
   const grantsKey = account ? `${account.signedIn}|${account.person?.sub ?? ""}|${account.person?.admin ?? ""}|${(account.person?.perms ?? []).join(",")}` : "";
   // (Not on the first look: the connect above lists them already.)

@@ -15,6 +15,8 @@ export interface FakeWindow {
   playing: boolean;
   /** Reached the end since the last ask. */
   ended: boolean;
+  /** Why its sound went silent since the last ask, or null. */
+  problem: string | null;
   /** Why a command is refused, or null. */
   refuse: (command: string, args: Args) => string | null;
   /** A frame asked for waits on this, when set. */
@@ -38,7 +40,7 @@ export function monitor(box = { left: 10, top: 50, width: 640, height: 360 }) {
 /** Puts the page in Edit.app's window; `frames()` runs the animation frames asked for, `settle()` lets answers land. */
 export function inWindow() {
   const fake: FakeWindow = {
-    calls: [], project: null, frame: 0, playing: false, ended: false, refuse: () => null, hold: null,
+    calls: [], project: null, frame: 0, playing: false, ended: false, problem: null, refuse: () => null, hold: null,
     of: (command) => fake.calls.filter(([name]) => name === command).map(([, args]) => args),
     last: (command) => fake.of(command).at(-1),
   };
@@ -65,7 +67,9 @@ export function inWindow() {
       case "preview_position": {
         const ended = fake.ended;
         fake.ended = false;
-        return { frame: fake.frame, playing: fake.playing, ended, drawn: 1, skipped: 0, slow: 0, draws: [2.5], starved: 0 };
+        const problem = fake.problem;
+        fake.problem = null;
+        return { frame: fake.frame, playing: fake.playing, ended, drawn: 1, skipped: 0, slow: 0, draws: [2.5], starved: 0, ...(problem === null ? {} : { problem }) };
       }
       default: return null;
     }

@@ -53,11 +53,15 @@ again on top (`ideas/cloud.ts`).
    - the board: a video already on any card (archived ones too) stops here:
      the person chooses **Improve it** (Claude treats that card's title as the
      bad version) or leaves it;
-   - the captions, through the YouTube proxy only, never from the Mac's own
-     address (the user: "try not to do research locally to not risk ip
-     bans"), kept where Edit's imports find them
-     (`cache/youtube-captions/<id>/`). No English captions: skipped (titles
-     come from the transcript, never the title alone);
+   - the video's words (`youtube_words.ts`, its `idea` use): YouTube's
+     captions through the YouTube proxy first (the user: "try not to do
+     research locally to not risk ip bans"), straight from the Mac when
+     YouTube turns the proxy's address away, kept where Edit's imports find
+     them (`cache/youtube-captions/<id>/`). With no English captions the
+     video's sound alone is fetched and heard on the Mac. Skipped only when
+     there are no words to be had, saying which it was: the video is gone,
+     YouTube turned Edit away for now (try again), or nothing is said in it
+     (titles come from the transcript, never the title alone);
    - an article, read as Script mode reads one;
    - the titles the team approved (every list from Approved on, read live):
      the closest to this case first (Sphe Research's ranking), then the most

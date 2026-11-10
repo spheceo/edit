@@ -20,6 +20,7 @@ import * as sources from "../src/ideas/sources.ts";
 import * as live from "../src/writer/live.ts";
 import { scratch } from "./helpers/home.ts";
 import { MockServer } from "./mocks/server.ts";
+import { NoWords } from "../src/youtube_words.ts";
 
 let mock: MockServer;
 let restore: () => void;
@@ -63,7 +64,7 @@ beforeAll(() => {
   );
   mock.on("POST", "/v1/ideas/trello/duplicates", () => Response.json({ found: {} }));
   // Captions, as yt-dlp through the proxy would give them.
-  sources.captions.fetch = async () => ({ model: "youtube-captions", language: "en", words: ["Where", "were", "you", "that", "night?", "At", "home."].map((text, n) => ({ text, start: n, end: n + 0.5, speaker: n < 5 ? "caption_turn_1" : "caption_turn_2" })) });
+  sources.captions.words = async () => ({ model: "youtube-captions", language: "en", words: ["Where", "were", "you", "that", "night?", "At", "home."].map((text, n) => ({ text, start: n, end: n + 0.5, speaker: n < 5 ? "caption_turn_1" : "caption_turn_2" })) });
 });
 
 afterEach(() => {
@@ -362,8 +363,10 @@ test("a video already on the board is the person's decision, not a run; no capti
   expect(idea.run).toMatchObject({ state: "failed", error: "Claude stopped before saving 3–5 titles and the thumbnail guide." });
   // No English captions: skipped, with the reason, and Claude never asked.
   await cloud.commit(videoIdea("i7-test", "noCaptions1"), 0, "Sphe");
-  const before = sources.captions.fetch;
-  sources.captions.fetch = async () => null;
+  const before = sources.captions.words;
+  sources.captions.words = async () => {
+    throw new NoWords("This video has no English captions, and nothing was heard in its sound.");
+  };
   asked = false;
   run.asking.ask = async () => {
     asked = true;
@@ -371,9 +374,19 @@ test("a video already on the board is the person's decision, not a run; no capti
   };
   await run.repackage(context(), "i7-test");
   idea = await settled("i7-test");
-  sources.captions.fetch = before;
   expect(asked).toBe(false);
   expect(idea.skipped).toContain("no English captions");
+  // YouTube turning Edit away is said as that, never as a video without captions (JJ, Nov 10: ten ideas skipped for captions their videos had).
+  await cloud.commit(videoIdea("i7b-test", "turnedAway1"), 0, "Sphe");
+  sources.captions.words = async () => {
+    throw new NoWords("YouTube turned this Mac away just now, so the video's words weren't read: try again in a few minutes.");
+  };
+  await run.repackage(context(), "i7b-test");
+  idea = await settled("i7b-test");
+  sources.captions.words = before;
+  expect(asked).toBe(false);
+  expect(idea.skipped).toContain("try again in a few minutes");
+  expect(idea.skipped).not.toContain("no English captions");
 });
 
 test("a run cut off by a restart is marked stopped, only on the Mac that ran it", async () => {
@@ -452,8 +465,9 @@ test("a repackaging looks through the case's video and puts the frames its guide
       { format_id: "sb0", width: 320, height: 180, rows: 3, columns: 3, fragments: [{ url: "https://i.ytimg.com/sb/M0.jpg", duration: 12 }] },
       { format_id: "137", vcodec: "avc1.640028", acodec: "none", protocol: "https", height: 1080, url: "https://rr.googlevideo.com/stream" },
     ],
+    way: "proxy",
   });
-  frames.looks.fetch = async (url, init = {}) => {
+  frames.looks.fetch = async (url, init) => {
     if (url.includes("/sb/")) return new Response(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
     const range = /bytes=(\d+)-(\d*)/.exec(init.range ?? "");
     if (range === null) return new Response(bytes, { headers: { "content-type": "video/mp4", "accept-ranges": "bytes" } });

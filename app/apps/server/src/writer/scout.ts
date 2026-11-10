@@ -16,6 +16,7 @@ import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
 import { ffmpeg } from "../tools.ts";
 import * as edit from "../youtube.ts";
+import * as youtubeWords from "../youtube_words.ts";
 import * as claude from "./claude.ts";
 import { flatten, fragments, putFound } from "./commentary.ts";
 import type { Job, Outcome } from "./jobs.ts";
@@ -432,22 +433,12 @@ export interface Line {
 async function captionsOf(app: App, video: string, dir: string): Promise<Line[]> {
   const kept = () => fs.readdirSync(dir).filter((name) => name.startsWith(`${video}.`) && name.endsWith(".json3")).sort()[0];
   if (kept() === undefined) {
-    const fetch = () => ytdlp(app, ["--skip-download", "--no-playlist", "--no-warnings", "--write-subs", "--write-auto-subs", "--sub-langs", "en,en-orig,en-US,en-GB", "--sub-format", "json3", "-o", join(dir, "%(id)s.%(ext)s"), `https://www.youtube.com/watch?v=${video}`], 120_000);
-    // YouTube turns away captions asked for too fast from one address ("429"): a wait, then again.
-    let failure: unknown = null;
-    for (const wait of [0, 15, 45]) {
-      if (wait > 0) await Bun.sleep(wait * 1000);
-      try {
-        await fetch();
-        failure = null;
-        break;
-      } catch (error) {
-        failure = error;
-        if (!diag.messageOf(error).includes("429")) break;
-      }
-    }
-    if (failure !== null) throw new Error(lastLine(failure));
-    if (kept() === undefined) throw new Error("It has no English captions.");
+    // Asked as every reader of a video's words asks (youtube_words.ts): a way YouTube turns away, a 429 included, gives way to the next.
+    const chosen = await youtubeWords.track(app.store.home, video, youtubeWords.USES.script).catch((error: unknown) => {
+      throw new Error(lastLine(error));
+    });
+    if (chosen === null) throw new Error("It has no English captions.");
+    fs.writeFileSync(join(dir, `${video}.${chosen.language}.json3`), JSON.stringify(chosen.value));
   }
   let value: unknown;
   try {

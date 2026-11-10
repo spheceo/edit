@@ -880,7 +880,7 @@ function Chat({ id, idea, onAsked }: { id: string; idea: Idea; onAsked: () => vo
   // A message shows the moment it's sent; what was there when the page opened doesn't animate in.
   const sent = useSentNow(`idea:${id}`, entries);
   const { turns, known } = useChatTurns(id, sent.entries, running || sent.sending);
-  // Its own steps say what it's at ("Reading the captions"); a plain "Claude is working" is left to the chat's thinking words.
+  // Its own steps say what it's at ("Reading the video's words"); a plain "Claude is working" is left to the chat's thinking words.
   const step = idea.run?.step !== undefined && !/^(Claude is working|Waiting for a turn)$/.test(idea.run.step) ? idea.run.step : undefined;
   const other = running && idea.run !== null && idea.run.tools === undefined && idea.run.said === undefined ? `On ${idea.run.holder}` : undefined;
   // Pictures attached to a message are kept beside the idea's own, not among its eight.

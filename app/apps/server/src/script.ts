@@ -33,7 +33,7 @@ import * as tools from "./tools.ts";
 import * as proc from "./effect/proc.ts";
 import { runPromise } from "./effect/runtime.ts";
 import type { Transcript, Word } from "./transcribe.ts";
-import { MODEL as CAPTIONS_MODEL } from "./youtube_captions.ts";
+import { MODEL as CAPTIONS_MODEL } from "./youtube_words.ts";
 import * as youtube from "./youtube.ts";
 import * as posts from "./posts.ts";
 import { LINK_PREFIX as FINISHED_LINK, reviewCode, reviewOf } from "./finished.ts";

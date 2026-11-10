@@ -1,24 +1,22 @@
 // What an idea is made from, read in code before Claude is asked (one prompt,
 // no round trips for fetching): a YouTube video's details from the YouTube
-// Data API on the relay (its key never leaves it), its captions through the
-// YouTube proxy only, and an article read as Script mode reads one. The user,
-// Oct 31: "try not to do research locally to not risk ip bans, try and do it
-// through the api and api key": nothing here asks YouTube from the Mac's own
-// address, and nothing crawls.
+// Data API on the relay (its key never leaves it), its words from
+// youtube_words.ts (captions through the YouTube proxy first), and an article
+// read as Script mode reads one. The user, Oct 31: "try not to do research
+// locally to not risk ip bans, try and do it through the api and api key":
+// nothing here crawls, and YouTube is asked from the Mac's own address only
+// for a case's captions when it turns the proxy's away (Nov 10).
 
 import * as fs from "node:fs";
 
 import type { IdeaSource } from "@edit/types/ideas";
 
 import * as diag from "../diag.ts";
-import { writeAtomic } from "../files.ts";
-import { join } from "../paths.ts";
 import * as relay from "../relay.ts";
-import { serialize, type Transcript } from "../transcribe.ts";
-import { MODEL, parseCaptions } from "../youtube_captions.ts";
+import type { Transcript } from "../transcribe.ts";
 import * as youtube from "../youtube.ts";
+import * as youtubeWords from "../youtube_words.ts";
 import * as research from "../writer/research.ts";
-import { THIS_MACHINE } from "../machine.ts";
 
 /** How much of a transcript goes to Claude (Sphe Research's cap: the hook is rarely in the tail). */
 export const TRANSCRIPT_CHARS = 60_000;
@@ -52,67 +50,20 @@ export async function video(id: string): Promise<Video> {
   };
 }
 
-const NO_PROXY = `The YouTube proxy isn't available, so the captions weren't fetched: Edit never asks YouTube for them from ${THIS_MACHINE}'s own address.`;
-
-/** Test hook: where the captions come from (yt-dlp through the proxy). */
+/** Test hook: where a video's words come from (youtube_words.ts, as an idea reads them). */
 export const captions = {
-  fetch: async (home: string, id: string, dir: string, signal?: AbortSignal): Promise<Transcript | null> => {
-    const proxy = await youtube.proxyUrl();
-    if (proxy === "") throw new Error(NO_PROXY);
-    fs.mkdirSync(dir, { recursive: true });
-    const binary = await youtube.ytdlp(home);
-    const languages = ["en-orig", "en", "en-US", "en-GB"];
-    const runtime = youtube.runtimeArgs();
-    const child = Bun.spawn(
-      [binary, ...runtime, "--proxy", proxy, "--skip-download", "--no-playlist", "--no-warnings", "--quiet", "--write-subs", "--write-auto-subs", "--sub-langs", languages.join(","), "--sub-format", "json3", "-o", join(dir, "captions"), `https://www.youtube.com/watch?v=${id}`],
-      { stdout: "ignore", stderr: "pipe", env: youtube.runtimeEnv(runtime) },
-    );
-    const stop = () => child.kill("SIGKILL");
-    signal?.addEventListener("abort", stop, { once: true });
-    const timeout = setTimeout(stop, 120_000);
-    try {
-      const stderr = await new Response(child.stderr).text();
-      await child.exited;
-      for (const language of languages) {
-        try {
-          const transcript = parseCaptions(JSON.parse(fs.readFileSync(join(dir, `captions.${language}.json3`), "utf8")) as Parameters<typeof parseCaptions>[0]);
-          if (transcript !== null) return transcript;
-        } catch {
-          // This track is absent or unreadable: the next English one.
-        }
-      }
-      // The proxy's address is a credential: never in a log line.
-      if (child.exitCode !== 0) diag.warn("ideas", `${id}: no captions (${diag.scrub(stderr.replace(/https?:\/\/[^\s@]*@[^\s]*/g, "<proxy>")).slice(0, 200)})`);
-      return null;
-    } finally {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", stop);
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  },
+  words: (home: string, id: string, signal?: AbortSignal, onStage?: (text: string) => void): Promise<Transcript> => youtubeWords.words(home, id, youtubeWords.USES.idea, signal, onStage),
 };
 
 /**
  * A video's words as Claude reads them: a line a speaker's turn (a new line
- * every ~60 words in a long one), each with its time. Captions Edit fetched
- * before (for an import) are reused, and these are kept for it in turn.
+ * every ~60 words in a long one), each with its time. They come from
+ * youtube_words.ts, the one reader an import uses too, so captions fetched
+ * for either serve the other. Throws its `NoWords` when there are none to be
+ * had, saying why (YouTube turning Edit away is not "no captions").
  */
-export async function transcript(home: string, id: string, signal?: AbortSignal): Promise<{ text: string; words: number; truncated: boolean } | null> {
-  const dir = join(home, "cache", "youtube-captions", id);
-  const kept = join(dir, "transcript-v1.json");
-  let found: Transcript | null = null;
-  try {
-    const cached = JSON.parse(fs.readFileSync(kept, "utf8")) as Transcript;
-    if (cached.model === MODEL && Array.isArray(cached.words) && cached.words.length > 0) found = cached;
-  } catch {
-    // Not fetched yet.
-  }
-  if (found === null) {
-    found = await captions.fetch(home, id, join(home, "cache", "ideas", `captions-${id}-${Date.now()}`), signal);
-    if (found === null) return null;
-    fs.mkdirSync(dir, { recursive: true });
-    writeAtomic(kept, serialize(found));
-  }
+export async function transcript(home: string, id: string, signal?: AbortSignal, onStage?: (text: string) => void): Promise<{ text: string; words: number; truncated: boolean }> {
+  const found = await captions.words(home, id, signal, onStage);
   const text = readable(found);
   const truncated = text.length > TRANSCRIPT_CHARS;
   return { text: truncated ? `${text.slice(0, TRANSCRIPT_CHARS)}\n\n[Transcript truncated: this is the first part of a long video.]` : text, words: found.words.length, truncated };

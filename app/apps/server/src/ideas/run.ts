@@ -22,6 +22,7 @@ import * as runLease from "../run_lease.ts";
 import * as modelChoice from "../model_choice.ts";
 import * as notices from "../notices.ts";
 import { join } from "../paths.ts";
+import { NoWords } from "../youtube_words.ts";
 import * as claude from "../writer/claude.ts";
 import { ideaBuilt, modelFor } from "@edit/types/models";
 import * as live from "../writer/live.ts";
@@ -487,9 +488,12 @@ async function prepare(context: Context, idea: Idea, step: (text: string) => Pro
         `Channel: ${video.channel} · ${views(video.views)} · outlier ${video.outlier} · published ${video.publishedAt?.slice(0, 10) ?? "unknown"} · ${clock(video.durationSeconds)}`,
         `Description: ${video.description.trim() || "(none)"}`,
       );
-      await step("Reading the captions");
-      const words = await sources.transcript(context.home, source.videoId, signal);
-      if (words === null) return "YouTube has no English captions for this video, so it wasn't repackaged: titles come from the transcript, never from the title alone.";
+      await step("Reading the video's words");
+      const words = await sources.transcript(context.home, source.videoId, signal, (text) => void step(text).catch(() => {})).catch((error: unknown) => {
+        if (error instanceof NoWords) return error;
+        throw error;
+      });
+      if (words instanceof NoWords) return `${words.message} It wasn't repackaged: titles come from the transcript, never from the title alone.`;
       parts.push("", `### Transcript${words.truncated ? " (the first part)" : ""}`, words.text, "");
     } else {
       await step("Reading the article");

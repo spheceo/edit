@@ -7,22 +7,22 @@
 // cheaply, then a full-size frame at the moments chosen, the sharpest of the
 // second and a half around each.
 //
-// As the captions (sources.ts), all of it through the YouTube proxy, never
-// from this Mac's own address ("try not to do research locally to not risk ip
-// bans", Oct 31). FFmpeg can't take the proxy itself (through it, it stood
-// still for minutes on the first try, Nov 2), so it reads the video from a
-// forwarder on this Mac that asks for each range through the proxy: about 8 s
-// and 1–2 MB a frame. The proxy's address is a credential: never in a line.
+// As the case's words (youtube_words.ts' `idea` use): through the YouTube
+// proxy first ("try not to do research locally to not risk ip bans", Oct 31),
+// straight from this Mac only when YouTube turns the proxy's address away
+// (Nov 10: it did for every question on JJ's Mac for days, and the video
+// couldn't be looked at). The pictures come the way the video's details did.
+// FFmpeg can't take the proxy itself (through it, it stood still for minutes
+// on the first try, Nov 2), so it reads the video from a forwarder on this Mac
+// that asks for each range that way: about 8 s and 1–2 MB a frame. The proxy's
+// address is a credential: never in a line.
 
 import * as fs from "node:fs";
 
-import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
 import * as tools from "../tools.ts";
 import * as youtube from "../youtube.ts";
-import { THIS_MACHINE } from "../machine.ts";
-
-const NO_PROXY = `The YouTube proxy isn't available, so the video can't be looked at: Edit never asks YouTube for it from ${THIS_MACHINE}'s own address.`;
+import { USES } from "../youtube_words.ts";
 
 /** A storyboard sheet: its picture, the second its first tile shows, and its tiles (left to right, then down). */
 export type Sheet = { url: string; start: number; tiles: number };
@@ -40,42 +40,32 @@ export type Video = {
   sheets: Sheet[];
   /** The picture alone (H.264 up to 1080p over HTTPS), for frames; null when YouTube offers none. */
   stream: string | null;
+  /** How YouTube answered for it: its pictures are fetched the same way. */
+  way: youtube.Way;
 };
 
 type Format = { format_id?: string; vcodec?: string; acodec?: string; protocol?: string; height?: number; width?: number; url?: string; rows?: number; columns?: number; fragments?: { url: string; duration?: number }[] };
 
-/** What yt-dlp says of the video (its formats), through the proxy. Tests give their own. */
+/** What yt-dlp says of the video (its formats), asked as an idea asks YouTube. Tests give their own. */
 export const looks = {
-  info: async (home: string, id: string, signal?: AbortSignal): Promise<{ duration: number; formats: Format[] }> => {
-    const proxy = await youtube.proxyUrl();
-    if (proxy === "") throw new Error(NO_PROXY);
-    const binary = await youtube.ytdlp(home);
-    const runtime = youtube.runtimeArgs();
-    const child = Bun.spawn([binary, ...runtime, "--proxy", proxy, "--no-playlist", "--no-warnings", "-J", `https://www.youtube.com/watch?v=${id}`], { stdout: "pipe", stderr: "pipe", env: youtube.runtimeEnv(runtime) });
-    const stop = () => child.kill("SIGKILL");
-    signal?.addEventListener("abort", stop, { once: true });
-    const timeout = setTimeout(stop, 120_000);
-    try {
-      const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-      await child.exited;
-      if (child.exitCode !== 0) throw new Error(`YouTube didn't give the video (${diag.scrub(err.replace(/https?:\/\/[^\s@]*@[^\s]*/g, "<proxy>")).trim().split("\n").at(-1)?.slice(0, 200) ?? "no reason"})`);
-      const json = JSON.parse(out) as { duration?: number; formats?: Format[] };
-      return { duration: json.duration ?? 0, formats: json.formats ?? [] };
-    } finally {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", stop);
-    }
+  info: async (home: string, id: string, signal?: AbortSignal): Promise<{ duration: number; formats: Format[]; way: youtube.Way }> => {
+    const asked = await youtube.ask(home, id, ["--no-playlist", "--no-warnings", "-J"], USES.idea.ways, (tried) => tried.code === 0, { area: "ideas", ...(signal ? { signal } : {}) }).catch((error: unknown) => {
+      if (error instanceof youtube.Unanswered) throw new Error(`YouTube didn't give the video (${error.message.slice(0, 200)})`);
+      throw error;
+    });
+    const json = JSON.parse(asked.stdout) as { duration?: number; formats?: Format[] };
+    return { duration: json.duration ?? 0, formats: json.formats ?? [], way: asked.way };
   },
-  /** Bytes through the proxy (a storyboard sheet, or a range of the video). */
-  fetch: async (url: string, init: { range?: string; signal?: AbortSignal } = {}): Promise<Response> => {
-    const proxy = await youtube.proxyUrl();
-    if (proxy === "") throw new Error(NO_PROXY);
-    return fetch(url, { proxy, headers: init.range ? { range: init.range } : {}, signal: init.signal ?? AbortSignal.timeout(60_000) });
+  /** Bytes the way the video's details came (a storyboard sheet, or a range of the video). */
+  fetch: async (url: string, init: { way: youtube.Way; range?: string; signal?: AbortSignal }): Promise<Response> => {
+    const proxy = init.way === "proxy" ? await youtube.proxyUrl() : "";
+    if (init.way === "proxy" && proxy === "") throw new Error("The YouTube proxy isn't available just now.");
+    return fetch(url, { ...(proxy === "" ? {} : { proxy }), headers: init.range ? { range: init.range } : {}, signal: init.signal ?? AbortSignal.timeout(60_000) });
   },
 };
 
 /** The video's storyboard and its picture stream, from yt-dlp's formats. */
-export function videoOf(id: string, duration: number, formats: Format[]): Video {
+export function videoOf(id: string, duration: number, formats: Format[], way: youtube.Way = "proxy"): Video {
   // The largest storyboard: 320×180 tiles, nine to a sheet, about every 5 s (YouTube's "sb0").
   const boards = formats.filter((one) => one.format_id?.startsWith("sb") && (one.fragments?.length ?? 0) > 0 && (one.width ?? 0) > 0).sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
   const board = boards[0];
@@ -97,13 +87,13 @@ export function videoOf(id: string, duration: number, formats: Format[]): Video 
   const streams = formats
     .filter((one) => one.url !== undefined && one.protocol === "https" && (one.acodec === "none" || one.acodec === undefined) && one.vcodec?.startsWith("avc1") && (one.height ?? 0) <= 1080)
     .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
-  return { id, duration, every, columns: board?.columns ?? 0, rows: board?.rows ?? 0, width: board?.width ?? 0, height: board?.height ?? 0, sheets, stream: streams[0]?.url ?? null };
+  return { id, duration, every, columns: board?.columns ?? 0, rows: board?.rows ?? 0, width: board?.width ?? 0, height: board?.height ?? 0, sheets, stream: streams[0]?.url ?? null, way };
 }
 
 /** The video, looked up once a run. */
 export async function video(home: string, id: string, signal?: AbortSignal): Promise<Video> {
   const info = await looks.info(home, id, signal);
-  return videoOf(id, info.duration, info.formats);
+  return videoOf(id, info.duration, info.formats, info.way);
 }
 
 /** "m:ss" (or "h:mm:ss"), as the transcript writes times. */
@@ -143,7 +133,7 @@ export async function scan(found: Video, dir: string, from: number, to: number, 
     picked.map(async (sheet) => {
       const path = join(dir, `storyboard-${String(found.sheets.indexOf(sheet) + 1).padStart(2, "0")}.jpg`);
       if (!fs.existsSync(path)) {
-        const answer = await looks.fetch(sheet.url, { signal });
+        const answer = await looks.fetch(sheet.url, { way: found.way, ...(signal ? { signal } : {}) });
         if (!answer.ok) throw new Error(`YouTube refused a storyboard sheet (${answer.status})`);
         fs.writeFileSync(path, new Uint8Array(await answer.arrayBuffer()));
       }
@@ -173,14 +163,14 @@ export async function grab(found: Video, times: number[], dir: string, signal?: 
   if (found.stream === null) throw new Error("YouTube offers no picture stream for this video to take frames from.");
   const stream = found.stream;
   fs.mkdirSync(dir, { recursive: true });
-  // FFmpeg reads the video from here; each range it asks for is fetched through the proxy.
+  // FFmpeg reads the video from here; each range it asks for is fetched the way the video's details came.
   const forwarder = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     idleTimeout: 120,
     async fetch(request) {
       const range = request.headers.get("range") ?? undefined;
-      const answer = await looks.fetch(stream, { range, signal });
+      const answer = await looks.fetch(stream, { way: found.way, ...(range === undefined ? {} : { range }), ...(signal ? { signal } : {}) });
       const headers = new Headers();
       for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
         const value = answer.headers.get(name);

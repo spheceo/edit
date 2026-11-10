@@ -646,3 +646,109 @@ export async function downloadRange(home: string, id: string, range: [number, nu
   const path = await runPromise(overRoutes(home, id, dir, 1, range, format, progress, `YouTube excerpt ${id} ${range[0]}–${range[1]} couldn't be downloaded`).pipe(inArea("youtube")));
   return { path, name: path.slice(dir.length + 1), size: fs.statSync(path).size };
 }
+
+/** A video's sound alone (m4a where YouTube has it), to hear a video that has no captions: a few MB where the picture is hundreds. */
+export async function downloadSound(home: string, id: string, dir: string): Promise<Downloaded> {
+  fs.mkdirSync(dir, { recursive: true });
+  const path = await runPromise(overRoutes(home, id, dir, 1, null, "ba[ext=m4a]/ba/b", () => {}, `YouTube video ${id}'s sound couldn't be downloaded`).pipe(inArea("youtube")));
+  return { path, name: path.slice(dir.length + 1), size: fs.statSync(path).size };
+}
+
+// ── A question for YouTube that downloads no video (captions, formats) ──
+//
+// Until Nov 10 each asker had its own single try (ideas through the proxy
+// only), and a refusal read as the answer: ten ideas on JJ's Mac were
+// "skipped: YouTube has no English captions" while every one of those videos
+// had them, because YouTube had turned the proxy's address away ("Sign in to
+// confirm you're not a bot"). Now a question goes over its use's ways until
+// one is answered, and a refusal is never taken for an answer.
+
+/** A way of asking: through the paid proxy, or straight from this machine. */
+export type Way = "proxy" | "straight";
+
+/** What yt-dlp said to one question. */
+export interface Asked {
+  way: Way;
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+/** No way was answered: `gone` when no way could be (the video is taken down or private, or only a signed-in YouTube has it), else YouTube turned Edit away for now. */
+export class Unanswered extends Error {
+  constructor(
+    message: string,
+    readonly gone: boolean,
+  ) {
+    super(message);
+  }
+}
+
+/** When YouTube last turned each way away: for ten minutes that way is asked last, so one refused address doesn't cost every question its wait. */
+const turnedAway = new Map<Way, number>();
+const TURNED_AWAY_MS = 10 * 60_000;
+
+/** Test hook: every way as good as new. */
+export const forgetRefusals = (): void => turnedAway.clear();
+
+/**
+ * Asks YouTube about video `id` with yt-dlp `args` (no `--proxy`, no URL),
+ * over `ways` in order, until `answered` says a try was (its files are
+ * there, or yt-dlp ended well). A refusal, a 429 or a failure nobody has
+ * seen goes on to the next way; a video that's gone or needs a sign-in ends
+ * it; an outdated yt-dlp is brought up to date once and asked again. Throws
+ * `Unanswered` with yt-dlp's last line when no way was answered.
+ */
+export async function ask(home: string, id: string, args: readonly string[], ways: readonly Way[], answered: (asked: Asked) => boolean, options: { area: string; signal?: AbortSignal; timeoutMs?: number } = { area: "youtube" }): Promise<Asked> {
+  const now = Date.now();
+  const lately = (way: Way) => now - (turnedAway.get(way) ?? -Infinity) < TURNED_AWAY_MS;
+  const queue = [...ways.filter((way) => !lately(way)), ...ways.filter(lately)];
+  let binary = await ytdlp(home);
+  let updated = false;
+  let last: TryFailure = new Unrecognised({ line: "the YouTube proxy isn't available" });
+  for (let at = 0; at < queue.length; at++) {
+    const way = queue[at]!;
+    // The proxy's address is asked for (the relay's, kept ten minutes) only when its turn comes; with none, the next way.
+    const proxy = way === "proxy" ? await proxyUrl() : "";
+    if (way === "proxy" && proxy === "") continue;
+    const runtime = runtimeArgs();
+    options.signal?.throwIfAborted();
+    const child = Bun.spawn([binary, ...runtime, ...(way === "proxy" ? ["--proxy", proxy] : []), ...args, `https://www.youtube.com/watch?v=${id}`], { stdout: "pipe", stderr: "pipe", env: runtimeEnv(runtime) });
+    const stop = () => child.kill("SIGKILL");
+    options.signal?.addEventListener("abort", stop, { once: true });
+    const timeout = setTimeout(stop, options.timeoutMs ?? 120_000);
+    let asked: Asked;
+    try {
+      const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      asked = { way, stdout, stderr, code };
+    } finally {
+      clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", stop);
+    }
+    options.signal?.throwIfAborted();
+    if (answered(asked)) {
+      turnedAway.delete(way);
+      return asked;
+    }
+    last = reasonOf(asked.stderr);
+    const next = afterFailure(last);
+    if (last._tag === "RouteRefused") turnedAway.set(way, Date.now());
+    // The sign-in from Chrome is a download's last resort (macOS warns the person each time it's read): never for a question.
+    if (next.to === "stop" || next.to === "sign-in") throw new Unanswered(last.line, true);
+    if (next.to === "update" && !updated && binary === join(home, "bin", "yt-dlp")) {
+      updated = true;
+      const fresh = await freshen(binary, true).catch(() => null);
+      if (fresh !== null) {
+        binary = fresh;
+        diag.warn(options.area, `${id}: ${last.line}; asking again with the newest yt-dlp`);
+        queue.splice(at + 1, 0, way);
+        continue;
+      }
+    }
+    const to = queue[at + 1];
+    diag.warn(options.area, `${id}: YouTube didn't answer${way === "proxy" ? " through the proxy" : ` straight from ${THIS_MACHINE}`} (${last.line})${to === undefined ? "" : `; asking ${to === "proxy" ? "through the proxy" : "straight"}`}`);
+    // Asked again the same way after "429: Too Many Requests", YouTube wants a while first.
+    if (to !== undefined) await timing.pause(to === way && /429/.test(last.line) ? 20_000 : 1000);
+  }
+  throw new Unanswered(last.line, false);
+}

@@ -23,7 +23,7 @@ import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as transcribe from "./transcribe.ts";
 import * as voices from "./voices.ts";
-import { writeCaptionTranscript } from "./youtube_captions.ts";
+import { writeCaptionTranscript } from "./youtube_words.ts";
 
 export type { Probe } from "./model.ts";
 

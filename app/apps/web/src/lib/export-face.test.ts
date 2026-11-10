@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { activityLine, cardFace, exportLabel, folderDetail, shareChip, shareStatus, type FaceJob } from "./export-face";
+import { activityLine, cardFace, exportLabel, folderDetail, shareChip, shareStatus, shownPath, type FaceJob } from "./export-face";
 
 const job = (over: Partial<FaceJob>): FaceJob => ({ name: "Republican Chairman", state: "running", progress: 0, ...over });
 
@@ -76,6 +76,13 @@ describe("the Share dialog's line", () => {
     expect(shareStatus({ ...only, exportState: { state: "cancelled", progress: 0 }, share: { state: "done" } })).toEqual({ kind: "cancelled" });
     // A share begun since says its own line.
     expect(shareStatus({ ...only, exportState: exported, sharing: "uploading 10%" })).toEqual({ kind: "progress", text: "Uploading 10%…" });
+  });
+
+  it("shows where an Export went with the home folder as ~", () => {
+    expect(shownPath("/Users/jj/Movies/Edit/Cops Realize.mp4", "/Users/jj")).toBe("~/Movies/Edit/Cops Realize.mp4");
+    expect(shownPath("/Volumes/Work/Cops Realize.mp4", "/Users/jj")).toBe("/Volumes/Work/Cops Realize.mp4");
+    expect(shownPath("/Users/jjx/a.mp4", "/Users/jj")).toBe("/Users/jjx/a.mp4");
+    expect(shownPath("/Users/jj/a.mp4", null)).toBe("/Users/jj/a.mp4");
   });
 
   it("says why a share failed after its export, from the server", () => {

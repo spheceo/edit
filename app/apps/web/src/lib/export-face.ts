@@ -125,3 +125,9 @@ export function shareStatus(given: {
   if (share?.state === "done" && given.linked) return { kind: "up" };
   return { kind: "none" };
 }
+
+/** A path on the computer running Edit as it's shown: the home folder as `~` (`home` null: as it is). */
+export function shownPath(path: string, home: string | null): string {
+  if (home && (path === home || path.startsWith(`${home}/`))) return `~${path.slice(home.length)}`;
+  return path;
+}

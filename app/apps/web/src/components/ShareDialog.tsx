@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { api, type Review } from "../lib/api";
 import { projectDuration } from "../lib/edit";
-import { shareStatus } from "../lib/export-face";
+import { shareStatus, shownPath } from "../lib/export-face";
 import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "../lib/exporting";
 import { onThisMac, showInFinder } from "../lib/files";
 import { FILE_MANAGER, THIS_MACHINE } from "../lib/platform";
@@ -56,9 +56,16 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [stopped, setStopped] = useState(false);
   // The export asked for here was an Export (this computer only), not a share's.
   const [only, setOnly] = useState(false);
+  // This computer's home folder, so where an Export went reads as `~/…`.
+  const [home, setHome] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
     setMarkTouched(false);
+    void api.exportFolder().then(
+      (given) => setHome(given.home),
+      // Shown whole, then.
+      () => {},
+    );
     void api.watermarks().then(
       (given) => {
         setChannels(given.channels);
@@ -330,6 +337,25 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
           )}
         </div>
 
+        {/* An Export's file, where it is (JJ, Nov 10: "save it locally and display where it is saved"). */}
+        {!problem && status.kind === "saved" && (
+          <div className="mt-4 flex items-center gap-2.5 rounded-[10px] border border-line bg-panel px-3 py-2.5 text-[13px]">
+            <Check size={14} className="shrink-0 text-success" />
+            <span className="min-w-0 flex-1 truncate text-fg" title={status.path}>
+              Saved to {shownPath(status.path, home)}
+            </span>
+            {onThisMac() ? (
+              <Button size="sm" variant="subtle" className="shrink-0" onClick={() => showInFinder(status.path)}>
+                <FolderSearch size={13} /> Show in {FILE_MANAGER}
+              </Button>
+            ) : (
+              <a className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-line-strong px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-hover" href={`/api/exports/file?path=${encodeURIComponent(status.path)}`} download>
+                <Download size={13} /> Download
+              </a>
+            )}
+          </div>
+        )}
+
         <div className="mt-5 flex min-h-[34px] items-center gap-3">
           <div className="min-w-0 flex-1 text-[12px]">
             {status.kind === "progress" && <span className="text-muted tabular">{status.text}</span>}
@@ -341,22 +367,6 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
             {!problem && status.kind === "up" && (
               <span className="flex items-center gap-1.5 text-success">
                 <Check size={13} /> Up on the link
-              </span>
-            )}
-            {!problem && status.kind === "saved" && (
-              <span className="flex min-w-0 items-center gap-1.5">
-                <span className="flex items-center gap-1.5 text-success" title={status.path}>
-                  <Check size={13} /> Exported
-                </span>
-                {onThisMac() ? (
-                  <Button size="sm" variant="ghost" className="shrink-0" onClick={() => showInFinder(status.path)}>
-                    <FolderSearch size={13} /> Show in {FILE_MANAGER}
-                  </Button>
-                ) : (
-                  <a className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-secondary transition-colors hover:bg-hover hover:text-fg" href={`/api/exports/file?path=${encodeURIComponent(status.path)}`} download>
-                    <Download size={13} /> Download
-                  </a>
-                )}
               </span>
             )}
           </div>

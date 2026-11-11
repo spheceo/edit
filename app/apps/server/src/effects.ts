@@ -65,6 +65,49 @@ import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 
+import font0 from "../../../crates/edit-render/fonts/Geist-Regular.ttf" with { type: "file" };
+import font1 from "../../../crates/edit-render/fonts/Geist-Medium.ttf" with { type: "file" };
+import font2 from "../../../crates/edit-render/fonts/Geist-SemiBold.ttf" with { type: "file" };
+import font3 from "../../../crates/edit-render/fonts/Geist-Bold.ttf" with { type: "file" };
+import font4 from "../../../crates/edit-render/fonts/Geist-Black.ttf" with { type: "file" };
+import font5 from "../../../crates/edit-render/fonts/GeistMono-Medium.ttf" with { type: "file" };
+import font6 from "../../../crates/edit-render/fonts/GeistMono-SemiBold.ttf" with { type: "file" };
+import font7 from "../../../crates/edit-render/fonts/Montserrat-SemiBold.ttf" with { type: "file" };
+import font8 from "../../../crates/edit-render/fonts/ReenieBeanie.ttf" with { type: "file" };
+import font9 from "../../../crates/edit-render/fonts/VT323-Regular.ttf" with { type: "file" };
+import font10 from "../../../crates/edit-render/fonts/Tinos-Regular.ttf" with { type: "file" };
+import font11 from "../../../crates/edit-render/fonts/Tinos-Bold.ttf" with { type: "file" };
+import font12 from "../../../crates/edit-render/fonts/Arimo-Regular.ttf" with { type: "file" };
+import font13 from "../../../crates/edit-render/fonts/Arimo-Bold.ttf" with { type: "file" };
+
+/**
+ * Edit's own faces (the renderer's, crates/edit-render/fonts, all SIL OFL 1.1),
+ * there for every effect page as if they were in its folder (`edit-fonts/…`,
+ * declared by the runtime), so an effect draws the same text on every computer
+ * that renders it: the agent's first board asked for Marker Felt, which a Mac
+ * has and Linux hasn't. Akwe Pro (its own licence) and Noto Sans JP (a fallback
+ * of 9 MB) stay the renderer's.
+ */
+export const FONTS: readonly { family: string; weight: number; file: string; path: string }[] = [
+  { family: "Geist", weight: 400, file: "Geist-Regular.ttf", path: font0 },
+  { family: "Geist", weight: 500, file: "Geist-Medium.ttf", path: font1 },
+  { family: "Geist", weight: 600, file: "Geist-SemiBold.ttf", path: font2 },
+  { family: "Geist", weight: 700, file: "Geist-Bold.ttf", path: font3 },
+  { family: "Geist", weight: 900, file: "Geist-Black.ttf", path: font4 },
+  { family: "Geist Mono", weight: 500, file: "GeistMono-Medium.ttf", path: font5 },
+  { family: "Geist Mono", weight: 600, file: "GeistMono-SemiBold.ttf", path: font6 },
+  { family: "Montserrat", weight: 600, file: "Montserrat-SemiBold.ttf", path: font7 },
+  { family: "Reenie Beanie", weight: 400, file: "ReenieBeanie.ttf", path: font8 },
+  { family: "VT323", weight: 400, file: "VT323-Regular.ttf", path: font9 },
+  { family: "Tinos", weight: 400, file: "Tinos-Regular.ttf", path: font10 },
+  { family: "Tinos", weight: 700, file: "Tinos-Bold.ttf", path: font11 },
+  { family: "Arimo", weight: 400, file: "Arimo-Regular.ttf", path: font12 },
+  { family: "Arimo", weight: 700, file: "Arimo-Bold.ttf", path: font13 },
+];
+
+/** The faces, declared for the page: loaded only when the page uses one. */
+const FACES = FONTS.map((font) => `@font-face { font-family: "${font.family}"; font-weight: ${font.weight}; src: url(edit-fonts/${font.file}); }`).join("\n");
+
 /** Edit's side of every effect page (effect_runtime.html), put in ahead of the page's own code. */
 const RUNTIME = runtimeText as unknown as string;
 
@@ -124,7 +167,7 @@ function filesIn(dir: string, under = ""): [string, number, number][] {
  * one, and so does a new build whose runtime draws differently.
  */
 function sourceKey(files: [string, number, number][], frame: { width: number; height: number; fps: number }): string {
-  return fingerprint([RUNTIME, `${frame.width}x${frame.height}@${frame.fps}`, ...files.map(([path, size, changed]) => `${path} ${size} ${changed}`)]);
+  return fingerprint([RUNTIME, FACES, `${frame.width}x${frame.height}@${frame.fps}`, ...files.map(([path, size, changed]) => `${path} ${size} ${changed}`)]);
 }
 
 /** The project's effects: every folder with a page in it, by name. */
@@ -246,10 +289,11 @@ function ownSource(request: Request, project: string, name: string): string {
   return `${host}${addressOf(project, name)}`;
 }
 
-/** The page with Edit's runtime ahead of its own code. */
+/** The page with Edit's runtime and faces ahead of its own code. */
 function withRuntime(page: string): string {
+  const ahead = `<style>\n${FACES}\n</style>\n${RUNTIME}`;
   const doctype = /^\s*<!doctype[^>]*>/i.exec(page);
-  return doctype === null ? `${RUNTIME}${page}` : `${doctype[0]}\n${RUNTIME}${page.slice(doctype[0].length)}`;
+  return doctype === null ? `${ahead}${page}` : `${doctype[0]}\n${ahead}${page.slice(doctype[0].length)}`;
 }
 
 function file(context: RouteContext<App>): Response {
@@ -267,6 +311,14 @@ function file(context: RouteContext<App>): Response {
   }
   const parts = [params.a, params.b, params.c].filter((part): part is string => part !== undefined);
   if (parts.some((part) => part === "" || part === "." || part === ".." || /[/\\\0]/.test(part))) throw notFound("no such file");
+  const headers = { "content-security-policy": policy(ownSource(request, project, params.name!)), "cache-control": "no-store" };
+  // One of Edit's faces, as if it were in the folder (a file of the effect's own by that name is never shadowed: its folder wins).
+  const face = parts.length === 2 && parts[0] === "edit-fonts" && !fs.existsSync(join(dir, ...parts)) ? FONTS.find((font) => font.file === parts[1]) : undefined;
+  if (face !== undefined) {
+    const response = new Response(Bun.file(face.path), { headers: { ...headers, "content-type": "font/ttf", "access-control-allow-origin": "null" } });
+    response.headers.set("cache-control", "max-age=86400");
+    return response;
+  }
   // The file itself, wherever a link in the folder points: nothing outside the folder is served.
   let path: string;
   try {
@@ -275,7 +327,6 @@ function file(context: RouteContext<App>): Response {
   } catch {
     throw notFound("no such file");
   }
-  const headers = { "content-security-policy": policy(ownSource(request, project, params.name!)), "cache-control": "no-store" };
   if (path.endsWith(".html")) {
     let page: string;
     try {
@@ -669,7 +720,10 @@ async function draw(app: App, render: Render): Promise<void> {
     }
     const partial = join(dir, `${name}-${key}.partial.mp4`);
     try {
-      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-an", "-movflags", "+faststart", partial]);
+      // At most twice the bitrate of Edit's best export (export.rs: 0.14 bits a pixel), which is what the render goes into:
+      // uncapped, the agent's first board (grain on every frame) was 204 MB for 12 s, too much to send up for the cloud.
+      const cap = Math.round(frame.width * frame.height * frame.fps * 0.14 * 2);
+      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-maxrate", String(cap), "-bufsize", String(cap * 2), "-an", "-movflags", "+faststart", partial]);
       fs.renameSync(partial, out);
     } catch (error) {
       fs.rmSync(partial, { force: true });

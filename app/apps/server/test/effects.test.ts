@@ -70,7 +70,14 @@ test("an effect's page is served shut in: no origin, no network, only its own fo
     expect(policy).toContain(`img-src 127.0.0.1:7700${base} data: blob:`);
     expect(page.headers.get("cache-control")).toBe("no-store");
     const text = await page.text();
-    expect(text.startsWith("<!doctype html>\n<script>")).toBe(true);
+    expect(text.startsWith('<!doctype html>\n<style>\n@font-face { font-family: "Geist"; font-weight: 400; src: url(edit-fonts/Geist-Regular.ttf); }')).toBe(true);
+    // Edit's faces, served as if in its folder, for the page alone.
+    const face = await get(app, `${base}edit-fonts/ReenieBeanie.ttf`);
+    expect(face.status).toBe(200);
+    expect(face.headers.get("access-control-allow-origin")).toBe("null");
+    expect(face.headers.get("content-security-policy")).toBe(policy);
+    expect((await face.arrayBuffer()).byteLength).toBeGreaterThan(30_000);
+    expect((await get(app, `${base}edit-fonts/AkwePro-Bold.otf`)).status).toBe(404);
     expect(text.indexOf("window.__edit")).toBeLessThan(text.indexOf("window.duration = 2"));
     // A file beside it, with the same walls.
     const beside = await get(app, `${base}img/a.txt`);
@@ -213,8 +220,9 @@ test.skipIf(chrome === null)("look draws the page in Chrome: its length, the sti
       "scene.html": `<!doctype html><head><style>@font-face { font-family: Hand; src: url(fonts/hand.ttf); }</style></head><body><img id="dot" src="img/dot.png"><script>
         window.seek = () => {};
         const dot = document.getElementById("dot");
-        window.ready = Promise.all([dot.decode().then(() => dot.naturalWidth, () => 0), document.fonts.load("40px Hand").then((found) => found.length, () => 0)])
-          .then(([picture, font]) => { window.duration = picture === 1 && font === 1 ? 5 : 99; });
+        // Its own font, and one of Edit's (there as if in its folder: Reenie Beanie, the house marker).
+        window.ready = Promise.all([dot.decode().then(() => dot.naturalWidth, () => 0), document.fonts.load("40px Hand").then((found) => found.length, () => 0), document.fonts.load("40px 'Reenie Beanie'").then((found) => found.length, () => 0)])
+          .then(([picture, font, house]) => { window.duration = picture === 1 && font === 1 && house === 1 ? 5 : 99; });
       </script></body>`,
     });
     fs.mkdirSync(join(loads, "img"), { recursive: true });

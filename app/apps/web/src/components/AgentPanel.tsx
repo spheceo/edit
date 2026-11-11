@@ -1,4 +1,5 @@
 import { explain } from "@edit/types/problems";
+import { effortName, HQ_EFFORT, HQ_MODEL } from "@edit/types/models";
 import {
   ArrowLeft,
   AudioLines,
@@ -793,6 +794,8 @@ function Composer({ disabled, projectId }: { disabled: boolean; projectId: strin
   const running = useAgent((state) => state.running);
   const modelName = useAgent((state) => state.chatModel ?? state.modelName);
   const revising = useAgent((state) => state.revising);
+  // Bodycam HQ (Edit V2) answers on Fable 5.2 thinking high, set for the person: said, with no menu.
+  const hq = useEditor((state) => state.project?.hq === true);
   const notes = useNotes((state) => queued(state.notes).length);
   const resetAsked = useEditor((state) => state.resetAsked);
   const upload = useMemo(() => (projectId === undefined ? undefined : { upload: projectUploader(projectId) }), [projectId]);
@@ -805,8 +808,8 @@ function Composer({ disabled, projectId }: { disabled: boolean; projectId: strin
       tray={tray.length > 0 ? tray : undefined}
       running={running}
       disabled={disabled}
-      modelName={modelName ?? undefined}
-      revising={revising}
+      modelName={hq ? `${HQ_MODEL.name} · ${effortName(HQ_EFFORT)}` : (modelName ?? undefined)}
+      revising={hq ? undefined : revising}
       placeholder="Start the editing workflow, or ask for a change…"
       // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
       onSend={(message, files) => void sendToAgent(message, playhead.frame, files)}

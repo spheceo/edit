@@ -126,6 +126,11 @@ test("a Bodycam HQ project's turn runs in its effects folder with the file tools
     // Still nothing asked and nothing run: a tool that isn't allowed is refused.
     expect(options.permissionMode).toBe("dontAsk");
     expect(String(options.systemPrompt)).toContain("THIS IS A BODYCAM HQ VIDEO");
+    // Fable 5.2 thinking high, every turn, whatever the menu says elsewhere (Sphe, Nov 11).
+    expect(options.model).toBe("claude-fable-5-2");
+    expect(options.effort).toBe("high");
+    expect(agents.revising(project)).toBe(false);
+    expect(agents.modelName(project)).toBe("Fable 5.2");
     expect(String(options.systemPrompt)).toContain("- look_at_effect(name: string, times?: array)");
   } finally {
     home.cleanup();

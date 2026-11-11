@@ -29,7 +29,7 @@ import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
 import { compareStrings, takeChars, charCount } from "./rust.ts";
 import { leftOver } from "./put_off.ts";
-import { nameOf } from "@edit/types/models";
+import { HQ_EFFORT, HQ_MODEL, nameOf } from "@edit/types/models";
 
 import * as claudeUsage from "./claude_usage.ts";
 import * as modelChoice from "./model_choice.ts";
@@ -839,7 +839,7 @@ export class Agents implements seams.AgentPanel {
       // driven by review notes, which nobody's watching, gets a tighter one (the audit, Oct 23).
       ...(reviewGuard.inReviewTurn(project) ? { maxTurns: REVIEW_MAX_TURNS, maxBudgetUsd: REVIEW_MAX_USD } : { maxTurns: MAX_TURNS }),
     };
-    const level = chat.effort ?? claude.effort() ?? "medium";
+    const level = live.project.hq === true ? HQ_EFFORT : (chat.effort ?? claude.effort() ?? "medium");
     if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];
     if (chat.thread !== null) options.resume = chat.thread;
     // A resumed session keeps the tool schemas it read: tell it once what this build changed (tool_changes.ts).
@@ -1512,11 +1512,19 @@ export class Agents implements seams.AgentPanel {
    * again from scratch is a build.
    */
   turnModel(project: string, text = ""): string {
+    if (this.isHq(project)) return HQ_MODEL.id;
     return this.revising(project, text) ? claude.revisionModel() : claude.DEFAULT_MODEL;
+  }
+
+  /** A Bodycam HQ project (Edit V2): every turn on Fable 5.2 at high, with no menu (`HQ_MODEL`). */
+  isHq(project: string): boolean {
+    return this.store.get(projectOf(project))?.project.hq === true;
   }
 
   /** Whether the next turn is a revision, on the person's pick (else a build, on Opus): the model menu offers the pick only then. */
   revising(project: string, text = ""): boolean {
+    // Bodycam HQ's model and thinking are set: never offered.
+    if (this.isHq(project)) return false;
     if (project.endsWith(`${SUB}review`) || reviewGuard.inReviewTurn(project)) return true;
     if (REBUILD.test(text)) return false;
     return this.isBuilt(project);

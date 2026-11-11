@@ -15,6 +15,8 @@ export interface ClaudeModel {
 
 export const OPUS: ClaudeModel = { id: "claude-opus-5-5", name: "Opus 5.5" };
 export const SONNET: ClaudeModel = { id: "claude-sonnet-5-5", name: "Sonnet 5.5" };
+/** Bodycam HQ's (Edit V2): it writes the graphics as code, which is what Fable did best in the session that proved the idea (Sphe, Nov 11: "for edit v2, let us use fable 5.2 high"). */
+export const FABLE: ClaudeModel = { id: "claude-fable-5-2", name: "Fable 5.2" };
 
 /** Every build. */
 export const BUILD_MODEL = OPUS;
@@ -48,7 +50,11 @@ export function readChoice(value: unknown): ModelChoice {
 export const revisionModel = (choice: ModelChoice): ClaudeModel => REVISION_MODELS.find((model) => model.id === choice.revision) ?? OPUS;
 
 /** A model id's name as the chat shows it ("Sonnet 5.5"); Claude Code's own `opus` is Opus's. */
-export const nameOf = (id: string): string => REVISION_MODELS.find((model) => model.id === id)?.name ?? (/sonnet/u.test(id) ? SONNET.name : OPUS.name);
+export const nameOf = (id: string): string => (id === FABLE.id ? FABLE.name : REVISION_MODELS.find((model) => model.id === id)?.name ?? (/sonnet/u.test(id) ? SONNET.name : OPUS.name));
+
+/** A Bodycam HQ project's every turn, build or revision: set for the person, with no menu. */
+export const HQ_MODEL = FABLE;
+export const HQ_EFFORT: Effort = "high";
 
 /** A thinking level as the menu shows it ("Medium", "Extra high"). */
 export const effortName = (effort: Effort): string => (effort === "xhigh" ? "Extra high" : effort[0]!.toUpperCase() + effort.slice(1));

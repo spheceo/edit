@@ -7,6 +7,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
+import * as vm from "node:vm";
 
 import { registerEffectTools } from "../src/effect_tools.ts";
 import * as effects from "../src/effects.ts";
@@ -78,7 +79,7 @@ test.skipIf(addon === null)("a point tracked through the footage is written into
     const script = fs.readFileSync(join(dir, "track.track.js"), "utf8");
     // Run as the page would, then read it back.
     const window: { tracks?: Record<string, { frames: number; fps: number; at: (name: string, t: number) => { x: number; y: number; w: number; h: number } }> } = {};
-    new Function("window", script)(window);
+    vm.runInNewContext(script, { window });
     const data = window.tracks!.track!;
     expect(data.frames).toBe(120);
     for (const t of [0.5, 1, 2, 3]) {

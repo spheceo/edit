@@ -18,12 +18,15 @@ const standIn = { on: true };
 afterAll(() => {
   standIn.on = false;
 });
+// The real ones kept first: once a module is stood in for, its own names point at the stand-ins, and a stand-in
+// calling "the real one" through them calls itself (every later test file's hearing then never ends).
+const real = { hear: realHearing.hear, nameNewVoices: realReuse.nameNewVoices, reviseWith: realScripting.reviseWith };
 const heardFiles: string[] = [];
 const told: string[] = [];
 void mock.module("../../src/writer/hearing.ts", () => ({
   ...realHearing,
   hear: async (...args: Parameters<typeof realHearing.hear>) => {
-    if (!standIn.on) return realHearing.hear(...args);
+    if (!standIn.on) return real.hear(...args);
     heardFiles.push(args[0]);
     expect(args[1]).toBeNull();
     return { model: "scribe_v3", language: "en", words: [{ text: "Hands", start: 0.2, end: 0.5, speaker: "speaker_0" }, { text: "up", start: 0.5, end: 0.8, speaker: "speaker_0" }] };
@@ -32,7 +35,7 @@ void mock.module("../../src/writer/hearing.ts", () => ({
 void mock.module("../../src/writer/reuse.ts", () => ({
   ...realReuse,
   nameNewVoices: async (...args: Parameters<typeof realReuse.nameNewVoices>) => {
-    if (!standIn.on) return realReuse.nameNewVoices(...args);
+    if (!standIn.on) return real.nameNewVoices(...args);
     const [now, , added, tag] = args;
     for (const word of now.words.slice(now.words.length - added)) word.speaker = `${tag}:p9`;
     now.speakers = { ...(now.speakers ?? {}), [`${tag}:p9`]: "Officer" };
@@ -41,7 +44,7 @@ void mock.module("../../src/writer/reuse.ts", () => ({
 void mock.module("../../src/writer/scripting.ts", () => ({
   ...realScripting,
   reviseWith: async (...args: Parameters<typeof realScripting.reviseWith>) => {
-    if (!standIn.on) return realScripting.reviseWith(...args);
+    if (!standIn.on) return real.reviseWith(...args);
     told.push(args[2]);
     return ["Put it after the intro.", 0.01];
   },

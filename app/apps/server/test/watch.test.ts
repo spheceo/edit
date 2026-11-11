@@ -561,6 +561,8 @@ test("a footage transcript kept from YouTube's captions is heard by Scribe once 
   tools.forget();
   try {
     const id = await subtitled(app, dir);
+    // Naming the voices Scribe heard is Claude's, and the hearing waits for it now (captions_core.transcriptOf): here it names no one.
+    (app.agents as { ask: unknown }).ask = async () => JSON.stringify({ speakers: [] });
     const transcript: Transcript = { model: "youtube-captions", language: "en", words: TRANSCRIPT.words.map((word, index) => ({ ...word, speaker: index < 3 ? "caption_turn_1" : "caption_turn_2" })) };
     const path = app.media.paths(`${dir}/interview.mp4`).transcript;
     write(path, serialize(transcript));

@@ -23,15 +23,19 @@ jobs:
     # On each platform releases are built for: a Mac, and Linux since Nov 7
     # (its engine runs FFmpeg where a Mac runs AVFoundation, so each checks
     # its own).
-    # Each in two halves side by side (Sphe, Nov 11: Check took ~15 minutes):
-    # the Rust (`just check-rust`) and the app (`just check-app`: the types,
-    # the addon, the TypeScript, the server's tests in parallel, and on the
-    # Mac the acceptance run).
+    # In parts side by side (Sphe, Nov 11: Check took ~15 minutes): the Rust
+    # (`just check-rust`); the app, on Linux all of it (`just check-app`: the
+    # types, the addon, the TypeScript, the server's tests in parallel) and on
+    # the Mac what only a Mac can tell (`just check-mac`: the addon and the
+    # server's tests); and on the Mac the acceptance run.
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-24.04]
-        part: [rust, app]
+        part: [rust, app, acceptance]
+        exclude:
+          - os: ubuntu-24.04
+            part: acceptance
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -53,12 +57,12 @@ jobs:
       # The web typecheck needs the WASM preview engine (gitignored, built
       # from Rust): engine-cache.yml's copy when there is one, else built.
       - id: wasm
-        if: matrix.part == 'app'
+        if: matrix.part == 'acceptance' || (matrix.part == 'app' && runner.os == 'Linux')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: app/apps/web/src/engine/pkg
           key: wasm-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**', 'app/scripts/build-wasm.sh') }}
-      - if: matrix.part == 'app' && steps.wasm.outputs.cache-hit != 'true'
+      - if: (matrix.part == 'acceptance' || (matrix.part == 'app' && runner.os == 'Linux')) && steps.wasm.outputs.cache-hit != 'true'
         run: scripts/build-wasm.sh
       # Pinned, as in release.yml: what Edit is built and checked with.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -83,27 +87,31 @@ jobs:
           scripts/ffmpeg.sh ${{ matrix.target }} ffmpeg
           echo "$PWD/ffmpeg" >> "$GITHUB_PATH"
       - name: Dependencies
-        if: matrix.part == 'app'
+        if: matrix.part != 'rust'
         run: bun install --frozen-lockfile
       - name: Check
-        run: just check-${{ matrix.part }}
+        if: matrix.part != 'acceptance'
+        run: just ${{ (runner.os == 'macOS' && matrix.part == 'app') && 'check-mac' || format('check-{0}', matrix.part) }}
+      - name: The addon, for acceptance
+        if: matrix.part == 'acceptance'
+        run: just native debug
       # Acceptance on the Mac (Nov 8 audit, item I; scripts/acceptance.ts): the
-      # server from this commit (just check left its addon built) serving the
-      # UI built here, a fixture project made with FFmpeg, the editor opened
-      # in headless Chrome (first frame, play, scrub, full screen, no decode
-      # error) and Home's layout at two widths. Here, not a job of its own:
-      # the debug addon it runs on is 590 MB, built a step ago. What a virtual
-      # Mac can't do is skipped and said in the run's summary.
+      # server from this commit (on the debug addon built a step ago) serving
+      # the UI built here, a fixture project made with FFmpeg, the editor
+      # opened in headless Chrome (first frame, play, scrub, full screen, no
+      # decode error) and Home's layout at two widths. A part of its own since
+      # Nov 11, beside the server's tests rather than after them. What a
+      # virtual Mac can't do is skipped and said in the run's summary.
       - name: The UI, for acceptance
-        if: runner.os == 'macOS' && matrix.part == 'app'
+        if: matrix.part == 'acceptance'
         run: bun run --cwd apps/web build
       - name: Acceptance
-        if: runner.os == 'macOS' && matrix.part == 'app'
+        if: matrix.part == 'acceptance'
         timeout-minutes: 8
         env:
           OUT: ${{ runner.temp }}/acceptance
         run: bun scripts/acceptance.ts
-      - if: failure() && runner.os == 'macOS' && matrix.part == 'app'
+      - if: failure() && matrix.part == 'acceptance'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: acceptance

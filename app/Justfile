@@ -337,6 +337,11 @@ check-rust:
     cargo test {{rust_crates}}
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
 
+# CI's Mac app half: what only a Mac can tell, the addon on AVFoundation and VideoToolbox and the server's tests
+# on it. The rest of check-app is the same TypeScript anywhere: Linux's Check runs it (Nov 11, Check in ~5 min).
+check-mac: native-test
+    bun run --cwd apps/server test
+
 check-app: types
     # The generated TS types are committed: they must match the Rust.
     git diff --exit-code -- packages/edit-types

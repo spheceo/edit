@@ -309,7 +309,9 @@ test("an export whose progress falls back (the engine trying its chunks again) a
   const registry = new ExportRegistry(home);
   app.exports = registry;
   const was = { ...stall };
-  Object.assign(stall, { ms: 60, everyMs: 10 });
+  // A 200 ms window, moves every 50 ms and 350 ms below the best after the fall: the old rule (stalled unless
+  // past the best) would restart it; room for a loaded runner's sleeps (CI's Mac, Nov 11: 25 ms in a 60 ms window failed).
+  Object.assign(stall, { ms: 200, everyMs: 20 });
   const plan = spyOn(native, "exportPlan").mockReturnValue({ plan: { start: 0, end: 30, width: 64, height: 36, audio: false }, fps: 30 });
   const archive = spyOn(exportCloud, "enabled").mockReturnValue(false);
   let starts = 0;
@@ -319,9 +321,9 @@ test("an export whose progress falls back (the engine trying its chunks again) a
       cancel: () => {},
       wait: async () => {
         // Up to 0.8, then the engine's retry: back to 0.1 and on, never past 0.8 within the watch's time.
-        for (const at of [0.4, 0.8, 0.1, 0.2, 0.3, 0.4, 0.5]) {
+        for (const at of [0.4, 0.8, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]) {
           progress(at);
-          await Bun.sleep(25);
+          await Bun.sleep(50);
         }
         fs.writeFileSync(job.output, "export");
         return { seconds: 1, bytes: 6 };

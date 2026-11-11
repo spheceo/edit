@@ -4065,5 +4065,48 @@
       "type": "object"
     },
     "name": "make_sound"
+  },
+  {
+    "name": "edit_history",
+    "description": "The project's newest changes, newest first (Bodycam HQ): each revision with when, who made it (you and which tool, the person, or Edit by itself) and what it changed. For undo_changes.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "description": "How many (default 15, at most 100)."
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Defaults to the project open in the UI."
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "undo_changes",
+    "description": "Take changes to the project back (Bodycam HQ): revs, those changes alone (refused where a later change touched the same thing, so nothing done since is lost: it says which), or back_to, everything after that revision. Yours, the person's or Edit's, from edit_history. It's one new change, itself undone the same way. An effect's code has its own versions (restore_effect).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "revs": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "The changes to undo, by revision."
+        },
+        "back_to": {
+          "type": "integer",
+          "description": "Undo everything after this revision."
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Defaults to the project open in the UI."
+        }
+      },
+      "required": []
+    }
   }
 ]

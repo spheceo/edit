@@ -51,6 +51,8 @@ export const HQ_TOOLS: readonly string[] = [
   "read_skill",
   "make_sound",
   "feedback_reopen",
+  "edit_history",
+  "undo_changes",
 ];
 
 /**

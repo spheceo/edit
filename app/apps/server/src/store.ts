@@ -82,7 +82,7 @@ export type Event = Record<string, unknown>;
  * running in the background (a smoothed shot swapped in) isn't the agent's
  * edit and isn't checked.
  */
-export const agentCalls = new AsyncLocalStorage<{ active: boolean }>();
+export const agentCalls = new AsyncLocalStorage<{ active: boolean; tool?: string }>();
 
 /** What the agent last read of a project, and what it learns from its own writes (edit_tools.ts keeps it). */
 export const agentView = {

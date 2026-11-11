@@ -2,6 +2,7 @@ import { Maximize, MessageSquarePlus, Minimize, Pause, Play, SkipBack, SkipForwa
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { useAgent } from "../lib/agent";
+import * as storyboard from "../lib/storyboard";
 import { api, mediaHost } from "../lib/api";
 import { openReport } from "../lib/diagnostics";
 import { paramAt, projectDuration, setParam } from "../lib/edit";
@@ -14,7 +15,7 @@ import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
-import { numbers, openComment, openComments, toggleNote, useNotes } from "../lib/notes";
+import { numbers, openComment, openComments, setScrubbing, toggleNote, useNotes } from "../lib/notes";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { AnimatePresence, motion } from "motion/react";
@@ -243,12 +244,26 @@ export function Viewer() {
               <Loader size={32} label="Loading the preview…" />
             </div>
           )}
-          {!error && framed && buffering && (
+          {/* Bodycam HQ: a spinner in the middle of the picture, as a video player's, the way to report it under it only once it's stuck (Sphe, Nov 11: the corner pill sat behind the controls). */}
+          {hq && !error && framed && buffering && (
+            <div role="status" aria-label="Loading the frame" className="appear-late pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3">
+              <span className="size-9 animate-spin rounded-full border-[3px] border-white/20 border-t-white/90 shadow-[0_0_24px_#0008]" />
+              {stuck && (
+                <button
+                  className="pointer-events-auto rounded-md bg-black/60 px-2.5 py-1 text-[11px] text-white/70 transition-colors hover:text-white"
+                  onClick={() => openReport(`The preview has been stuck on "Loading frame…" at frame ${Math.floor(playhead.frame)}`)}
+                >
+                  Stuck? Report it
+                </button>
+              )}
+            </div>
+          )}
+          {!hq && !error && framed && buffering && (
             <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
               <Pulse size={12} /> Loading frame…
             </div>
           )}
-          {!error && buffering && stuck && (
+          {!hq && !error && buffering && stuck && (
             <button
               className={cx("absolute rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted underline underline-offset-2 hover:text-fg", framed ? "right-3 bottom-11" : "bottom-[calc(50%-64px)] left-1/2 -translate-x-1/2")}
               onClick={() => openReport(`The preview has been stuck on "Loading frame…" at frame ${Math.floor(playhead.frame)}`)}
@@ -548,6 +563,14 @@ function VideoControls({ fullscreen }: { fullscreen: boolean }) {
 function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number; duration: number; thin?: boolean; marks?: { id: string; n: number; frame: number; text: string }[] }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const fraction = duration > 0 ? Math.min(1, Math.max(0, frame / duration)) : 0;
+  // The frame under the pointer, shown over the bar as it moves (lib/storyboard.ts).
+  const [hover, setHover] = useState<{ x: number; width: number; frame: number } | null>(null);
+  const hoverAt = (clientX: number) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || duration <= 0) return;
+    const x = Math.min(rect.width, Math.max(0, clientX - rect.left));
+    setHover({ x, width: rect.width, frame: Math.min(duration - 1, Math.max(0, Math.round((x / rect.width) * duration))) });
+  };
   const seekFrom = (clientX: number) => {
     const rect = trackRef.current?.getBoundingClientRect();
     if (!rect || rect.width <= 0 || duration <= 0) return;
@@ -562,11 +585,15 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
       aria-valuenow={Math.round(frame)}
       title="Click or drag to scrub"
       className={cx("group flex cursor-pointer touch-none items-center", thin ? "h-4" : "h-6 px-3")}
+      onPointerMove={(event) => hoverAt(event.clientX)}
+      onPointerLeave={() => setHover(null)}
       onPointerDown={(event) => {
         (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+        setScrubbing(true);
         seekFrom(event.clientX);
         const move = (moveEvent: PointerEvent) => seekFrom(moveEvent.clientX);
         const up = () => {
+          setScrubbing(false);
           window.removeEventListener("pointermove", move);
           window.removeEventListener("pointerup", up);
           window.removeEventListener("pointercancel", up);
@@ -579,6 +606,7 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
       <div ref={trackRef} className={cx("relative w-full rounded-full bg-white/20 transition-[height]", thin ? "h-[3px] group-hover:h-[5px]" : "h-1.5 group-hover:h-2")}>
         <div className="absolute inset-y-0 left-0 rounded-full bg-playhead" style={{ width: `${fraction * 100}%` }} />
         <div className={cx("absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100", thin ? "size-3" : "size-3.5")} style={{ left: `${fraction * 100}%` }} />
+        {hover !== null && <ScrubPreview at={hover} duration={duration} />}
         {/* The open comments: a dot each over the bar; hovered, its words; clicked, its moment and its card. */}
         {duration > 0 &&
           marks.map((mark) => (
@@ -600,6 +628,32 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
             </button>
           ))}
       </div>
+    </div>
+  );
+}
+
+/** The frame under the pointer over the progress bar: the nearest of the board at once, the exact one when the pointer rests. */
+function ScrubPreview({ at, duration }: { at: { x: number; width: number; frame: number }; duration: number }) {
+  const project = useEditor((state) => state.project);
+  const rev = useEditor((state) => state.rev) ?? 0;
+  useSyncExternalStore(storyboard.subscribe, () => (project ? storyboard.pictureAt(project.id, rev, duration, at.frame) : null));
+  useEffect(() => {
+    if (!project) return;
+    const timer = setTimeout(() => void storyboard.fetchExact(project.id, rev, duration, at.frame), 90);
+    return () => clearTimeout(timer);
+  }, [project, rev, duration, at.frame]);
+  if (!project) return null;
+  const url = storyboard.pictureAt(project.id, rev, duration, at.frame);
+  const fps = rate(project.settings);
+  const width = 176;
+  const height = Math.round((width * project.settings.height) / project.settings.width);
+  const left = Math.min(at.width - width / 2, Math.max(width / 2, at.x));
+  return (
+    <div className="pointer-events-none absolute bottom-full mb-3 -translate-x-1/2" style={{ left }}>
+      <div className="overflow-hidden rounded-lg bg-black shadow-[0_8px_28px_#000c] ring-1 ring-white/25" style={{ width, height }}>
+        {url !== null && <img src={url} alt="" className="size-full object-cover" draggable={false} />}
+      </div>
+      <div className="mt-1.5 text-center text-[12px] font-medium text-white tabular [text-shadow:0_1px_3px_#000]">{clock(at.frame, fps)}</div>
     </div>
   );
 }

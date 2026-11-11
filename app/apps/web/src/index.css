@@ -357,3 +357,12 @@ html.native-preview .editor-root {
   .pulse-ring { display: none; }
   .button-busy::before { animation: none; transform: none; opacity: 0.12; }
 }
+
+/* Shown only once something's been waiting a moment: a quick seek never flashes it (the HQ player's loading spinner). */
+@keyframes appear-late {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.appear-late {
+  animation: appear-late 200ms ease-out 350ms both;
+}

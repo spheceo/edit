@@ -247,7 +247,7 @@ test("Bodycam HQ's comments: numbered as the team sees them, a spot or an area, 
     const reopen = handlerFor("feedback_reopen")!.handler;
     const said = (await reopen({ app, args: { note: "#1" }, projectId: id, scope: id })) as { text: string }[];
     expect(said[0]!.text).toContain("open again");
-    expect(db.rows[0]!.status).toBe("queued");
+    expect(db.rows[0]!.status as string).toBe("queued");
     await expect(Promise.resolve(reopen({ app, args: { note: "#1" }, projectId: id, scope: id }))).rejects.toThrow("open already");
     await expect(Promise.resolve(reopen({ app, args: { note: "#9" }, projectId: id, scope: id }))).rejects.toThrow("no comment #9");
     running = false;

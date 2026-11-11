@@ -4,8 +4,9 @@
 // the thumbnail page's pins, over the picture at the paused frame they were
 // left on. The comment tool (the note button, or Q) turns the cursor into a
 // pin: a click pins a spot, a drag an area, and the comment's words go in the
-// bubble there. The open ones stay pinned until the agent settles them; the
-// progress bar shows where they are (VideoControls).
+// bubble there. Playing or scrubbing only holds it back (the tool stays up and
+// comes back on the next pause). The open ones stay pinned until the agent
+// settles them; the progress bar shows where they are (VideoControls).
 
 import { AnimatePresence } from "motion/react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -30,16 +31,12 @@ function pinOf(box: NoteBox, width: number, height: number): { x: number; y: num
   return spot ? { x: (box.x + box.w / 2) * width, y: (box.y + box.h / 2) * height } : { x: box.x * width, y: box.y * height };
 }
 
-/** What its card says while it's open: where it is with the agent. */
-function statusOf(note: AppNote): string {
-  return note.status === "sent" ? "With the agent" : "Goes to the agent with your next message";
-}
-
 export function VideoComments({ wrap }: { wrap: HTMLDivElement | null }) {
   const settings = useEditor((state) => state.project?.settings);
   const notes = useNotes((state) => state.notes);
   const commenting = useNotes((state) => state.commenting);
   const opened = useNotes((state) => state.opened);
+  const scrubbing = useNotes((state) => state.scrubbing);
   const paused = usePaused();
   const frame = useFrame();
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -53,12 +50,11 @@ export function VideoComments({ wrap }: { wrap: HTMLDivElement | null }) {
     observer.observe(wrap);
     return () => observer.disconnect();
   }, [wrap]);
-  // Comments are left on a paused frame: playing puts the tool and an unsent comment down.
+  // Comments are left on a paused frame: playing drops an unsent one and holds the tool back until the next pause.
   useEffect(() => {
     if (paused) return;
     setDraft(null);
     setDrag(null);
-    if (useNotes.getState().commenting) setCommenting(false);
     if (useNotes.getState().opened !== null) setOpened(null);
   }, [paused]);
   // Escape puts the tool down (an unsent comment first); Delete takes the open comment off.
@@ -88,6 +84,8 @@ export function VideoComments({ wrap }: { wrap: HTMLDivElement | null }) {
     return () => window.removeEventListener("pointerdown", away, true);
   }, [opened]);
   if (settings === undefined || size.width === 0) return null;
+  // The tool works on a paused frame, not while the playhead is dragged.
+  const able = commenting && paused && !scrubbing;
   const bounds = { width: settings.width, height: settings.height };
   const rect = pictureRect(size.width, size.height, settings.width, settings.height);
   const scale = rect.width / settings.width;
@@ -113,10 +111,10 @@ export function VideoComments({ wrap }: { wrap: HTMLDivElement | null }) {
     <div
       ref={layer}
       data-comment-layer
-      className={cx("absolute", commenting && paused ? "pointer-events-auto" : "pointer-events-none")}
-      style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, ...(commenting && paused ? { cursor: PIN_CURSOR } : {}) }}
+      className={cx("absolute", able ? "pointer-events-auto" : "pointer-events-none")}
+      style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height, ...(able ? { cursor: PIN_CURSOR } : {}) }}
       onPointerDown={(event) => {
-        if (!commenting || !paused || (event.target as Element).closest("[data-comment]") !== null) return;
+        if (!able || (event.target as Element).closest("[data-comment]") !== null) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         const point = local(event);
         setDraft(null);
@@ -145,7 +143,7 @@ export function VideoComments({ wrap }: { wrap: HTMLDivElement | null }) {
           })()}
         />
       )}
-      {commenting && paused && draft === null && drag === null && shown.length === 0 && (
+      {able && draft === null && drag === null && shown.length === 0 && (
         <div className="pointer-events-none absolute inset-x-0 top-3 mx-auto w-fit rounded-md bg-black/75 px-2.5 py-1.5 text-[11px] text-fg">Click to comment on a spot, or drag over an area</div>
       )}
       <AnimatePresence>
@@ -157,7 +155,6 @@ export function VideoComments({ wrap }: { wrap: HTMLDivElement | null }) {
             scale={scale}
             opened={opened === note.id}
             movable={false}
-            status={statusOf(note)}
             onOpen={() => setOpened(opened === note.id ? null : note.id)}
             onKeepOpen={() => setOpened(note.id)}
             onHover={(on) => setHovered(on ? note.id : null)}

@@ -152,12 +152,12 @@ export function Pin({ comment, bounds, scale, opened, movable = true, status, on
             // Padding, not a margin, between the pin and its card: the pointer crosses to the card without leaving it.
             className={cx("absolute", at.x > bounds.width * 0.62 ? "right-full pr-2" : "left-full pl-2", at.y > bounds.height * 0.6 ? "bottom-0" : "top-0")}
           >
-            <div className="w-[264px] rounded-xl border border-line-strong bg-raised p-3 text-left shadow-[0_16px_40px_#000a]">
+            <div className="group/card w-[264px] rounded-xl border border-line-strong bg-raised p-3 text-left shadow-[0_16px_40px_#000a]">
               <div className="flex items-center gap-2 text-[11.5px]">
                 <span className="truncate font-medium text-fg">{comment.by.split(" ")[0]}</span>
                 <span className="text-faint">{ago(comment.at)}</span>
                 <div className="flex-1" />
-                <IconButton label={opened ? "Remove the comment (Delete)" : "Remove the comment"} onClick={onRemove} className="-my-1 size-6">
+                <IconButton label={opened ? "Remove the comment (Delete)" : "Remove the comment"} onClick={onRemove} className="-my-1 size-6 opacity-0 transition-opacity group-hover/card:opacity-100 focus-visible:opacity-100">
                   <Trash2 size={12} />
                 </IconButton>
               </div>

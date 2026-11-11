@@ -136,7 +136,7 @@ export async function call(
   }
   // The agent's own edits, checked against what it read (store.ts agentCalls); not what it leaves running after.
   const asAgent = async (): Promise<Content[]> => {
-    const state = { active: true };
+    const state = { active: true, tool: name };
     try {
       return await agentCalls.run(state, () => registered.handler({ app, args, projectId, scope }));
     } finally {

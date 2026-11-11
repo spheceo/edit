@@ -32,12 +32,19 @@ export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
   const shown = useMemo(() => (project ? playedLive(showings(project), effects) : []), [project, effects]);
   const fps = project ? rate(project.settings) : 30;
   const working = useAgent((state) => state.running);
-  // The effect being made: the newest not on the timeline, while the agent works or the timeline shows nothing.
+  // When this turn began: its message's time.
+  const began = useAgent((state) => state.entries.findLast((entry) => entry.kind === "user")?.at ?? 0);
+  // The effect being made: the newest not on the timeline that this turn has saved (one taken off the timeline in an
+  // earlier turn never comes back here: Sphe, Nov 11, a revision played the old scene it had replaced on a loop), or,
+  // while the timeline shows nothing, the newest there is.
   const bench = useMemo(() => {
-    if (!project || (!working && project.clips.some((clip) => clip.type === "video"))) return null;
+    if (!project) return null;
+    const empty = !project.clips.some((clip) => clip.type === "video");
+    if (!working && !empty) return null;
     const placed = new Set(showings(project).map((showing) => showing.name));
-    return [...effects].filter((effect) => !placed.has(effect.name)).sort((a, b) => b.changed - a.changed)[0]?.name ?? null;
-  }, [project, effects, working]);
+    const candidates = effects.filter((effect) => !placed.has(effect.name) && (empty || effect.changed >= began));
+    return candidates.sort((a, b) => b.changed - a.changed)[0]?.name ?? null;
+  }, [project, effects, working, began]);
   /** Each page's length, as it said when ready (seconds), for the bench's loop. */
   const lengths = useRef(new WeakMap<Window, number>());
   /** The frames by `name:changed`, and the pages that have said they're ready. */

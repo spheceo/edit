@@ -31,9 +31,11 @@ interface NotesState {
   commenting: boolean;
   /** Bodycam HQ: the comment open on the picture (its card showing), or null. */
   opened: string | null;
+  /** The playhead is being dragged along the progress bar: no comment is left meanwhile. */
+  scrubbing: boolean;
 }
 
-export const useNotes = create<NotesState>(() => ({ project: null, notes: [], draft: null, commenting: false, opened: null }));
+export const useNotes = create<NotesState>(() => ({ project: null, notes: [], draft: null, commenting: false, opened: null, scrubbing: false }));
 
 let timer: ReturnType<typeof setInterval> | null = null;
 if (typeof window !== "undefined") window.addEventListener("edit:notes", () => void loadNotes());
@@ -149,6 +151,10 @@ export function openComment(id: string): void {
   preview.pause();
   preview.seek(note.now);
   useNotes.setState({ opened: id });
+}
+
+export function setScrubbing(on: boolean): void {
+  if (useNotes.getState().scrubbing !== on) useNotes.setState({ scrubbing: on });
 }
 
 export function setOpened(id: string | null): void {

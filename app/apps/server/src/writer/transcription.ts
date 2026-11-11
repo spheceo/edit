@@ -19,17 +19,21 @@ import * as fs from "node:fs";
 import type { Clip, Script, Word } from "@edit/types/writer";
 
 import type { App } from "../app.ts";
-import * as diag from "../diag.ts";
+import * as log from "../hearing_log.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
 import * as macSpeech from "../mac_speech.ts";
-import { ffmpeg } from "../tools.ts";
+import { appleCached, appleHear } from "../first_hearing.ts";
+import * as editCloud from "../cloud.ts";
+import { asKept } from "../kept_hearing.ts";
+
+export { appleCached, appleHear, appleStage } from "../first_hearing.ts";
 import type { Transcript } from "../transcribe.ts";
 import * as captions from "./captions.ts";
 import * as hearing from "./hearing.ts";
 import * as media from "./media.ts";
 import { caseNames } from "./names.ts";
-import { partFiles } from "./parts.ts";
+import { partFiles, partSources } from "./parts.ts";
 import { keepPeaks } from "./tidy.ts";
 import { isYoutube } from "./youtube.ts";
 
@@ -75,67 +79,79 @@ function recordingKey(dir: string, script: Script, index: number, reuse: string 
   return has(reuseKey) || !has(legacy) ? reuseKey : legacy;
 }
 
-/** Where Apple's words of a recording are kept, apart from a paid hearing. */
-const APPLE = "apple.json";
+/** Whether a recording's words here are rough (captions or Apple's, or Edit's with stretches heard) with no paid hearing beside them. */
+export function roughOnly(work: string): boolean {
+  return hearing.cached(work) === null && (captions.cached(work) !== null || appleCached(work) !== null || editCached(work) !== null);
+}
 
-/** Apple's words heard before. */
-export function appleCached(work: string): Transcript | null {
+/** Where Edit's words of a recording are kept when Edit heard only some of it (its kept stretches, `heard`). */
+const EDIT = "edit.json";
+
+/** Edit's words of a recording kept here, when Edit heard only some of it. */
+export function editCached(work: string): Transcript | null {
   try {
-    const found = JSON.parse(fs.readFileSync(join(work, APPLE), "utf8")) as Transcript;
-    return found.model === macSpeech.MODEL && Array.isArray(found.words) && found.words.length > 0 ? found : null;
+    const found = JSON.parse(fs.readFileSync(join(work, EDIT), "utf8")) as Transcript;
+    return Array.isArray(found.words) && found.words.length > 0 && Array.isArray(found.heard) && found.heard.length > 0 ? found : null;
   } catch {
     return null;
   }
 }
 
-/** Whether a recording's words here are rough (captions or Apple's) with no paid hearing beside them. */
-export function roughOnly(work: string): boolean {
-  return hearing.cached(work) === null && (captions.cached(work) !== null || appleCached(work) !== null);
-}
-
 /**
- * The import's stage line for what Apple's recogniser says it's doing
- * (mac_speech.ts `hear`'s progress), or null for what needs no line. Its
- * en-US model is downloaded once a Mac on first use, about a minute: said
- * as such, so the first import on a Mac isn't a transcription that looks stuck.
+ * What Edit mode already heard of a recording (`source`: `youtube:<id>`,
+ * `drive:<id>`, `sha256:<hex>`), from Edit's analysis: heard whole, it's this
+ * recording's hearing (kept as transcript.json, nothing paid again); heard in
+ * the stretches its edits kept (`heard`), its words, those stretches counted
+ * as heard exactly. Null when Edit has none, or only free rough words (Script
+ * mode reads its own).
  */
-export function appleStage(said: string): string | null {
-  if (said === "downloading the en-US model") return "Downloading Apple's speech model, once for this Mac.";
-  const percent = /^model (\d+)%$/u.exec(said);
-  if (percent !== null) return `Downloading Apple's speech model, once for this Mac: ${percent[1]}%.`;
-  if (said === "model installed") return "Transcribing.";
-  return null;
+export async function fromEdit(source: string | null, work: string, signal?: AbortSignal): Promise<Transcript | null> {
+  if (source === null || !editCloud.enabled() || signal?.aborted) return null;
+  const kept = editCached(work);
+  if (kept !== null) return kept;
+  // A help, never a wait: the cloud slow or out of reach, the recording's own first words are read instead.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), FROM_EDIT_MS);
+    signal?.addEventListener("abort", () => resolve(null), { once: true });
+  });
+  try {
+    return await Promise.race([lookUp(source, work), late]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-/** A recording (or its `span` of the footage, in ms) heard by Apple on this Mac, kept in `work`; null where there's no Apple recogniser or it heard nothing (then Scribe hears it). `onStage` is told what the person should see meanwhile (`appleStage`). */
-export async function appleHear(file: string, span: [number, number] | null, work: string, signal?: AbortSignal, onStage?: (text: string) => void): Promise<Transcript | null> {
-  const kept = appleCached(work);
-  if (kept !== null) return kept;
-  if (!(await macSpeech.available()) || !isFile(file)) return null;
-  fs.mkdirSync(work, { recursive: true });
-  const cut = join(work, "apple-stretch.m4a");
+/** How long Script mode looks for Edit's words of a recording. */
+const FROM_EDIT_MS = 10_000;
+
+async function lookUp(source: string, work: string): Promise<Transcript | null> {
+  const key = `edit/analysis/${source.replace(":", "/")}/transcript.json`;
+  const copy = join(work, ".from-edit.json");
+  let found: Transcript;
   try {
-    let source = file;
-    if (span !== null) {
-      const child = Bun.spawn([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", (span[0] / 1000).toFixed(3), "-t", ((span[1] - span[0]) / 1000).toFixed(3), "-i", file, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "96k", cut], { stdout: "ignore", stderr: "pipe", ...(signal ? { signal } : {}) });
-      const stderr = await new Response(child.stderr).text();
-      if ((await child.exited) !== 0) throw new Error(`could not take the sound out of the footage: ${diag.gist(stderr)}`);
-      source = cut;
-    }
-    const heard = await macSpeech.hear(source, join(work, APPLE), signal, (said) => {
-      const text = appleStage(said);
-      if (text !== null) onStage?.(text);
-    });
-    if (heard.words.length === 0) return null;
-    writeAtomic(join(work, APPLE), JSON.stringify({ ...heard, model: macSpeech.MODEL }));
-    return appleCached(work);
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    diag.warn("writer", `${file}: Apple's recogniser didn't hear it (${diag.messageOf(error)}); Scribe hears it`);
+    if (!(await editCloud.has(key))) return null;
+    fs.mkdirSync(work, { recursive: true });
+    await editCloud.download(key, copy);
+    found = asKept(JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript);
+  } catch {
     return null;
   } finally {
-    fs.rmSync(cut, { force: true });
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(editCloud.partialPath(copy), { force: true });
   }
+  if (!Array.isArray(found.words) || found.words.length === 0) return null;
+  if (found.heard === undefined) {
+    if (!found.model.startsWith("scribe")) return null;
+    keep(work, found);
+    log.line(`${source}: Edit's hearing of all of it, ${log.said(found.model)}, ${log.count(found.words.length)} words; nothing heard again`);
+    return found;
+  }
+  if (found.heard.length === 0) return null;
+  writeAtomic(join(work, EDIT), JSON.stringify(found));
+  const heardS = found.heard.reduce((sum, [from, to]) => sum + to - from, 0);
+  log.line(`${source}: Edit's words, ${log.said(found.model)} over ${found.heard.length} stretches (${log.clock(heardS)}), ${log.said(found.rough)} the rest; those stretches aren't heard again`);
+  return found;
 }
 
 /** Each recording's YouTube link, in the order of `recordings`. */
@@ -155,6 +171,16 @@ export function onClock(transcript: Transcript, offsetMs: number, lengthMs: numb
       const endMs = Math.min(Math.max(offsetMs + Math.round(Math.max(word.end, 0) * 1000), startMs + 1), offsetMs + lengthMs);
       return { id: "", text: word.text, startMs, endMs, ...(word.speaker === undefined ? {} : { speaker: tag === null ? word.speaker : `${tag}:${word.speaker}` }) };
     });
+}
+
+/** Edit's stretches of a recording (`offsetMs` into the script) counted as heard exactly, with the names they were heard with: the build doesn't hear them again (exact.ts). */
+export function withEditStretches(script: Script, transcript: Transcript, offsetMs: number): void {
+  const before = script.exact ?? [];
+  const stretches = (transcript.heard ?? []).map(([from, to]): [number, number] => [offsetMs + Math.round(from * 1000), offsetMs + Math.round(to * 1000)]);
+  const had = new Set((script.exactKeyterms ?? []).map((name) => name.toLowerCase()));
+  const names = transcript.keyterms ?? [];
+  script.exactKeyterms = before.length === 0 ? [...names] : names.filter((name) => had.has(name.toLowerCase()));
+  script.exact = [...before.filter(([a, b]) => !stretches.some(([x, y]) => a >= x && b <= y)), ...stretches].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
 }
 
 /**
@@ -183,9 +209,11 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
   const all = recordings(dir, script);
   const count = all.length;
   const youtube = links(script);
+  const sources = partSources(dir, script).map((found) => found?.[0] ?? null);
   const wantCaptions = captions.wanted(script);
   let captioned = 0;
   let apple = 0;
+  let edited = 0;
   const heard: Word[] = [];
   for (const [index, recording] of all.entries()) {
     if (signal?.aborted) throw new Error("Stopped by you. Completed work is saved.");
@@ -195,6 +223,8 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
     const kept = local !== null && local.words.length > 0 ? local : null;
     const url = wantCaptions ? (youtube[index] ?? null) : null;
     let transcript: Transcript | null = script.status !== "ready" ? kept : null;
+    // What Edit mode heard of it already (its kept stretches, or all of it): never paid for twice.
+    transcript ??= await fromEdit(sources[index] ?? null, work, signal);
     transcript ??= url === null ? null : await captions.transcript(app, url, work, signal);
     transcript ??= script.status === "ready" ? kept : null;
     // Free rough words before paid ones: Scribe hears only what the build chooses (exact.ts).
@@ -203,13 +233,15 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
       if (!isFile(recording.file)) throw new Error("The original video is missing, so it can't be transcribed.");
       transcript = await hearing.hear(recording.file, recording.span, work, await keyterms(), signal);
     }
-    if (transcript.model === captions.MODEL) {
-      captioned++;
-      diag.info("writer", `${recording.key}: ${transcript.words.length} words from YouTube's captions`);
-    } else if (transcript.model === macSpeech.MODEL) {
-      apple++;
-      diag.info("writer", `${recording.key}: ${transcript.words.length} words from Apple's recogniser`);
+    if (transcript.model === captions.MODEL) captioned++;
+    else if (transcript.model === macSpeech.MODEL) apple++;
+    else if (Array.isArray(transcript.heard)) {
+      edited++;
+      withEditStretches(script, transcript, recording.offsetMs);
     }
+    log.line(
+      `"${script.title}" ${recording.key}: ${log.count(transcript.words.length)} words from ${log.said(transcript.model)}${transcript.model === captions.MODEL || transcript.model === macSpeech.MODEL ? "; Scribe hears only the stretches the build chooses" : ""}`,
+    );
     onProgress(((index + 1) * 1000) / count, 1000);
     // A joined case's voices are its recordings' own: one recording's speaker_0 is not the next one's.
     const recovered = onClock(transcript, recording.offsetMs, recording.lengthMs, count > 1 ? String(index + 1) : null);
@@ -218,7 +250,7 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
   }
   if (heard.length === 0) throw new Error(NO_WORDS);
   script.captions = (script.captions ?? false) || captioned > 0;
-  script.rough = (script.rough ?? false) || captioned + apple > 0;
+  script.rough = (script.rough ?? false) || captioned + apple + edited > 0;
   // A recovery adds missing words without changing existing text, corrections, word ids (reuse highlights use them) or the timeline.
   if (script.words.length === 0) heard.forEach((word, index) => (word.id = `w${String(index).padStart(5, "0")}`));
   script.words = heard;

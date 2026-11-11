@@ -635,6 +635,18 @@ test("the workflow skill starts the watcher; an unknown skill lists the rest", a
   );
 });
 
+test("update_clip says when a clip's linked picture or sound kept its own timing", async () => {
+  const { app, id, fixture } = setUp("tools-linked");
+  await fixture.store.update(id, "test", (project) => {
+    project.media.push({ id: "m1", name: "b.mp4", path: "/x/b.mp4", kind: "video", duration: 600, width: 1920, height: 1080, fps: 30, has_audio: true });
+    project.clips.push(clip({ id: "pic", track: "v1", start: 0, duration: 300, type: "video", media: "m1", source_in: 10, link: "l1" }));
+    project.clips.push(clip({ id: "snd", track: "a4", start: 0, duration: 300, type: "audio", media: "m1", source_in: 10, link: "l1" }));
+  });
+  // The Mac's check, Nov 11: a kept clip lengthened in picture left its sound, which is what Scribe hears.
+  expect(await said(app, "update_clip", { clip_id: "pic", patch: { duration: 600 } })).toEndWith("(its linked snd kept its own duration: patch it too, or use set_in_out or extend_clip, which move both)");
+  expect(await said(app, "update_clip", { clip_id: "pic", patch: { opacity: 0.5 } })).not.toContain("its linked");
+});
+
 test("a cut-in is covered in one call, its card gone and its voice-over on A1", async () => {
   const { app, id, fixture } = setUp("tools-cutin");
   await fixture.store.update(id, "test", (project) => {

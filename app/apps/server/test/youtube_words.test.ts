@@ -7,7 +7,6 @@ import { captionRange, MODEL, NoWords, parse, read, select, USES, words, hearing
 import * as youtube from "../src/youtube.ts";
 import { fixtureHome } from "./helpers/home.ts";
 import { media } from "./helpers/model.ts";
-import { transcriptOf } from "../src/captions_core.ts";
 import { voicesFor, type Answer } from "../src/watch.ts";
 import { MockServer } from "./mocks/server.ts";
 import * as tools from "../src/tools.ts";
@@ -71,31 +70,28 @@ test("missing captions fall back without repeatedly probing every excerpt", asyn
   } finally { if (previous === undefined) delete process.env.EDIT_YTDLP; else process.env.EDIT_YTDLP = previous; home.cleanup(); }
 });
 
-test("the media processor uses local script source offsets and names do not trigger paid re-hearing", async () => {
+test.skipIf(Bun.which("ffmpeg") === null)("an Edit-mode excerpt of a YouTube video is heard by Scribe, never read from its captions (they have no voices)", async () => {
   const home = fixtureHome("caption-processor");
   const mock = MockServer.start();
-  mock.modelAnswer = JSON.stringify({ people: ["John Smith"], places: [] });
   const restore = mock.useEnv();
   const previous = process.env.EDIT_YTDLP;
   try {
+    tools.forget();
     process.env.EDIT_YTDLP = fake(home.dir, data);
     const source = `${home.dir}/excerpt.mp4`;
-    fs.writeFileSync(source, "not decoded: captions come from the original YouTube source");
+    expect(Bun.spawnSync([Bun.which("ffmpeg")!, "-v", "error", "-f", "lavfi", "-i", "color=s=32x32:d=1", "-f", "lavfi", "-i", "sine=d=1", "-c:v", "libx264", "-c:a", "aac", "-shortest", source]).exitCode).toBe(0);
     const id = home.store.create("Compilation", { width: 1920, height: 1080, fps: 30 }).project.id;
     await home.store.update(id, "script", (project) => {
       project.media.push(media({ id: "m1", name: "Case", path: source, kind: "video", duration: 1, has_audio: true }));
-      project.script = { blocks: [{ kind: "footage", file: "youtube:abcdefghijk", url: "https://youtu.be/abcdefghijk", label: "", start: 10.1, end: 10.9, media: "m1", media_start: 10 }, { kind: "narration", text: "John Smith was questioned by the officers about the incident that morning." }] };
+      project.script = { blocks: [{ kind: "footage", file: "youtube:abcdefghijk", url: "https://youtu.be/abcdefghijk", label: "", start: 10.1, end: 10.9, media: "m1", media_start: 10 }] };
     });
     home.app.media.transcribe(source, true);
     const deadline = Date.now() + 5000;
     while (home.app.media.status(source).transcript === "working" && Date.now() < deadline) await Bun.sleep(5);
     expect(home.app.media.status(source).transcript).toBe("ready");
-    const project = home.store.get(id)!.project;
-    const transcript = await transcriptOf(home.app, project.media[0]!, project);
-    expect(transcript).toMatchObject({ model: MODEL, words: [{ text: "Hello", start: 0.1 }, { text: "there.", start: 0.6 }] });
-    expect(JSON.parse(fs.readFileSync(`${home.home}/research/${id}/names.json`, "utf8")).names).toContain("John Smith");
-    expect(mock.calls("/v1/transcribe")).toHaveLength(0);
-    expect(fs.existsSync(home.app.media.paths(source).transcript.replace(/\.json$/u, ".ogg"))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(home.app.media.paths(source).transcript, "utf8")).model).toBe("scribe_v3");
+    expect(mock.calls("/v1/transcribe")).toHaveLength(1);
+    expect(fs.existsSync(`${home.dir}/calls`)).toBe(false);
   } finally { if (previous === undefined) delete process.env.EDIT_YTDLP; else process.env.EDIT_YTDLP = previous; restore(); mock.stop(); home.cleanup(); }
 });
 
@@ -118,7 +114,7 @@ test.skipIf(Bun.which("ffmpeg") === null)("a YouTube source without usable capti
     const deadline = Date.now() + 5000;
     while (home.app.media.status(source).transcript === "working" && Date.now() < deadline) await Bun.sleep(5);
     expect(home.app.media.status(source).transcript).toBe("ready");
-    expect(JSON.parse(fs.readFileSync(home.app.media.paths(source).transcript, "utf8")).model).toBe("scribe_v2");
+    expect(JSON.parse(fs.readFileSync(home.app.media.paths(source).transcript, "utf8")).model).toBe("scribe_v3");
     expect(mock.calls("/v1/transcribe")).toHaveLength(1);
     home.app.media.transcribe(source, true);
     expect(mock.calls("/v1/transcribe")).toHaveLength(1);
@@ -128,23 +124,14 @@ test.skipIf(Bun.which("ffmpeg") === null)("a YouTube source without usable capti
   }
 });
 
-test("alternate English word captions work in existing cloud-backed projects without script blocks or re-hearing finished media", async () => {
+test("alternate English word captions are read for a cloud excerpt on its own clock, once", async () => {
   const home = fixtureHome("caption-existing-cloud");
   const previous = process.env.EDIT_YTDLP;
   try {
     // A later requested track failed after this usable track was written.
     process.env.EDIT_YTDLP = fake(home.dir, data, "en-US", 1);
-    const source = `${home.dir}/old-cloud-proxy.mp4`;
-    fs.writeFileSync(source, "existing imported proxy; no decode needed");
-    const id = home.store.create("Existing", { width: 1920, height: 1080, fps: 30 }).project.id;
-    await home.store.update(id, "test", (project) => {
-      project.media.push(media({ id: "m", name: "Earlier YouTube import", path: source, kind: "video", duration: 1, has_audio: true, cloud: { source: "youtube:abcdefghijk#10000-11000", original: "edit/originals/youtube/abcdefghijk.mp4", proxy: "edit/proxies/youtube/abcdefghijk/10000-11000.mp4", size: 100 } }));
-    });
-    home.app.media.transcribe(source, true);
-    const deadline = Date.now() + 5000;
-    while (home.app.media.status(source).transcript === "working" && Date.now() < deadline) await Bun.sleep(5);
-    expect(home.app.media.status(source).transcript).toBe("ready");
-    const target = home.app.media.paths(source).transcript;
+    const target = `${home.dir}/excerpt.json`;
+    expect(await writeCaptionTranscript(home.home, "youtube:abcdefghijk#10000-11000", target)).toBe(true);
     const transcript = JSON.parse(fs.readFileSync(target, "utf8"));
     expect(transcript).toMatchObject({ model: MODEL, words: [{ text: "Hello", start: 0.1 }, { text: "there.", start: 0.6 }] });
     const args = JSON.parse(fs.readFileSync(`${home.dir}/args.json`, "utf8")) as string[];
@@ -152,9 +139,8 @@ test("alternate English word captions work in existing cloud-backed projects wit
     expect(args).toContain("--write-subs");
     expect(args).toContain("--write-auto-subs");
     expect(args).toContain("en-orig,en.*");
-    home.app.media.transcribe(source, true);
+    expect(await writeCaptionTranscript(home.home, "youtube:abcdefghijk#10000-11000", `${home.dir}/again.json`)).toBe(true);
     expect(fs.readFileSync(`${home.dir}/calls`, "utf8")).toBe("1");
-    expect(JSON.parse(fs.readFileSync(target, "utf8"))).toEqual(transcript);
   } finally { if (previous === undefined) delete process.env.EDIT_YTDLP; else process.env.EDIT_YTDLP = previous; home.cleanup(); }
 });
 
@@ -338,7 +324,7 @@ test.skipIf(Bun.which("ffmpeg") === null)("with no captions and no Apple recogni
     const fake = ytdlp(home.dir, `if (args.includes("--skip-download")) process.exit(0);\nconst dir = args[args.indexOf("-P") + 1];\nfs.copyFileSync(${JSON.stringify(sound)}, dir + "/Some title [abcdefghijk].m4a");\nconsole.log("EDIT-FILE " + dir + "/Some title [abcdefghijk].m4a");`);
     const stages: string[] = [];
     const transcript = await words(home.home, "abcdefghijk", USES.idea, undefined, (text) => stages.push(text));
-    expect(transcript.model).toBe("scribe_v2");
+    expect(transcript.model).toBe("scribe_v3");
     expect(transcript.words.length).toBeGreaterThan(0);
     expect(stages).toEqual(["No captions: fetching the video's sound", "No captions: hearing the video"]);
     const download = fake.calls().find((args) => args.includes("-f"))!;
@@ -349,7 +335,7 @@ test.skipIf(Bun.which("ffmpeg") === null)("with no captions and no Apple recogni
     expect(mock.calls("/v1/transcribe")).toHaveLength(1);
     // Kept: read again, nothing is fetched or heard.
     const calls = fake.calls().length;
-    expect((await words(home.home, "abcdefghijk", USES.idea)).model).toBe("scribe_v2");
+    expect((await words(home.home, "abcdefghijk", USES.idea)).model).toBe("scribe_v3");
     expect(fake.calls()).toHaveLength(calls);
     expect(mock.calls("/v1/transcribe")).toHaveLength(1);
     expect(fs.existsSync(`${home.home}/cache/youtube-captions/abcdefghijk/sound`)).toBe(false);

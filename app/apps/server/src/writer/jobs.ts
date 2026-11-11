@@ -416,6 +416,9 @@ export function resetForTests(): void {
   carrying.clear();
   jobs.clear();
   titles.clear();
+  // A job a test left that never ends (import_stops' stuck one) isn't a later test's to wait for.
+  stops.clear();
+  endings.clear();
 }
 
 /** What the person hears when a job they started ends (notices.ts); the background ones (speakers, exact hearing, transcription) say nothing. */

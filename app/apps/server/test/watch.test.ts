@@ -552,7 +552,7 @@ test("segments are held to who is heard: talk marked narration is footage, a nar
   expect(voicedSegments(given.slice(0, 1), lumped, s(41), fps).filter((segment) => segment.kind === "narration")).toEqual([]);
 });
 
-test("caption turns go through the normal visual speaker/cast verification and reuse its completed receipt", async () => {
+test("a footage transcript kept from YouTube's captions is heard by Scribe once before it's watched, then the receipt is reused", async () => {
   const { app, dir, cleanup } = fixtureHome("watch-captions");
   write(`${dir}/ffmpeg`, '#!/bin/sh\nfor a; do out="$a"; done\nprintf x > "$out"\n');
   fs.chmodSync(`${dir}/ffmpeg`, 0o755);
@@ -570,19 +570,19 @@ test("caption turns go through the normal visual speaker/cast verification and r
     });
     mock.castAnswer = JSON.stringify({ people: [{ name: null, title: "Detective", role: "leader", members: [0] }, { name: "Tyler", title: "Suspect", role: "suspect", members: [1] }] });
     const call = async () => await dispatch(app, { id: 1, method: "tools/call", params: { name: "watch_footage", arguments: { project_id: id } } }, null) as { result: { isError: boolean; content: { text: string }[] } };
+    const heardBefore = mock.calls("/v1/transcribe").length;
     const first = await call();
     expect(first.result.isError).toBe(false);
+    // Captions have no voices: Scribe hears it, once, and its voices are what's watched.
     const verified = JSON.parse(fs.readFileSync(path, "utf8")) as Transcript;
-    expect(verified.model).toBe("youtube-captions");
-    expect(verified.words.map(({ text, start, end }) => ({ text, start, end }))).toEqual(transcript.words.map(({ text, start, end }) => ({ text, start, end })));
-    const voice = verified.words[3]!.speaker!;
-    expect(verified.speakers?.[voice]).toBe("Tyler (Suspect)");
-    expect(verified.roles?.[voice]).toBe("suspect");
+    expect(verified.model).toBe("scribe_v3");
+    expect(verified.words.every((word) => !word.speaker?.startsWith("caption_turn"))).toBe(true);
+    expect(mock.calls("/v1/transcribe")).toHaveLength(heardBefore + 1);
     const count = mock.calls("/v1/chat/completions").length;
     const second = await call();
     expect(JSON.parse(second.result.content[0]!.text.slice("watched: ".length))).toMatchObject({ cached: 1, cost: 0, failed: [] });
     expect(mock.calls("/v1/chat/completions")).toHaveLength(count);
-    expect(mock.calls("/v1/transcribe")).toHaveLength(0);
+    expect(mock.calls("/v1/transcribe")).toHaveLength(heardBefore + 1);
   } finally {
     mock.castAnswer = null;
     if (previous === undefined) delete process.env.EDIT_FFMPEG; else process.env.EDIT_FFMPEG = previous;

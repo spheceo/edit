@@ -15,16 +15,19 @@ import type { Script } from "@edit/types/writer";
 
 import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
+import * as log from "../hearing_log.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
-import { serialize, type Transcript } from "../transcribe.ts";
+import { asKept } from "../kept_hearing.ts";
+import { hearsAll, MODEL as SCRIBE, serialize, type Transcript } from "../transcribe.ts";
 import * as drive from "./drive.ts";
 import * as hearing from "./hearing.ts";
 import { named } from "./jobs.ts";
 import * as media from "./media.ts";
 import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
-import { recordings, roughOnly } from "./transcription.ts";
+import * as captions from "./captions.ts";
+import { appleCached, editCached, recordings, roughOnly } from "./transcription.ts";
 import { THIS_MACHINE } from "../machine.ts";
 
 /** A source's place in Edit's keys: `drive/<id>`, `youtube/<id>`, `sha256/<hex>`. */
@@ -49,7 +52,7 @@ export async function sha256Of(path: string): Promise<string> {
 }
 
 /** One recording to share: its own file, its source and name, where it sits on the script's clock, its voices' mark ("2:" in a joined case) and its hearing's key. */
-interface Shared {
+export interface Shared {
   /** Null: streamed to Edit's originals when imported (writer/streamed.ts), never on this Mac. */
   file: string | null;
   source: string;
@@ -81,21 +84,40 @@ async function shared(dir: string, script: Script): Promise<Shared[]> {
   return out;
 }
 
-/** A recording's words in Edit's format: as the script has them, with the voices settled and named, unless a hearing made after them says otherwise. */
-function transcriptOf(dir: string, script: Script, recording: Shared): Transcript {
-  const heard = hearing.cached(join(dir, "transcript", recording.key));
+/**
+ * A recording's words in Edit's format: as the script has them, with the
+ * voices settled and named, unless a hearing made after them says otherwise.
+ * A recording whose words are rough (captions or Apple's) gives them all,
+ * Scribe's over the stretches heard exactly (exact.ts, `Script.exact`) and
+ * `heard` saying which; voices only there. Edit's agent cuts on the rough
+ * words and Scribe hears only what it keeps (kept_hearing.ts).
+ */
+export function transcriptOf(dir: string, script: Script, recording: Shared): Transcript {
+  const work = join(dir, "transcript", recording.key);
+  const whole = hearing.cached(work);
+  const rough = roughOnly(work);
   const strip = (speaker: string): string | null => (recording.tag === null ? speaker : speaker.startsWith(`${recording.tag}:`) ? speaker.slice(recording.tag.length + 1) : null);
   const end = recording.offsetMs + recording.lengthMs;
+  const exact = (script.exact ?? []).flatMap(([from, to]): [number, number][] => (to <= recording.offsetMs || from >= end ? [] : [[Math.max(from, recording.offsetMs), Math.min(to, end)]]));
   const words = script.words
     .filter((word) => word.startMs >= recording.offsetMs && word.startMs < end)
     .map((word) => {
-      const speaker = word.speaker == null ? null : strip(word.speaker);
+      // Rough words have no voices Edit keeps: who speaks there waits for Scribe (kept_hearing.ts).
+      const heardHere = !rough || exact.some(([from, to]) => (word.startMs + word.endMs) / 2 >= from && (word.startMs + word.endMs) / 2 < to);
+      const speaker = word.speaker == null || !heardHere ? null : strip(word.speaker);
       return { text: word.text, start: (word.startMs - recording.offsetMs) / 1000, end: Math.max(word.endMs - recording.offsetMs, 0) / 1000, ...(speaker !== null ? { speaker } : {}) };
     });
-  const derived = heard !== null && heard.words.length === words.length && heard.words.every((word, at) => word.text === words[at]!.text);
-  if (heard !== null && heard.words.length > 0 && !derived) return heard;
+  const derived = whole !== null && whole.words.length === words.length && whole.words.every((word, at) => word.text === words[at]!.text);
+  if (whole !== null && whole.words.length > 0 && !derived) return whole;
   const speakers = Object.fromEntries(Object.entries(script.speakers ?? {}).flatMap(([label, name]) => (strip(label) === null ? [] : [[strip(label)!, name]])));
-  return { model: heard?.model || "scribe_v2", language: heard?.language ?? null, words, speakers, ...(heard?.keyterms ? { keyterms: heard.keyterms } : {}) };
+  if (rough) {
+    const heard = exact.map(([from, to]): [number, number] => [(from - recording.offsetMs) / 1000, (to - recording.offsetMs) / 1000]);
+    const keyterms = heard.length > 0 ? (script.exactKeyterms ?? []) : [];
+    const first = captions.cached(work)?.model ?? appleCached(work)?.model ?? editCached(work)?.rough ?? "youtube-captions";
+    const model = heard.length > 0 ? SCRIBE : first;
+    return { model, language: null, words, speakers, ...(keyterms.length > 0 ? { keyterms } : {}), heard, rough: first };
+  }
+  return { model: whole?.model || SCRIBE, language: whole?.language ?? null, words, speakers, ...(whole?.keyterms ? { keyterms: whole.keyterms } : {}) };
 }
 
 /** The parts of a script `folderPart` reads: Script mode's own, or Writer's as the handoff has it. */
@@ -205,21 +227,89 @@ export async function share(data: string, id: string): Promise<string> {
     keepShared(dir, recording.file, recording.source, typeof record?.originalKey === "string" ? record.originalKey : originalKey(recording.source, recording.name));
     await shareWords(dir, script, recording, done);
   }
+  // Words go even for a recording whose footage isn't on this Mac (cleared, or streamed): they need only its source.
+  const listed = new Set(list.map((recording) => recording.source));
+  for (const recording of wordRecordings(dir, script)) if (!listed.has(recording.source)) await shareWords(dir, script, recording, done);
   if (done.length > 0) diag.info("writer", `${name}: shared with Edit: ${done.join("; ")}`);
   // A folder case's master named in the script itself, so it syncs and every Mac's Start the edit finds it.
   if (stampShared(dir)) diag.info("writer", `${name}: its Drive folder cases name their masters in Edit's originals`);
-  return list.length === 0 ? `no footage on ${THIS_MACHINE} to share` : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
+  return list.length === 0 && done.length === 0 ? `no footage on ${THIS_MACHINE} to share` : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
 }
 
-/** A recording's words to Edit's analysis: only where the script has them, and never rough words alone (YouTube's captions, which Edit reads itself, or Apple's): Edit's subtitles want heard words. */
+/**
+ * A recording's words to Edit's analysis, where the script has them: heard
+ * whole, or rough with the stretches heard exactly since, `heard` naming
+ * them (Edit hears what it keeps before subtitles or the watch read it). A
+ * whole hearing there stays; rough words shared before are replaced when
+ * more was heard.
+ */
 async function shareWords(dir: string, script: Script, recording: Shared, done: string[]): Promise<void> {
+  if (script.words.length === 0) return;
   const at = transcriptKey(recording.source);
-  const captioned = roughOnly(join(dir, "transcript", recording.key));
-  if (script.words.length > 0 && !captioned && !(await editCloud.has(at))) {
-    const text = serialize(transcriptOf(dir, script, recording));
-    await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
-    done.push(`shared the words of ${recording.name}`);
+  const words = transcriptOf(dir, script, recording);
+  if (await editCloud.has(at)) {
+    if (words.heard === undefined) return;
+    const there = await sharedThere(dir, at);
+    if (there === null || hearsAll(there, words.heard)) return;
   }
+  const text = serialize(words);
+  await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
+  const heardS = (words.heard ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
+  log.line(
+    words.heard === undefined
+      ? `${recording.source}: Script mode's words to Edit, ${log.said(words.model)} for all of it (${log.count(words.words.length)} words)`
+      : `${recording.source}: Script mode's words to Edit, ${log.said(SCRIBE)} over ${words.heard.length} stretches (${log.clock(heardS)} of ${log.clock(recording.lengthMs / 1000)}), ${log.said(words.rough)} the rest (${log.count(words.words.length)} words)`,
+  );
+  done.push(words.heard === undefined ? `shared the words of ${recording.name}` : `shared the words of ${recording.name}'s chosen stretches`);
+}
+
+/** What Edit's analysis has at `key`: its stretches heard (none: heard whole), or null when it can't be read (it's left as it is). */
+async function sharedThere(dir: string, key: string): Promise<Pick<Transcript, "heard"> | null> {
+  const copy = join(dir, `.shared-words-${process.pid}.json`);
+  try {
+    await editCloud.download(key, copy);
+    // YouTube's captions an older Edit kept there (no `heard`) are rough words, not a hearing.
+    const found = asKept(JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript);
+    return Array.isArray(found.heard) ? { heard: found.heard } : {};
+  } catch {
+    return null;
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(editCloud.partialPath(copy), { force: true });
+  }
+}
+
+/**
+ * Only the script's words to Edit's analysis, before Start the edit makes the
+ * edit (writer_handoff.ts): its excerpts then take them, and Scribe hears
+ * only what the edit keeps beyond what Script mode paid for. The footage's
+ * own share runs on its own (`shareSoon`). Answers what it did.
+ */
+export async function shareWordsNow(data: string, id: string): Promise<string[]> {
+  if (!editCloud.enabled()) return [];
+  const dir = store.scriptDir(data, id);
+  const script = store.read(dir);
+  const done: string[] = [];
+  for (const recording of wordRecordings(dir, script)) await shareWords(dir, script, recording, done);
+  return done;
+}
+
+/** The script's recordings by their sources, for their words: the footage needn't be on this Mac (cleared, or streamed). */
+function wordRecordings(dir: string, script: Script): Shared[] {
+  const all = recordings(dir, script);
+  const sources = partSources(dir, script);
+  let kept: { source?: unknown; file?: unknown }[] = [];
+  try {
+    kept = JSON.parse(fs.readFileSync(join(dir, "edit-shared.json"), "utf8")) as typeof kept;
+  } catch {
+    kept = [];
+  }
+  return all.flatMap((recording, index): Shared[] => {
+    const relative = recording.file.startsWith(`${dir}/`) ? recording.file.slice(dir.length + 1) : null;
+    const source = sources[index]?.[0] ?? kept.find((entry) => entry.file === relative && typeof entry.source === "string")?.source;
+    if (typeof source !== "string") return [];
+    return [{ file: null, source, name: sources[index]?.[1] ?? source, offsetMs: recording.offsetMs, lengthMs: recording.lengthMs, tag: all.length > 1 ? String(index + 1) : null, key: recording.key }];
+  });
 }
 
 const sharing = new Map<string, Promise<string>>();

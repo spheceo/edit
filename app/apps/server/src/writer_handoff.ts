@@ -389,6 +389,11 @@ export async function importScript(app: App, id: string): Promise<{ project: str
     // Out of credit, the script stays as it is (its cut, its clips) rather than an edit laid out from rough times that then waits for the same credit.
     if (exactAfter.waitsForCredit(data, id) && exactAfter.pending(data, id)) throw new Error("The chosen footage hasn't been heard exactly yet: the transcription plan is out of credit. The script keeps its cut and Edit tries again every 30 minutes by itself; start the edit once it says the footage was heard.");
   }
+  // Its words where the edit's excerpts find them (rough ones and what was heard exactly), so nothing paid for is heard again.
+  if (writerStore.idOk(id) && fs.existsSync(join(writerStore.scriptDir(data, id), "script.json"))) {
+    const shared = await writerShare.shareWordsNow(data, id).catch((error: unknown) => [`not shared: ${diag.messageOf(error)}`]);
+    if (shared.length > 0) diag.info("script", `${id}: before its edit: ${shared.join("; ")}`);
+  }
   let given = await fetchScript(id, app.store.home);
   // A Drive folder case not yet in Edit's originals: sent up now (or the send under way joined), so Start the edit goes on rather than stopping on it.
   if (writerShare.unsharedFolder(given) && writerStore.idOk(id) && fs.existsSync(join(writerStore.scriptDir(data, id), "script.json"))) {

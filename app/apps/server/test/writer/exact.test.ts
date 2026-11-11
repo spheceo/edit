@@ -2,8 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { Clip, Script, Word } from "@edit/types/writer";
 
-import { WHOLE_UP_TO } from "../../src/transcribe.ts";
-import { pieces, planOf, retime, silent, stretches } from "../../src/writer/exact.ts";
+import { planOf, retime, silent, split, stretches } from "../../src/writer/exact.ts";
 import type { Heard } from "../../src/writer/hearing.ts";
 
 const word = (text: string, startMs: number): Word => ({ id: "", text, startMs, endMs: startMs + 200, speaker: "t1" });
@@ -67,8 +66,22 @@ test("a built cut reads back as its plan", () => {
   expect([items[2]!.firstWordId, items[2]!.lastWordId]).toEqual(["w4", "w5"]);
 });
 
-test("long stretches are heard in single requests", () => {
-  const cut = pieces(200);
-  expect(cut).toHaveLength(3);
-  expect(cut.every((piece) => piece.to - piece.from < WHOLE_UP_TO)).toBe(true);
+test("the stretches heard as one recording, a second of quiet between them, go back onto the footage", () => {
+  // Two stretches, 2.5 s and 4 s long as cut: the second starts at 3.5 s in the joined recording.
+  const spans: [number, number][] = [[10_000, 12_500], [40_000, 44_000]];
+  const words = [
+    { text: "first", start: 0.2, end: 0.6, speaker: "speaker_0" },
+    { text: "edge", start: 2.3, end: 2.7, speaker: "speaker_0" },
+    { text: "second", start: 3.6, end: 4.0, speaker: "speaker_1" },
+    { text: "last", start: 7.2, end: 7.6, speaker: "speaker_0" },
+  ];
+  const out = split(words, spans, [2.5, 4]);
+  expect(out[0]!.map((one) => [one.text, Math.round(one.start), Math.round(one.end), one.speaker])).toEqual([
+    ["first", 10_200, 10_600, "speaker_0"],
+    ["edge", 12_300, 12_500, "speaker_0"],
+  ]);
+  expect(out[1]!.map((one) => [one.text, Math.round(one.start), Math.round(one.end), one.speaker])).toEqual([
+    ["second", 40_100, 40_500, "speaker_1"],
+    ["last", 43_700, 44_000, "speaker_0"],
+  ]);
 });

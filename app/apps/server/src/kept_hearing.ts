@@ -57,7 +57,7 @@ const CAPTIONS = "youtube-captions";
  */
 export function asKept(transcript: Transcript): Transcript {
   if (transcript.model !== CAPTIONS || transcript.heard !== undefined) return transcript;
-  return { ...transcript, words: transcript.words.map(({ text, start, end }) => ({ text, start, end })), speakers: {}, roles: {}, colors: {}, heard: [] };
+  return { ...transcript, words: transcript.words.map(({ text, start, end }) => ({ text, start, end })), speakers: {}, roles: {}, colors: {}, heard: [], rough: CAPTIONS };
 }
 
 /** An Edit file's transcript, or null when it's not there or unreadable. */
@@ -245,7 +245,7 @@ export function split(words: readonly Word[], spans: readonly Span[], lengths: r
  * voices are its own (`h2:speaker_0`): Scribe's numbers mean nothing across
  * two hearings, and naming (speakers.ts) and the watch give each its person.
  */
-export function merged(transcript: Transcript, spans: readonly Span[], words: readonly Word[][], keyterms: readonly string[], model: string): Transcript {
+export function merged(transcript: Transcript, spans: readonly Span[], words: readonly Word[][], keyterms: readonly string[], model: string, again = false): Transcript {
   // A word the cut runs through ("there-" at a stretch's last instant) is half a word: the earlier words stand
   // there, and Scribe's take over only between its first and last whole words (the Mac's check, Nov 11).
   const whole = spans.map(([from, to], index) => (words[index] ?? []).filter((word) => word.start > from + EDGE_MS && word.end < to - EDGE_MS));
@@ -266,11 +266,15 @@ export function merged(transcript: Transcript, spans: readonly Span[], words: re
   const kept = transcript.words.filter((word) => !inside((word.start + word.end) / 2));
   const before = transcript.heard ?? [];
   const had = new Set((transcript.keyterms ?? []).map((name) => name.toLowerCase()));
-  const names = before.length === 0 ? [...keyterms] : keyterms.filter((name) => had.has(name.toLowerCase()));
+  // The names every stretch was heard with; heard all again (`again`), the ones it was just heard with.
+  const names = before.length === 0 || again ? [...keyterms] : keyterms.filter((name) => had.has(name.toLowerCase()));
   const { keyterms: _old, ...rest } = transcript;
+  // Who the rest is still from: the rough words' model, said apart from Scribe's.
+  const rough = transcript.rough ?? (before.length === 0 && transcript.model !== model ? transcript.model : undefined);
   return {
     ...rest,
     model,
+    ...(rough !== undefined ? { rough } : {}),
     words: [...kept, ...fresh].sort((a, b) => a.start - b.start || a.end - b.end),
     ...(names.length > 0 ? { keyterms: names } : {}),
     heard: union([...before, ...spans.map(([from, to]): Span => [from / 1000, to / 1000])]),

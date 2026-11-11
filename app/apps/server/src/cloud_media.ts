@@ -65,6 +65,7 @@ import * as pieces from "./proxy_pieces.ts";
 import * as cloud from "./cloud.ts";
 import { PLAYBACK_ROUTE, playbackKey, playbackPath } from "./cloud_playback.ts";
 import * as diag from "./diag.ts";
+import * as log from "./hearing_log.ts";
 import { serveFile } from "./http/files.ts";
 import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
@@ -2787,8 +2788,13 @@ export async function wholeTranscript(source: string, target: string, scratch: s
     .map((word) => ({ ...word, start: Math.max(word.start - start, 0), end: Math.max(word.end - start, 0) }));
   fs.mkdirSync(parent(target) ?? ".", { recursive: true });
   const { heard: _whole, ...rest } = whole;
-  writeAtomic(target, serialize({ ...rest, words, ...(stretches !== null ? { heard: stretches } : {}) }));
-  diag.info("cloud", `${source}: ${words.length} words from its recording's shared transcript (not heard again)${stretches !== null ? `, the script's ${stretches.length} stretches heard` : ""}`);
+  writeAtomic(target, serialize({ ...rest, words, ...(stretches !== null ? { heard: stretches, rough: whole.rough ?? "youtube-captions" } : {}) }));
+  const heardS = (stretches ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
+  log.line(
+    stretches === null
+      ? `${source}: ${words.length.toLocaleString("en-US")} words from the shared transcript, ${log.said(whole.model)} for all of it; nothing heard again`
+      : `${source}: ${words.length.toLocaleString("en-US")} words from Script mode's shared transcript, ${log.said(whole.model)} over ${stretches.length} stretches (${log.clock(heardS)}), ${log.said(whole.rough ?? "youtube-captions")} the rest; nothing heard again`,
+  );
   return true;
 }
 

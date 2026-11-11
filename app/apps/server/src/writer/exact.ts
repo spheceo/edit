@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import type { Clip, Script, Word } from "@edit/types/writer";
 
 import { join } from "../paths.ts";
+import * as log from "../hearing_log.ts";
 import * as transcribe from "../transcribe.ts";
 import { isCutIn } from "./blocks.ts";
 import * as claude from "./claude.ts";
@@ -94,7 +95,10 @@ export async function run(script: Script, dir: string, footage: string, clips: C
   const keyterms = await caseNames(dir, script);
   report.heardMs = spans.reduce((sum, [from, to]) => sum + to - from, 0);
   onStep(`Hearing the chosen footage exactly: ${clock(report.heardMs)} of ${clock(report.footageMs)}`);
+  const began = Date.now();
+  log.line(`"${script.title}": Scribe to hear the build's ${spans.length} chosen stretches, ${log.clock(report.heardMs / 1000)} of ${log.clock(report.footageMs / 1000)}; the rest stays rough`);
   const heard = await hearJoined(join(dir, "exact"), footage, spans, keyterms, signal);
+  log.line(`"${script.title}": ${log.said(transcribe.MODEL)} heard the ${spans.length} chosen stretches, ${log.count(heard.flat().length)} words, in ${log.took(Date.now() - began)}`);
   let heardVoices: (string | null)[] = script.words.map(() => null);
   const inserts: Insert[] = [];
   spans.forEach(([from, to], index) => {

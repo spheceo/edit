@@ -13,6 +13,7 @@
 import * as fs from "node:fs";
 
 import * as diag from "./diag.ts";
+import * as log from "./hearing_log.ts";
 import { writeAtomic } from "./files.ts";
 import * as macSpeech from "./mac_speech.ts";
 import { isFile, join } from "./paths.ts";
@@ -95,6 +96,7 @@ export async function appleHear(file: string, span: [number, number] | null, wor
  * no free hearing for it: the caller pays for Scribe.
  */
 export async function firstWords(home: string, cloud: string | null, input: string, target: string, work: string, signal?: AbortSignal): Promise<boolean> {
+  const began = Date.now();
   let words: Transcript | null = null;
   if (cloud !== null && captionRange(cloud) !== null && (await writeCaptionTranscript(home, cloud, target))) {
     try {
@@ -108,9 +110,11 @@ export async function firstWords(home: string, cloud: string | null, input: stri
     fs.rmSync(target, { force: true });
     return false;
   }
-  const rough: Transcript = { model: words.model, language: words.language ?? null, words: words.words.map(({ text, start, end }) => ({ text, start, end })), heard: [] };
+  const rough: Transcript = { model: words.model, language: words.language ?? null, words: words.words.map(({ text, start, end }) => ({ text, start, end })), heard: [], rough: words.model };
   writeAtomic(target, serialize(rough));
   fs.rmSync(join(work, APPLE), { force: true });
-  diag.info("transcribe", `${input}: ${rough.words.length} free first words (${rough.model}); Scribe hears only what's kept`);
+  log.line(
+    `${log.said(rough.model)} gave ${cloud ?? log.labelOf(input)} its first words: ${log.count(rough.words.length)} words, no voices, in ${log.took(Date.now() - began)}. Nothing paid; Scribe hears only what the edit keeps`,
+  );
   return true;
 }

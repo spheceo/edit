@@ -15,6 +15,7 @@ import type { Script } from "@edit/types/writer";
 
 import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
+import * as log from "../hearing_log.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
 import { asKept } from "../kept_hearing.ts";
@@ -26,7 +27,7 @@ import * as media from "./media.ts";
 import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
 import * as captions from "./captions.ts";
-import { appleCached, recordings, roughOnly } from "./transcription.ts";
+import { appleCached, editCached, recordings, roughOnly } from "./transcription.ts";
 import { THIS_MACHINE } from "../machine.ts";
 
 /** A source's place in Edit's keys: `drive/<id>`, `youtube/<id>`, `sha256/<hex>`. */
@@ -112,8 +113,9 @@ export function transcriptOf(dir: string, script: Script, recording: Shared): Tr
   if (rough) {
     const heard = exact.map(([from, to]): [number, number] => [(from - recording.offsetMs) / 1000, (to - recording.offsetMs) / 1000]);
     const keyterms = heard.length > 0 ? (script.exactKeyterms ?? []) : [];
-    const model = heard.length > 0 ? SCRIBE : (captions.cached(work)?.model ?? appleCached(work)?.model ?? SCRIBE);
-    return { model, language: null, words, speakers, ...(keyterms.length > 0 ? { keyterms } : {}), heard };
+    const first = captions.cached(work)?.model ?? appleCached(work)?.model ?? editCached(work)?.rough ?? "youtube-captions";
+    const model = heard.length > 0 ? SCRIBE : first;
+    return { model, language: null, words, speakers, ...(keyterms.length > 0 ? { keyterms } : {}), heard, rough: first };
   }
   return { model: whole?.model || SCRIBE, language: whole?.language ?? null, words, speakers, ...(whole?.keyterms ? { keyterms: whole.keyterms } : {}) };
 }
@@ -252,6 +254,12 @@ async function shareWords(dir: string, script: Script, recording: Shared, done: 
   }
   const text = serialize(words);
   await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
+  const heardS = (words.heard ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
+  log.line(
+    words.heard === undefined
+      ? `${recording.source}: Script mode's words to Edit, ${log.said(words.model)} for all of it (${log.count(words.words.length)} words)`
+      : `${recording.source}: Script mode's words to Edit, ${log.said(SCRIBE)} over ${words.heard.length} stretches (${log.clock(heardS)} of ${log.clock(recording.lengthMs / 1000)}), ${log.said(words.rough)} the rest (${log.count(words.words.length)} words)`,
+  );
   done.push(words.heard === undefined ? `shared the words of ${recording.name}` : `shared the words of ${recording.name}'s chosen stretches`);
 }
 

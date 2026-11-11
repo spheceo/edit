@@ -665,9 +665,15 @@ async function updateClip({ app, args, projectId }: ToolCall): Promise<Content[]
     if (touchesPeople(objectOf(patch))) editPlan.hooks.oneColourPerPerson(project);
     bindBlurs(project, [clipId]);
   });
-  const clip = app.store.get(projectId)?.project.clips.find((own) => own.id === clipId) ?? null;
+  const after = app.store.get(projectId)?.project ?? null;
+  const clip = after?.clips.find((own) => own.id === clipId) ?? null;
+  // A raw patch moves only this clip, so a J- or L-cut can be made: said when its linked picture or sound stayed
+  // where it was (the Mac's check, Nov 11: a kept clip lengthened in picture left its sound, which is what's heard).
+  const timing = ["start", "duration", "source_in", "speed"].filter((field) => field in objectOf(patch));
+  const partners = after === null || timing.length === 0 ? [] : linkedWith(after, clipId);
+  const note = partners.length === 0 ? "" : ` (its linked ${partners.join(", ")} kept its own ${timing.join(", ")}: patch it too, or use set_in_out or extend_clip, which move both)`;
   // serde_json::to_string of the clip: its fields in their own order.
-  return text(`updated ${clipId}: ${JSON.stringify(clip)}`);
+  return text(`updated ${clipId}: ${JSON.stringify(clip)}${note}`);
 }
 
 const objectOf = (value: unknown): Args =>

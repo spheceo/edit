@@ -72,7 +72,15 @@ export async function transcriptOf(app: App, media: Media, project?: Project, re
           continue;
         }
         const asked = `${path}\n${names.map((name) => name.toLowerCase()).sort().join("\n")}`;
-        // Heard whole without the names: heard again with them. Kept stretches keep the names they were heard with.
+        // Kept stretches heard before the case's names came: heard again with them, those stretches only, once.
+        if (transcript.heard !== undefined && transcript.heard.length > 0 && project !== undefined && refine && !covers(transcript.keyterms, names) && !reheard.has(asked)) {
+          reheard.add(asked);
+          if (await app.media.refine(path, soundUses(project, media.id), names, true)) {
+            (await import("./speakers.ts")).ensure(app, path);
+            continue;
+          }
+        }
+        // Heard whole without the names: heard again with them.
         if (transcript.heard === undefined && !covers(transcript.keyterms, names) && !reheard.has(asked)) {
           reheard.add(asked);
           diag.info("media", `${media.name}: heard again with the case's names (${names.length})`);
@@ -120,6 +128,7 @@ export function parseTranscript(text: string): Transcript {
   }
   if (!Array.isArray(object.keyterms)) delete object.keyterms;
   if (!Array.isArray(object.heard) || !(object.heard as unknown[]).every((range) => Array.isArray(range) && range.length === 2 && range.every((at) => typeof at === "number"))) delete object.heard;
+  if (typeof object.rough !== "string") delete object.rough;
   return asKept(object as unknown as Transcript);
 }
 

@@ -22,7 +22,8 @@ import { extension, join, parent, startsWith, withExtension, canonical } from ".
 import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import { FIRST_PASS_FROM_S, firstWords } from "./first_hearing.ts";
-import { hearJoined, merged, readKept, toHear, WHOLE_SHARE } from "./kept_hearing.ts";
+import * as log from "./hearing_log.ts";
+import { hearJoined, merged, PAD_MS, readKept, toHear, WHOLE_SHARE } from "./kept_hearing.ts";
 import * as transcribe from "./transcribe.ts";
 import * as voices from "./voices.ts";
 
@@ -536,9 +537,9 @@ export class Processor {
    * and joined, are heard, once; heard before, they're left. Footage kept
    * almost whole is heard whole. Answers whether anything was heard.
    */
-  refine(source: string, kept: readonly (readonly [number, number])[], keyterms: readonly string[] = []): Promise<boolean> {
+  refine(source: string, kept: readonly (readonly [number, number])[], keyterms: readonly string[] = [], again = false): Promise<boolean> {
     const before = this.refining.get(source) ?? Promise.resolve();
-    const mine = before.then(() => this.refineNow(source, kept, keyterms));
+    const mine = before.then(() => this.refineNow(source, kept, keyterms, again));
     const settled = mine.catch(() => undefined);
     this.refining.set(source, settled);
     void settled.then(() => {
@@ -547,30 +548,47 @@ export class Processor {
     return mine;
   }
 
-  private async refineNow(source: string, kept: readonly (readonly [number, number])[], keyterms: readonly string[]): Promise<boolean> {
+  private async refineNow(source: string, kept: readonly (readonly [number, number])[], keyterms: readonly string[], again: boolean): Promise<boolean> {
     const target = this.paths(source).transcript;
     const transcript = readKept(target);
     if (transcript === null || transcript.heard === undefined) return false;
     const input = await this.inputOf(source);
     const length = Math.round((await transcribe.seconds(input)) * 1000) || Math.max(0, ...kept.map(([, to]) => to * 1000), ...transcript.words.map((word) => word.end * 1000));
-    const spans = toHear(kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]), transcript.heard.map(([from, to]): [number, number] => [from * 1000, to * 1000]), length);
+    const heardMs = transcript.heard.map(([from, to]): [number, number] => [from * 1000, to * 1000]);
+    // Again (for the case's names, heard without them): everything heard so far and what's kept, heard once more.
+    const spans = again
+      ? toHear([...kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]), ...heardMs.map(([from, to]): [number, number] => [from + PAD_MS, to - PAD_MS])], [], length)
+      : toHear(kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]), heardMs, length);
     if (spans.length === 0) return false;
     const total = spans.reduce((sum, [from, to]) => sum + to - from, 0);
     const work = join(parent(target) ?? ".", "kept");
+    const name = this.cloudSource(source) ?? log.labelOf(source);
+    const rough = transcript.rough ?? transcript.model;
+    const heardBefore = transcript.heard.reduce((sum, [from, to]) => sum + to - from, 0);
+    const began = Date.now();
     try {
       if (transcript.heard.length === 0 && total >= WHOLE_SHARE * length) {
         // Kept almost whole (a subtitled video): one request for the file.
-        diag.info("media", `${source}: ${Math.round(total / 1000)} s of ${Math.round(length / 1000)} s kept: heard whole`);
+        log.line(`${name}: the edit keeps ${log.clock(total / 1000)} of its ${log.clock(length / 1000)}, so Scribe hears all of it, replacing ${log.said(rough)}'s words`);
         const whole = join(work, "whole.json");
         fs.mkdirSync(work, { recursive: true });
         await transcribe.run(input, whole, keyterms);
         fs.renameSync(whole, target);
+        const heard = readKept(target);
+        log.line(`${name}: now ${log.said(heard?.model ?? transcribe.MODEL)} for all ${log.clock(length / 1000)}, ${log.count(heard?.words.length ?? 0)} words, in ${log.took(Date.now() - began)}`);
       } else {
-        diag.info("media", `${source}: hearing the ${spans.length} kept stretches, ${Math.round(total / 1000)} s of ${Math.round(length / 1000)} s`);
+        log.line(
+          `${name}: Scribe to hear the ${spans.length} kept stretch${spans.length === 1 ? "" : "es"} ${again ? `again, for the case's ${keyterms.length} names` : "it hasn't yet"}, ${log.clock(total / 1000)} of its ${log.clock(length / 1000)} (${log.clock(heardBefore)} heard before); the rest stays ${log.said(rough)}`,
+        );
         const words = await hearJoined(work, input, spans, [...keyterms]);
         // Re-read: naming or the watch may have written meanwhile.
         const now = readKept(target) ?? transcript;
-        writeAtomic(target, transcribe.serialize(merged(now, spans, words, keyterms, transcribe.MODEL)));
+        const next = merged(now, spans, words, keyterms, transcribe.MODEL, again);
+        writeAtomic(target, transcribe.serialize(next));
+        const heardNow = (next.heard ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
+        log.line(
+          `${name}: ${log.said(next.model)} heard the ${spans.length} kept stretch${spans.length === 1 ? "" : "es"} (${log.clock(total / 1000)}), ${log.count(words.flat().length)} words, in ${log.took(Date.now() - began)}; Scribe has now heard ${log.clock(heardNow)} of its ${log.clock(length / 1000)}, ${log.said(next.rough ?? rough)} the rest`,
+        );
       }
     } finally {
       fs.rmSync(work, { recursive: true, force: true });

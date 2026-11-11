@@ -40,6 +40,7 @@ import * as fs from "node:fs";
 import { Cause, Clock, Context, Duration, Effect, Option, Predicate, Schedule, Schema } from "effect";
 
 import * as cameras from "./cameras.ts";
+import * as log from "./hearing_log.ts";
 import * as diag from "./diag.ts";
 import * as proc from "./effect/proc.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
@@ -105,6 +106,12 @@ export interface Transcript {
    * without words. Absent: the whole file was heard.
    */
   heard?: [number, number][];
+  /**
+   * The free model whose words fill what `heard` leaves out
+   * ("apple-speech", "youtube-captions"): `model` is who heard `heard`.
+   * Absent when the whole file was heard by `model`.
+   */
+  rough?: string;
 }
 
 /** How far a use may reach past what was heard (seconds) and still be taken as heard: a cut's word boundary moved. */
@@ -156,6 +163,7 @@ export function serialize(transcript: Transcript): string {
   if (transcript.keyterms !== undefined && transcript.keyterms.length > 0) text += `,"keyterms":${JSON.stringify(transcript.keyterms)}`;
   if (typeof transcript.voices === "string" && transcript.voices !== "") text += `,"voices":${JSON.stringify(transcript.voices)}`;
   if (Array.isArray(transcript.heard)) text += `,"heard":${JSON.stringify(transcript.heard)}`;
+  if (Array.isArray(transcript.heard) && typeof transcript.rough === "string" && transcript.rough !== "") text += `,"rough":${JSON.stringify(transcript.rough)}`;
   return `${text}}`;
 }
 
@@ -738,7 +746,15 @@ export const transcribeFile = Effect.fn("transcribe.file")(function* (source: st
     const seconds = yield* lengthOf(audio);
     const heard = yield* hearFile(source, audio, seconds, target, keyterms, again);
     const took = (yield* Clock.currentTimeMillis) - began;
-    if (seconds > 90) yield* Effect.logInfo(`${source}: heard whole (${hours(seconds)}, ${heard.words.length} words) in ${Math.round(took / 1000)} s`);
+    const longest = yield* Longest;
+    const jobs = yield* Jobs;
+    const how = seconds > longest ? `in ${plan(seconds, Bun.file(audio).size).length} parts` : seconds > jobs.longerThan ? "by link" : "in one request";
+    const voices = new Set(heard.words.map((word) => word.speaker).filter(Boolean)).size;
+    yield* Effect.sync(() =>
+      log.line(
+        `${log.said(heard.model)} heard ${log.labelOf(source)} (${log.clock(seconds)}) ${how}${again ? ", again" : ""}${keyterms.length > 0 ? `, listening for ${keyterms.length} names` : ""}: ${log.count(heard.words.length)} words, ${voices} voices, in ${log.took(took)}`,
+      ),
+    );
     return heard;
   }).pipe(Effect.scoped);
   // Heard again, it never comes out much shorter than the transcript it replaces (Killer Pastor in dev, Nov 8: its

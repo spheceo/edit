@@ -174,10 +174,17 @@ export interface CompilationReaders {
  * be. Oct 30, the team: an external writer's Doc this Mac's Google account
  * can't open ("we can't add" it), and pasting it lost the timestamps' links.
  * Null when the text isn't a script: lines of links (a compilation), a title.
+ * A Doc taken as Markdown (Docs' own export) reads the same: its escapes
+ * (`\[3:23-3:26\]`, `yea\!`) go, and a line all in `**bold**` stays bold, so a
+ * chapter title ("ACT 1") is shown, never voiced (Nov 12: the bodycam HQ
+ * test's Doc, its Dropbox links swapped for the Drive folder's files).
  */
 export function pastedScript(text: string): Parsed | null {
   // A Doc's comment markers ("[a]", linked to the comment) aren't the script's words.
-  const lines = text.split(/\r?\n/u).map((line) => line.replace(/\[\[[a-z]{1,3}\]\]\(#cmnt\d+\)/gu, "").trim()).filter((line) => line !== "");
+  const lines = text
+    .split(/\r?\n/u)
+    .map((line) => line.replace(/\[\[[a-z]{1,3}\]\]\(#cmnt\d+\)/gu, "").replace(/\\([\\[\]()*_!#+\-.`>~|{}])/gu, "$1").trim())
+    .filter((line) => line !== "");
   const linked = /\[[^\]]+\]\(https?:\/\/[^)\s]+\)/u;
   // A footage link left bare by a plain-text paste (a horror script's reel after "Take a look at this:", its "Voice-over: <Drive link>").
   const bare = /(?<![(\[])\bhttps?:\/\/[^\s)\]]+/gu;
@@ -199,14 +206,17 @@ export function pastedScript(text: string): Parsed | null {
     return out + escape(text.slice(at));
   };
   const html = `<html><body>${lines
-    .map((line) => {
+    .map((whole) => {
+      const bold = /^\*\*(.+)\*\*$/u.exec(whole);
+      const line = bold?.[1] ?? whole;
       let out = "";
       let at = 0;
       for (const match of line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu)) {
         out += bareLinks(line.slice(at, match.index)) + `<a href="${escape(match[2]!)}">${escape(match[1]!)}</a>`;
         at = match.index! + match[0].length;
       }
-      return `<p>${out}${bareLinks(line.slice(at))}</p>`;
+      out += bareLinks(line.slice(at));
+      return bold ? `<p><span style="font-weight:700">${out}</span></p>` : `<p>${out}</p>`;
     })
     .join("")}</body></html>`;
   const parsed = script.parse(html);

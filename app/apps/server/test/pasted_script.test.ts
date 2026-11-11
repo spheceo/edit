@@ -20,6 +20,26 @@ test("a Doc's words pasted with their links are read as the script", () => {
   expect(JSON.stringify(parsed.blocks)).not.toContain("cmnt");
 });
 
+// Nov 12: a Doc taken as Markdown (Docs' export) escapes its brackets and marks
+// its chapter titles in bold: the titles are shown, never voiced, as the Doc's own.
+test("a Doc's Markdown keeps its chapter titles off the voice-over and loses its escapes", () => {
+  const pasted = [
+    "**HOOK** ",
+    "\\[[4:49-4:55](https://drive.google.com/file/d/1gv3wq3IRO26Ani4h1OYibV7PrEqzzjoI/view)\\]  ",
+    "Yea, keep going keep going\\!",
+    "Police just arrived at the backyard of a quiet neighbourhood home in Columbus where they found Darrell shot.",
+    "**ACT 1**",
+    "\\[[2:52-4:31](https://drive.google.com/file/d/1gv3wq3IRO26Ani4h1OYibV7PrEqzzjoI/view)\\]",
+    "On the afternoon of December 10th, 2024, a 911 dispatcher received an alarming call from East Moler Street.",
+  ].join("\n");
+  const parsed = pastedScript(pasted)!;
+  expect(parsed.blocks.filter((block) => block.kind === "footage").map((block) => block.kind === "footage" && [block.start, block.end])).toEqual([[289, 295], [172, 271]]);
+  const narration = parsed.blocks.flatMap((block) => (block.kind === "narration" ? [block.text] : [])).join("\n");
+  expect(narration).not.toContain("ACT 1");
+  expect(narration).not.toContain("\\");
+  expect(narration).toContain("keep going!");
+});
+
 test("a list of video links, or a title, is not a pasted script", () => {
   expect(pastedScript("https://youtu.be/4NiDAhqfVZc\nhttps://youtu.be/gmwUoZuYdxo\nhttps://youtu.be/5uB7ysH2BtY")).toBeNull();
   expect(pastedScript("Case 1: [the video](https://youtu.be/4NiDAhqfVZc)")).toBeNull();

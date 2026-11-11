@@ -42,12 +42,20 @@ mutes?: Array<Mute>,
  */
 channel?: SoundChannel, 
 /**
+ * A crossfade into this clip from the sound ending where it starts
+ * on its track, this many frames long, centred on the cut (`eval`'s
+ * `audio_segments`): set only where it's asked for (Sphe, Nov 11:
+ * "optional… between these audio layers, add cross dissolve"). 0: a
+ * plain cut, each clip with its own fades.
+ */
+crossfade?: number, 
+/**
  * The source around the clip that has no word in it (seconds of
  * the media, from before `source_in` to past where the clip ends):
  * how far a crossfade at a cut may play the clip's sound beyond its
  * own edges (`eval`'s `audio_segments`). Edit writes it from the
  * file's words on every save (the server's `sound_room.ts`); None
- * (no words known): its cuts aren't crossfaded.
+ * (no words known): a crossfade goes as far as the file does.
  */
 room?: SoundRoom, } | { "type": "text", text: string, style: TextStyle, transform: Transform, animation: TextAnimation, opacity: number, 
 /**

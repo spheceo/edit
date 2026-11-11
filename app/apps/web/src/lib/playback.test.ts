@@ -393,31 +393,31 @@ describe("preview seeks and lifetime", () => {
     expect(gain.linearRampToValueAtTime.mock.calls.slice(0, 3).map((call) => call[0])).toEqual([1 / 3, 2 / 3, 1].map((value) => expect.closeTo(value)));
   });
 
-  it("crossfades a cut between footage sounds as the export does: the next sound in early, the last one on past it", () => {
+  it("crossfades a cut it is asked to between footage sounds as the export does: the next sound in early, the last one on past it", () => {
     // JJ, Nov 10: "the two sounds overlapping and blended", not one fading down and the next up.
     const p = fixture(); p.media[0].has_audio = true;
     p.tracks.push({ id: "a1", kind: "audio", hidden: false, muted: false, locked: false });
     p.clips.push({ id: "a", type: "audio", track: "a1", media: "m1", start: 0, duration: 90,
       source_in: 2, speed: 1, volume_db: 0, fade_in: 0, fade_out: 6, color: "blue", room: { from: 1.5, to: 5.5, words_from: 2.5, words_to: 4.5 } });
     p.clips.push({ id: "b", type: "audio", track: "a1", media: "m1", start: 90, duration: 60,
-      source_in: 6, speed: 1, volume_db: 0, fade_in: 6, fade_out: 0, color: "blue", room: { from: 5.5, to: 8.5, words_from: 6.5, words_to: 7.5 } });
+      source_in: 6, speed: 1, volume_db: 0, fade_in: 6, fade_out: 0, crossfade: 8, color: "blue", room: { from: 5.5, to: 8.5, words_from: 6.5, words_to: 7.5 } });
     for (let chunk = 0; chunk < 20; chunk++) decoding.sound.set(chunk,
       { start: chunk * 0.5, sampleRate: 48000, channels: [new Float32Array(24000)] });
     engine.sources.mockReturnValue("[]");
     preview.setProject(p, {}); preview.seek(81); draw(); preview.play(); draw();
-    // 0.12 s either side of the cut at frame 90: "b" from frame 86.4 (its source from 5.88 s), "a" on to 93.6.
+    // 8 frames centred on the cut at frame 90: "b" from frame 86 (its source from 5.87 s), "a" on to 94.
     const starts = clock.nodes.map((node) => node.start.mock.calls[0] as number[]);
     // When frame `f` plays on the audio clock: the first sound ("a" at 81) is on it at the clock's start.
     const at = (f: number) => starts[0][0] + (f - 81) / 30;
-    const early = starts.findIndex((call) => Math.abs(call[0] - at(86.4)) < 1e-6);
+    const early = starts.findIndex((call) => Math.abs(call[0] - at(86)) < 1e-6);
     expect(early).toBeGreaterThanOrEqual(0);
     const rising = clock.gains[early].gain;
     expect(rising.setValueAtTime.mock.calls[0][0]).toBeCloseTo(0);
-    // On the equal-power curve over the 7.2 frames, not the clip's 6-frame linear fade (2 frames in: 0.43, not 0.33).
-    const twoIn = rising.linearRampToValueAtTime.mock.calls.find((call) => Math.abs(call[1] - at(88.4)) < 1e-6);
-    expect(twoIn?.[0]).toBeCloseTo(Math.sin((Math.PI / 2) * (2 / 7.2)));
-    // "a"'s last chunk plays on past the cut and is silent at 93.6.
-    const out = clock.gains.find((node) => node.gain.linearRampToValueAtTime.mock.calls.some((call) => Math.abs(call[1] - at(93.6)) < 1e-6 && Math.abs(call[0]) < 1e-9));
+    // On the equal-power curve over the 8 frames, not the clip's 6-frame linear fade (2 frames in: 0.38, not 0.33).
+    const twoIn = rising.linearRampToValueAtTime.mock.calls.find((call) => Math.abs(call[1] - at(88)) < 1e-6);
+    expect(twoIn?.[0]).toBeCloseTo(Math.sin((Math.PI / 2) * (2 / 8)));
+    // "a"'s last chunk plays on past the cut and is silent at 94.
+    const out = clock.gains.find((node) => node.gain.linearRampToValueAtTime.mock.calls.some((call) => Math.abs(call[1] - at(94)) < 1e-6 && Math.abs(call[0]) < 1e-9));
     expect(out).toBeDefined();
   });
 

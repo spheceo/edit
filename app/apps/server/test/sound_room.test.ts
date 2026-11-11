@@ -19,18 +19,18 @@ const WORDS = wordsOf([
   { text: "four", start: 7.02, end: 8 },
 ]);
 
-test("the room reaches to the words either side and in to the clip's own, never into one, and no further than half a second", () => {
+test("the room reaches to the words either side and in to the clip's own, never into one, and no further than a second (the longest a crossfade reaches)", () => {
   // Each word is taken as 50 ms longer at each end (GUARD).
-  // The clip plays "two" (2.5–4.5 s): quiet back to "one"'s end and half a second on (the next word is at 6); its own word 3–4.
-  expect(roomAround(WORDS, 2.5, 4.5, 60)).toEqual({ from: 2.05, to: 5, words_from: 2.95, words_to: 4.05 });
-  // Long quiet, no word in it: half a second each way, out and in.
-  expect(roomAround(WORDS, 4.4, 5, 60)).toEqual({ from: 4.05, to: 5.5, words_from: 4.9, words_to: 4.5 });
+  // The clip plays "two" (2.5–4.5 s): quiet back to "one"'s end and a second on (the next word is at 6); its own word 3–4.
+  expect(roomAround(WORDS, 2.5, 4.5, 60)).toEqual({ from: 2.05, to: 5.5, words_from: 2.95, words_to: 4.05 });
+  // No word in it: out to the words either side (each 50 ms longer), and in all the way.
+  expect(roomAround(WORDS, 4.4, 5, 60)).toEqual({ from: 4.05, to: 5.95, words_from: 5, words_to: 4.4 });
   // Cut through a word on either side: no room that side, out or in.
   expect(roomAround(WORDS, 1.5, 6.5, 60)).toEqual({ from: 1.5, to: 6.5, words_from: 1.5, words_to: 6.5 });
   // Cut tight on its own word, and before one 20 ms after it: no room either side.
   expect(roomAround(WORDS, 6, 7, 60)).toEqual({ from: 6, to: 7, words_from: 6, words_to: 7 });
   // Nor past the file's ends.
-  expect(roomAround(WORDS, 0.2, 0.8, 0.9)).toEqual({ from: 0, to: 0.9, words_from: 0.7, words_to: 0.3 });
+  expect(roomAround(WORDS, 0.2, 0.8, 0.9)).toEqual({ from: 0, to: 0.9, words_from: 0.8, words_to: 0.2 });
 });
 
 function footage(project: Project): void {
@@ -60,7 +60,7 @@ test("every save sets each footage sound's room from its file's words, and keeps
     const id = store.createAs("Room", "bodycam", SETTINGS).project.id;
     await store.update(id, "agent", (project) => footage(project));
     let saved = store.get(id)!.project;
-    expect(roomOf(saved, "s1")).toEqual({ from: 2.05, to: 5, words_from: 2.95, words_to: 4.05 });
+    expect(roomOf(saved, "s1")).toEqual({ from: 2.05, to: 5.5, words_from: 2.95, words_to: 4.05 });
     expect(roomOf(saved, "s2")).toEqual({ from: 6, to: 7, words_from: 6, words_to: 7 });
     // The team's music keeps its own fades: no room, and its words aren't looked for.
     expect(roomOf(saved, "music")).toBeUndefined();

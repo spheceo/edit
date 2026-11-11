@@ -773,12 +773,19 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         channel: Option<SoundChannel>,
+        /// A crossfade into this clip from the sound ending where it starts
+        /// on its track, this many frames long, centred on the cut (`eval`'s
+        /// `audio_segments`): set only where it's asked for (Sphe, Nov 11:
+        /// "optional… between these audio layers, add cross dissolve"). 0: a
+        /// plain cut, each clip with its own fades.
+        #[serde(default, skip_serializing_if = "is_zero_i64")]
+        crossfade: i64,
         /// The source around the clip that has no word in it (seconds of
         /// the media, from before `source_in` to past where the clip ends):
         /// how far a crossfade at a cut may play the clip's sound beyond its
         /// own edges (`eval`'s `audio_segments`). Edit writes it from the
         /// file's words on every save (the server's `sound_room.ts`); None
-        /// (no words known): its cuts aren't crossfaded.
+        /// (no words known): a crossfade goes as far as the file does.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         room: Option<SoundRoom>,
@@ -965,6 +972,10 @@ pub struct Transform {
     /// A little handheld camera shake: how far it wanders, in project pixels (0 = still).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub shake: f32,
+}
+
+fn is_zero_i64(value: &i64) -> bool {
+    *value == 0
 }
 
 fn is_zero(value: &f32) -> bool {
@@ -2220,7 +2231,10 @@ impl Project {
                         .and_then(|one| one.parent.as_deref());
                 }
             }
-            if clip.fade_in < 0 || clip.fade_out < 0 {
+            if clip.fade_in < 0
+                || clip.fade_out < 0
+                || matches!(clip.content, ClipContent::Audio { crossfade, .. } if crossfade < 0)
+            {
                 return Err(format!("clip {} fades must be nonnegative", clip.id));
             }
             let audio_clip = matches!(clip.content, ClipContent::Audio { .. });
@@ -2986,6 +3000,7 @@ mod validation_tests {
             volume_db: 0.0,
             mutes: Vec::new(),
             channel: None,
+            crossfade: 0,
             room: None,
         })
         .unwrap();

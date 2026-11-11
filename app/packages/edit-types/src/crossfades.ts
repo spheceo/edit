@@ -1,4 +1,5 @@
-// The crossfade at each cut between footage sounds, as edit-core's
+// The crossfade at each cut between footage sounds the agent was asked to
+// blend (an audio clip's `crossfade`), as edit-core's
 // `audio_segments` makes it for the export and Edit.app's player
 // (crates/edit-core/src/eval.rs), for the page's own player
 // (apps/web/src/lib/playback.ts). JJ, Nov 10: "the two sounds overlapping and
@@ -9,7 +10,7 @@
 import type { Clip, Media, Project } from "./generated";
 
 /** The most a cut's crossfade reaches either side of it (seconds): edit-core's CROSSFADE_REACH. */
-export const CROSSFADE_REACH = 0.12;
+export const CROSSFADE_REACH = 1;
 /** Shorter than this in all, a cut stays as it was: edit-core's CROSSFADE_LEAST. */
 export const CROSSFADE_LEAST = 0.01;
 
@@ -73,6 +74,8 @@ export function crossfades(project: Project): Map<string, SoundEdges> {
 /** edit-core's `crossfade`: the cut from `before` to `after`, or null. */
 function crossfade(media: Map<string, Media>, fps: number, before: AudioClip, after: AudioClip): Cut | null {
   if (before.track !== after.track || before.start + before.duration !== after.start) return null;
+  const asked = after.crossfade ?? 0;
+  if (asked <= 0) return null;
   const footage = (id: string) => {
     const file = media.get(id);
     return file !== undefined && (file.library === undefined || file.library === null) && file.has_audio ? file : null;
@@ -85,16 +88,20 @@ function crossfade(media: Map<string, Media>, fps: number, before: AudioClip, af
   const toIn = after.source_in ?? 0;
   const fromOut = fromIn + (before.duration / fps) * fromSpeed;
   if (before.media === after.media && Math.abs(toIn - fromOut) < 0.5 / fps && Math.abs(toSpeed - fromSpeed) < 1e-9) return null;
-  if (before.room == null || after.room == null) return null;
+  // No words known: asked for, it goes as far as the file does.
+  const blind = { from: 0, to: Infinity, words_from: Infinity, words_to: -Infinity };
+  const fromRoom = before.room ?? blind;
+  const toRoom = after.room ?? blind;
   const fromLength = before.duration / fps;
   const toLength = after.duration / fps;
+  const reach = Math.min(asked / fps / 2, CROSSFADE_REACH);
   // Seconds of quiet each way, on the timeline: what the edit cut out either side, and each clip's own edge.
-  const quiet = (seconds: number, speed: number, most: number) => Math.min(Math.max(0, seconds) / speed, CROSSFADE_REACH, most);
+  const quiet = (seconds: number, speed: number, most: number) => Math.min(Math.max(0, seconds) / speed, reach, most);
   const cut: Cut = {
-    lead: quiet(toIn - Math.max(0, after.room.from), toSpeed, fromLength),
-    fadeIn: quiet(after.room.words_from - toIn, toSpeed, toLength / 2),
-    fadeOut: quiet(fromOut - before.room.words_to, fromSpeed, fromLength / 2),
-    tail: quiet(Math.min(before.room.to, from.duration) - fromOut, fromSpeed, toLength),
+    lead: quiet(toIn - Math.max(0, toRoom.from), toSpeed, fromLength),
+    fadeIn: quiet(toRoom.words_from - toIn, toSpeed, toLength / 2),
+    fadeOut: quiet(fromOut - fromRoom.words_to, fromSpeed, fromLength / 2),
+    tail: quiet(Math.min(fromRoom.to, from.duration) - fromOut, fromSpeed, toLength),
   };
   return cut.lead + cut.fadeIn >= CROSSFADE_LEAST || cut.fadeOut + cut.tail >= CROSSFADE_LEAST ? cut : null;
 }

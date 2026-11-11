@@ -1,5 +1,5 @@
-// How far each footage sound may play past its own edges in a cut's crossfade
-// (edit-core's `audio_segments`; JJ, Nov 10: at a cut "the two sounds
+// How far each footage sound may play past its own edges in a cut's crossfade,
+// where one is asked for (an audio clip's `crossfade`; edit-core's `audio_segments`; JJ, Nov 10: at a cut "the two sounds
 // overlapping and blended", not one fading down and the next up). A crossfade
 // plays source the edit cut out, so it may only play source with no word in
 // it: an audio clip's `room` is that stretch around it, in seconds of its file,
@@ -13,8 +13,8 @@
 import fs from "node:fs";
 import type { Clip, Media, Project, Word } from "./model.ts";
 
-/** How far from a clip's edges wordless source is looked for (seconds): more than a crossfade reaches (edit-core's CROSSFADE_REACH, 0.12 s). */
-const LOOK = 0.5;
+/** How far from a clip's edges wordless source is looked for (seconds): as far as a crossfade reaches (edit-core's CROSSFADE_REACH, 1 s). */
+const LOOK = 1;
 /** A word overlapping an edge by less than this (seconds) isn't one cut into: times rounded either side of a cut. */
 const SLACK = 0.01;
 /**

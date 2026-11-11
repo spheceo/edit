@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as cloud from "../src/cloud.ts";
 import * as cloudBlocks from "../src/cloud_blocks.ts";
 import * as cloudMedia from "../src/cloud_media.ts";
+import * as hearingLog from "../src/hearing_log.ts";
 import * as steps from "../src/import_steps.ts";
 import { playbackKey, playbackPath } from "../src/cloud_playback.ts";
 import { buildRouter } from "../src/routes.ts";
@@ -308,6 +309,9 @@ test("files from a disk: a sound goes up as itself, footage with a proxy made on
     expect(mock.cloud.contentTypes.get(madeSound.cloud!.original)).toBe("audio/wav");
     const soundRecord = await cloudMedia.getRecord(madeSound.cloud!.source);
     expect(soundRecord).toMatchObject({ originalReady: true, proxyReady: true, name: "take.wav", size: 12 });
+    // Its hearing's line says the file, not its hash (Nov 11: a linked Drive .wav read "sha256/8a9f…/….wav").
+    expect(hearingLog.nameOf(madeSound.cloud!.source)).toBe("take.wav");
+    expect(hearingLog.labelOf(madeSound.path)).toBe("take.wav");
 
     // Footage someone already paid to analyse here (before cloud was on).
     const video = `${dir}/interview.mov`;

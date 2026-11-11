@@ -29,7 +29,8 @@ export function labelOf(path: string): string {
   const key = /[?&]key=([^&]+)/u.exec(path)?.[1];
   if (key !== undefined) {
     const place = decodeURIComponent(key).replace(/^edit\/(proxies|originals|excerpts)\//u, "");
-    return names.get(place) ?? place;
+    // An original's key carries the name it came in with after its hash: `sha256/<hex>/911 call.wav`.
+    return names.get(place) ?? /^sha256\/[0-9a-f]{64}\/(.+)$/u.exec(place)?.[1] ?? place;
   }
   if (/\/joined-[0-9a-f]+\/joined\.wav$/u.test(path)) return "the kept stretches, joined into one recording";
   return names.get(path) ?? (path.split("/").pop() || path);
@@ -38,10 +39,15 @@ export function labelOf(path: string): string {
 /** What files named by their content are called (a proxy's key is its hash alone): the name each came in with. */
 const names = new Map<string, string>();
 
+/** A cloud source said by the name its file came in with (`sha256:<hex>` → "MOORE REDACTED BWC.mp4") when known. */
+export function nameOf(source: string): string {
+  return names.get(source) ?? source;
+}
+
 /**
  * Names a file whose key or path says only its content (`sha256/80f2….mp4`, a
  * dropped or linked file's proxy) by the name it came in with, so its hearing
- * reads "MOORE REDACTED BWC.mp4" (Nov 11: a Drive file's line gave its hash).
+ * reads "MOORE REDACTED BWC.mp4" (Nov 11: a Drive file's line gave its hash); its source (`sha256:<hex>`) too.
  */
 export function knownAs(keysOrPaths: readonly string[], name: string): void {
   if (names.size > 5_000) names.clear();

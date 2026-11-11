@@ -118,7 +118,7 @@ export async function firstWords(home: string, cloud: string | null, input: stri
       words = await appleHear(input, null, work, stop);
     } catch (error) {
       if (signal?.aborted) throw error;
-      diag.warn("transcribe", `${cloud ?? log.labelOf(input)}: Apple's recogniser took more than ${log.took(limitMs)} and was stopped; heard another way`);
+      diag.warn("transcribe", `${cloud !== null ? log.nameOf(cloud) : log.labelOf(input)}: Apple's recogniser took more than ${log.took(limitMs)} and was stopped; heard another way`);
       words = null;
     }
   }
@@ -130,7 +130,7 @@ export async function firstWords(home: string, cloud: string | null, input: stri
   writeAtomic(target, serialize(rough));
   fs.rmSync(join(work, APPLE), { force: true });
   log.line(
-    `${log.said(rough.model)} gave ${cloud ?? log.labelOf(input)} its first words: ${log.count(rough.words.length)} words, no voices, in ${log.took(Date.now() - began)}. Nothing paid; Scribe hears only what the edit keeps`,
+    `${log.said(rough.model)} gave ${cloud !== null ? log.nameOf(cloud) : log.labelOf(input)} its first words: ${log.count(rough.words.length)} words, no voices, in ${log.took(Date.now() - began)}. Nothing paid; Scribe hears only what the edit keeps`,
   );
   return true;
 }

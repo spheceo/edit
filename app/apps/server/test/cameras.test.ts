@@ -1,9 +1,13 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+
+import * as fs from "node:fs";
+import * as os from "node:os";
 
 // The seams first: speakers.ts alone meets the cast→speakers cycle before ROLES is set.
 import "../src/seams.ts";
 import { bodycams } from "../src/speakers.ts";
-import { apply, cleaned } from "../src/cameras.ts";
+import * as aiClaude from "../src/ai_claude.ts";
+import { apply, cleaned, read } from "../src/cameras.ts";
 import type { Transcript, Word } from "../src/transcribe.ts";
 
 test("camera IDs read off the picture are made one spelling each, misreadings dropped", () => {
@@ -40,3 +44,38 @@ test("one camera, or none, changes nothing", () => {
   expect(transcript.cameras).toBeUndefined();
   expect(bodycams({ model: "scribe_v2", words: [] })).toBe("");
 });
+
+test("a long file's sheets are cut from its keyframes and asked at once, each tile's ID in its place", async () => {
+  // Nov 11: after Scribe, a 25-minute video's strips took 101 s decoding every frame and its three sheets 46 s asked
+  // one after another, all under Script mode's "Transcribing".
+  const dir = fs.mkdtempSync(`${os.tmpdir()}/edit-cameras-test-`);
+  const file = `${dir}/two-sheets.mp4`;
+  const made = Bun.spawnSync(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=2:duration=700", "-c:v", "libx264", "-g", "8", "-preset", "ultrafast", file]);
+  expect(made.exitCode).toBe(0);
+  let flying = 0;
+  let most = 0;
+  const post = spyOn(aiClaude, "post").mockImplementation(async (body: string) => {
+    flying += 1;
+    most = Math.max(most, flying);
+    await Bun.sleep(50);
+    flying -= 1;
+    const asked = JSON.parse(fs.readFileSync(body, "utf8")) as { messages: { content: { text?: string }[] }[] };
+    const count = Number(/has (\d+) tiles/u.exec(asked.messages[0]!.content[0]!.text!)![1]);
+    // The first sheet shows one camera, the second another.
+    const id = count === 120 ? "D01A45518" : "D01A2379M";
+    return { choices: [{ message: { content: JSON.stringify({ tiles: Array.from({ length: count }, (_, n) => ({ n, id })) }) } }], usage: { cost: 0.01 } };
+  });
+  try {
+    const reading = (await read(file, 700))!;
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(most).toBe(2);
+    expect(reading.step).toBe(5);
+    expect(reading.ids.length).toBe(141);
+    expect(reading.ids[119]).toBe("D01A45518");
+    expect(reading.ids[120]).toBe("D01A2379M");
+    expect(reading.ids[140]).toBe("D01A2379M");
+  } finally {
+    post.mockRestore();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 60_000);

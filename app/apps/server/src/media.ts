@@ -179,7 +179,12 @@ export class Processor {
 
   status(source: string): MediaStatus {
     const known = this.statuses.get(mediaKey(source));
-    return known !== undefined ? shown(known) : this.statusFromDisk(source);
+    if (known === undefined) return this.statusFromDisk(source);
+    // "Not in the cloud" is asked again once that answer is old: a dropped file's proxy is uploaded just after
+    // the drop returns, so the first ask can find nothing (Nov 11: a fresh upload stayed "failed" for good).
+    const key = known.error === MISSING_IN_CLOUD ? playbackKey(source) : null;
+    if (key !== null) this.askAbout(source, key);
+    return shown(known);
   }
 
   private statusFromDisk(source: string): MediaStatus {
@@ -213,8 +218,18 @@ export class Processor {
     const known = keyVerdict(key);
     if (known !== null) return known;
     void checkKey(key).then((there) => {
-      if (there !== false) return;
       const now = this.statuses.get(mediaKey(source));
+      if (there === true) {
+        // There after all (its upload finished): playable, as a streamed proxy is.
+        if (now?.error !== MISSING_IN_CLOUD) return;
+        this.set(source, (status) => {
+          status.proxy = "ready";
+          status.proxy_progress = 1;
+          delete status.error;
+        });
+        return;
+      }
+      if (there !== false) return;
       if (now === undefined || now.proxy === "failed") return;
       this.set(source, (status) => {
         status.proxy = "failed";
@@ -566,7 +581,8 @@ export class Processor {
     if (spans.length === 0) return false;
     const total = spans.reduce((sum, [from, to]) => sum + to - from, 0);
     const work = join(parent(target) ?? ".", "kept");
-    const name = this.cloudSource(source) ?? log.labelOf(source);
+    const cloudSource = this.cloudSource(source);
+    const name = cloudSource !== null ? log.nameOf(cloudSource) : log.labelOf(source);
     const rough = transcript.rough ?? transcript.model;
     const heardBefore = transcript.heard.reduce((sum, [from, to]) => sum + to - from, 0);
     const began = Date.now();

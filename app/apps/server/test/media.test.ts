@@ -212,3 +212,49 @@ test.skipIf(ffmpeg === null)("long footage's thumbnails are each read where they
     cleanup();
   }
 }, 60_000);
+
+test("a streamed proxy the cloud didn't have yet is playable once its upload lands", async () => {
+  // Nov 11: a dropped file's proxy is uploaded just after the drop returns; the first ask found nothing,
+  // and the file stayed "Its proxy isn't in the cloud" for good (its background watch skipped it too).
+  const { mediaHooks, MISSING_IN_CLOUD } = await import("../src/media.ts");
+  const { setSystemTime } = await import("bun:test");
+  const { store, cleanup } = fixtureHome("media-missing");
+  const was = mediaHooks.keyAnswers;
+  const hex = "7b7767985de7eb1e5e4fcf0c202146b64ce305b0e1f6a970d93bdcb9bcc7a357";
+  const source = `http://127.0.0.1:7731/api/cloud/preview?key=${encodeURIComponent(`edit/proxies/sha256/${hex}.mp4`)}`;
+  let uploaded = false;
+  const asked: boolean[] = [];
+  try {
+    mediaHooks.keyAnswers = async () => {
+      asked.push(uploaded);
+      return uploaded;
+    };
+    const media = new Processor(store);
+    const events: MediaStatus[] = [];
+    const stop = store.subscribe((event) => {
+      if (event.type === "media" && event.path === source) events.push(event.status as MediaStatus);
+    });
+    media.ensure(source, { kind: "video", duration: 400, width: 1280, height: 720, fps: 30, has_audio: true } as never);
+    media.status(source);
+    await Bun.sleep(20);
+    expect(media.status(source)).toMatchObject({ proxy: "failed", error: MISSING_IN_CLOUD });
+    // The upload lands; while the "not there" answer is fresh nothing is asked again.
+    uploaded = true;
+    media.status(source);
+    await Bun.sleep(20);
+    expect(asked).toEqual([false]);
+    // Once it's old, the next look asks again and the file is playable.
+    setSystemTime(new Date(Date.now() + 61_000));
+    media.status(source);
+    await Bun.sleep(20);
+    expect(asked).toEqual([false, true]);
+    expect(media.status(source)).toMatchObject({ proxy: "ready", proxy_progress: 1 });
+    expect(media.status(source).error).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({ proxy: "ready" });
+    stop();
+  } finally {
+    setSystemTime();
+    mediaHooks.keyAnswers = was;
+    cleanup();
+  }
+});

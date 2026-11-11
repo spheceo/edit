@@ -904,6 +904,7 @@ async function putHashed(cache: string, path: string, probe: Probe, name: string
       await putRecord({ source, originalReady: true, proxyKey: originalKey, proxyReady: true, duration: probe.duration });
     }
     const made = probe.kind === "image" ? path : previewPath(cache, originalKey);
+    log.knownAs([source, originalKey, made], name);
     carryAnalysis(cache, path, made);
     return { path: made, name, probe, cloud: { source, original: originalKey, proxy: originalKey, size } };
   }
@@ -923,7 +924,7 @@ async function putHashed(cache: string, path: string, probe: Probe, name: string
       }
       const pieced = pieces.proxyKeyOf(source);
       const made = previewPath(cache, pieced);
-      log.knownAs([pieced, originalKey, made], name);
+      log.knownAs([source, pieced, originalKey, made], name);
       carryAnalysis(cache, path, made);
       return { path: made, name, probe, cloud: { source, original: originalKey, proxy: pieced, size } };
     }
@@ -942,7 +943,7 @@ async function putHashed(cache: string, path: string, probe: Probe, name: string
     await publish(path, probe, source, originalKey, needOriginal, proxy, local, later);
   }
   const made = previewPath(cache, proxy);
-  log.knownAs([proxy, originalKey, made], name);
+  log.knownAs([source, proxy, originalKey, made], name);
   carryAnalysis(cache, path, made);
   return { path: made, name, probe, cloud: { source, original: originalKey, proxy, size } };
 }

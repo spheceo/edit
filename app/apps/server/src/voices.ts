@@ -304,7 +304,7 @@ export async function revoice(cacheDir: string | null, source: string, target: s
     await cameras.split(source, now).catch((error: unknown) => diag.warn("voices", `${source}: reading its bodycams: ${diag.messageOf(error)}`));
     writeAtomic(target, serialize(now));
     const voices = new Set(now.words.map((word) => word.speaker).filter(Boolean)).size;
-    log.line(`${cloudSource ?? log.labelOf(source)}: ${log.said(MODEL)} gave its ${voices} voices, from ${from}, in ${log.took(Date.now() - began)}; Scribe's words stay`);
+    log.line(`${cloudSource !== null ? log.nameOf(cloudSource) : log.labelOf(source)}: ${log.said(MODEL)} gave its ${voices} voices, from ${from}, in ${log.took(Date.now() - began)}; Scribe's words stay`);
     return true;
   } catch (error) {
     diag.warn("voices", `${source}: pyannote's voices: ${diag.messageOf(error)}; its voices stay as they were`);

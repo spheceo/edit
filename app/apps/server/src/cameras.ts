@@ -159,7 +159,10 @@ export async function read(source: string, seconds: number): Promise<Reading | n
     const filter =
       `fps=1/${step.toFixed(3)},split[a][b];[a]crop=iw:ih/8:0:0[top];[b]crop=iw:ih/8:0:ih*7/8[bottom];` +
       `[top][bottom]vstack,scale=480:-2,pad=iw+4:ih+4:2:2:red,tile=4x${PER_SHEET / 4}`;
-    const made = Bun.spawn([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", source, "-filter_complex", filter, "-q:v", "4", `${dir}/sheet-%03d.jpg`], {
+    // Keyframes only: a camera's ID stays put between them, and an encoder puts one on each cut, where cameras change.
+    // Decoding every frame took the 25-minute video of Nov 11 101 s here (it held Script mode's "Transcribing" after
+    // Scribe was done); its keyframes, 4.4 s apart, 8 s. A strip is then at most a keyframe's gap early, the step's size.
+    const made = Bun.spawn([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-skip_frame", "nokey", "-i", source, "-filter_complex", filter, "-q:v", "4", `${dir}/sheet-%03d.jpg`], {
       stdin: "ignore",
       stdout: "ignore",
       stderr: "pipe",
@@ -170,17 +173,20 @@ export async function read(source: string, seconds: number): Promise<Reading | n
     const sheets = fs.readdirSync(dir).filter((name) => name.startsWith("sheet-")).sort();
     const ids = new Array<string>(frames).fill("");
     let cost = 0;
-    for (const [index, name] of sheets.entries()) {
-      const first = index * PER_SHEET;
-      const count = Math.min(PER_SHEET, frames - first);
-      if (count <= 0) break;
-      const body = `${dir}/ask-${index}.json`;
-      fs.writeFileSync(body, JSON.stringify(question(fs.readFileSync(`${dir}/${name}`).toString("base64"), count)));
-      const answer = await aiClaude.post(body, undefined, "Claude opus reading the bodycams' IDs");
-      const usage = (answer as { usage?: { cost?: unknown } } | null)?.usage?.cost;
-      if (typeof usage === "number") cost += usage;
-      for (const [at, id] of tiles(answer, count)) ids[first + at] = id;
-    }
+    // The sheets asked at once (at most MOST / PER_SHEET): one after another, three took 46 s on Nov 11.
+    await Promise.all(
+      sheets.map(async (name, index) => {
+        const first = index * PER_SHEET;
+        const count = Math.min(PER_SHEET, frames - first);
+        if (count <= 0) return;
+        const body = `${dir}/ask-${index}.json`;
+        fs.writeFileSync(body, JSON.stringify(question(fs.readFileSync(`${dir}/${name}`).toString("base64"), count)));
+        const answer = await aiClaude.post(body, undefined, "Claude opus reading the bodycams' IDs");
+        const usage = (answer as { usage?: { cost?: unknown } } | null)?.usage?.cost;
+        if (typeof usage === "number") cost += usage;
+        for (const [at, id] of tiles(answer, count)) ids[first + at] = id;
+      }),
+    );
     diag.info("media", `${source}: bodycam IDs read on ${sheets.length} sheets ($${cost.toFixed(4)}): ${[...new Set(ids.filter((id) => id !== ""))].join(", ") || "none"}`);
     return { step, ids };
   } finally {

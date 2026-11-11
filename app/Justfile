@@ -46,8 +46,11 @@ native profile="release":
 
 # The native addon's smoke tests under Bun (builds it first; GPU tests skip
 # without one, or with EDIT_NO_GPU=1), and its types
-native-test: (native "debug")
-    cd crates/edit-native && bun test && bun run typecheck
+native-test: (native "debug") native-tests
+
+# The addon's own tests on the addon as it is (CI builds it or restores it from its cache first).
+native-tests:
+    cd crates/edit-native && { [ -d node_modules ] || bun install --frozen-lockfile; } && bun test && bun run typecheck
 
 # The addon embedded in a `bun build --compile` binary, run from elsewhere
 # with the .node out of the way (what shipping it inside `edit` relies on)
@@ -341,12 +344,13 @@ check-rust:
     cargo test {{rust_crates}} -- --nocapture
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
 
-# Everything but the server's tests: the same TypeScript anywhere, so CI runs it on Linux alone.
+# Everything but the server's tests: the same TypeScript anywhere, so CI runs it on Linux alone. Like
+# check-tests, it takes the debug addon as built already (`just native debug`, or CI's cache of it).
 check-ts: types
     # The generated TS types are committed: they must match the Rust.
     git diff --exit-code -- packages/edit-types
     test -z "$(git status --porcelain -- packages/edit-types)"
-    just native-test
+    just native-tests
     # So is the addon's index.d.ts (napi writes it as it builds).
     git diff --exit-code -- crates/edit-native/index.d.ts
     bun run --cwd apps/web typecheck
@@ -354,14 +358,13 @@ check-ts: types
     bun run --cwd apps/server typecheck
     just lint
 
-# `shard` of the server's tests (1/2, 2/2: CI's two jobs side by side, balanced by test/timings.json) after the
-# addon's own, one after another: in parallel on CI's runners FFmpeg- and encoder-heavy tests timed out (Nov 11:
+# `shard` of the server's tests (1/2, 2/2: CI's two jobs side by side, balanced by test/timings.json), one after
+# another, on the debug addon as built already: in parallel on CI's runners FFmpeg- and encoder-heavy tests timed out (Nov 11:
 # two hung on the Mac's hardware encoder, three thumbnail tests at 60 s on Linux), where one after another they
 # always passed.
 check-tests shard="1/1":
-    just native-test
     cd apps/server && bun test --timeout=30000 --timings=test/timings.json --shard={{shard}}
 
 # Here, on a desk with the cores for it: the server's tests in parallel (package.json's test).
-check-app: check-ts
+check-app: (native "debug") check-ts
     bun run --cwd apps/server test

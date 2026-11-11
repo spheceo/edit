@@ -97,14 +97,35 @@ jobs:
       - name: Dependencies
         if: matrix.part != 'rust'
         run: bun install --frozen-lockfile
+      # The debug addon every part but the Rust runs on, kept by a hash of the
+      # Rust it's built from (a minute and more on each part, every run: the
+      # workspace's own crates are never in rust-cache's cache), built when
+      # that changed. Its index.d.ts is in the key, so a hit is a build whose
+      # check of it passed.
+      - id: addon
+        if: matrix.part != 'rust'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: app/crates/edit-native/edit-native.node
+          key: addon-debug-${{ matrix.target }}-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**') }}
+      - name: The addon
+        if: matrix.part != 'rust' && steps.addon.outputs.cache-hit != 'true'
+        run: just native debug
+      # The addon's own tests once on each platform: in Linux's TypeScript part
+      # (check-ts) and the Mac's first half of the server's tests.
       - name: Check
         if: matrix.part != 'acceptance'
-        run: just ${{ matrix.part == 'tests-1' && 'check-tests 1/2' || matrix.part == 'tests-2' && 'check-tests 2/2' || format('check-{0}', matrix.part) }}
-      - name: The addon, for acceptance
-        if: matrix.part == 'acceptance'
-        run: just native debug
+        run: |
+          case "${{ matrix.part }}" in
+            rust) just check-rust ;;
+            ts) just check-ts ;;
+            tests-1)
+              if [ "$RUNNER_OS" = macOS ]; then just native-tests; fi
+              just check-tests 1/2 ;;
+            tests-2) just check-tests 2/2 ;;
+          esac
       # Acceptance on the Mac (Nov 8 audit, item I; scripts/acceptance.ts): the
-      # server from this commit (on the debug addon built a step ago) serving
+      # server from this commit (on the debug addon above) serving
       # the UI built here, a fixture project made with FFmpeg, the editor
       # opened in headless Chrome (first frame, play, scrub, full screen, no
       # decode error) and Home's layout at two widths. A part of its own since

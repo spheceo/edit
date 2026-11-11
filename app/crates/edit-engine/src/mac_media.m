@@ -967,12 +967,22 @@ void edit_sound_writer_close(void *handle) {
 @property AVAssetWriter *writer;
 @property AVAssetWriterInput *input;
 @property AVAssetWriterInputPixelBufferAdaptor *adaptor;
+// The adaptor's pixel-buffer pool, held by us from the writer's start to its
+// end. Read from the adaptor at each frame it was the adaptor's alone, and a
+// writer failing on its own threads (the encoder refusing a setting) let go of
+// it while a frame was being made from it: CoreVideo trapped on the freed pool
+// (EXC_BREAKPOINT in __CF_IS_OBJC under CVPixelBufferPoolCreatePixelBuffer…,
+// CI's Mac, Nov 11, caught under lldb: Check's intermittent SIGTRAP).
+@property(nonatomic) CVPixelBufferPoolRef pool;
 @property uint32_t width;
 @property uint32_t height;
 @property double fps;
 @end
 @implementation EditWriter
-- (void)dealloc { if (_writer.status == AVAssetWriterStatusWriting) [_writer cancelWriting]; }
+- (void)dealloc {
+    if (_writer.status == AVAssetWriterStatusWriting) [_writer cancelWriting];
+    if (_pool) CVPixelBufferPoolRelease(_pool);
+}
 @end
 
 // `flags`: 1 = a finished export (B-frames, High profile), 2 = move the index
@@ -1020,6 +1030,10 @@ static void *edit_writer_open_unguarded(const char *path, uint32_t width, uint32
         w.writer.shouldOptimizeForNetworkUse = (flags & 2) != 0;
         if (![w.writer startWriting]) { fail(error, capacity, w.writer.error.localizedDescription); return NULL; }
         [w.writer startSessionAtSourceTime:kCMTimeZero];
+        // The pool exists once writing has started; ours to hold until the writer goes.
+        CVPixelBufferPoolRef pool = w.adaptor.pixelBufferPool;
+        if (!pool) { [w.writer cancelWriting]; fail(error, capacity, w.writer.error.localizedDescription ?: @"Native encoder has no pixel buffers"); return NULL; }
+        w.pool = CVPixelBufferPoolRetain(pool);
         return (__bridge_retained void *)w;
     }
 }
@@ -1052,7 +1066,7 @@ static int edit_writer_frame_unguarded(void *handle, int64_t frame, const uint8_
             }
             if (w.input.readyForMoreMediaData) {
                 CVReturn result = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault,
-                    w.adaptor.pixelBufferPool, (__bridge CFDictionaryRef)@{(id)kCVPixelBufferPoolAllocationThresholdKey: @6}, &pixel);
+                    w.pool, (__bridge CFDictionaryRef)@{(id)kCVPixelBufferPoolAllocationThresholdKey: @6}, &pixel);
                 if (result != kCVReturnSuccess && result != kCVReturnWouldExceedAllocationThreshold) {
                     fail(error, capacity, @"Cannot allocate native encoder pixel buffer"); return 0;
                 }

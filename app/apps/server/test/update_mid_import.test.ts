@@ -46,7 +46,7 @@ test.skipIf(ffmpeg === null)("a script's import stopped for an update stays impo
     // Each piece answered slowly: the import is mid-transcription when the update comes.
     mock.on("POST", "/v1/transcribe", async () => (await Bun.sleep(1_500), Response.json(scribeAnswer(["Where", "were", "you?"]))));
     const script = await imports.fromFile(app, data, source, null, "Mid import", null, null, "started");
-    for (let i = 0; i < 200 && mock.calls("/v1/transcribe").length === 0; i++) await Bun.sleep(50);
+    for (let i = 0; i < 600 && mock.calls("/v1/transcribe").length === 0; i++) await Bun.sleep(50);
     expect(mock.calls("/v1/transcribe").length).toBeGreaterThan(0);
     // An update doesn't wait for it.
     expect(busy.wouldLose(app)).toEqual([]);

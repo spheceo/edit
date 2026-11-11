@@ -92,7 +92,8 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
     expect(Date.now() - asked).toBeLessThan(700);
     expect(answered.status).toBe("processing");
     expect(imports.importing(answered.id)).toBe(true);
-    for (let i = 0; i < 200 && imports.importing(answered.id); i++) await Bun.sleep(50);
+    // Up to 30 s: a loaded runner's import took past 10 (Check, Nov 11).
+    for (let i = 0; i < 600 && imports.importing(answered.id); i++) await Bun.sleep(50);
     expect(imports.importing(answered.id)).toBe(false);
     const now = store.read(store.scriptDir(data, answered.id));
     expect(now.status).toBe("ready");
@@ -102,7 +103,7 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
     mock.on("POST", "/v1/transcribe", () => Response.json({ detail: { message: "quota exceeded" } }, { status: 402 }));
     const second = await imports.fromFile(app, data, source, null, "Stops later", null, null, "started");
     expect(second.status).toBe("processing");
-    for (let i = 0; i < 200 && imports.importing(second.id); i++) await Bun.sleep(50);
+    for (let i = 0; i < 600 && imports.importing(second.id); i++) await Bun.sleep(50);
     const stopped = store.read(store.scriptDir(data, second.id));
     expect(stopped.status).toBe("error");
     expect(stopped.error).toContain("quota exceeded");
@@ -110,7 +111,7 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
     mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Where", "were", "you?"])));
     const retried = await imports.resume(app, data, second.id, { kind: "retry" }, "started");
     expect(retried.status).toBe("processing");
-    for (let i = 0; i < 200 && imports.importing(second.id); i++) await Bun.sleep(50);
+    for (let i = 0; i < 600 && imports.importing(second.id); i++) await Bun.sleep(50);
     expect(store.read(store.scriptDir(data, second.id)).status).toBe("ready");
 
     // Made with a first build (New project): built once its import is ready, no longer importing by then
@@ -120,7 +121,7 @@ test.skipIf(ffmpeg === null)("an import asked for by a route is answered once it
     imports.hooks.build = (_app, id, note) => void built.push({ id, note, importing: imports.importing(id) });
     try {
       const third = await imports.fromFile(app, data, source, null, "Builds after", null, { note: "the first message" }, "started");
-      for (let i = 0; i < 200 && built.length === 0; i++) await Bun.sleep(50);
+      for (let i = 0; i < 600 && built.length === 0; i++) await Bun.sleep(50);
       expect(built).toEqual([{ id: third.id, note: "the first message", importing: false }]);
       expect(store.read(store.scriptDir(data, third.id)).firstBuild).toBeUndefined();
     } finally {

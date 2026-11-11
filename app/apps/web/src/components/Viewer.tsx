@@ -410,8 +410,9 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
 /**
  * While Bodycam HQ's agent works, the viewer says so as the thumbnail page
  * does (Sphe, Nov 11: "something like the thumbnail page… where we see a cool
- * animation and the stage it's at"): its light turning round the picture's
- * edge, a sheen across it, and the stage on a dark pill with the turning orb.
+ * animation and the stage it's at"): a light travelling round the viewer's
+ * rounded edge, a sheen across it, and the stage on a dark pill with the
+ * thumbnail page's turning orb.
  */
 function HqWorking() {
   const running = useAgent((state) => state.running);
@@ -424,8 +425,7 @@ function HqWorking() {
       {running && (
         <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-xl">
           <div className="working-sheen" />
-          {/* Inside the frame's edge (the thumbnail's ring sits 2 px outside its canvas, which the viewer's frame would cut). */}
-          <div className="working-ring" style={{ inset: 0 }} />
+          <EdgeLight />
           <div className="absolute inset-x-0 top-3 flex justify-center">
             <motion.div layout transition={{ type: "spring", stiffness: 420, damping: 34 }} className="flex h-7 items-center gap-2 rounded-full bg-[#0b0b0b] pr-3.5 pl-2 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_8px_24px_#000c]">
               <span className="working-orb" />
@@ -439,6 +439,40 @@ function HqWorking() {
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/**
+ * The light round the viewer's edge: one rounded rectangle on its border,
+ * stroked only along a stretch that travels round it, with a soft glow under
+ * it and a white head. Drawn as a shape, not the thumbnail's masked gradient,
+ * whose corners Safari's engine left square and outside the viewer's rounded
+ * frame (Sphe, Nov 11: "it is so broken").
+ */
+function EdgeLight() {
+  const box = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const node = box.current;
+    if (node === null) return;
+    const observer = new ResizeObserver(() => setSize({ width: node.clientWidth, height: node.clientHeight }));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  // Its line on the frame's border, a pixel in, the frame's corner radius (rounded-xl, 12 px) a pixel less.
+  const edge = { x: 1, y: 1, width: Math.max(0, size.width - 2), height: Math.max(0, size.height - 2), rx: 11, pathLength: 100, fill: "none" };
+  return (
+    <div ref={box} className="absolute inset-0">
+      {size.width > 0 && (
+        <svg width={size.width} height={size.height} className="absolute inset-0" aria-hidden>
+          {/* The glow, the light, and its white head at the front: one stretch of the border, the same for all three. */}
+          <rect {...edge} className="edge-light" stroke="var(--color-agent)" strokeWidth={8} strokeDasharray="26 74" opacity={0.4} style={{ filter: "blur(6px)" }} />
+          <rect {...edge} className="edge-light" stroke="var(--color-agent)" strokeWidth={2} strokeDasharray="26 74" strokeLinecap="round" />
+          <rect {...edge} className="edge-light" stroke="var(--color-playhead)" strokeWidth={2} strokeDasharray="0 16 8 76" strokeLinecap="round" />
+          <rect {...edge} className="edge-light" stroke="#fff" strokeWidth={2} strokeDasharray="0 23 3 74" strokeLinecap="round" />
+        </svg>
+      )}
+    </div>
   );
 }
 

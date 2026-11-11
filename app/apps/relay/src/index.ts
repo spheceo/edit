@@ -2,7 +2,7 @@ import { allow, budgetKey, burstKey, caller, mayVoice, type AuthEnv, type Caller
 import { exportDoc, listDocs } from "./docs";
 import { trelloCard, trelloCards } from "./trello";
 import { manifest } from "./manifest";
-import { cloud, r2Config, type CloudEnv } from "./cloud";
+import { cloud, emptyCleanups, r2Config, type CloudEnv } from "./cloud";
 import { media, type EdgeCache } from "./media";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
 import { fromOtherRelay, openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
@@ -87,6 +87,18 @@ const SCRIBE = "https://api.elevenlabs.io/v1/speech-to-text";
 const MODEL = "scribe_v3";
 
 export default {
+  /** Every half hour (wrangler.toml `crons`): Edit's queued cloud files deleted (cloud.ts `emptyCleanups`). */
+  async scheduled(_event: unknown, env: Env, ctx: { waitUntil(promise: Promise<unknown>): void }): Promise<void> {
+    ctx.waitUntil(
+      emptyCleanups(env).then(
+        (done) => {
+          if (done.deleted + done.failed > 0) console.log(`cleanups: ${done.deleted} deleted, ${done.failed} failed`);
+        },
+        (error: unknown) => console.error(`cleanups: ${error instanceof Error ? error.message : String(error)}`),
+      ),
+    );
+  },
+
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     // What Edit lets an admin grant (accounts.spheceo.com reads it): public, cached up to an hour.

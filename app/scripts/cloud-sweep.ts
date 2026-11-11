@@ -1,10 +1,12 @@
 /**
  * Footage in the cloud that no project or script uses any more (a deleted
  * project's: Convex deletes only its body), and temporary pieces left behind.
- * Report only unless `--delete`; then it deletes only what has been
- * unreferenced at every run for GRACE_DAYS (a teammate's Mac may hold a
- * project not pushed yet), noted in `edit/sweep/unreferenced.json`. The bucket
- * is shared with Repack: nothing outside `edit/` is read or touched.
+ * Report only unless `--delete`, which writes and deletes nothing; then it
+ * deletes only what has been unreferenced at every deleting run for
+ * GRACE_DAYS (a teammate's Mac may hold a project not pushed yet), noted in
+ * `edit/sweep/unreferenced.json`. What a live Writer script uses is read from
+ * its `edit-shared.json` under `writer/scripts/` (read only). The bucket is
+ * shared with Repack: nothing outside `edit/` is touched.
  *
  *   infisical run --projectId=… --env=dev --path=/edit-relay --silent -- bun scripts/cloud-sweep.ts [--delete]
  */
@@ -79,8 +81,20 @@ for (const card of projects) {
   if (!answer.ok) throw new Error(`a project's body didn't load (${answer.status}): nothing is deleted when one can't be read`);
   read(await answer.text());
 }
-const scripts = (await convex("query", "writer:listScripts", {})) as { deletedAt?: number }[];
-for (const row of scripts) if (row.deletedAt === undefined || row.deletedAt === null) read(JSON.stringify(row));
+const scripts = (await convex("query", "writer:listScripts", {})) as { scriptId?: string; deletedAt?: number }[];
+for (const row of scripts) {
+  if (row.deletedAt !== undefined && row.deletedAt !== null) continue;
+  read(JSON.stringify(row));
+  // The footage a script uses is named in its edit-shared.json (writer/handoff.ts), pushed with its files, not in
+  // its row: read here, every version of it, or that footage counts as unused (Nov 11: 83.7 GB of live scripts' originals).
+  if (typeof row.scriptId !== "string") throw new Error("a script without an id: nothing is deleted when one can't be read");
+  let token: string | undefined;
+  do {
+    const page = await s3.list({ prefix: `writer/scripts/${row.scriptId}/files/`, maxKeys: 1000, ...(token !== undefined ? { continuationToken: token } : {}) });
+    for (const one of page.contents ?? []) if (one.key.endsWith("/edit-shared.json")) read(await s3.file(one.key).text());
+    token = page.isTruncated === true ? page.nextContinuationToken : undefined;
+  } while (token !== undefined);
+}
 const here = join(os.homedir(), ".edit", "projects");
 for (const name of fs.existsSync(here) ? fs.readdirSync(here) : []) if (name.endsWith(".json")) read(fs.readFileSync(join(here, name), "utf8"));
 
@@ -123,11 +137,12 @@ for (const prefix of TEMP) {
 const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
 console.log(`${projects.length} cloud projects and ${scripts.length} scripts read; ${used.size} sources in use`);
 console.log(`unused footage: ${unused.size} sources, ${gb(unusedBytes)}; due (unused ${GRACE_DAYS}+ days, and old temporary pieces): ${due.length} files, ${gb(dueBytes)}`);
-await s3.write(NOTED, JSON.stringify(next));
 if (!remove) {
   for (const key of due.slice(0, 40)) console.log(`  would delete ${key}`);
   console.log("report only: run with --delete to delete what's due");
 } else {
+  // Kept only by a run that deletes: a report writes nothing (Nov 11: it wrote this even when only reporting).
+  await s3.write(NOTED, JSON.stringify(next));
   for (const key of due) await s3.delete(key);
   console.log(`deleted ${due.length} files, ${gb(dueBytes)}`);
 }

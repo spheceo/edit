@@ -297,6 +297,12 @@ export async function archiveExportFile(
  */
 export async function archiveFinished(home: string, id: string, output: string, key: string, record: ExportRecord, signal?: AbortSignal): Promise<void> {
   if (!fs.existsSync(output)) {
+    // Its review's copy stands in for it (`heldByReview`): listed as that.
+    const kept = record.bytes === null ? null : reviewCopyOf(home, id, output, record.bytes);
+    if (kept !== null) {
+      remember(home, id, { ...record, cloudKey: kept });
+      return;
+    }
     // Archived and deleted here before a restart crossed its job off: listed in the cloud, and done.
     const there = record.bytes === null ? null : await exportCloud.head(key).catch(() => null);
     if (there !== null && there.size === record.bytes) {
@@ -306,6 +312,13 @@ export async function archiveFinished(home: string, id: string, output: string, 
     // Nothing to send: the job is crossed off, not tried at every start until it's given up.
     throw new jobs.Gone(`${output} is gone`);
   }
+  // Its review's full-quality download is this very file already: not sent a second time.
+  const held = reviewCopyOf(home, id, output, fs.statSync(output).size);
+  if (held !== null) {
+    remember(home, id, { ...record, cloudKey: held });
+    diag.info("export", `${id}: ${output} is in the cloud already as ${held}: not archived again`);
+    return;
+  }
   // Short of room: the older copies kept while there was some go first, so this one may stay.
   dropKept(home, output);
   // Its job begun by an earlier run: carried on after a restart.
@@ -314,6 +327,9 @@ export async function archiveFinished(home: string, id: string, output: string, 
     try {
       remember(home, id, record);
     } catch { /* the list keeps the local-only record */ }
+    // Its review's copy landed while this one went up: this one goes again.
+    const held = fs.existsSync(output) ? reviewCopyOf(home, id, output, fs.statSync(output).size) : null;
+    if (held !== null) await heldByReview(home, id, output, held, fs.statSync(output).size);
     diag.info("export", `${id}: archived ${output} to ${key}${fs.existsSync(output) ? " (the local copy kept: being read, or the newest with room for it)" : " and deleted the local copy"}`);
   } else if (signal?.aborted) {
     diag.info("export", `${id}: the upload of ${output} to the cloud stopped: a newer export of it is being made`);
@@ -544,6 +560,44 @@ function remember(home: string, id: string, record: ExportRecord): void {
   own.push(record);
   records[id] = own.slice(Math.max(own.length - KEEP_LISTED, 0));
   writeRecords(home, records);
+}
+
+/**
+ * An export's exact file is in the cloud already as a review's full-quality
+ * download (`key`, `size` bytes): its own archive would be a second copy of
+ * the same bytes (Sphe, Nov 11: 111 GB of exports were stored twice). The
+ * archive under `edit/exports/` goes (the relay lets a project's people
+ * delete its own exports) and the export points at the review's copy, which
+ * it's restored from; one still to go up is never sent (`archiveFinished`).
+ * A newer export written to the same path since (another size) is left as it
+ * is. A delete the cloud refuses (an older relay) leaves both: nothing lost.
+ */
+export async function heldByReview(home: string, id: string, path: string, key: string, size: number): Promise<void> {
+  const records = readRecords(home);
+  const record = (records[id] ?? []).find((one) => one.path === path);
+  if (record === undefined || (record.bytes !== null && record.bytes !== size)) return;
+  const archive = record.cloudKey;
+  if (archive === key) return;
+  if (archive !== undefined && archive.startsWith(`edit/exports/${id}/`)) {
+    try {
+      await cloud.remove([archive]);
+    } catch (error) {
+      diag.warn("export", `${id}: ${archive} is the same file as the review's ${key}, and stays: ${diag.messageOf(error)}`);
+      return;
+    }
+  }
+  const now = readRecords(home);
+  const fresh = (now[id] ?? []).find((one) => one.path === path);
+  if (fresh === undefined) return;
+  fresh.cloudKey = key;
+  writeRecords(home, now);
+  diag.info("export", `${id}: ${path} is kept in the cloud once, as the review's ${key}${archive !== undefined && archive !== key ? ` (${archive} removed)` : ""}`);
+}
+
+/** The review's copy an export's file already is in the cloud, when it is (`heldByReview`). */
+function reviewCopyOf(home: string, id: string, path: string, size: number): string | null {
+  const record = (readRecords(home)[id] ?? []).find((one) => one.path === path);
+  return record?.cloudKey !== undefined && record.cloudKey.startsWith(`edit/reviews/${id}/`) && (record.bytes === null || record.bytes === size) ? record.cloudKey : null;
 }
 
 /** The fewest frames a speed sample has: a short export is mostly its fixed start and finish. */

@@ -332,7 +332,7 @@ const R2_ROUTES: Record<string, (body: Record<string, unknown>, r2: R2, access: 
     // Footage is shared by every project using it: only an admin deletes from the cloud. A deleted review
     // link's own files are the exception: whoever may share reviews deletes them once Repack's review is gone
     // (Nov 1: a non-admin's delete left them for a cleanup that never runs on dev).
-    if (!isAdmin(access.found) && !(await deletedReviewFiles(access, keys))) throw new Forbidden("Only an admin can delete from Edit's cloud.");
+    if (!isAdmin(access.found) && !(await deletedReviewFiles(access, keys)) && !(await ownExports(access, keys))) throw new Forbidden("Only an admin can delete from Edit's cloud.");
     await Promise.all(keys.map((key) => r2Fetch(r2, "DELETE", key, {}, { allow404: true })));
     return json(200, { ok: true, deleted: keys.length });
   },
@@ -597,6 +597,22 @@ async function deletedReviewFiles(access: Access, keys: string[]): Promise<boole
   return (await reviewOf(access.env, project)) === null;
 }
 
+/**
+ * A project's own exports (`edit/exports/<project>/<name>`: never footage,
+ * never another project's): whoever may work on the project deletes them.
+ * Edit drops an export's archive once its review holds the same file as its
+ * full-quality download (Sphe, Nov 11: 111 GB of exports were stored twice).
+ */
+async function ownExports(access: Access, keys: string[]): Promise<boolean> {
+  const projects = new Set(keys.map((key) => projectOfKey(key)));
+  const [project] = [...projects];
+  if (projects.size !== 1 || project === null || project === undefined) return false;
+  if (!keys.every((key) => key.startsWith(`edit/exports/${project}/`) && !key.slice(`edit/exports/${project}/`.length).includes("/"))) return false;
+  if (project === "playback" || project === "results") return false;
+  for (const key of keys) await mayTouch(access, "write", key);
+  return true;
+}
+
 /** Repack's review of a project (`reviews:get`, as Edit), or null when there's none. */
 async function reviewOf(env: CloudEnv, projectId: string): Promise<unknown> {
   if (!env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) throw new Upstream("Convex is not configured on the relay yet.");
@@ -628,6 +644,39 @@ async function convexValueOf(env: CloudEnv, kind: string, path: string, args: Re
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Empties Edit's own entries from mamagi's cleanup queue (Sphe, Nov 11: old
+ * review versions are retired when a new one is shared, and their files were
+ * queued for a cleanup only Repack's server ever ran): each due file under
+ * `edit/` deleted from R2, then settled; a failure is settled with its error,
+ * so the queue tries it again later. Runs on the relay's schedule.
+ */
+export async function emptyCleanups(env: CloudEnv): Promise<{ deleted: number; failed: number }> {
+  const r2 = r2Config(env);
+  if (!r2 || !env.CONVEX_URL || !env.CONVEX_SERVICE_TOKEN) return { deleted: 0, failed: 0 };
+  let deleted = 0;
+  let failed = 0;
+  // A few pages a run, so a long queue empties over a few runs and a run stays short.
+  for (let page = 0; page < 4; page++) {
+    const due = await convexValueOf(env, "query", "cleanup:due", { limit: 50, prefix: "edit/" });
+    if (!Array.isArray(due) || due.length === 0) break;
+    for (const row of due as { id: string; target: string }[]) {
+      let error: string | null = null;
+      try {
+        if (!validKey(row.target)) throw new Error("not a key under edit/");
+        await r2Fetch(r2, "DELETE", row.target, {}, { allow404: true });
+        deleted += 1;
+      } catch (thrown) {
+        error = thrown instanceof Error ? thrown.message : String(thrown);
+        failed += 1;
+      }
+      await convexValueOf(env, "mutation", "cleanup:settle", { id: row.id, error });
+    }
+    if (due.length < 50) break;
+  }
+  return { deleted, failed };
 }
 
 /** A project's Convex card (`edit:getProject`, with its summary), or null when it isn't in the cloud. */

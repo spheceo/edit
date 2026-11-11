@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import * as cloud from "../src/cloud.ts";
-import { archiveExportFile, archiveFinished, dropLeftSnapshot, exportCloud, listExports, type ExportRecord } from "../src/exports.ts";
+import { archiveExportFile, archiveFinished, dropLeftSnapshot, exportCloud, heldByReview, listExports, type ExportRecord } from "../src/exports.ts";
 import * as jobs from "../src/jobs.ts";
 import { fullBehind } from "../src/reviews.ts";
 
@@ -115,6 +115,45 @@ test("a review's full-quality file already up goes straight to telling the revie
     expect(sent).toBe(0);
     expect(told.at(-1)).toEqual({ fullKey: "edit/reviews/p1/t/full.mp4", fullUpload: null });
     expect(jobs.list(home, "full")).toEqual([]);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("an export shared for review is kept in the cloud once: its archive goes for the review's copy, and one still to go up never does (Nov 11)", async () => {
+  const home = folder();
+  try {
+    const output = path.join(home, "Case.mp4");
+    fs.writeFileSync(output, Buffer.alloc(50));
+    const archive = "edit/exports/p1/Case.mp4";
+    const full = "edit/reviews/p1/t1/full.mp4";
+    const record: ExportRecord = { path: output, name: "Case.mp4", finished_ms: 1, seconds: 1, bytes: 50, frames: 30, whole: true, format: "h264", cloudKey: archive };
+    let sent = 0;
+    const removed: string[][] = [];
+    spies.push(
+      spyOn(exportCloud, "head").mockImplementation(async () => ({ size: 50 })),
+      spyOn(exportCloud, "upload").mockImplementation(async () => void (sent += 1)),
+      spyOn(cloud, "remove").mockImplementation(async (keys: string[]) => void removed.push(keys)),
+    );
+    // Archived, then shared: the archive goes, the export points at the review's copy.
+    await archiveFinished(home, "p1", output, archive, record);
+    expect(sent).toBe(1);
+    await heldByReview(home, "p1", output, full, 50);
+    expect(removed).toEqual([[archive]]);
+    expect(listExports(home, "p1")).toEqual([expect.objectContaining({ cloudKey: full })]);
+    // Its archive asked for again (a restart, a retry): not sent, the review's copy is it.
+    await archiveFinished(home, "p1", output, archive, record);
+    expect(sent).toBe(1);
+    expect(listExports(home, "p1")).toEqual([expect.objectContaining({ cloudKey: full })]);
+    // A newer export written to the same path since (another size): left as it is.
+    removed.length = 0;
+    await heldByReview(home, "p1", output, "edit/reviews/p1/t2/full.mp4", 49);
+    expect(removed).toEqual([]);
+    // The cloud refusing the delete (an older relay): both kept, nothing lost.
+    fs.writeFileSync(path.join(home, "exports.json"), JSON.stringify({ p1: [record] }));
+    spies.push(spyOn(cloud, "remove").mockImplementation(async () => { throw new Error("Only an admin can delete from Edit's cloud."); }));
+    await heldByReview(home, "p1", output, full, 50);
+    expect(listExports(home, "p1")).toEqual([expect.objectContaining({ cloudKey: archive })]);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

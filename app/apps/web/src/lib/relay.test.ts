@@ -1,7 +1,7 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readCutOffsWith, useKeys } from "../../../relay/src/auth";
-import { forgetProjects, presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
+import { emptyCleanups, forgetProjects, presign, validKey, validPrefix, writerReadable } from "../../../relay/src/cloud";
 import { forgetScripts } from "../../../relay/src/writer_cloud";
 import relay, { TranscriptionBudget, type Env } from "../../../relay/src/index";
 import { signed } from "../../../relay/src/transcribe_jobs";
@@ -617,6 +617,45 @@ describe("relay cloud endpoints", () => {
     expect((await call("r2/delete", { keys: [...files, "edit/reviews/p2/v1/edit.mp4"] }, { token: WRITER })).status).toBe(403);
     expect((await call("r2/delete", { keys: ["edit/originals/drive/f/a.mp4"] }, { token: WRITER })).status).toBe(403);
     expect((await call("r2/list", { prefix: "edit/reviews/" }, { token: WRITER })).status).toBe(403);
+  });
+
+  it("whoever may work on a project deletes its export archives, never footage or another project's (Nov 11)", async () => {
+    cloudWith(bodycam, null);
+    expect((await call("r2/delete", { keys: ["edit/exports/p1/edit.mp4", "edit/exports/p1/edit (2).mp4"] })).status).toBe(200);
+    // Not footage, not two projects at once, not the shared renders and results, nothing deeper.
+    expect((await call("r2/delete", { keys: ["edit/exports/p1/edit.mp4", "edit/originals/drive/f/a.mp4"] })).status).toBe(403);
+    expect((await call("r2/delete", { keys: ["edit/exports/p1/edit.mp4", "edit/exports/p2/edit.mp4"] })).status).toBe(403);
+    expect((await call("r2/delete", { keys: ["edit/exports/playback/p1/abc.mp4"] })).status).toBe(403);
+    expect((await call("r2/delete", { keys: ["edit/exports/results/x.json"] })).status).toBe(403);
+    expect((await call("r2/delete", { keys: ["edit/exports/p1/deeper/edit.mp4"] })).status).toBe(403);
+  });
+});
+
+describe("relay cloud: Edit's queued files", () => {
+  it("deletes what mamagi queued under edit/ and settles each, a failure settled with its error (Nov 11)", async () => {
+    const settled: { id: string; error: string | null }[] = [];
+    const deleted: string[] = [];
+    let asked = 0;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("cloudflarestorage.com")) {
+        const key = decodeURIComponent(new URL(String(url)).pathname.split("/").slice(2).join("/"));
+        if (key.endsWith("broken.mp4")) return new Response("nope", { status: 500 });
+        deleted.push(key);
+        return new Response(null, { status: 204 });
+      }
+      const sent = JSON.parse(String(init?.body)) as { path: string; args: Record<string, unknown> };
+      if (sent.path === "cleanup:due") {
+        expect(sent.args.prefix).toBe("edit/");
+        asked += 1;
+        return Response.json({ status: "success", value: asked === 1 ? [{ id: "c1", target: "edit/reviews/p1/v1/video.mp4" }, { id: "c2", target: "edit/reviews/p1/v1/broken.mp4" }, { id: "c3", target: "writer/x" }] : [] });
+      }
+      if (sent.path === "cleanup:settle") settled.push({ id: String(sent.args.id), error: (sent.args.error as string | null) ?? null });
+      return Response.json({ status: "success", value: null });
+    }));
+    const env = { R2_ACCOUNT_ID: "account", R2_ACCESS_KEY_ID: "key", R2_SECRET_ACCESS_KEY: "secret", R2_BUCKET: "bucket", CONVEX_URL: "https://convex.test", CONVEX_SERVICE_TOKEN: "svc" } as unknown as Env;
+    expect(await emptyCleanups(env)).toEqual({ deleted: 1, failed: 2 });
+    expect(deleted).toEqual(["edit/reviews/p1/v1/video.mp4"]);
+    expect(settled.map((one) => [one.id, one.error === null])).toEqual([["c1", true], ["c2", false], ["c3", false]]);
   });
 });
 

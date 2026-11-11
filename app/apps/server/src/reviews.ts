@@ -36,7 +36,7 @@ import { DEFAULT_RELAY, url as relayUrl } from "./relay.ts";
 import { ApiError } from "./http/errors.ts";
 import { readJson, type Router } from "./http/router.ts";
 import * as busy from "./busy.ts";
-import { chunkFolder, clipMap, deleteExport, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport, withWatermarkKey } from "./exports.ts";
+import { chunkFolder, clipMap, deleteExport, heldByReview, lastChunks, listExports, mapFile, optionsKey, timelineHash, withExport, withWatermarkKey } from "./exports.ts";
 import { shareLine } from "./export_prep.ts";
 import { readState, writeAtomic } from "./files.ts";
 import { registerTool, text, type ToolCall } from "./mcp/registry.ts";
@@ -494,6 +494,8 @@ export function fullBehind(home: string, projectId: string, name: string, path: 
           }
         }
         diag.info("review", `${name}: the full-quality file is up for the review's Download button`);
+        // The export's own archive is the same bytes: it's kept once, as this.
+        await heldByReview(home, projectId, path, key, last.total).catch((error: unknown) => diag.warn("review", `${name}: keeping the export once: ${diag.messageOf(error)}`));
         return;
       } catch (error) {
         if (attempt >= fullUpload.tries) {

@@ -154,11 +154,18 @@ deleted_classes = ["ExportJobs"]
 # secrets (`bun scripts/push-secrets.ts --yes`) and dev's own Convex and R2. Deploy: `npx wrangler deploy --env dev`.
 # The live relay above is deployed only from a nightly's tag (release.yml).
 # Wrangler doesn't carry bindings into an environment: each is repeated here.
+# Every half hour: Edit's queued cloud files (a retired review version's) deleted (cloud.ts emptyCleanups).
+[triggers]
+crons = ["*/30 * * * *"]
+
 [env.dev]
 name = "edit-relay-dev"
 workers_dev = true
 preview_urls = false
 routes = [{ pattern = "media-dev.spheceo.com", custom_domain = true }]
+
+[env.dev.triggers]
+crons = ["*/30 * * * *"]
 
 [env.dev.vars]
 MEDIA_HOST = "media-dev.spheceo.com"

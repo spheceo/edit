@@ -26,6 +26,7 @@ node_modules/
 
 # FFmpeg and qjs fetched for a release (scripts/ffmpeg.sh, scripts/fetch-quickjs.sh)
 /app/ffmpeg/
+/app/ci-tools/
 /app/quickjs/
 # RIFE for Linux's smoothing (scripts/rife.sh)
 /app/rife/

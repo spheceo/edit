@@ -14,6 +14,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch cancels the run it supersedes, so old runs
+# don't hold the Mac runners (GitHub gives five at a time; Nov 11: Mac parts
+# waited 7-10 minutes behind superseded runs). A re-run (attempt 2 and on:
+# someone's, or a release re-running its commit's cancelled Check,
+# release.yml `checked`) has a group of its own: never cancelled, and it
+# cancels nothing.
+concurrency:
+  group: check-${{ github.ref }}-${{ github.run_attempt == 1 && 'first' || github.run_id }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: app
@@ -69,24 +79,21 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.0
-      - name: Tools (just, FFmpeg)
-        if: runner.os == 'macOS'
-        run: brew install just ffmpeg
-      # Linux: the FFmpeg its release ships (scripts/ffmpeg.sh), and Vulkan's
-      # software device for the renderer's tests (Edit renders on Vulkan only;
-      # hosted runners have no GPU).
-      - if: runner.os == 'Linux'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      # The tools (scripts/ci-tools.sh): just, the FFmpeg Edit ships and, on
+      # Linux, Vulkan's software device for the renderer's tests, kept in one
+      # cached folder so a Check installs nothing from a package mirror (Nov
+      # 11: apt's mirror stopped resolving and failed six Checks in a row).
+      - id: image
+        run: echo "version=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: app/ffmpeg
-          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('app/scripts/ffmpeg.sh') }}
-      - name: Tools (just, FFmpeg, Vulkan)
-        if: runner.os == 'Linux'
+          path: app/ci-tools
+          key: ci-tools-${{ matrix.target }}-${{ steps.image.outputs.version }}-${{ hashFiles('app/scripts/ci-tools.sh', 'app/scripts/ffmpeg.sh') }}
+          restore-keys: ci-tools-${{ matrix.target }}-
+      - name: Tools
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq just mesa-vulkan-drivers libvulkan1
-          scripts/ffmpeg.sh ${{ matrix.target }} ffmpeg
-          echo "$PWD/ffmpeg" >> "$GITHUB_PATH"
+          scripts/ci-tools.sh ${{ matrix.target }} ci-tools
+          echo "$PWD/ci-tools/bin" >> "$GITHUB_PATH"
       - name: Dependencies
         if: matrix.part != 'rust'
         run: bun install --frozen-lockfile

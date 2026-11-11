@@ -46,7 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     permissions:
-      actions: read
+      # write: to run the commit's Check again when a newer push cancelled it (never one that failed).
+      actions: write
     defaults:
       run:
         working-directory: .
@@ -72,8 +73,24 @@ jobs:
           fi
           read -r id status conclusion <<<"$run"
           echo "Check run: https://github.com/$GH_REPO/actions/runs/$id"
-          # Check takes ~15 minutes; a rerun of a failed leg restarts the wait.
+          # Check takes ~5 minutes; a rerun of a failed leg restarts the wait. A
+          # run cancelled because a newer push to main superseded it (check.yml's
+          # concurrency) never ran: it's run again for this commit (its own
+          # concurrency group, so nothing cancels it) and waited for. A failure
+          # is never run again here.
+          reruns=0
           for _ in $(seq 1 420); do
+            if [ "$status" = completed ] && [ "$conclusion" = cancelled ] && [ "$reruns" -lt 2 ]; then
+              echo "Check for $SHA was cancelled (superseded by a newer push): running it again for this release"
+              gh run rerun "$id"
+              reruns=$((reruns + 1))
+              # Until GitHub says it's going again (it can read completed for a few seconds).
+              for _ in $(seq 1 24); do
+                sleep 5
+                read -r id status conclusion <<<"$(runs)"
+                [ "$status" != completed ] && break
+              done
+            fi
             [ "$status" = completed ] && break
             sleep 10
             read -r id status conclusion <<<"$(runs)"

@@ -65,6 +65,8 @@ export type Work =
   /** `review`: the fresh-eyes read after it (scripting.ts `scriptFreshEyes`); absent from builds started before it was kept, which had it. */
   | { kind: "build"; note: string; format?: import("@edit/types/writer").Kind; review?: boolean }
   | { kind: "revise"; request: string; focus: import("@edit/types/writer").Focus }
+  /** A revision whose message links videos: each brought in whole first (links.ts). */
+  | { kind: "link"; urls: string[]; request: string; focus: import("@edit/types/writer").Focus }
   | { kind: "reuse"; urls: string[] }
   | { kind: "find" }
   | { kind: "learn"; step: import("@edit/types/writer").LearnStep }
@@ -77,6 +79,7 @@ export type Work =
 const FIRST_STAGE: Record<Work["kind"], string> = {
   build: "Starting",
   revise: "Editing the script",
+  link: "Downloading the linked video",
   reuse: "Bringing in the reused cases",
   find: "Finding clips",
   learn: "Learning from the feedback",
@@ -94,6 +97,8 @@ function described(work: Work): string {
       return "writing the script";
     case "revise":
       return `revising: "${[...work.request].slice(0, 80).join("")}"`;
+    case "link":
+      return `bringing in ${plural(work.urls.length, "linked video", "linked videos")} and revising: "${[...work.request].slice(0, 80).join("")}"`;
     case "reuse":
       return `bringing in ${plural(work.urls.length, "reused case", "reused cases")}`;
     case "find":
@@ -425,6 +430,7 @@ export function resetForTests(): void {
 const DONE: Partial<Record<Work["kind"], string>> = {
   build: "First draft is ready",
   revise: "Revision is done",
+  link: "The linked video is in",
   review: "Review notes are fixed",
   reuse: "Reused cases are in",
   find: "Clips are found",
@@ -437,7 +443,7 @@ function tell(id: string, title: string, work: Work, job: BuildStatus): void {
   // A stop they pressed needs no telling.
   if (done === undefined || job.error === STOPPED) return;
   const name = title || "Untitled script";
-  const detail = job.error ?? (work.kind === "revise" || work.kind === "review" ? (job.report ?? "") : "");
+  const detail = job.error ?? (work.kind === "revise" || work.kind === "link" || work.kind === "review" ? (job.report ?? "") : "");
   const body = detail.trim() === "" ? name : `${name}: ${notices.line(detail)}`;
   notices.notify({ key: `script:${id}:${job.startedAt}`, title: job.error === null ? done : "Claude stopped on the script", body, path: `/scripts/${id}` });
 }

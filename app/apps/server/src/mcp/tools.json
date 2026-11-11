@@ -2640,18 +2640,19 @@
   },
   {
     "name": "wait",
-    "description": "Wait once for background work (smoothing, map shots, the watcher, an export, B-roll imports still downloading) for as long as it says it has left, instead of reading the project again to see. Returns when it's done, or after at_most seconds (default: its estimate, at most 300) with what's still running.",
+    "description": "Wait once for background work (smoothing, map shots, the watcher, an export, B-roll imports still downloading, a link coming in) for as long as it says it has left, instead of reading the project again to see. Returns when it's done, or after at_most seconds (default: its estimate, at most 300) with what's still running.",
     "inputSchema": {
       "properties": {
         "for": {
-          "description": "Which: smooth, map, watch, export, import (default all).",
+          "description": "Which: smooth, map, watch, export, import (B-roll), link (a link from import_link) (default all).",
           "items": {
             "enum": [
               "smooth",
               "map",
               "watch",
               "export",
-              "import"
+              "import",
+              "link"
             ],
             "type": "string"
           },
@@ -2719,6 +2720,26 @@
         },
         "end": {
           "type": "number"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
+    "name": "import_link",
+    "description": "Bring in a video the person linked in their message: a YouTube video, a Google Drive file, or the video on any other page (an Instagram, X or TikTok post, a news site's player, a direct link to a file). It's downloaded whole, however long, added to the project's media (not the timeline) and transcribed whole, with who speaks. It answers at once while it works: wait {for: [\"link\"]} for its progress, then call it again with the same url for its media id, duration and words. Then place it where and how the person asked.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "url": {
+          "description": "The link as the person gave it.",
+          "type": "string"
         }
       },
       "required": [

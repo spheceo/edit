@@ -207,7 +207,8 @@ async function addMedia(
   // Footage with no free words is heard by Scribe now only once the case's names are in (names.ts): heard without
   // them, it was heard again when the research came, which made Oct 21's 13.5 hours of footage cost 62 hours.
   // (A script's import hears its own footage; voice-overs have theirs.)
-  const noScript = (live.project.script === undefined || live.project.script === null) && origin !== "voice" && origin !== "script";
+  // A link pasted in a chat (links.ts) is heard whole by Scribe there, once it's in.
+  const noScript = (live.project.script === undefined || live.project.script === null) && origin !== "voice" && origin !== "script" && origin !== "link";
   const names = noScript ? seams.research.knownNames(app, live.project) : [];
   const transcribing: string[] = [];
   for (const { path, probe } of items) {

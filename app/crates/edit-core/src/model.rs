@@ -437,6 +437,13 @@ pub struct Media {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub effect: Option<String>,
+    /// For a coded effect: the version of its code (its files' key, the
+    /// server's `effects.sourceKey`) that `path` was rendered from. None while
+    /// `path` is only its still. A key that isn't the code's now is a render
+    /// to make again; the viewer plays the code live until it's made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub effect_key: Option<String>,
 }
 
 /// Which half of the team's sound library a sound is from.

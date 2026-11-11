@@ -15,6 +15,7 @@ export const BLOCKED = new Set([
   "search_broll",
   "read_broll_source",
   "import_broll",
+  "import_link",
   "capture_evidence",
   "read_page",
   "read_review",

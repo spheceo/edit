@@ -130,7 +130,7 @@ test("the agent's file tools are allowed in the effects folder and nowhere else,
   }
 });
 
-test("an effect's tools are refused outside an HQ project, and an export of an edit with an effect is refused", async () => {
+test("an effect's tools are refused outside an HQ project, and an export waits for an effect's render", async () => {
   const { app, cleanup, id } = hq("effects-refused");
   try {
     const call = async (name: string, args: Record<string, unknown>) =>
@@ -146,14 +146,21 @@ test("an effect's tools are refused outside an HQ project, and an export of an e
     });
     const now = (await dispatch(app, { id: 1, method: "tools/list" }, id)) as { result: { tools: { name: string }[] } };
     expect(now.result.tools.some((tool) => tool.name === "look_at_effect")).toBe(true);
-    // In the media but on no clip: nothing of it would be exported.
-    expect(() => effects.refuseExport(app.store.get(id)!.project)).not.toThrow();
+    // In the media but on no clip: nothing of it is exported, so nothing to wait for.
+    expect(effects.onTimeline(app.store.get(id)!.project)).toEqual([]);
+    await seams.broll.waitForMaps(app, id, 10);
     await app.store.update(id, "test", (project) => {
       project.tracks.push({ id: "t1", kind: "video", name: "V1" } as unknown as (typeof project.tracks)[number]);
       project.clips.push({ id: "c1", type: "video", track: "t1", start: 0, duration: 60, media: "m1", source_in: 0 } as unknown as (typeof project.clips)[number]);
     });
-    expect(() => effects.refuseExport(app.store.get(id)!.project)).toThrow("can't export those yet");
-    await expect(seams.broll.waitForMaps(app, id, 10)).rejects.toThrow("a coded effect (bar)");
+    expect(effects.onTimeline(app.store.get(id)!.project)).toEqual(["bar"]);
+    // Its code isn't on this computer and it was never rendered: an export can't have it, and says so.
+    await expect(seams.broll.waitForMaps(app, id, 10)).rejects.toThrow("bar is a coded effect made on another computer and never rendered there");
+    // Rendered on that computer (its media is the render): exported as it is.
+    await app.store.update(id, "test", (project) => {
+      project.media[0]!.effect_key = "abc";
+    });
+    await seams.broll.waitForMaps(app, id, 10);
   } finally {
     cleanup();
   }
@@ -240,3 +247,53 @@ test.skipIf(chrome === null)("look draws the page in Chrome: its length, the sti
     cleanup();
   }
 }, 120_000);
+
+test.skipIf(chrome === null)("an effect on the timeline is rendered from its code, in place of its still, and again when its code changes", async () => {
+  const { app, cleanup, id } = hq("effects-render");
+  const router = buildRouter();
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (request) => (await respond(app, router, request, null)) ?? new Response(null, { status: 404 }) });
+  try {
+    app.port = server.port!;
+    await app.store.update(id, "test", (project) => {
+      project.hq = true;
+    });
+    const dir = write(app, id, "bar", { "scene.html": GOOD });
+    const added = await effects.add(app, id, "bar");
+    expect(added.duration).toBe(2);
+    let media = app.store.get(id)!.project.media.find((one) => one.id === added.media)!;
+    expect(media.kind).toBe("image");
+    expect(media.effect_key).toBeUndefined();
+    await app.store.update(id, "test", (project) => {
+      project.tracks.push({ id: "t1", kind: "video", name: "V1", hidden: false, muted: false, locked: false } as unknown as (typeof project.tracks)[number]);
+      project.clips.push({ id: "c1", type: "video", track: "t1", start: 0, duration: 60, media: added.media, source_in: 0 } as unknown as (typeof project.clips)[number]);
+    });
+    // What every export does first: waits for it, rendering it now.
+    await seams.broll.waitForMaps(app, id, 90_000);
+    media = app.store.get(id)!.project.media.find((one) => one.id === added.media)!;
+    const key = effects.list(app.store, id)[0]!.key;
+    expect(media.effect_key).toBe(key);
+    expect(media.kind).toBe("video");
+    expect(media.effect).toBe("bar");
+    expect(media.path.endsWith(`effect-renders/bar-${key}.mp4`)).toBe(true);
+    expect(media.width).toBe(1920);
+    expect(media.height).toBe(1080);
+    expect(Math.abs(media.duration - 2)).toBeLessThan(0.05);
+    // The frames went once joined; the video is every frame of it.
+    expect(fs.existsSync(media.path.replace(/\.mp4$/, ".frames"))).toBe(false);
+    const counted = Bun.spawnSync(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", media.path]).stdout.toString().trim().replace(/,$/, "");
+    expect(counted).toBe("60");
+    // Rendered: nothing more to wait for.
+    await seams.broll.waitForMaps(app, id, 10);
+    // A change to its code is a new version: the render is outdated until it's made again.
+    await Bun.sleep(20);
+    fs.writeFileSync(join(dir, "scene.html"), GOOD.replace("#e0343c", "#34e03c"));
+    const now = effects.list(app.store, id)[0]!.key;
+    expect(now).not.toBe(key);
+    await expect(seams.broll.waitForMaps(app, id, 10)).rejects.toThrow("bar is still rendering");
+    await seams.broll.waitForMaps(app, id, 90_000);
+    expect(app.store.get(id)!.project.media.find((one) => one.id === added.media)!.effect_key).toBe(now);
+  } finally {
+    await server.stop(true);
+    cleanup();
+  }
+}, 240_000);

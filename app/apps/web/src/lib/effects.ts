@@ -16,6 +16,8 @@ export interface Effect {
   changed: number;
   /** Its page's address on the server: it holds a key made anew each time Edit starts, so the list is asked for again then. */
   page: string;
+  /** The version of its code: a media rendered from this one (`effect_key`) plays its render, and the page isn't needed. */
+  key: string;
 }
 
 export const useEffects = create<{ project: string | null; effects: Effect[] }>(() => ({ project: null, effects: [] }));
@@ -65,6 +67,8 @@ export interface Showing {
   speed: number;
   /** Its track's place among the tracks (the higher is drawn over the lower). */
   track: number;
+  /** The version of the code its media was rendered from (none while it's a still). */
+  rendered: string | null;
 }
 
 /** Every showing of an effect in the project: found once a change, not once a frame (most projects have none). */
@@ -77,9 +81,22 @@ export function showings(project: Project): Showing[] {
     if (clip.type !== "video") continue;
     const name = effects.get(clip.media);
     if (name === undefined) continue;
-    found.push({ name, start: clip.start, end: clip.start + clip.duration, from: clip.source_in, speed: clip.speed, track: project.tracks.findIndex((one) => one.id === clip.track) });
+    const media = project.media.find((one) => one.id === clip.media);
+    found.push({ name, start: clip.start, end: clip.start + clip.duration, from: clip.source_in, speed: clip.speed, track: project.tracks.findIndex((one) => one.id === clip.track), rendered: media?.effect_key ?? null });
   }
   return found;
+}
+
+/**
+ * The showings to play live: those whose code has changed since their render
+ * (or that have none yet). The rest the player plays as footage, from the
+ * render, which is what's exported and what a Mac's window draws smoothly.
+ */
+export function playedLive(shown: Showing[], effects: Effect[]): Showing[] {
+  return shown.filter((showing) => {
+    const code = effects.find((effect) => effect.name === showing.name);
+    return code !== undefined && code.key !== showing.rendered;
+  });
 }
 
 /** How far ahead of the playhead an effect's page is loaded, so it's drawn by the time its clip starts. */

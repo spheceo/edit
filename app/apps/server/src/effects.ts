@@ -26,12 +26,24 @@
 // each time Edit starts and told only to Edit's own page with the list above,
 // is part of every file's path, so no other site's page can name one.
 //
-// Not yet: the render (an effect on the timeline exports as its still, so an
-// export with one is refused: `refuseExport`), sound, and effects kept in the
-// cloud (the folder is this computer's).
+// The render: once an effect's code has stopped changing for a few seconds,
+// and while it's on the timeline, it's drawn frame by frame in Chromes Edit
+// drives, side by side (each `seek` is pure, so any frame can be drawn by any
+// of them), and the video made of the frames takes the still's place under the
+// same media id (`Media::effect_key` says which version of the code it is). The
+// engine then plays and exports it like footage, and the viewer stops playing
+// the page live (a Mac's window draws the render on its own player, where a
+// heavy page can't keep up: Nov 10, the evidence board's blur at 16 frames a
+// second in WKWebView). Every export waits for the renders it needs
+// (`waitForRenders`). Measured Nov 11 on mandalorian: a 1080p frame captured as
+// JPEG in 84 ms (a PNG 534), four Chromes 41 frames a second together.
+//
+// Not yet: sound, and effects kept in the cloud (the folder is this
+// computer's; another computer plays the render, which the cloud does carry).
 
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { join, sep } from "node:path";
 import type { App } from "./app.ts";
 import * as devtools from "./chrome_devtools.ts";
@@ -43,10 +55,15 @@ import { serveFile } from "./http/files.ts";
 import { letStrangersRead } from "./http/host.ts";
 import type { RouteContext, Router } from "./http/router.ts";
 import { importPaths } from "./import.ts";
-import type { Project } from "./model.ts";
+import { fingerprint } from "./hash.ts";
+import { probe as probeFile, Semaphore } from "./media.ts";
+import type { Media, Project } from "./model.ts";
 import { native } from "./native/index.ts";
+import { fps as rateOf } from "./project.ts";
+import * as relay from "./relay.ts";
 import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
+import * as tools from "./tools.ts";
 
 /** Edit's side of every effect page (effect_runtime.html), put in ahead of the page's own code. */
 const RUNTIME = runtimeText as unknown as string;
@@ -83,21 +100,37 @@ export interface Effect {
   changed: number;
   /** Its page's address on this server, for the viewer's frame. */
   page: string;
+  /** The version of its code (`sourceKey`): a media whose `effect_key` is this one plays its render, not the page. */
+  key: string;
 }
 
-/** The newest change among a folder's files, however deep. */
-function changedAt(dir: string): number {
-  let newest = 0;
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) newest = Math.max(newest, changedAt(path));
-    else if (entry.isFile()) newest = Math.max(newest, Math.floor(fs.statSync(path).mtimeMs));
+/** Every file in a folder, however deep: its path inside the folder, size and when it changed. */
+function filesIn(dir: string, under = ""): [string, number, number][] {
+  const found: [string, number, number][] = [];
+  for (const entry of fs.readdirSync(join(dir, under), { withFileTypes: true })) {
+    const inside = under === "" ? entry.name : `${under}/${entry.name}`;
+    if (entry.isDirectory()) found.push(...filesIn(dir, inside));
+    else if (entry.isFile()) {
+      const stat = fs.statSync(join(dir, inside));
+      found.push([inside, stat.size, Math.floor(stat.mtimeMs)]);
+    }
   }
-  return newest;
+  return found.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+}
+
+/**
+ * The version of an effect's code: its files (each by name, size and when it
+ * last changed), Edit's runtime and the frame it's drawn at. A save makes a new
+ * one, and so does a new build whose runtime draws differently.
+ */
+function sourceKey(files: [string, number, number][], frame: { width: number; height: number; fps: number }): string {
+  return fingerprint([RUNTIME, `${frame.width}x${frame.height}@${frame.fps}`, ...files.map(([path, size, changed]) => `${path} ${size} ${changed}`)]);
 }
 
 /** The project's effects: every folder with a page in it, by name. */
 export function list(store: Store, project: string): Effect[] {
+  const live = store.get(project);
+  const frame = live === null ? { width: 0, height: 0, fps: 0 } : frameOf(live.project);
   let names: string[];
   try {
     names = fs.readdirSync(root(store, project));
@@ -109,7 +142,9 @@ export function list(store: Store, project: string): Effect[] {
     if (!NAME.test(name)) continue;
     const dir = join(root(store, project), name);
     try {
-      if (fs.statSync(join(dir, ENTRY)).isFile()) found.push({ name, changed: changedAt(dir), page: `${addressOf(project, name)}${ENTRY}` });
+      if (!fs.statSync(join(dir, ENTRY)).isFile()) continue;
+      const files = filesIn(dir);
+      found.push({ name, changed: Math.max(0, ...files.map((one) => one[2])), page: `${addressOf(project, name)}${ENTRY}`, key: sourceKey(files, frame) });
     } catch {
       // A folder with no page yet: the agent is still writing it.
     }
@@ -140,6 +175,8 @@ export function workshop(store: Store, project: string): string {
 // Telling the viewer
 
 const watched = new Map<string, fs.FSWatcher>();
+/** Told when a project's effects change on disk (the renders, once `start` has run). */
+let changed: ((project: string) => void) | null = null;
 
 /**
  * Watches a project's effects from here on, so a file the agent writes is on
@@ -159,6 +196,7 @@ export function watch(store: Store, project: string): void {
       soon = setTimeout(() => {
         soon = null;
         store.emit({ type: "effects", id: project, effects: list(store, project) });
+        changed?.(project);
       }, 40);
     });
     watcher.on("error", (error) => {
@@ -349,10 +387,30 @@ export interface Look {
   errors: string[];
 }
 
-/** The size an effect is drawn at: the project's frame. */
+/** The size an effect is drawn at, and its frames a second: the project's. */
 function frameOf(project: Project): { width: number; height: number; fps: number } {
-  const { width, height, fps } = project.settings;
-  return { width, height, fps };
+  return { width: project.settings.width, height: project.settings.height, fps: rateOf(project) };
+}
+
+/** Opens an effect's page (`url`, carrying `token`) in a Chrome's page and waits for it to be ready: its length, and whether it has a seek. */
+async function load(page: devtools.Page, url: string, token: string, name: string): Promise<{ duration: number; seek: boolean }> {
+  await page.call("Page.navigate", { url });
+  const loaded = await page.evaluate<{ duration: number; seek: boolean } | "none" | "slow">(
+    `new Promise((resolve) => {
+      const until = Date.now() + 20000;
+      (function wait() {
+        if (location.search.includes(${JSON.stringify(token)}) && window.__edit) {
+          const slow = setTimeout(() => resolve("slow"), Math.max(0, until - Date.now()));
+          window.__edit.ready.then((value) => { clearTimeout(slow); resolve(value); });
+        } else if (Date.now() > until) resolve("none");
+        else setTimeout(wait, 30);
+      })();
+    })`,
+    40_000,
+  );
+  if (loaded === "none") throw new Error(`${name}'s page didn't load in Chrome`);
+  if (loaded === "slow") throw new Error(`${name}'s window.ready didn't resolve in 20 s: a picture or font it waits for never loads (everything it loads must be in its own folder)`);
+  return loaded;
 }
 
 /**
@@ -376,22 +434,7 @@ export async function look(app: App, projectId: string, name: string, times: num
   const started = Date.now();
   try {
     return await inChrome(width, height, async (page, interval) => {
-      await page.call("Page.navigate", { url });
-      const loaded = await page.evaluate<{ duration: number; seek: boolean } | "none" | "slow">(
-        `new Promise((resolve) => {
-          const until = Date.now() + 20000;
-          (function wait() {
-            if (location.search.includes(${JSON.stringify(token)}) && window.__edit) {
-              const slow = setTimeout(() => resolve("slow"), Math.max(0, until - Date.now()));
-              window.__edit.ready.then((value) => { clearTimeout(slow); resolve(value); });
-            } else if (Date.now() > until) resolve("none");
-            else setTimeout(wait, 30);
-          })();
-        })`,
-        40_000,
-      );
-      if (loaded === "none") throw new Error(`${name}'s page didn't load in Chrome`);
-      if (loaded === "slow") throw new Error(`${name}'s window.ready didn't resolve in 20 s: a picture or font it waits for never loads (everything it loads must be in its own folder)`);
+      const loaded = await load(page, url, token, name);
       const stills: Still[] = [];
       if (loaded.seek) {
         // Six of it, each from the middle of its sixth, when no moments are asked for.
@@ -494,15 +537,258 @@ export function onTimeline(project: Project): string[] {
   return names;
 }
 
+// ---------------------------------------------------------------------------
+// The render
+
+/** How long an effect's code has to stay unchanged before it's rendered: the agent saves a page several times a minute while it works. */
+const SETTLE_MS = 6_000;
+/** Chromes drawing one render side by side: as the map shots, by the computer's memory. */
+const CHROMES = os.totalmem() >= 16 * 2 ** 30 ? 4 : 2;
+const RENDER_PROFILE = "edit-effect-render-";
+
+/** Where a project's renders and their frames are kept. */
+function rendersDir(store: Store, project: string): string {
+  return join(store.uploadsDir(project), "effect-renders");
+}
+
+/** A render that stopped because the code changed under it: it's started again for the new code. */
+class Outdated extends Error {}
+
+/** One effect's render: what it's for and how far it's got. */
+interface Render {
+  project: string;
+  name: string;
+  key: string;
+  /** Frames drawn of all of them (0 until its length is known). */
+  drawn: number;
+  frames: number;
+  done: Promise<void>;
+}
+
+const renders = new Map<string, Render>();
+/** Renders that failed, by project, effect and code version: not tried again until the code changes. */
+const failed = new Map<string, string>();
+const settling = new Map<string, ReturnType<typeof setTimeout>>();
+const renderSlot = new Semaphore(1);
+const id = (project: string, name: string, key: string) => `${project}/${name}/${key}`;
+
+/** The effects on a project's timeline, each with its media, its code now (null: not on this computer) and whether its render is that code's. */
+function needed(store: Store, project: string): { name: string; media: Media; current: Effect | null; fresh: boolean }[] {
+  const live = store.get(project);
+  if (live === null || live.project.hq !== true) return [];
+  const effects = list(store, project);
+  const out: { name: string; media: Media; current: Effect | null; fresh: boolean }[] = [];
+  for (const name of onTimeline(live.project)) {
+    const media = live.project.media.find((one) => one.effect === name)!;
+    const current = effects.find((one) => one.name === name) ?? null;
+    // Made on another computer: whatever it rendered there is what there is.
+    const fresh = current === null ? media.effect_key !== undefined && media.effect_key !== null : media.effect_key === current.key;
+    out.push({ name, media, current, fresh });
+  }
+  return out;
+}
+
 /**
- * An export of an edit with a coded effect on its timeline is refused, in
- * words the person can act on: the engine would export the effect's still,
- * not the effect, until the render is built.
+ * Renders an effect's code as it is now, unless it's rendered already or
+ * under way: the frames drawn in `CHROMES` Chromes at once, kept on disk as
+ * they land (a render cut short goes on from them), joined into a video, and
+ * that put in place of the still. Answers when it's in place.
  */
-export function refuseExport(project: Project): void {
-  const names = onTimeline(project);
-  if (names.length === 0) return;
-  throw new Error(
-    `This edit has ${names.length === 1 ? "a coded effect" : "coded effects"} (${names.join(", ")}), and Edit V2 can't export those yet: they play in the viewer, and their render is the next piece to be built.`,
-  );
+export function renderNow(app: App, project: string, name: string): Promise<void> {
+  const dir = folder(app.store, project, name);
+  const live = app.store.get(project);
+  if (live === null) return Promise.reject(new Error("no such project"));
+  const key = sourceKey(filesIn(dir), frameOf(live.project));
+  const running = renders.get(id(project, name, key));
+  if (running !== undefined) return running.done;
+  const failure = failed.get(id(project, name, key));
+  if (failure !== undefined) return Promise.reject(new Error(failure));
+  const render: Render = { project, name, key, drawn: 0, frames: 0, done: Promise.resolve() };
+  render.done = renderSlot
+    .with(() => draw(app, render))
+    .catch((error: unknown) => {
+      if (error instanceof Outdated) return renderNow(app, project, name);
+      const said = diag.messageOf(error);
+      failed.set(id(project, name, key), said);
+      diag.warn("effects", `${project}: ${name} didn't render: ${said}`);
+      throw new Error(`${name} didn't render: ${said}`);
+    })
+    .finally(() => renders.delete(id(project, name, key)));
+  renders.set(id(project, name, key), render);
+  // Its error goes to whoever waits on it; one nobody waits on is in the log.
+  render.done.catch(() => {});
+  return render.done;
+}
+
+async function draw(app: App, render: Render): Promise<void> {
+  const { project, name, key } = render;
+  const live = app.store.get(project);
+  if (live === null) throw new Error("the project is gone");
+  const frame = frameOf(live.project);
+  const dir = rendersDir(app.store, project);
+  const out = join(dir, `${name}-${key}.mp4`);
+  const frames = join(dir, `${name}-${key}.frames`);
+  const started = Date.now();
+  if (!fs.existsSync(out)) {
+    fs.mkdirSync(frames, { recursive: true });
+    const url = `http://${seams.broll.pageHost(app)}${addressOf(project, name)}${ENTRY}?render=`;
+    const opened: devtools.Page[] = [];
+    try {
+      for (let at = 0; at < CHROMES; at++) opened.push(await devtools.open({ profile: RENDER_PROFILE, width: frame.width, height: frame.height, gpu: true, what: "Rendering an effect" }));
+      const loaded = await Promise.all(opened.map((page, at) => load(page, `${url}${key}-${at}`, `${key}-${at}`, name)));
+      const duration = loaded[0]!.duration;
+      if (!(duration > 0)) throw new Error("its page has no window.duration");
+      if (!loaded[0]!.seek) throw new Error("its page has no window.seek(t)");
+      render.frames = Math.max(1, Math.round(duration * frame.fps));
+      const wanted: number[] = [];
+      for (let index = 0; index < render.frames; index++) if (!fs.existsSync(join(frames, frameName(index)))) wanted.push(index);
+      render.drawn = render.frames - wanted.length;
+      let next = 0;
+      await Promise.all(
+        opened.map(async (page) => {
+          for (;;) {
+            const index = wanted[next++];
+            if (index === undefined) return;
+            // The code changed while it rendered: these frames are an older version's.
+            if (index % 60 === 0 && sourceKey(filesIn(folder(app.store, project, name)), frame) !== key) throw new Outdated();
+            const time = index / frame.fps;
+            const drawn = await page.evaluate<{ error?: string }>(`window.__edit.seek(${time})`, 15_000);
+            if (drawn.error !== undefined) throw new Error(`its page threw at ${time.toFixed(2)} s: ${drawn.error.split("\n")[0]}`);
+            const shot = await page.call("Page.captureScreenshot", { format: "jpeg", quality: 95, optimizeForSpeed: true, clip: { x: 0, y: 0, width: frame.width, height: frame.height, scale: 1 } }, 60_000);
+            if (typeof shot.data !== "string") throw new Error(`Chrome drew nothing at ${time.toFixed(2)} s`);
+            // Whole frames only: one cut short by a quit is drawn again.
+            const path = join(frames, frameName(index));
+            fs.writeFileSync(`${path}.partial`, Buffer.from(shot.data, "base64"));
+            fs.renameSync(`${path}.partial`, path);
+            render.drawn += 1;
+          }
+        }),
+      );
+    } finally {
+      for (const page of opened) page.close();
+    }
+    const partial = join(dir, `${name}-${key}.partial.mp4`);
+    try {
+      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-an", "-movflags", "+faststart", partial]);
+      fs.renameSync(partial, out);
+    } catch (error) {
+      fs.rmSync(partial, { force: true });
+      throw new Error(`its frames didn't join into a video: ${diag.messageOf(error)}`);
+    }
+    fs.rmSync(frames, { recursive: true, force: true });
+  }
+  const probe = await probeFile(out);
+  if (probe.kind !== "video" || !(probe.duration > 0)) throw new Error("its render isn't a video Edit can read");
+  // Code changed while the video was made: the next render takes over.
+  if (sourceKey(filesIn(folder(app.store, project, name)), frame) !== key) throw new Outdated();
+  let placed = false;
+  await app.store.update(project, "effects", (edited) => {
+    for (const media of edited.media) {
+      if (media.effect !== name) continue;
+      media.path = out;
+      media.kind = probe.kind;
+      media.duration = probe.duration;
+      media.width = probe.width;
+      media.height = probe.height;
+      media.fps = probe.fps;
+      media.has_audio = probe.has_audio;
+      media.effect_key = key;
+      delete media.cloud;
+      placed = true;
+    }
+    return placed;
+  });
+  if (!placed) return;
+  app.media.ensure(out, probe);
+  try {
+    if (relay.cloudEnabled()) seams.cloudMedia.backfillSoon(app, project);
+  } catch (error) {
+    diag.warn("cloud", `backfill ${project}: ${diag.messageOf(error)}`);
+  }
+  diag.record("effects", "render", Date.now() - started);
+  diag.info("effects", `${project}: ${name} rendered (${render.frames} frames in ${((Date.now() - started) / 1000).toFixed(1)} s)`);
+}
+
+function frameName(index: number): string {
+  return `frame-${String(index).padStart(5, "0")}.jpg`;
+}
+
+/** The project's rate as FFmpeg reads it ("30", "30000/1001"). */
+function rateArg(project: Project): string {
+  const whole = Math.max(project.settings.fps, 1);
+  return project.settings.ntsc === true ? `${whole * 1000}/1001` : String(whole);
+}
+
+/**
+ * Renders, a few seconds after the code stops changing, every effect on the
+ * project's timeline whose render isn't of its code now. Called on every
+ * change to the project or its effects; cheap when there's nothing to do.
+ */
+export function renderSoon(app: App, project: string): void {
+  const waiting = settling.get(project);
+  if (waiting !== undefined) clearTimeout(waiting);
+  const timer = setTimeout(() => {
+    settling.delete(project);
+    for (const effect of needed(app.store, project)) {
+      if (effect.fresh || effect.current === null) continue;
+      renderNow(app, project, effect.name).catch(() => {});
+    }
+  }, SETTLE_MS);
+  timer.unref?.();
+  settling.set(project, timer);
+}
+
+/** What the agent is told of an effect's render: null while the effect isn't on the timeline (nothing renders it then). */
+export function renderLine(app: App, project: string, name: string): string | null {
+  const effect = needed(app.store, project).find((one) => one.name === name);
+  if (effect === undefined) return null;
+  if (effect.fresh) return "Its render is of this code: that's what plays and exports.";
+  const state = effect.current === null ? null : renderState(project, name, effect.current.key);
+  return state === null ? "Its render follows a few seconds after the code stops changing; until then the viewer plays the code live." : `Its render: ${state}.`;
+}
+
+/** What an effect's render is doing, for the agent and the person: null when there's nothing to say. */
+export function renderState(project: string, name: string, key: string): string | null {
+  const running = renders.get(id(project, name, key));
+  if (running !== undefined) return running.frames > 0 ? `rendering, ${running.drawn} of ${running.frames} frames` : "rendering";
+  const failure = failed.get(id(project, name, key));
+  return failure === undefined ? null : `its render failed: ${failure}`;
+}
+
+/**
+ * Waits (up to `limitMs`) for every effect on the timeline to be rendered from
+ * its code as it is, starting any render that isn't under way: an export never
+ * goes out with a still, or an older version, where an effect is. An error
+ * says which effect and why.
+ */
+export async function waitForRenders(app: App, project: string, limitMs: number): Promise<void> {
+  const until = Date.now() + limitMs;
+  for (const effect of needed(app.store, project)) {
+    if (effect.fresh) continue;
+    if (effect.current === null) throw new Error(`${effect.name} is a coded effect made on another computer and never rendered there: open the project there to render it`);
+    const done = renderNow(app, project, effect.name);
+    const left = until - Date.now();
+    const timedOut = await Promise.race([done.then(() => false), Bun.sleep(Math.max(0, left)).then(() => true)]);
+    if (timedOut) {
+      throw new Error(`${effect.name} is still rendering (${renderState(project, effect.name, effect.current.key) ?? "starting"}): it's done in a minute or two, then export again`);
+    }
+  }
+}
+
+/**
+ * From Edit's start: every change to a project made the new way (a clip of an
+ * effect placed, a file of one saved) brings its renders up to date, and the
+ * ones left undone when Edit last closed are made.
+ */
+export function start(app: App): void {
+  changed = (project) => renderSoon(app, project);
+  app.store.subscribe((event) => {
+    if (event.type !== "project" || typeof event.id !== "string" || event.origin === "effects") return;
+    if ((event.project as Project | undefined)?.hq === true) renderSoon(app, event.id);
+  });
+  for (const summary of app.store.list()) {
+    if (summary.hq !== true) continue;
+    watch(app.store, summary.id);
+    renderSoon(app, summary.id);
+  }
 }

@@ -28,6 +28,7 @@ import * as jobs from "./jobs.ts";
 import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
 import { registerEffectTools } from "./effect_tools.ts";
+import * as effects from "./effects.ts";
 import { registerMediaTools } from "./media_tools.ts";
 import { allowedHosts } from "./http/host.ts";
 import { initNative, native } from "./native/index.ts";
@@ -303,6 +304,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   registerEditingTools();
   registerMediaTools();
   registerEffectTools();
+  // Coded effects (Edit V2): rendered as their code settles, and those left undone when Edit last closed.
+  effects.start(app);
   // A whole edit that ends with fixable flags gets one follow-up from Edit.
   agentHooks.unfinished = (project) => unfinishedNote(app, project);
   // The script's comments, written on any Mac, reach the edit before each agent turn.

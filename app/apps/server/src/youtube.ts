@@ -393,6 +393,58 @@ const downloadWhole = Effect.fn("youtube.download")(function* (home: string, id:
 type Progress = (bytes: number, total: number | null, name: string) => void;
 
 /**
+ * Downloads the video on any other page yt-dlp reads (a post, a news site's
+ * player, a direct link to a file) whole into `dir`, as `download` does a
+ * YouTube video: one at a time per folder, a finished one reused, no length
+ * or size limit, stopped only when it says nothing for `timing.quiet`. Asked
+ * straight (the proxy and the sign-in are YouTube's), with yt-dlp brought up
+ * to date once when it's too old for the site.
+ */
+export function downloadLink(home: string, url: string, dir: string, progress: Progress): Promise<Downloaded> {
+  const already = running.get(dir);
+  if (already !== undefined) return already;
+  const work = runPromise(linkWhole(home, url, dir, progress).pipe(inArea("youtube"))).finally(() => running.delete(dir));
+  running.set(dir, work);
+  return work;
+}
+
+const linkWhole = Effect.fn("youtube.downloadLink")(function* (home: string, url: string, dir: string, progress: Progress) {
+  fs.mkdirSync(dir, { recursive: true });
+  const done = join(dir, ".done");
+  const kept = (() => {
+    try {
+      const name = fs.readFileSync(done, "utf8").trim();
+      const path = join(dir, name);
+      return name !== "" && fs.existsSync(path) ? { path, name, size: fs.statSync(path).size } : null;
+    } catch {
+      // Not downloaded yet.
+      return null;
+    }
+  })();
+  if (kept !== null) {
+    progress(kept.size, kept.size, kept.name);
+    return kept;
+  }
+  let binary = yield* Effect.promise(() => ytdlp(home));
+  const route: Route = { proxy: null, signIn: false };
+  let tried = yield* tryRoute(binary, url, dir, route, progress, null, "bv*+ba/b");
+  if (tried.path === null && reasonOf(tried.stderr)._tag === "YtdlpOutdated" && binary === join(home, "bin", "yt-dlp")) {
+    const fresh = yield* Effect.tryPromise(() => freshen(binary, true)).pipe(Effect.option);
+    if (Option.isSome(fresh)) {
+      binary = fresh.value;
+      tried = yield* tryRoute(binary, url, dir, route, progress, null, "bv*+ba/b");
+    }
+  }
+  if (tried.path === null) return yield* new DownloadFailed({ reason: reasonOf(tried.stderr)._tag, message: `${url} couldn't be downloaded: ${errorLine(tried.stderr)}` });
+  const path = tried.path;
+  const name = path.slice(dir.length + 1);
+  fs.writeFileSync(done, name);
+  const size = fs.statSync(path).size;
+  progress(size, size, name);
+  return { path, name, size };
+});
+
+/**
  * Tries the routes in order until one gives the file, as `afterFailure`
  * says; when none does, fails with `DownloadFailed` saying the last reason.
  */

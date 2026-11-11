@@ -30,4 +30,11 @@ library?: LibraryKind,
  * engine plays for it: a still of it until it's rendered, then the
  * render. The viewer plays the page itself, live, in its place.
  */
-effect?: string, };
+effect?: string, 
+/**
+ * For a coded effect: the version of its code (its files' key, the
+ * server's `effects.sourceKey`) that `path` was rendered from. None while
+ * `path` is only its still. A key that isn't the code's now is a render
+ * to make again; the viewer plays the code live until it's made.
+ */
+effect_key?: string, };

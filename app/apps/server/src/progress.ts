@@ -13,7 +13,7 @@ export const timing = {
   sleep: (ms: number) => Bun.sleep(ms),
 };
 
-export type Work = "smooth" | "map" | "watch" | "export" | "import";
+export type Work = "smooth" | "map" | "watch" | "export" | "import" | "link";
 
 /**
  * How long each takes here before it has measured progress of its own, from
@@ -22,7 +22,7 @@ export type Work = "smooth" | "map" | "watch" | "export" | "import";
  * 50 s to 2 min 21 s, a few at once. Each finished job moves its kind's
  * figure toward what it took.
  */
-const typical: Record<Work, number> = { smooth: 190_000, map: 300_000, watch: 130_000, export: 600_000, import: 240_000 };
+const typical: Record<Work, number> = { smooth: 190_000, map: 300_000, watch: 130_000, export: 600_000, import: 240_000, link: 600_000 };
 
 interface Entry {
   kind: Work;
@@ -33,6 +33,9 @@ interface Entry {
   total: number;
   /** When `done` was first above zero, and what it was then (an export joined part-way). */
   first: [number, number] | null;
+  /** The stage it's in, and what it's doing in words ("downloading “Bodycam 4”: 1.2 of 3.4 GB, 35%"): a link's. */
+  step?: string;
+  say?: string;
 }
 
 const running = new Map<string, Entry>();
@@ -53,6 +56,25 @@ export function step(kind: Work, project: string, part: string, done: number, to
   const entry = running.get(keyOf(kind, project, part));
   if (entry === undefined) return;
   if (total !== undefined) entry.total = total;
+  if (done > 0 && entry.first === null) entry.first = [timing.now(), done];
+  entry.done = Math.max(entry.done, done);
+}
+
+/**
+ * What it's doing now (`step`, a stage's name) in words (`say`), and its
+ * measured progress in that stage: a new stage measures from its own start
+ * (total 0: none measured, so its kind's usual time).
+ */
+export function stage(kind: Work, project: string, part: string, step: string, say: string, done = 0, total = 0): void {
+  const entry = running.get(keyOf(kind, project, part));
+  if (entry === undefined) return;
+  if (entry.step !== step) {
+    entry.step = step;
+    entry.done = 0;
+    entry.first = null;
+  }
+  entry.say = say;
+  entry.total = total;
   if (done > 0 && entry.first === null) entry.first = [timing.now(), done];
   entry.done = Math.max(entry.done, done);
 }
@@ -89,7 +111,7 @@ function left(entry: Entry, now: number): number {
 }
 
 /** What's still running for a project, of these kinds (all by default). */
-export function pending(project: string, kinds: readonly Work[] = ["smooth", "map", "watch", "export", "import"]): Entry[] {
+export function pending(project: string, kinds: readonly Work[] = ["smooth", "map", "watch", "export", "import", "link"]): Entry[] {
   return [...running.values()].filter((entry) => entry.project === project && kinds.includes(entry.kind));
 }
 
@@ -135,6 +157,7 @@ export function summary(project: string, kinds?: readonly Work[]): string | null
     ...(watch === undefined ? [] : [watch.total > 0 ? `the watcher (${watch.done} of ${watch.total} windows)` : "the watcher"]),
     ...count("export", "an export", "exports"),
     ...count("import", "a B-roll import downloading", "B-roll imports downloading"),
+    ...mine.filter((entry) => entry.kind === "link").map((entry) => `a link ${entry.say ?? "downloading"}`),
   ];
   return `${parts.join(", ")}: done in ${about(ms)}`;
 }
@@ -162,7 +185,7 @@ export async function waitFor(project: string, kinds: readonly Work[], limitMs: 
 /** For tests: forget everything running and the measured figures. */
 export function reset(): void {
   running.clear();
-  Object.assign(typical, { smooth: 190_000, map: 300_000, watch: 130_000, export: 600_000 });
+  Object.assign(typical, { smooth: 190_000, map: 300_000, watch: 130_000, export: 600_000, import: 240_000, link: 600_000 });
 }
 
 /** Stores whose exports are followed already. */

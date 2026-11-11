@@ -27,13 +27,16 @@ jobs:
     # (`just check-rust`); the app, on Linux all of it (`just check-app`: the
     # types, the addon, the TypeScript, the server's tests in parallel) and on
     # the Mac what only a Mac can tell (`just check-mac`: the addon and the
-    # server's tests); and on the Mac the acceptance run.
+    # server's tests, half in `app` and half in `tests`); and on the Mac the
+    # acceptance run.
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-24.04]
-        part: [rust, app, acceptance]
+        part: [rust, app, tests, acceptance]
         exclude:
+          - os: ubuntu-24.04
+            part: tests
           - os: ubuntu-24.04
             part: acceptance
         include:
@@ -91,7 +94,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Check
         if: matrix.part != 'acceptance'
-        run: just ${{ (runner.os == 'macOS' && matrix.part == 'app') && 'check-mac' || format('check-{0}', matrix.part) }}
+        run: just ${{ runner.os != 'macOS' && format('check-{0}', matrix.part) || matrix.part == 'rust' && 'check-rust' || matrix.part == 'app' && 'check-mac 1/2' || 'check-mac 2/2' }}
       - name: The addon, for acceptance
         if: matrix.part == 'acceptance'
         run: just native debug

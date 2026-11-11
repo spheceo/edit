@@ -16,6 +16,7 @@ import * as fixing from "./fixing.ts";
 import * as footage from "./footage.ts";
 import * as imports from "./imports.ts";
 import * as jobs from "./jobs.ts";
+import * as links from "./links.ts";
 import * as reuse from "./reuse.ts";
 import * as scout from "./scout.ts";
 import * as scripting from "./scripting.ts";
@@ -29,6 +30,8 @@ export function runFor(app: App, id: string, work: jobs.Work): (job: jobs.Job) =
       return (job) => scripting.buildAndReview(app, data, id, work.note, work.format, work.review ?? scripting.scriptFreshEyes(undefined), job);
     case "revise":
       return (job) => scripting.reviseWith(data, id, work.request, work.request, work.focus, false, job);
+    case "link":
+      return (job) => links.bringLinks(app, data, id, work.urls, work.request, work.focus, job);
     case "reuse":
       return (job) => reuse.importReused(app, data, id, work.urls, job);
     case "find":

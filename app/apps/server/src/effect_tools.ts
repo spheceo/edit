@@ -43,6 +43,8 @@ async function lookAtEffect({ app, args, projectId }: ToolCall): Promise<Content
   if (look.problems.length > 0) lines.push(`BREAKS THE EFFECT CONTRACT:\n${look.problems.map((problem) => `- ${problem}`).join("\n")}`);
   const cost = costLine(look, fps);
   if (cost !== "") lines.push(cost);
+  const render = effects.renderLine(app, projectId, name);
+  if (render !== null) lines.push(render);
   out.push(...text(lines.join("\n")));
   return out;
 }

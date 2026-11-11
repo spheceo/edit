@@ -447,9 +447,11 @@ export class Processor {
    * Transcribes `source` through the relay unless already done or running,
    * listening for `keyterms` (the case's names, names.ts). `again` hears a
    * finished one again (with names it wasn't given): the old transcript stays
-   * until the new one is in.
+   * until the new one is in. `whole`: Scribe hears all of it now, with no free
+   * first hearing (a link pasted in a chat, links.ts: one piece the person
+   * asked for, not hours to cut down).
    */
-  transcribe(source: string, hasAudio: boolean, keyterms: readonly string[] = [], again = false, freeOnly = false): MediaStatus {
+  transcribe(source: string, hasAudio: boolean, keyterms: readonly string[] = [], again = false, freeOnly = false, whole = false): MediaStatus {
     const current = this.entry(source);
     // Shared analysis can arrive after status() first saw this file. It is
     // still completed work and must win over a new caption/paid request.
@@ -477,7 +479,7 @@ export class Processor {
       const input = await this.inputOf(source);
       // A long file's first words are free (first_hearing.ts): the agent cuts on them, and Scribe hears only
       // what's kept (`refine`). Heard again on purpose (`again`): Scribe, whole.
-      if (!again && (await transcribe.seconds(input)) > FIRST_PASS_FROM_S) {
+      if (!again && !whole && (await transcribe.seconds(input)) > FIRST_PASS_FROM_S) {
         const work = join(parent(target) ?? ".", "first");
         try {
           if (await firstWords(this.store.home, this.cloudSource(source), input, target, work)) return;

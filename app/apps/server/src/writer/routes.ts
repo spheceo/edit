@@ -30,6 +30,7 @@ import { projectFor } from "../writer_handoff.ts";
 import * as footage from "./footage.ts";
 import * as imports from "./imports.ts";
 import * as jobs from "./jobs.ts";
+import * as links from "./links.ts";
 import * as reuse from "./reuse.ts";
 import * as reviews from "./reviews.ts";
 import * as scout from "./scout.ts";
@@ -622,7 +623,9 @@ export function routes(router: Router<App>): void {
         if (request === "") throw new Error("Say what to change.");
         if ([...request].length > 8_000) throw new Error("Keep the request under 8,000 characters.");
         const focus = given.focus ?? NO_FOCUS;
-        return startJob(context.app, id(context), { kind: "revise", request, focus });
+        // A video linked in the message comes into the script first, then the revision places it (links.ts).
+        const urls = readFor(dataOf(context.app), id(context)).commentary ? [] : links.videoLinks(request);
+        return startJob(context.app, id(context), urls.length > 0 ? { kind: "link", urls, request, focus } : { kind: "revise", request, focus });
       });
     })
     .post("/api/writer/scripts/{id}/exact", (context) =>

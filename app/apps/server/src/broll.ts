@@ -13,7 +13,7 @@ import type { App } from "./app.ts";
 import { parseTranscript } from "./captions_core.ts";
 import * as diag from "./diag.ts";
 import * as jobs from "./jobs.ts";
-import { refuseExport as refuseEffectExport } from "./effects.ts";
+import { waitForRenders as waitForEffectRenders } from "./effects.ts";
 import { copyFile, ioMessage } from "./files.ts";
 import { isBug } from "./guard.ts";
 import { fingerprint } from "./hash.ts";
@@ -1227,11 +1227,10 @@ export function isMapStandIn(path: string): boolean {
  * still by mistake.
  */
 export async function waitForMaps(app: App, projectId: string, limitMs: number): Promise<void> {
-  // A coded effect (Edit V2) has no render yet and would export as its still: refused here, the one
+  // A coded effect (Edit V2) exports as its render, made from its code as it is: waited for here, the one
   // place every export (the agent's, the button's, a share's) stops before it starts.
-  const live = app.store.get(projectId);
-  if (live !== null) refuseEffectExport(live.project);
   const started = timing.now();
+  await waitForEffectRenders(app, projectId, limitMs);
   // Each stand-in left without its footage is started again once, here,
   // rather than refused (Oct 21: three exports waited on agents to call
   // map_view again for maps that had stalled or run out of allowance).

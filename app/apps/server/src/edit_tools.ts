@@ -179,7 +179,7 @@ function background(projectId: string): { background?: string } {
   return said === "" ? {} : { background: said };
 }
 
-const WORK: readonly progress.Work[] = ["smooth", "map", "watch", "export", "import"];
+const WORK: readonly progress.Work[] = ["smooth", "map", "watch", "export", "import", "link"];
 
 /**
  * Waits once for background work (smoothing, map shots, the watcher, an

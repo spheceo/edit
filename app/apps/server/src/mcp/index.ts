@@ -155,7 +155,11 @@ export async function call(
  * repeat joins the run in progress, a run past `answerAfterMs` answers that
  * it's still working, and the result waits for the next call to collect it.
  */
-const LONG = new Set(["caption_speakers", "mute_house_words", "add_subtitles", "repack_subtitles", "import_broll", "share_for_review"]);
+const LONG = new Set(["caption_speakers", "mute_house_words", "add_subtitles", "repack_subtitles", "import_broll", "import_link", "share_for_review"]);
+
+/** What the agent does while a pasted link comes in (links.ts): the person hears how it's going, in a line each time. */
+const linkMeanwhile =
+  'It downloads whole, then is transcribed whole: as long as it takes. Tell the person in one short line that it\'s downloading, then wait {for: ["link"], at_most: 60} and each time tell them in one short line how far it is (the wait says: the stage, the size and the share done); go on with anything else they asked meanwhile. Once the wait says done, call import_link again with the same url for its media id and words, then place it as they asked';
 
 export const longTiming = { answerAfterMs: 4 * 60 * 1000, importAnswerAfterMs: 1500, keepMs: 15 * 60 * 1000 };
 
@@ -202,13 +206,13 @@ export async function once(key: string, name: string, work: () => Promise<Conten
   own.waiting += 1;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const late = new Promise<null>((resolve) => {
-    timer = setTimeout(() => resolve(null), name === "import_broll" ? longTiming.importAnswerAfterMs : longTiming.answerAfterMs);
+    timer = setTimeout(() => resolve(null), name === "import_broll" || name === "import_link" ? longTiming.importAnswerAfterMs : longTiming.answerAfterMs);
   });
   try {
     const answer = await Promise.race([own.promise, late]);
     if (answer !== null) return answer;
     const seconds = Math.round((Date.now() - own.started) / 1000);
-    const meanwhile = name === "import_broll" ? ". search_broll {queries:[]} lists completed ranges as they arrive; inspect those or existing source footage and compose the current chapter while the rest download (YouTube takes one to four minutes a video), then wait {for: [\"import\"]} rather than giving up on them" : "";
+    const meanwhile = name === "import_link" ? `. ${linkMeanwhile}` : name === "import_broll" ? ". search_broll {queries:[]} lists completed ranges as they arrive; inspect those or existing source footage and compose the current chapter while the rest download (YouTube takes one to four minutes a video), then wait {for: [\"import\"]} rather than giving up on them" : "";
     return [{ type: "text", text: `${name} is still working in the background (${seconds} s so far): call ${name} again with the same arguments in a minute or two; it answers with this run's result and never runs it twice${meanwhile}` }];
   } finally {
     if (timer !== null) clearTimeout(timer);

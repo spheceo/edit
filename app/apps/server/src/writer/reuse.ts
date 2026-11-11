@@ -388,35 +388,8 @@ async function bringIn(app: App, dir: string, given: string[], job: Job): Promis
   now.captions = (now.captions ?? false) || captioned;
   now.rough = (now.rough ?? false) || rough;
   if (rough) {
-    // The speaker pass reads the whole compilation. Words, labels and suspects already saved stay; only the new captions are named.
-    const prior = now.words.length - added;
-    const prefix = now.words.slice(0, prior).map((word) => ({ ...word }));
-    const savedSpeakers = { ...(now.speakers ?? {}) };
-    const savedSuspects = [...(now.suspects ?? [])];
-    const savedNotes = [...(now.notes ?? [])];
-    const tags = now.words.slice(prior).map((word) => (word.speaker?.includes(":") ? word.speaker.slice(0, word.speaker.indexOf(":")) : "reuse"));
     job.stage("Reading who says each line");
-    await readTurns(now, dir, null, job.signal);
-    if (now.words.length === prefix.length + tags.length && prefix.every((saved, index) => now.words[index]!.id === saved.id)) {
-      prefix.forEach((saved, index) => {
-        const word = now.words[index]!;
-        word.text = saved.text;
-        if (saved.speaker == null) delete word.speaker;
-        else word.speaker = saved.speaker;
-      });
-      const assigned = now.speakers ?? {};
-      now.speakers = savedSpeakers;
-      now.words.slice(prior).forEach((word, index) => {
-        if (word.speaker == null) return;
-        const namespaced = `${tags[index]}:${word.speaker}`;
-        const label = assigned[word.speaker];
-        if (label !== undefined) now.speakers![namespaced] ??= label;
-        word.speaker = namespaced;
-      });
-      if (savedSuspects.length > 0) now.suspects = savedSuspects;
-      const fresh = (now.notes ?? []).filter((note) => note.startsWith("Who says each line"));
-      now.notes = [...savedNotes.filter((note) => !note.startsWith("Who says each line")), ...fresh];
-    }
+    await nameNewVoices(now, dir, added, "reuse", job.signal);
   }
   checkStopped(job);
   if (store.read(dir).revision !== revision) throw new Error("The script changed while its reused cases were being transcribed. The recordings and answers are kept; try again to apply them.");
@@ -434,6 +407,43 @@ async function bringIn(app: App, dir: string, given: string[], job: Job): Promis
   if (failed !== null) report += ` Its moments couldn't be picked yet (${failed}); the next build tries again.`;
   if (now.clips.some((clip) => clip.kind === "cut-in")) report += " Ask for the opening to use them, or rebuild.";
   return [report.trim(), cost];
+}
+
+/**
+ * Who says each of the script's last `added` words (footage just joined on):
+ * the turns pass (imports.readTurns) reads the whole script, and everything
+ * before them stays exactly as it was (words, voices, suspects, notes). The
+ * new voices are kept apart under their recording's mark ("2:speaker_0" as
+ * "2:<voice>"), `fallback` for a word heard with none.
+ */
+export async function nameNewVoices(now: Script, dir: string, added: number, fallback: string, signal: AbortSignal): Promise<void> {
+  const prior = now.words.length - added;
+  const prefix = now.words.slice(0, prior).map((word) => ({ ...word }));
+  const savedSpeakers = { ...(now.speakers ?? {}) };
+  const savedSuspects = [...(now.suspects ?? [])];
+  const savedNotes = [...(now.notes ?? [])];
+  const tags = now.words.slice(prior).map((word) => (word.speaker?.includes(":") ? word.speaker.slice(0, word.speaker.indexOf(":")) : fallback));
+  await readTurns(now, dir, null, signal);
+  if (now.words.length === prefix.length + tags.length && prefix.every((saved, index) => now.words[index]!.id === saved.id)) {
+    prefix.forEach((saved, index) => {
+      const word = now.words[index]!;
+      word.text = saved.text;
+      if (saved.speaker == null) delete word.speaker;
+      else word.speaker = saved.speaker;
+    });
+    const assigned = now.speakers ?? {};
+    now.speakers = savedSpeakers;
+    now.words.slice(prior).forEach((word, index) => {
+      if (word.speaker == null) return;
+      const namespaced = `${tags[index]}:${word.speaker}`;
+      const label = assigned[word.speaker];
+      if (label !== undefined) now.speakers![namespaced] ??= label;
+      word.speaker = namespaced;
+    });
+    if (savedSuspects.length > 0) now.suspects = savedSuspects;
+    const fresh = (now.notes ?? []).filter((note) => note.startsWith("Who says each line"));
+    now.notes = [...savedNotes.filter((note) => !note.startsWith("Who says each line")), ...fresh];
+  }
 }
 
 /**

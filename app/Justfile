@@ -337,10 +337,15 @@ check-rust:
     cargo test {{rust_crates}}
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
 
-# CI's Mac app half: what only a Mac can tell, the addon on AVFoundation and VideoToolbox and the server's tests
-# on it. The rest of check-app is the same TypeScript anywhere: Linux's Check runs it (Nov 11, Check in ~5 min).
-check-mac: native-test
-    bun run --cwd apps/server test
+# CI's Mac: what only a Mac can tell, the addon on AVFoundation and VideoToolbox and the server's tests on it,
+# `shard` of them (1/2, 2/2: two jobs side by side; the first also tests the addon). One after another, not in
+# parallel: on CI's three-core Mac, tests in parallel hung on the hardware encoder (Nov 11: two at 30 s, 224 s in
+# all). The rest of check-app is the same TypeScript anywhere: Linux's Check runs it.
+check-mac shard="1/1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{shard}}" in 1/*) just native-test ;; *) just native debug ;; esac
+    cd apps/server && bun test --timeout=30000 --timings=test/timings.json --shard={{shard}}
 
 check-app: types
     # The generated TS types are committed: they must match the Rust.

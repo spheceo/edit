@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
-import { effectAddress, effectsAt, showings, useEffects } from "../lib/effects";
+import { effectAddress, effectsAt, playedLive, showings, useEffects } from "../lib/effects";
 import { pictureRect } from "../lib/note-shapes";
 import { playhead } from "../lib/playback";
 import { useEditor } from "../lib/store";
@@ -15,11 +15,14 @@ import { rate } from "../lib/types";
  * engine draws for it. Nothing is rendered, so a page the agent has just saved
  * plays at once, and a scrub is as quick as the page draws. A page saved again
  * is loaded beside the one showing, which stays up until the new one is ready.
+ * Once the server has rendered the code as it is (a few seconds after it stops
+ * changing), the player plays the render instead and the page goes.
  */
 export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
   const project = useEditor((state) => state.project);
   const effects = useEffects((state) => state.effects);
-  const shown = useMemo(() => (project ? showings(project) : []), [project]);
+  // Only what's changed since its render plays live: the rest is footage now, played (and exported) as the render.
+  const shown = useMemo(() => (project ? playedLive(showings(project), effects) : []), [project, effects]);
   const fps = project ? rate(project.settings) : 30;
   /** The frames by `name:changed`, and the pages that have said they're ready. */
   const frames = useRef(new Map<string, HTMLIFrameElement>());

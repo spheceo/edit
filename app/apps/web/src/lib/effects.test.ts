@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { effectAddress, effectsAt as at, showings } from "./effects";
+import { effectAddress, effectsAt as at, playedLive, showings } from "./effects";
 import type { Project } from "./types";
 
 function project(): Project {
@@ -45,4 +45,21 @@ test("the effect the playhead is on, the second of it to draw, and the pages to 
 
 test("a changed effect is a new address, so its page is loaded again", () => {
   expect(effectAddress({ page: "/api/effects/key/p1/board/scene.html", changed: 5 })).toBe("/api/effects/key/p1/board/scene.html?v=5");
+});
+
+test("an effect plays live only while its code is newer than its render", () => {
+  const edit = project();
+  const shown = showings(edit);
+  const code = [
+    { name: "board", changed: 1, page: "/b", key: "k2" },
+    { name: "windows", changed: 1, page: "/w", key: "k9" },
+  ];
+  // Neither rendered: both live.
+  expect(playedLive(shown, code).map((one) => one.name)).toEqual(["board", "board", "windows"]);
+  // The board rendered from its code as it is: footage now; the windows' render is of older code.
+  (edit.media[1] as { effect_key?: string }).effect_key = "k2";
+  (edit.media[2] as { effect_key?: string }).effect_key = "k8";
+  expect(playedLive(showings(edit), code).map((one) => one.name)).toEqual(["windows"]);
+  // An effect whose code isn't on this computer plays as whatever its media is.
+  expect(playedLive(showings(edit), [])).toEqual([]);
 });

@@ -1,10 +1,14 @@
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 
 import { agentInstructions } from "../src/agent.ts";
 import * as effects from "../src/effects.ts";
 import { registerEffectTools } from "../src/effect_tools.ts";
+import { registerEditingTools } from "../src/edit_tools.ts";
+import { findAddon, useNative, wrap, type Native } from "../src/native/index.ts";
+import * as tools from "../src/tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
 import { HQ_TOOLS, NOT_IN_HQ, toolsFor, TOOLS } from "../src/mcp/registry.ts";
 import { respond } from "../src/http/server.ts";
@@ -13,6 +17,7 @@ import * as seams from "../src/seams.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
 registerEffectTools();
+registerEditingTools();
 afterAll(() => effects.closeChrome());
 
 /** A page that keeps the contract: a bar that crosses the frame in two seconds, and a count of the frame. */
@@ -434,3 +439,101 @@ test.skipIf(chrome === null)("a sound made from its code: rendered in the page, 
     cleanup();
   }
 }, 120_000);
+
+const SEE_THROUGH = `<!doctype html>
+<html><body style="margin:0;overflow:hidden">
+<div style="position:absolute;left:0;top:0;width:960px;height:1080px;background:#ff0000"></div>
+<script>
+window.duration = 1;
+window.ready = Promise.resolve();
+window.seek = () => {};
+</script></body></html>`;
+
+/** The colour at (x, y) of a picture (PNG or JPEG bytes), as FFmpeg reads it. */
+function pixel(picture: Uint8Array, x: number, y: number): number[] {
+  const kind = picture[0] === 0xff && picture[1] === 0xd8 ? "jpg" : "png";
+  const path = join(os.tmpdir(), `edit-pixel-${process.pid}-${Math.random().toString(36).slice(2)}.${kind}`);
+  fs.writeFileSync(path, picture);
+  try {
+    return [...Bun.spawnSync(["ffmpeg", "-v", "error", "-i", path, "-vf", `format=rgb24,crop=1:1:${x}:${y}`, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]).stdout];
+  } finally {
+    fs.rmSync(path, { force: true });
+  }
+}
+
+const size = (path: string) => Bun.spawnSync(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", path]).stdout.toString().trim().replace(/,$/, "");
+
+test.skipIf(chrome === null)("an effect with see-through parts renders with its alpha and plays over what's beneath; while its code is newer, the engine draws nothing for it", async () => {
+  const { app, cleanup, id } = hq("effects-alpha");
+  const router = buildRouter();
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (request) => (await respond(app, router, request, null)) ?? new Response(null, { status: 404 }) });
+  const addon = findAddon();
+  const before = addon === null ? null : useNative(wrap(require(addon) as Native));
+  try {
+    app.port = server.port!;
+    await app.store.update(id, "test", (project) => {
+      project.hq = true;
+    });
+    const dir = write(app, id, "half", { "scene.html": SEE_THROUGH });
+    // The agent's look says so, and shows it over a checkerboard.
+    const looked = (await effects.look(app, id, "half", [0])).stills[0]!;
+    expect(looked.seeThrough).toBe(true);
+    const red = pixel(looked.picture, 300, 270);
+    expect(red[0]).toBeGreaterThan(230);
+    expect(red[1]! + red[2]!).toBeLessThan(40);
+    expect(new Set(pixel(looked.picture, 700, 270)).size).toBe(1);
+    const added = await effects.add(app, id, "half");
+    const mediaOf = () => app.store.get(id)!.project.media.find((one) => one.id === added.media)!;
+    // Before its render: a clear picture of its own, nothing drawn for it.
+    expect(mediaOf().path.endsWith("effect-stills/half.clear.png")).toBe(true);
+    expect([mediaOf().width, mediaOf().height]).toEqual([1920, 1080]);
+    await app.store.update(id, "test", (project) => {
+      project.tracks.push({ id: "t1", kind: "video", name: "V1", hidden: false, muted: false, locked: false } as unknown as (typeof project.tracks)[number]);
+      project.tracks.push({ id: "t2", kind: "video", name: "V2", hidden: false, muted: false, locked: false } as unknown as (typeof project.tracks)[number]);
+      // Blue beneath it, the effect over it.
+      project.clips.push({ id: "c0", type: "solid", track: "t1", start: 0, duration: 30, fill: [0, 0, 1, 1], opacity: 1 } as unknown as (typeof project.clips)[number]);
+      project.clips.push({ id: "c1", type: "video", track: "t2", start: 0, duration: 30, media: added.media, source_in: 0 } as unknown as (typeof project.clips)[number]);
+    });
+    await seams.broll.waitForMaps(app, id, 90_000);
+    let media = mediaOf();
+    expect(media.stacked_alpha).toBe(true);
+    expect(media.kind).toBe("video");
+    // The picture's own size; the file is the picture over its alpha, played as it is (no preview copy to halve it).
+    expect([media.width, media.height]).toEqual([1920, 1080]);
+    expect(size(media.path)).toBe("1920,2160");
+    expect(app.media.status(media.path).proxy).toBe("skipped");
+    // The engine draws it over the blue: red where it's painted, blue where it isn't (with the real engine, built).
+    if (addon !== null) {
+      (require(addon) as Native).init({ home: app.store.home, cacheDir: app.store.cacheDir(), ffmpeg: tools.ffmpeg(), ffprobe: tools.ffprobe(), log: () => {} });
+      const frame = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "render_frame", arguments: { frame: 10, max_size: 1920 } } }, id)) as { result: { content: { type: string; data?: string; text?: string }[] } }).result;
+      const picture = Buffer.from(frame.content.find((part) => part.type === "image")?.data ?? "", "base64");
+      expect(picture.length).toBeGreaterThan(0);
+      const [r1, g1, b1] = pixel(picture, 480, 540);
+      expect(r1).toBeGreaterThan(230);
+      expect(g1! + b1!).toBeLessThan(30);
+      const [r2, g2, b2] = pixel(picture, 1440, 540);
+      expect(b2).toBeGreaterThan(230);
+      expect(r2! + g2!).toBeLessThan(30);
+    }
+    // Its code changed: at once its old render gives way to its clear picture (the page playing live is all that's seen of it).
+    await Bun.sleep(20);
+    fs.writeFileSync(join(dir, "scene.html"), SEE_THROUGH.replace("margin:0;", "margin:0;background:#00ff00;"));
+    effects.renderSoon(app, id);
+    for (let wait = 0; wait < 50 && mediaOf().kind !== "image"; wait++) await Bun.sleep(50);
+    media = mediaOf();
+    expect(media.path.endsWith("half.clear.png")).toBe(true);
+    expect(media.effect_key).toBeUndefined();
+    expect(media.stacked_alpha).toBeUndefined();
+    // A page that paints every pixel is plain video, as before.
+    expect((await effects.look(app, id, "half", [0])).stills[0]!.seeThrough).toBe(false);
+    await seams.broll.waitForMaps(app, id, 90_000);
+    media = mediaOf();
+    expect(media.stacked_alpha).toBeUndefined();
+    expect(media.kind).toBe("video");
+    expect(size(media.path)).toBe("1920,1080");
+  } finally {
+    if (addon !== null) useNative(before);
+    await server.stop(true);
+    cleanup();
+  }
+}, 240_000);

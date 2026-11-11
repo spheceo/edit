@@ -37,4 +37,12 @@ effect?: string,
  * `path` is only its still. A key that isn't the code's now is a render
  * to make again; the viewer plays the code live until it's made.
  */
-effect_key?: string, };
+effect_key?: string, 
+/**
+ * The file carries its transparency: an ordinary video twice `height`,
+ * the picture (its colour premultiplied by its alpha) on top and the
+ * alpha as grey below, so a coded effect with see-through parts plays
+ * over what's beneath it through every decoder, proxy and the cloud
+ * as any H.264 does. `width`×`height` stay the picture's own.
+ */
+stacked_alpha?: boolean, };

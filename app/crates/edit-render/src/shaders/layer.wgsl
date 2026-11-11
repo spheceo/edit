@@ -10,7 +10,8 @@ struct Layer {
     opacity: f32,
     tint: vec4f,
     // 0 straight-alpha texture, 1 solid tint, 2 glow mask (tinted alpha), 3 premultiplied texture, 4 shadow,
-    // 5 box shadow, 6 gradient (tint fading across the quad)
+    // 5 box shadow, 6 gradient (tint fading across the quad), 7 stacked texture (its top half the
+    // picture, colour premultiplied; its bottom half the alpha as grey)
     mode: u32,
     // Box shadow: the Gaussian's sigma in pixels.
     blur: f32,
@@ -93,6 +94,14 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             let half = max(u.size * 0.5 - 3.0 * u.blur, vec2f(0.0));
             let a = box_blur(p, half, u.blur) * u.tint.a * u.opacity;
             return vec4f(u.tint.rgb * a, a);
+        }
+        case 7u: {
+            // uv is over the picture; each half kept half a texel from the seam so neither bleeds in.
+            let half_texel = 0.5 / f32(textureDimensions(tex).y);
+            let color = textureSampleLevel(tex, samp, vec2f(in.uv.x, min(in.uv.y * 0.5, 0.5 - half_texel)), 0.0);
+            let alpha = textureSampleLevel(tex, samp, vec2f(in.uv.x, max(0.5 + in.uv.y * 0.5, 0.5 + half_texel)), 0.0).g;
+            // Coded colour stays inside its alpha (4:2:0 and the encoder's rounding can push it past).
+            return vec4f(min(color.rgb, vec3f(alpha)), alpha) * u.opacity * mask;
         }
         case 6u: {
             let t = clamp((in.corner.x - u.uv.x) / (u.uv.y - u.uv.x), 0.0, 1.0);

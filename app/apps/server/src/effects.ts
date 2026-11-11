@@ -36,7 +36,18 @@
 // heavy page can't keep up: Nov 10, the evidence board's blur at 16 frames a
 // second in WKWebView). Every export waits for the renders it needs
 // (`waitForRenders`). Measured Nov 11 on mandalorian: a 1080p frame captured as
-// JPEG in 84 ms (a PNG 534), four Chromes 41 frames a second together.
+// JPEG in 84 ms, four Chromes 41 frames a second together; as PNG with
+// optimizeForSpeed (and its alpha) 52 ms, so frames are PNG.
+//
+// See-through parts (Sphe, Nov 11: "do the transparency"): Chrome draws on
+// nothing (no white behind the page), so what the page leaves unpainted is
+// transparent. A render whose frames all fill the frame is plain H.264 as
+// before; one with see-through parts is stacked (`Media::stacked_alpha`): the
+// picture, its colour premultiplied, above its alpha as grey, in one H.264
+// twice the height, which every decoder, the cloud and the engine's shared
+// compositor carry as any video and which plays over what's beneath it. While
+// its code is newer than its render, the engine draws a clear picture for it
+// (`standIn`) and the page plays alone, so nothing shows twice.
 //
 // Not yet: sound, and effects kept in the cloud (the folder is this
 // computer's; another computer plays the render, which the cloud does carry).
@@ -439,7 +450,36 @@ export interface Still {
   mime: string;
   /** What a frame takes while it plays from here, in milliseconds, on this computer. */
   cost: number;
+  /** Some of it is see-through (shown over a checkerboard): it plays over what's beneath it. */
+  seeThrough: boolean;
 }
+
+/**
+ * Run in the effect's page: a PNG screenshot (base64) drawn over a grey
+ * checkerboard as a JPEG, and whether any of it was see-through, so the agent
+ * sees which parts will show what's beneath.
+ */
+const OVER_CHECKS = `async (png) => {
+  const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
+  const shot = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
+  const plain = new OffscreenCanvas(shot.width, shot.height).getContext("2d");
+  plain.drawImage(shot, 0, 0);
+  const pixels = plain.getImageData(0, 0, shot.width, shot.height).data;
+  let clear = false;
+  for (let at = 3; at < pixels.length; at += 4) if (pixels[at] < 250) { clear = true; break; }
+  const canvas = new OffscreenCanvas(shot.width, shot.height);
+  const ctx = canvas.getContext("2d");
+  const cell = Math.max(8, Math.round(shot.width / 60));
+  for (let y = 0; y < shot.height; y += cell) for (let x = 0; x < shot.width; x += cell) {
+    ctx.fillStyle = ((x / cell + y / cell) & 1) === 0 ? "#9a9a9a" : "#6a6a6a";
+    ctx.fillRect(x, y, cell, cell);
+  }
+  ctx.drawImage(shot, 0, 0);
+  const jpeg = new Uint8Array(await (await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 })).arrayBuffer());
+  let text = "";
+  for (let at = 0; at < jpeg.length; at += 0x8000) text += String.fromCharCode(...jpeg.subarray(at, at + 0x8000));
+  return { jpeg: btoa(text), clear };
+}`;
 
 export interface Look {
   /** The effect's length in seconds (`window.duration`; 0 when the page doesn't say). */
@@ -505,17 +545,20 @@ export async function look(app: App, projectId: string, name: string, times: num
       if (loaded.seek) {
         // Six of it, each from the middle of its sixth, when no moments are asked for.
         const wanted = times ?? (loaded.duration > 0 ? [0, 1, 2, 3, 4, 5].map((part) => Math.round(((part + 0.5) * loaded.duration * 100) / 6) / 100) : [0]);
+        // As it renders: nothing behind the page, its unpainted parts see-through, shown over a checkerboard.
+        await page.call("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
         for (const time of wanted) {
           const cost = await page.evaluate<number>(`window.__edit.cost(${time}, ${1 / fps})`);
           await page.evaluate(`window.__edit.seek(${time})`);
           const scale = side > 0 ? Math.min(1, side / Math.max(width, height)) : 1;
-          const shot = await page.call(
-            "Page.captureScreenshot",
-            { format: side > 0 ? "jpeg" : "png", ...(side > 0 ? { quality: 82 } : {}), clip: { x: 0, y: 0, width, height, scale } },
-            90_000,
-          );
+          const shot = await page.call("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip: { x: 0, y: 0, width, height, scale } }, 90_000);
           if (typeof shot.data !== "string") throw new Error("Chrome drew nothing");
-          stills.push({ time, picture: new Uint8Array(Buffer.from(shot.data, "base64")), mime: side > 0 ? "image/jpeg" : "image/png", cost });
+          if (side === 0) {
+            stills.push({ time, picture: new Uint8Array(Buffer.from(shot.data, "base64")), mime: "image/png", cost, seeThrough: false });
+            continue;
+          }
+          const shown = await page.evaluate<{ jpeg: string; clear: boolean }>(`(${OVER_CHECKS})(${JSON.stringify(shot.data)})`, 60_000);
+          stills.push({ time, picture: new Uint8Array(Buffer.from(shown.jpeg, "base64")), mime: "image/jpeg", cost, seeThrough: shown.clear });
         }
       }
       const said = await page.evaluate<{ problems: string[]; errors: string[] }>("({ problems: window.__edit.problems, errors: window.__edit.errors })");
@@ -532,8 +575,8 @@ export async function look(app: App, projectId: string, name: string, times: num
 /**
  * The effect as one of the project's media, so it's placed and cut like
  * footage: `media.effect` names it, its length is the page's, and what the
- * engine plays for it is a still from its middle until the render is built
- * (the viewer plays the page itself, live). Adding one that's there already
+ * engine plays for it is a clear picture until the render is built (the
+ * viewer plays the page itself, live, alone). Adding one that's there already
  * takes its length again from the page.
  */
 export async function add(app: App, projectId: string, name: string): Promise<{ media: string; duration: number }> {
@@ -544,13 +587,7 @@ export async function add(app: App, projectId: string, name: string): Promise<{ 
   const existing = live?.project.media.find((media) => media.effect === name);
   let mediaId = existing?.id;
   if (mediaId === undefined) {
-    const still = (await look(app, projectId, name, [first.duration / 2], 0)).stills[0];
-    if (still === undefined) throw new Error(`${name} drew nothing`);
-    const dir = join(app.store.uploadsDir(projectId), "effect-stills");
-    fs.mkdirSync(dir, { recursive: true });
-    const path = join(dir, `${name}.png`);
-    writeAtomic(path, still.picture);
-    const [, added, errors] = await importPaths(app, projectId, [path], false, "agent");
+    const [, added, errors] = await importPaths(app, projectId, [clearStill(app.store, projectId, name)], false, "agent");
     mediaId = added[0];
     if (mediaId === undefined) throw new Error(errors.join("; "));
   }
@@ -561,8 +598,54 @@ export async function add(app: App, projectId: string, name: string): Promise<{ 
     media.effect = name;
     media.name = name;
     media.duration = first.duration;
+    if (media.effect_key === undefined || media.effect_key === null) {
+      media.width = project.settings.width;
+      media.height = project.settings.height;
+    }
   });
   return { media: id, duration: first.duration };
+}
+
+/** A 2×2 PNG with nothing in it: what the engine draws for an effect whose render isn't its code's. */
+const CLEAR_PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAC0lEQVR42mNgQAcAABIAAeRVjecAAAAASUVORK5CYII=", "base64");
+
+/** An effect's clear picture among the project's uploads (its own file, so it's its own media). */
+function clearStill(store: Store, project: string, name: string): string {
+  const dir = join(store.uploadsDir(project), "effect-stills");
+  const path = join(dir, `${name}.clear.png`);
+  if (!fs.existsSync(path)) {
+    fs.mkdirSync(dir, { recursive: true });
+    writeAtomic(path, CLEAR_PNG);
+  }
+  return path;
+}
+
+/**
+ * Each effect whose code here is newer than its render: the engine draws its
+ * clear picture in the render's place until the new one is made, so the page
+ * playing live is all that's seen of it (a see-through page over its old
+ * render would show both), in the browser and a Mac's window alike.
+ */
+async function standIn(app: App, project: string): Promise<void> {
+  const stale = needed(app.store, project).filter((effect) => effect.current !== null && !effect.fresh && typeof effect.media.effect_key === "string");
+  if (stale.length === 0) return;
+  const paths = new Map(stale.map((effect) => [effect.name, clearStill(app.store, project, effect.name)]));
+  await app.store.update(project, "effects", (edited) => {
+    let changed = false;
+    for (const media of edited.media) {
+      const path = media.effect === undefined || media.effect === null ? undefined : paths.get(media.effect);
+      if (path === undefined || typeof media.effect_key !== "string") continue;
+      media.path = path;
+      media.kind = "image";
+      media.width = edited.settings.width;
+      media.height = edited.settings.height;
+      delete media.effect_key;
+      delete media.stacked_alpha;
+      delete media.cloud;
+      changed = true;
+    }
+    return changed;
+  });
 }
 
 /**
@@ -945,6 +1028,8 @@ async function draw(app: App, render: Render): Promise<void> {
     const opened: devtools.Page[] = [];
     try {
       for (let at = 0; at < CHROMES; at++) opened.push(await devtools.open({ profile: RENDER_PROFILE, width: frame.width, height: frame.height, gpu: true, what: "Rendering an effect" }));
+      // Nothing behind the page: what it leaves unpainted is see-through.
+      await Promise.all(opened.map((page) => page.call("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } })));
       const loaded = await Promise.all(opened.map((page, at) => load(page, `${url}${key}-${at}`, `${key}-${at}`, name)));
       const duration = loaded[0]!.duration;
       if (!(duration > 0)) throw new Error("its page has no window.duration");
@@ -964,7 +1049,7 @@ async function draw(app: App, render: Render): Promise<void> {
             const time = index / frame.fps;
             const drawn = await page.evaluate<{ error?: string }>(`window.__edit.seek(${time})`, 15_000);
             if (drawn.error !== undefined) throw new Error(`its page threw at ${time.toFixed(2)} s: ${drawn.error.split("\n")[0]}`);
-            const shot = await page.call("Page.captureScreenshot", { format: "jpeg", quality: 95, optimizeForSpeed: true, clip: { x: 0, y: 0, width: frame.width, height: frame.height, scale: 1 } }, 60_000);
+            const shot = await page.call("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip: { x: 0, y: 0, width: frame.width, height: frame.height, scale: 1 } }, 60_000);
             if (typeof shot.data !== "string") throw new Error(`Chrome drew nothing at ${time.toFixed(2)} s`);
             // Whole frames only: one cut short by a quit is drawn again.
             const path = join(frames, frameName(index));
@@ -989,8 +1074,18 @@ async function draw(app: App, render: Render): Promise<void> {
       // On the video hardware where there is some (the encoder Edit's export uses: tools.hardwareH264), at the cap: on a
       // busy M1, libx264 took 75 s to join a 12 s board's frames (Nov 11, kenobi). Else libx264, by quality, under the cap.
       const hardware = tools.hardwareH264();
-      const encode = hardware === null ? ["-c:v", "libx264", "-preset", "medium", "-crf", "17", "-maxrate", String(cap), "-bufsize", String(cap * 2)] : [...hardware, "-b:v", String(cap), "-maxrate", String(cap), "-bufsize", String(cap * 2)];
-      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "scale=in_range=pc:out_range=tv,format=yuv420p", ...encode, "-an", "-movflags", "+faststart", partial]);
+      const input = ["-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.png")];
+      const stacked = await seeThrough(input);
+      // Stacked, it's twice the pixels (the alpha half costs little) and it plays as it is, with no preview copy to seek in:
+      // a keyframe every half second and no B-frames. Kept within H.264's 4096 lines: a 4K project's stack is half size.
+      const rate = stacked ? Math.round(cap * 1.5) : cap;
+      const shrink = Math.min(1, 4096 / (frame.height * 2));
+      const gop = stacked ? ["-g", String(Math.max(1, Math.round(frame.fps / 2))), "-bf", "0"] : [];
+      const encode = hardware === null ? ["-c:v", "libx264", "-preset", "medium", "-crf", "17", "-maxrate", String(rate), "-bufsize", String(rate * 2)] : [...hardware, "-b:v", String(rate), "-maxrate", String(rate), "-bufsize", String(rate * 2)];
+      const picture = stacked
+        ? ["-filter_complex", `[0:v]format=rgba,split[c][m];[c]premultiply=inplace=1,format=rgb24[p];[m]alphaextract,format=rgb24[a];[p][a]vstack=inputs=2${shrink < 1 ? `,scale=${even(frame.width * shrink)}:${even(frame.height * 2 * shrink)}` : ""},${TO_VIDEO}`]
+        : ["-vf", TO_VIDEO];
+      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...input, ...picture, ...encode, ...gop, ...VIDEO_TAGS, "-an", "-movflags", "+faststart", partial]);
       fs.renameSync(partial, out);
     } catch (error) {
       fs.rmSync(partial, { force: true });
@@ -1000,6 +1095,8 @@ async function draw(app: App, render: Render): Promise<void> {
   }
   const probe = await probeFile(out);
   if (probe.kind !== "video" || !(probe.duration > 0)) throw new Error("its render isn't a video Edit can read");
+  // A stacked render is twice as tall as the frame is for its width (whatever size it was kept at).
+  const stacked = probe.width > 0 && Math.abs(probe.height / probe.width - (2 * frame.height) / frame.width) < 0.01;
   // Code changed while the video was made: the next render takes over.
   if (sourceKey(filesIn(folder(app.store, project, name)), frame) !== key) throw new Outdated();
   let placed = false;
@@ -1009,11 +1106,13 @@ async function draw(app: App, render: Render): Promise<void> {
       media.path = out;
       media.kind = probe.kind;
       media.duration = probe.duration;
-      media.width = probe.width;
-      media.height = probe.height;
+      media.width = stacked ? frame.width : probe.width;
+      media.height = stacked ? frame.height : probe.height;
       media.fps = probe.fps;
       media.has_audio = probe.has_audio;
       media.effect_key = key;
+      if (stacked) media.stacked_alpha = true;
+      else delete media.stacked_alpha;
       delete media.cloud;
       placed = true;
     }
@@ -1021,7 +1120,7 @@ async function draw(app: App, render: Render): Promise<void> {
   });
   if (!placed) return;
   prune(app.store, project, name, out);
-  app.media.ensure(out, probe);
+  app.media.ensure(out, probe, stacked);
   try {
     if (relay.cloudEnabled()) seams.cloudMedia.backfillSoon(app, project);
   } catch (error) {
@@ -1093,8 +1192,23 @@ function prune(store: Store, project: string, name: string, kept: string): void 
   }
 }
 
+/** The frames (RGB) as footage is: BT.709, video range, 4:2:0, and tagged so (the engine's fast path reads it as it is). */
+const TO_VIDEO = "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p";
+const VIDEO_TAGS = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"];
+
+/** Even, as H.264's 4:2:0 wants a size. */
+function even(value: number): number {
+  return Math.max(2, Math.round(value / 2) * 2);
+}
+
+/** Whether any of the frames (`input`: FFmpeg's arguments for them) has a pixel less than opaque. */
+async function seeThrough(input: string[]): Promise<boolean> {
+  const out = new TextDecoder().decode(await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", ...input, "-vf", "format=rgba,alphaextract,signalstats,metadata=print:key=lavfi.signalstats.YMIN:file=-", "-f", "null", "-"]));
+  return [...out.matchAll(/YMIN=(\d+)/g)].some((match) => Number(match[1]) < 255);
+}
+
 function frameName(index: number): string {
-  return `frame-${String(index).padStart(5, "0")}.jpg`;
+  return `frame-${String(index).padStart(5, "0")}.png`;
 }
 
 /** The project's rate as FFmpeg reads it ("30", "30000/1001"). */
@@ -1109,6 +1223,7 @@ function rateArg(project: Project): string {
  * change to the project or its effects; cheap when there's nothing to do.
  */
 export function renderSoon(app: App, project: string): void {
+  standIn(app, project).catch((error: unknown) => diag.warn("effects", `${project}: its effects' clear pictures: ${diag.messageOf(error)}`));
   const waiting = settling.get(project);
   if (waiting !== undefined) clearTimeout(waiting);
   const timer = setTimeout(() => {
@@ -1128,7 +1243,7 @@ export function renderLine(app: App, project: string, name: string): string | nu
   if (effect === undefined) return null;
   if (effect.fresh) return "Its render is of this code: that's what plays and exports.";
   const state = effect.current === null ? null : renderState(project, name, effect.current.key);
-  return state === null ? "Its render follows a few seconds after the code stops changing; until then the viewer plays the code live." : `Its render: ${state}.`;
+  return state === null ? "Its render follows a few seconds after the code stops changing; until then the viewer plays the code live, and Edit's frames (render_frame, contact_sheet) show nothing of it: look_at_effect does." : `Its render: ${state}.`;
 }
 
 /** What an effect's render is doing, for the agent and the person: null when there's nothing to say. */

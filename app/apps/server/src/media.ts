@@ -256,16 +256,21 @@ export class Processor {
     this.store.emit({ type: "media", path: source, status: shown(entry) });
   }
 
-  /** Starts whatever work is missing for `source`. Safe to call repeatedly. */
-  ensure(source: string, probe: Probe): void {
+  /**
+   * Starts whatever work is missing for `source`. Safe to call repeatedly.
+   * `whole`: it plays as it is, with no preview copies (a coded effect's
+   * render carrying its alpha below its picture: H.264 with short GOPs
+   * already, which a copy capped at 1080 would halve).
+   */
+  ensure(source: string, probe: Probe, whole = false): void {
     // A cloud proxy still being made in the cloud: nothing local to process
     // yet (playback streams it); processing runs when a fetch caches it.
     if (isLocalCopy(this.store.cacheDir(), source) && !isFile(source)) return;
-    if (probe.kind === "image") {
+    if (probe.kind === "image" || whole) {
       this.set(source, (status) => {
         status.proxy = "skipped";
         status.light = "skipped";
-        status.peaks = "skipped";
+        if (probe.kind === "image") status.peaks = "skipped";
       });
     }
     // Told to the engine at once, before anything there measures it.
@@ -283,7 +288,7 @@ export class Processor {
     // starting two unbounded extra decoders for every import.
     const slots = probe.kind === "image" ? imageSlots : backgroundSlots;
     void slots
-      .with(() => this.process(source, probe, paths))
+      .with(() => this.process(source, probe, paths, whole))
       .catch((error: unknown) => {
         // A crash mid-way leaves no stage "working" (and the file can be processed again).
         const said = isBug(error) ? crashMessage(error) : diag.messageOf(error);
@@ -329,7 +334,7 @@ export class Processor {
     void this.inputOf(source).then(() => native().loudnessWarm(source));
   }
 
-  private async process(source: string, probe: Probe, paths: CachePaths): Promise<void> {
+  private async process(source: string, probe: Probe, paths: CachePaths, whole = false): Promise<void> {
     const status = this.status(source);
     const input = await this.inputOf(source);
     const pictured = (kind: MediaKind) => kind === "video" || kind === "image";
@@ -379,7 +384,7 @@ export class Processor {
         s.peaks = "skipped";
       });
     }
-    if (probe.kind === "image") {
+    if (probe.kind === "image" || whole) {
       this.set(source, (s) => {
         s.proxy = "skipped";
       });
@@ -412,7 +417,7 @@ export class Processor {
     }
     // Then the light one, from the preview (already scaled and tagged).
     const proxied = this.status(source).proxy === "ready";
-    if (probe.kind !== "video" || playbackKey(source) !== null) {
+    if (probe.kind !== "video" || whole || playbackKey(source) !== null) {
       this.set(source, (s) => {
         s.light = "skipped";
       });
@@ -439,6 +444,7 @@ export class Processor {
     // the audit's censored_broll is ready by the time the edit is reviewed:
     // started only by the audit, Mom Leaves 5 Kids' final pass found all
     // sixteen files still pending and its blurred B-roll went out.
+    if (whole) return;
     if (probe.kind === "video") native().censorWarm(source, input === source ? null : input);
     // Its own black borders (a tape's edge), so footage placed later fills the frame.
     if (probe.kind === "video" || probe.kind === "image") framing.warmBorders({ path: source, name: source, ...probe });

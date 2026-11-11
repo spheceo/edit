@@ -33,6 +33,7 @@ fn evidence_multiply_preserves_black_type_and_screen_adds_light() {
         crop: Default::default(),
         frame: None,
         blend: BlendMode::Multiply,
+        stacked: false,
     };
     let mut scene = Scene {
         width: 32,
@@ -88,6 +89,7 @@ fn rounded_photo_corners_leave_the_background_visible() {
                 opacity: 1.0,
                 crop: Default::default(),
                 blend: BlendMode::Normal,
+                stacked: false,
                 frame: Some(PhotoFrame {
                     width: 0.0,
                     color: Rgba::WHITE,
@@ -178,6 +180,7 @@ fn keeps_uniforms_independent_beyond_512_draws() {
                 crop: Default::default(),
                 frame: None,
                 blend: Default::default(),
+                stacked: false,
             })
             .collect(),
     };
@@ -237,6 +240,7 @@ fn renders_gradient_glowing_title_and_grade() {
                 crop: Default::default(),
                 frame: None,
                 blend: Default::default(),
+                stacked: false,
             },
             Layer::Adjustment {
                 grade: Grade {
@@ -326,7 +330,7 @@ fn renders_repack_subtitle_style() {
         width: w,
         height: h,
         layers: vec![
-            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0, crop: Default::default(), frame: None, blend: Default::default() },
+            Layer::Video { clip: "c1".into(), media: "m1".into(), source_time: 0.0, transform: Transform::default(), opacity: 1.0, crop: Default::default(), frame: None, blend: Default::default(), stacked: false },
             Layer::Text {
                 clip: "s1".into(),
                 text: "This is how a subtitle looks in Repack's house style, wrapping onto a second line when it runs long".into(),
@@ -373,6 +377,7 @@ fn independent_moments_of_one_source_do_not_share_a_texture() {
         crop: Default::default(),
         frame: None,
         blend: Default::default(),
+        stacked: false,
     };
     renderer.render(&Scene {
         width: 80,
@@ -415,6 +420,7 @@ fn crops_a_picture_and_fades_a_gradient() {
                 },
                 frame: None,
                 blend: Default::default(),
+                stacked: false,
             },
             // Black, clear at 60% across, full by 90%.
             Layer::Solid {
@@ -491,6 +497,7 @@ fn blurs_only_inside_the_region() {
         crop: Default::default(),
         frame: None,
         blend: Default::default(),
+        stacked: false,
     };
     let word = Layer::Text {
         clip: "t1".into(),
@@ -639,6 +646,7 @@ fn bench_busy_frames() {
             crop: Default::default(),
             frame: None,
             blend: Default::default(),
+            stacked: false,
         },
         Layer::Video {
             clip: "b".into(),
@@ -652,6 +660,7 @@ fn bench_busy_frames() {
             crop: Default::default(),
             frame: None,
             blend: Default::default(),
+            stacked: false,
         },
     ];
     for index in 0..30 {
@@ -833,6 +842,7 @@ fn a_light_leak_warms_from_its_side_and_burns_toward_white() {
         crop: Default::default(),
         frame: None,
         blend: Default::default(),
+        stacked: false,
     };
     let leak = |leak: f32| Layer::Adjustment {
         grade: Grade {
@@ -908,6 +918,7 @@ fn a_bounded_blur_matches_the_whole_frame_blur() {
         crop: Default::default(),
         frame: None,
         blend: Default::default(),
+        stacked: false,
     };
     let adjustment = |blur: Blur, opacity: f32| Layer::Adjustment {
         grade: Grade::default(),
@@ -1015,6 +1026,7 @@ fn the_output_reads_back_as_bt709_420() {
             crop: Default::default(),
             frame: None,
             blend: BlendMode::Normal,
+            stacked: false,
         }],
     };
     let read = |r: &mut Renderer| {
@@ -1129,6 +1141,7 @@ fn a_420_upload_is_ffmpegs_rgba() {
             crop: Default::default(),
             frame: None,
             blend: BlendMode::Normal,
+            stacked: false,
         }],
     };
     r.upload_video_yuv420("planes", w, h, &planes);
@@ -1166,4 +1179,87 @@ fn a_420_upload_is_ffmpegs_rgba() {
             "{pixel:?}"
         );
     }
+}
+
+#[test]
+#[allow(clippy::unwrap_used)]
+fn a_stacked_video_draws_its_picture_over_what_is_beneath_by_its_alpha() {
+    let Some(mut r) = renderer(32, 32) else {
+        return;
+    };
+    // A 32×32 picture over its alpha (a 32×64 file): the left half solid
+    // red, the right half see-through, a stripe across the middle half seen.
+    let file: Vec<u8> = (0..64)
+        .flat_map(|y| {
+            (0..32).flat_map(move |x| {
+                let alpha: u8 = if x < 16 {
+                    255
+                } else if (12..20).contains(&(y % 32)) {
+                    128
+                } else {
+                    0
+                };
+                if y < 32 {
+                    // Premultiplied red.
+                    [alpha, 0, 0, 255]
+                } else {
+                    [alpha, alpha, alpha, 255]
+                }
+            })
+        })
+        .collect();
+    r.upload_video_rgba("fx", 32, 64, &file);
+    let scene = Scene {
+        width: 32,
+        height: 32,
+        layers: vec![
+            Layer::Solid {
+                color: Rgba([0.0, 0.0, 1.0, 1.0]),
+                opacity: 1.0,
+                gradient: None,
+            },
+            Layer::Video {
+                clip: "fx".into(),
+                media: "fx".into(),
+                source_time: 0.0,
+                transform: Transform::default(),
+                opacity: 1.0,
+                crop: Default::default(),
+                frame: None,
+                blend: BlendMode::Normal,
+                stacked: true,
+            },
+        ],
+    };
+    r.render(&scene);
+    let pixels = r.read_output().unwrap();
+    let at = |x: usize, y: usize| pixels[(y * 32 + x) * 4..][..4].to_vec();
+    // Opaque: the picture, filling the frame (its own half, not the file's).
+    assert!(
+        at(4, 2)[0] > 250 && at(4, 2)[2] < 3,
+        "opaque {:?}",
+        at(4, 2)
+    );
+    assert!(
+        at(4, 30)[0] > 250 && at(4, 30)[2] < 3,
+        "opaque bottom {:?}",
+        at(4, 30)
+    );
+    // See-through: what's beneath.
+    assert!(
+        at(28, 2)[0] < 3 && at(28, 2)[2] > 250,
+        "clear {:?}",
+        at(28, 2)
+    );
+    assert!(
+        at(28, 30)[0] < 3 && at(28, 30)[2] > 250,
+        "clear bottom {:?}",
+        at(28, 30)
+    );
+    // Half: both, evenly.
+    let half = at(28, 16);
+    assert!(
+        (i32::from(half[0]) - 128).abs() < 8 && (i32::from(half[2]) - 128).abs() < 8,
+        "half {half:?}"
+    );
 }

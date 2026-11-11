@@ -444,6 +444,13 @@ pub struct Media {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub effect_key: Option<String>,
+    /// The file carries its transparency: an ordinary video twice `height`,
+    /// the picture (its colour premultiplied by its alpha) on top and the
+    /// alpha as grey below, so a coded effect with see-through parts plays
+    /// over what's beneath it through every decoder, proxy and the cloud
+    /// as any H.264 does. `width`×`height` stay the picture's own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stacked_alpha: bool,
 }
 
 /// Which half of the team's sound library a sound is from.

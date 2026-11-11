@@ -20,6 +20,8 @@ pub enum Layer {
         crop: Crop,
         frame: Option<PhotoFrame>,
         blend: crate::BlendMode,
+        /// The media's file is the picture over its alpha ([`crate::Media::stacked_alpha`]).
+        stacked: bool,
     },
     Text {
         clip: String,
@@ -165,6 +167,7 @@ pub fn evaluate(project: &Project, frame: i64) -> Scene {
                 },
                 frame: *frame,
                 blend: *blend,
+                stacked: project.media(media).is_some_and(|one| one.stacked_alpha),
             },
             ClipContent::Text {
                 text,
@@ -358,8 +361,9 @@ impl Scene {
     }
 }
 
-/// Whether `layer` hides everything beneath it: an opaque video (not an image,
-/// which may have see-through parts), uncropped and unturned, filling the frame.
+/// Whether `layer` hides everything beneath it: an opaque video (not an image
+/// or a video carrying its alpha, which may have see-through parts),
+/// uncropped and unturned, filling the frame.
 pub fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
     let Layer::Video {
         media,
@@ -379,6 +383,7 @@ pub fn covers_frame(project: &Project, scene: &Scene, layer: &Layer) -> bool {
     if frame.is_some_and(|f| f.radius > 0.0)
         || *blend != crate::BlendMode::Normal
         || media.kind != MediaKind::Video
+        || media.stacked_alpha
         || *opacity < 0.999
         || !crop.is_none()
         || transform.rotation.abs() > 1e-3
@@ -1285,6 +1290,7 @@ mod tests {
             library: None,
             effect: None,
             effect_key: None,
+            stacked_alpha: false,
         });
         let v1 = project.tracks[0].id.clone();
         let v2 = project.tracks[1].id.clone();
@@ -1443,7 +1449,20 @@ mod tests {
         let seen = evaluate_seen(&project, 40);
         assert_eq!(evaluate(&project, 40).layers.len(), 2);
         assert_eq!(seen.layers.len(), 1);
-        assert!(matches!(&seen.layers[0], Layer::Video { clip, .. } if clip == "c2"));
+        assert!(
+            matches!(&seen.layers[0], Layer::Video { clip, stacked: false, .. } if clip == "c2")
+        );
+        // A video carrying its alpha (a coded effect with see-through parts) covers nothing.
+        let mut stacked = project.clone();
+        if let Some(media) = stacked.media.iter_mut().find(|one| one.id == "m1") {
+            media.stacked_alpha = true;
+        }
+        let seen = evaluate_seen(&stacked, 40);
+        assert_eq!(seen.layers.len(), 2);
+        assert!(seen
+            .layers
+            .iter()
+            .all(|layer| matches!(layer, Layer::Video { stacked: true, .. })));
         // Not quite covering: smaller, see-through, or cropped.
         let changed = |change: &dyn Fn(&mut Clip)| {
             let mut project = project.clone();

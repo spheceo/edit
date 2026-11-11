@@ -134,6 +134,8 @@ const MODE_PREMULTIPLIED: u32 = 3;
 const MODE_SHADOW: u32 = 4;
 const MODE_BOX_SHADOW: u32 = 5;
 const MODE_GRADIENT: u32 = 6;
+/// A video whose file is its picture (colour premultiplied) over its alpha as grey.
+const MODE_STACKED: u32 = 7;
 
 struct Target {
     texture: wgpu::Texture,
@@ -939,6 +941,7 @@ impl Renderer {
                     crop,
                     frame,
                     blend,
+                    stacked,
                     ..
                 } => {
                     let Some(video) = self.videos.get(clip).or_else(|| self.videos.get(media))
@@ -948,9 +951,15 @@ impl Renderer {
                     if *opacity <= 0.0 {
                         continue;
                     }
+                    // A stacked file's picture is its top half.
+                    let picture_height = if *stacked {
+                        video.height as f32 / 2.0
+                    } else {
+                        video.height as f32
+                    };
                     let fit = (self.width as f32 / video.width as f32)
-                        .min(self.height as f32 / video.height as f32);
-                    let size = [video.width as f32 * fit, video.height as f32 * fit];
+                        .min(self.height as f32 / picture_height);
+                    let size = [video.width as f32 * fit, picture_height * fit];
                     // A crop draws less of the picture where it was: a smaller quad,
                     // moved towards the side that's kept, turned and scaled with it.
                     let kept = [
@@ -1088,7 +1097,11 @@ impl Renderer {
                             half_canvas,
                             *opacity,
                             [1.0; 4],
-                            MODE_STRAIGHT,
+                            if *stacked {
+                                MODE_STACKED
+                            } else {
+                                MODE_STRAIGHT
+                            },
                         )
                     };
                     let offset =

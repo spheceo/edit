@@ -91,11 +91,44 @@ pub fn new_renderer(width: u32, height: u32) -> Result<Renderer, String> {
 }
 
 /// Decoded size for a source drawn into a `width`×`height` frame: contain-fit, even.
+/// A stacked file (`Media::stacked_alpha`) is decoded whole, its picture fitted.
 fn decode_size(media: &Media, width: u32, height: u32) -> (u32, u32) {
     let (mw, mh) = (media.width.max(2) as f32, media.height.max(2) as f32);
     let fit = (width as f32 / mw).min(height as f32 / mh).min(1.0);
     let even = |value: f32| ((value.round() as u32) / 2 * 2).max(2);
-    (even(mw * fit), even(mh * fit))
+    let file_height = if media.stacked_alpha { mh * 2.0 } else { mh };
+    (even(mw * fit), even(file_height * fit))
+}
+
+/// A stacked frame (picture over its alpha, `Media::stacked_alpha`) as one
+/// straight-alpha picture of its top half's size, as an image with
+/// see-through parts is everywhere else.
+pub fn unstack(width: u32, height: u32, pixels: &[u8]) -> RgbaImage {
+    let half = (height / 2) as usize;
+    let row = width as usize * 4;
+    let (picture, matte) = pixels.split_at((half * row).min(pixels.len()));
+    let mut out = Vec::with_capacity(half * row);
+    for ([r, g, b, _], [_, alpha, _, _]) in picture
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(matte.as_chunks::<4>().0)
+    {
+        let alpha = *alpha;
+        let straight = |value: u8| {
+            if alpha == 0 {
+                0
+            } else {
+                (u32::from(value.min(alpha)) * 255 / u32::from(alpha)) as u8
+            }
+        };
+        out.extend_from_slice(&[straight(*r), straight(*g), straight(*b), alpha]);
+    }
+    RgbaImage {
+        width,
+        height: half as u32,
+        pixels: out,
+    }
 }
 
 /// Pixel order of decoded and rendered frames.
@@ -1575,10 +1608,16 @@ pub fn media_frames(
     let frames = decode_all(&mut pool, &requests, 4)?;
     let images = frames
         .into_iter()
-        .map(|pixels| RgbaImage {
-            width: size.0,
-            height: size.1,
-            pixels,
+        .map(|pixels| {
+            if media.stacked_alpha {
+                unstack(size.0, size.1, &pixels)
+            } else {
+                RgbaImage {
+                    width: size.0,
+                    height: size.1,
+                    pixels,
+                }
+            }
         })
         .collect();
     Ok((images, times))
@@ -1590,6 +1629,9 @@ pub fn media_still(media: &Media, time: f64) -> Result<RgbaImage, String> {
     let source = Source::new(media, PathBuf::from(&media.path), size, Order::Rgba);
     let mut reader = VideoReader::open(source);
     let pixels = reader.frame_at(time)?.to_vec();
+    if media.stacked_alpha {
+        return Ok(unstack(size.0, size.1, &pixels));
+    }
     Ok(RgbaImage {
         width: size.0,
         height: size.1,
@@ -1630,9 +1672,15 @@ pub fn save_still(media: &Media, time: f64, out: &Path) -> Result<(), String> {
     if media.kind != edit_core::MediaKind::Image {
         command.arg("-ss").arg(format!("{time:.3}"));
     }
+    command.arg("-i").arg(&media.path);
+    // A stacked file: its top half with the bottom half's grey as its alpha.
+    if media.stacked_alpha {
+        command.args([
+            "-filter_complex",
+            "[0:v]split[c][m];[c]crop=iw:ih/2:0:0[top];[m]crop=iw:ih/2:0:ih/2,format=gray[alpha];[top][alpha]alphamerge,unpremultiply=inplace=1,format=rgba",
+        ]);
+    }
     let output = command
-        .arg("-i")
-        .arg(&media.path)
         .args(["-frames:v", "1"])
         .arg(out)
         .stdin(Stdio::null())
@@ -3438,6 +3486,17 @@ mod tests {
     /// Two layers of one file at two sizes, played on: each keeps its pooled
     /// reader, where the second was opened (and seeked) again every frame.
     #[test]
+    fn a_stacked_frame_is_its_picture_with_the_alpha_below_it() {
+        // 2×1 picture over its alpha: premultiplied half red, then clear.
+        let file = [
+            128, 0, 0, 255, 0, 0, 0, 255, 128, 128, 128, 255, 0, 0, 0, 255,
+        ];
+        let still = unstack(2, 2, &file);
+        assert_eq!((still.width, still.height), (2, 1));
+        assert_eq!(still.pixels, vec![255, 0, 0, 128, 0, 0, 0, 0]);
+    }
+
+    #[test]
     fn two_layers_keep_their_readers_from_frame_to_frame() {
         let dir = temp_dir("two-layers");
         let video = dir.join("bars.mp4");
@@ -3741,6 +3800,7 @@ mod tests {
                 crop: Default::default(),
                 frame: None,
                 blend: Default::default(),
+                stacked: false,
             }],
         };
         let media = |path: &PathBuf, (width, height): (u32, u32)| -> Media {

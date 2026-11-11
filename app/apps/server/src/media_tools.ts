@@ -53,7 +53,7 @@ function live(app: App, id: string) {
   return found;
 }
 
-async function listLibrary({ app, args, projectId }: ToolCall): Promise<Content[]> {
+async function listLibrary({ app, args }: ToolCall): Promise<Content[]> {
   const listing = await (app.library as library.Library).list(bool(args.refresh) ?? false);
   let out = "The team's sound library (Google Drive). Place one with add_from_library {id}.\n";
   let heading: [string, string] | null = null;

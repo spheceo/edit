@@ -147,7 +147,9 @@ export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
             src={effectAddress(page)}
             sandbox="allow-scripts"
             className="pointer-events-none absolute origin-top-left border-0"
-            style={{ left: rect.left, top: rect.top, width: project.settings.width, height: project.settings.height, transform: `scale(${rect.width / project.settings.width})` }}
+            // The page's own (light) scheme, not the app's dark one: an iframe whose scheme differs from its page's gets an
+            // opaque backdrop, and an effect's unpainted parts are see-through, over the footage beneath.
+            style={{ left: rect.left, top: rect.top, width: project.settings.width, height: project.settings.height, transform: `scale(${rect.width / project.settings.width})`, colorScheme: "light" }}
           />
         );
       })}

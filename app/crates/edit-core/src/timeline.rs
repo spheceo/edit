@@ -359,6 +359,7 @@ mod tests {
             library: None,
             effect: None,
             effect_key: None,
+            stacked_alpha: false,
         });
         let (v1, v2, a1) = (
             project.tracks[0].id.clone(),

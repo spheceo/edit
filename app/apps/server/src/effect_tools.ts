@@ -42,6 +42,8 @@ async function lookAtEffect({ app, args, projectId }: ToolCall): Promise<Content
   const out: Content[] = [];
   for (const still of look.stills) out.push(...image(still.picture, `${name} at ${fixed(still.time, 2)} s`, still.mime));
   const lines = [`${name}: ${look.duration > 0 ? `${fixed(look.duration, 2)} s long` : "no length (window.duration)"}.`];
+  // What it leaves unpainted plays over what's beneath it: said, so a background left out by mistake is seen as one.
+  if (look.stills.some((still) => still.seeThrough)) lines.push("See-through where the checkerboard shows: there it plays over whatever is beneath it on the timeline. Paint a background if it should fill the frame.");
   if (look.errors.length > 0) lines.push(`ERRORS its page threw (fix these first):\n${look.errors.map((error) => `- ${error}`).join("\n")}`);
   if (look.problems.length > 0) lines.push(`BREAKS THE EFFECT CONTRACT:\n${look.problems.map((problem) => `- ${problem}`).join("\n")}`);
   const cost = costLine(look, fps);
@@ -56,7 +58,7 @@ async function addEffect({ app, args, projectId }: ToolCall): Promise<Content[]>
   const name = named(app, projectId, args);
   const added = await effects.add(app, projectId, name);
   const fps = app.store.get(projectId)!.project.settings.fps;
-  return text(`${name} is media ${added.media}: ${fixed(added.duration, 2)} s (${Math.round(added.duration * fps)} frames). Place it like a video (add_clip or apply_edit_plan with media ${added.media}); the viewer plays its page live wherever its clip is, and a change to its code shows there at once.`);
+  return text(`${name} is media ${added.media}: ${fixed(added.duration, 2)} s (${Math.round(added.duration * fps)} frames). Place it like a video (add_clip or apply_edit_plan with media ${added.media}); the viewer plays its page live wherever its clip is, and a change to its code shows there at once. Edit's frames (render_frame, contact_sheet) show it once its render lands, a few seconds after its code stops changing.`);
 }
 
 async function effectPicture({ app, args, projectId }: ToolCall): Promise<Content[]> {

@@ -851,7 +851,8 @@ test("wait waits once for background work and says what's left", async () => {
   expect(await said(app, "wait", { for: ["map"], at_most: 5 })).toMatch(/^done \(waited [01] s; it was a map shot rendering: done in about \d+ min\)$/);
   // Still running at the limit: what's left, and to go on.
   progress.begin("smooth", id, "c1");
-  expect(await said(app, "wait", { for: ["smooth"], at_most: 1 })).toMatch(/^still running after 1 s: a clip smoothing: done in about 3 min\. Go on/);
+  // Its estimate is learned from the smoothing done before it in the same run (about 3 min with none).
+  expect(await said(app, "wait", { for: ["smooth"], at_most: 1 })).toMatch(/^still running after 1 s: a clip smoothing: done in about \d+ (s|min)\. Go on/);
   progress.end("smooth", id, "c1", false);
   // The edit's reads say what's still running, and how long it has left.
   progress.begin("watch", id, "watch");

@@ -15,11 +15,13 @@ import { MockServer, scribeAnswer } from "../mocks/server.ts";
 
 // Apple's recogniser, here on any computer when a test says so: it hears "rough words here" every 2 s.
 const apple = { on: false, heard: 0 };
+// The real ones kept first: once a module is mocked its own names are the stand-ins (links.test.ts, Nov 11).
+const real = { hear: realSpeech.hear, structured: realClaude.structured };
 void mock.module("../../src/mac_speech.ts", () => ({
   ...realSpeech,
   available: async () => apple.on,
   hear: async (file: string, target: string) => {
-    if (!apple.on) return realSpeech.hear(file, target);
+    if (!apple.on) return real.hear(file, target);
     apple.heard++;
     const words = Array.from({ length: 20 }, (_, n) => ({ text: n % 2 === 0 ? "rough" : "words", start: n * 2, end: n * 2 + 0.4 }));
     const transcript = { model: realSpeech.MODEL, language: "en", words };
@@ -31,7 +33,7 @@ void mock.module("../../src/mac_speech.ts", () => ({
 const sonnet = { standIn: false };
 void mock.module("../../src/writer/claude.ts", () => ({
   ...realClaude,
-  structured: (...args: Parameters<typeof realClaude.structured>) => (sonnet.standIn ? Promise.resolve({ lines: [], newPeople: [] }) : realClaude.structured(...args)),
+  structured: (...args: Parameters<typeof realClaude.structured>) => (sonnet.standIn ? Promise.resolve({ lines: [], newPeople: [] }) : real.structured(...args)),
 }));
 
 const tools = await import("../../src/tools.ts");

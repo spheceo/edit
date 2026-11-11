@@ -753,6 +753,7 @@ async function draw(app: App, render: Render): Promise<void> {
     return placed;
   });
   if (!placed) return;
+  prune(app.store, project, name, out);
   app.media.ensure(out, probe);
   try {
     if (relay.cloudEnabled()) seams.cloudMedia.backfillSoon(app, project);
@@ -761,6 +762,33 @@ async function draw(app: App, render: Render): Promise<void> {
   }
   diag.record("effects", "render", Date.now() - started);
   diag.info("effects", `${project}: ${name} rendered (${render.frames} frames in ${((Date.now() - started) / 1000).toFixed(1)} s)`);
+}
+
+/**
+ * An effect's older renders go once a newer one is in place, all but the one
+ * before it (what an undo of the swap would show); so do frames left by a
+ * render the code outran. The agent saves a page many times a session, and each
+ * settled version is a render: the first trial left 255 MB of three.
+ */
+function prune(store: Store, project: string, name: string, kept: string): void {
+  const dir = rendersDir(store, project);
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  const own = (entry: string) => entry.startsWith(`${name}-`) && /^[0-9a-f]{12}\./.test(entry.slice(name.length + 1));
+  const running = new Set([...renders.values()].filter((render) => render.project === project && render.name === name).map((render) => render.key));
+  const videos = entries
+    .filter((entry) => own(entry) && entry.endsWith(".mp4") && !entry.endsWith(".partial.mp4") && join(dir, entry) !== kept)
+    .map((entry) => ({ entry, at: fs.statSync(join(dir, entry)).mtimeMs }))
+    .sort((a, b) => b.at - a.at);
+  for (const { entry } of videos.slice(1)) fs.rmSync(join(dir, entry), { force: true });
+  for (const entry of entries) {
+    if (!own(entry) || !entry.endsWith(".frames") || running.has(entry.slice(name.length + 1, name.length + 13))) continue;
+    fs.rmSync(join(dir, entry), { recursive: true, force: true });
+  }
 }
 
 function frameName(index: number): string {

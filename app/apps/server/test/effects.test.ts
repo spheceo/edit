@@ -300,6 +300,12 @@ test.skipIf(chrome === null)("an effect on the timeline is rendered from its cod
     await expect(seams.broll.waitForMaps(app, id, 10)).rejects.toThrow("bar is still rendering");
     await seams.broll.waitForMaps(app, id, 90_000);
     expect(app.store.get(id)!.project.media.find((one) => one.id === added.media)!.effect_key).toBe(now);
+    // A third version: the oldest render goes, the one before the newest stays (an undo shows it).
+    await Bun.sleep(20);
+    fs.writeFileSync(join(dir, "scene.html"), GOOD.replace("#e0343c", "#3434e0"));
+    await seams.broll.waitForMaps(app, id, 90_000);
+    const third = effects.list(app.store, id)[0]!.key;
+    expect(fs.readdirSync(join(app.store.uploadsDir(id), "effect-renders")).sort()).toEqual([`bar-${now}.mp4`, `bar-${third}.mp4`].sort());
   } finally {
     await server.stop(true);
     cleanup();

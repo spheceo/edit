@@ -32,7 +32,13 @@ keychains=("${(@f)$(security list-keychains -d user | sed -E 's/^[[:space:]]*"(.
 trap 'rm -rf "$work"; if [[ -n "${keychain:-}" ]]; then security list-keychains -d user -s "${keychains[@]}"; security delete-keychain "$keychain" 2>/dev/null; fi; true' EXIT
 
 echo "==> Edit.app ($target)"
-(cd "$root/crates/edit-window" && bunx @tauri-apps/cli@2.12.4 build --target "$target" --bundles app --config \
+# The release has the window helper already (scripts/build-native.sh, with custom-protocol as `tauri build` makes
+# it, kept by engine-cache.yml): it's bundled as it is, not compiled again (4 of the Mac build's 7.5 minutes, Nov 11).
+# Anywhere else (a Mac by hand), `tauri build` compiles it first.
+helper="${CARGO_TARGET_DIR:-$root/target}/$target/release/edit-window"
+tauri=(build)
+if [[ "${CI:-}" == true && -x "$helper" ]]; then tauri=(bundle); fi
+(cd "$root/crates/edit-window" && bunx @tauri-apps/cli@2.12.4 "${tauri[@]}" --target "$target" --bundles app --config \
   "{\"bundle\":{\"resources\":{\"$pkg/edit-ffmpeg\":\"edit-ffmpeg\",\"$pkg/edit-ffprobe\":\"edit-ffprobe\",\"$pkg/qjs-$target\":\"qjs-$target\",\"$pkg/edit-speech\":\"edit-speech\",\"$pkg/edit\":\"edit\"}}}")
 built="${CARGO_TARGET_DIR:-$root/target}/$target/release/bundle/macos/Edit.app"
 app="$work/Edit.app"

@@ -5,9 +5,11 @@ import { join } from "node:path";
 import { cache, hasGpu, home, logs, native, solidProject } from "./native";
 
 let gpu = false;
+// Up to 30 s: the first Vulkan device a debug build opens on a runner (no GPU: the software one) took past
+// the default 5 (Check on Linux, Nov 11).
 beforeAll(async () => {
   gpu = await hasGpu();
-});
+}, 30_000);
 
 /** A PNG's size, from its header. */
 function pngSize(png: Buffer): [number, number] {

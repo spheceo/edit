@@ -147,7 +147,6 @@ jobs:
 
   # The UI (with the WASM preview engine) is the same for every build.
   web:
-    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

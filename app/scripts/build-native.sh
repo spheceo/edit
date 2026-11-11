@@ -26,7 +26,9 @@ stamp="$(mktemp)"
 newer="$(find "target/$target/release/build" -path '*/out/*.a' -newer "$stamp" \
   -exec sh -c 'otool -l "$1" | awk -v f="$1" "/ minos / && \$2+0 > 13 {print f\": macOS \" \$2}"' _ {} \; | sort -u)"
 if [ -n "$newer" ]; then echo "built for a newer macOS than 13.0:"; echo "$newer"; exit 1; fi
-cargo build --release --locked -p edit-window --target "$target"
+# With tauri's custom-protocol, as `tauri build` compiles it: the release bundles this very binary into Edit.app
+# (package-app.sh, `tauri bundle`) instead of compiling it again (4 of the Mac build's 7.5 minutes, Nov 11).
+cargo build --release --locked -p edit-window --features tauri/custom-protocol --target "$target"
 codesign -s - -f "target/$target/release/edit-window"
 mkdir -p engine
 cp crates/edit-native/edit-native.node "target/$target/release/edit-window" engine/

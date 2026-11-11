@@ -29,10 +29,16 @@ defaults:
 
 jobs:
   native:
+    # Linux too since Nov 11: without it every Linux release compiled its addon (3.5 of its 4.5 minutes). On
+    # 22.04, as the release builds it (glibc 2.35).
     strategy:
       matrix:
-        target: [aarch64-apple-darwin]
-    runs-on: macos-latest
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The key is taken here, before anything is built into crates/.

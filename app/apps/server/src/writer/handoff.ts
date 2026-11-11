@@ -17,6 +17,7 @@ import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
+import { asKept } from "../kept_hearing.ts";
 import { hearsAll, MODEL as SCRIBE, serialize, type Transcript } from "../transcribe.ts";
 import * as drive from "./drive.ts";
 import * as hearing from "./hearing.ts";
@@ -224,10 +225,13 @@ export async function share(data: string, id: string): Promise<string> {
     keepShared(dir, recording.file, recording.source, typeof record?.originalKey === "string" ? record.originalKey : originalKey(recording.source, recording.name));
     await shareWords(dir, script, recording, done);
   }
+  // Words go even for a recording whose footage isn't on this Mac (cleared, or streamed): they need only its source.
+  const listed = new Set(list.map((recording) => recording.source));
+  for (const recording of wordRecordings(dir, script)) if (!listed.has(recording.source)) await shareWords(dir, script, recording, done);
   if (done.length > 0) diag.info("writer", `${name}: shared with Edit: ${done.join("; ")}`);
   // A folder case's master named in the script itself, so it syncs and every Mac's Start the edit finds it.
   if (stampShared(dir)) diag.info("writer", `${name}: its Drive folder cases name their masters in Edit's originals`);
-  return list.length === 0 ? `no footage on ${THIS_MACHINE} to share` : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
+  return list.length === 0 && done.length === 0 ? `no footage on ${THIS_MACHINE} to share` : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
 }
 
 /**
@@ -256,14 +260,48 @@ async function sharedThere(dir: string, key: string): Promise<Pick<Transcript, "
   const copy = join(dir, `.shared-words-${process.pid}.json`);
   try {
     await editCloud.download(key, copy);
-    const found = JSON.parse(fs.readFileSync(copy, "utf8")) as { heard?: unknown };
-    return Array.isArray(found.heard) ? { heard: found.heard as [number, number][] } : {};
+    // YouTube's captions an older Edit kept there (no `heard`) are rough words, not a hearing.
+    const found = asKept(JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript);
+    return Array.isArray(found.heard) ? { heard: found.heard } : {};
   } catch {
     return null;
   } finally {
     fs.rmSync(copy, { force: true });
     fs.rmSync(editCloud.partialPath(copy), { force: true });
   }
+}
+
+/**
+ * Only the script's words to Edit's analysis, before Start the edit makes the
+ * edit (writer_handoff.ts): its excerpts then take them, and Scribe hears
+ * only what the edit keeps beyond what Script mode paid for. The footage's
+ * own share runs on its own (`shareSoon`). Answers what it did.
+ */
+export async function shareWordsNow(data: string, id: string): Promise<string[]> {
+  if (!editCloud.enabled()) return [];
+  const dir = store.scriptDir(data, id);
+  const script = store.read(dir);
+  const done: string[] = [];
+  for (const recording of wordRecordings(dir, script)) await shareWords(dir, script, recording, done);
+  return done;
+}
+
+/** The script's recordings by their sources, for their words: the footage needn't be on this Mac (cleared, or streamed). */
+function wordRecordings(dir: string, script: Script): Shared[] {
+  const all = recordings(dir, script);
+  const sources = partSources(dir, script);
+  let kept: { source?: unknown; file?: unknown }[] = [];
+  try {
+    kept = JSON.parse(fs.readFileSync(join(dir, "edit-shared.json"), "utf8")) as typeof kept;
+  } catch {
+    kept = [];
+  }
+  return all.flatMap((recording, index): Shared[] => {
+    const relative = recording.file.startsWith(`${dir}/`) ? recording.file.slice(dir.length + 1) : null;
+    const source = sources[index]?.[0] ?? kept.find((entry) => entry.file === relative && typeof entry.source === "string")?.source;
+    if (typeof source !== "string") return [];
+    return [{ file: null, source, name: sources[index]?.[1] ?? source, offsetMs: recording.offsetMs, lengthMs: recording.lengthMs, tag: all.length > 1 ? String(index + 1) : null, key: recording.key }];
+  });
 }
 
 const sharing = new Map<string, Promise<string>>();

@@ -24,6 +24,9 @@ import { captionRange, writeCaptionTranscript } from "./youtube_words.ts";
 /** Where Apple's words of a recording are kept, apart from a paid hearing. */
 const APPLE = "apple.json";
 
+/** The least time Apple's recogniser is given for a file (its model comes down once a Mac, about a minute). */
+const APPLE_LEAST_MS = 10 * 60_000;
+
 /** Files at most this long are heard by Scribe straight away (Edit): a first pass would save at most a cent and cost a second hearing's voices. */
 export const FIRST_PASS_FROM_S = 300;
 
@@ -95,8 +98,13 @@ export async function appleHear(file: string, span: [number, number] | null, wor
  * clock (`cloud`, `youtube:<id>#<ms>-<ms>`), else Apple's. False when there's
  * no free hearing for it: the caller pays for Scribe.
  */
-export async function firstWords(home: string, cloud: string | null, input: string, target: string, work: string, signal?: AbortSignal): Promise<boolean> {
+export async function firstWords(home: string, cloud: string | null, input: string, target: string, work: string, seconds: number, signal?: AbortSignal): Promise<boolean> {
   const began = Date.now();
+  // Apple's recogniser hears ~40x real time; one that hangs (its model download, a stuck helper) is stopped, and
+  // with it the queue every other first hearing on this Mac waits in (mac_speech.ts).
+  const limitMs = Math.max(APPLE_LEAST_MS, (seconds * 1000) / 8);
+  const stall = AbortSignal.timeout(limitMs);
+  const stop = signal === undefined ? stall : AbortSignal.any([signal, stall]);
   let words: Transcript | null = null;
   if (cloud !== null && captionRange(cloud) !== null && (await writeCaptionTranscript(home, cloud, target))) {
     try {
@@ -105,7 +113,15 @@ export async function firstWords(home: string, cloud: string | null, input: stri
       words = null;
     }
   }
-  words ??= await appleHear(input, null, work, signal);
+  if (words === null) {
+    try {
+      words = await appleHear(input, null, work, stop);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      diag.warn("transcribe", `${cloud ?? log.labelOf(input)}: Apple's recogniser took more than ${log.took(limitMs)} and was stopped; heard another way`);
+      words = null;
+    }
+  }
   if (words === null || words.words.length === 0) {
     fs.rmSync(target, { force: true });
     return false;

@@ -137,6 +137,27 @@ test("a whole recording pyannote can't hear: the excerpt takes its own audio's v
   }
 });
 
+// Nov 11: the live relay keeps `diarize` on for builds from before (with it off they'd hear each long file twice in
+// Scribe); this build reads `voices`, which says Scribe's voices alone.
+test("voices are pyannote's only when the relay's `voices` says so; `diarize` is read only from relays that don't say", async () => {
+  const other = MockServer.start();
+  try {
+    other.on("GET", "/health", () => Response.json({ ok: true, diarize: true, voices: "scribe" }));
+    voices.setOnForTests(null);
+    const back = other.useEnv({ EDIT_RELAY_TOKEN: "relay-token" });
+    expect(await voices.on()).toBe(false);
+    back();
+    other.on("GET", "/health", () => Response.json({ ok: true, diarize: false, voices: "pyannote" }));
+    voices.setOnForTests(null);
+    const again = other.useEnv({ EDIT_RELAY_TOKEN: "relay-token" });
+    expect(await voices.on()).toBe(true);
+    again();
+  } finally {
+    voices.setOnForTests(null);
+    other.stop();
+  }
+});
+
 // Nov 9: one relay's "diarize" answer, cached for a minute, was taken for another's: a full test run's earlier
 // hearing on a relay with the flag on sent watch.test's captions (on a mock relay without it) to Scribe.
 test("the flag is the relay's asked now, not another relay's cached answer", async () => {

@@ -34,6 +34,7 @@ const transcribe = await import("../src/transcribe.ts");
 const tools = await import("../src/tools.ts");
 const handoff = await import("../src/writer/handoff.ts");
 const log = await import("../src/hearing_log.ts");
+const watch = await import("../src/watch.ts");
 const transcription = await import("../src/writer/transcription.ts");
 const { join } = await import("../src/paths.ts");
 const { clip } = await import("./helpers/model.ts");
@@ -65,6 +66,11 @@ test("what's kept is heard padded and joined, less what was heard; stretches tha
   expect(kept.toHear([[10_000, 31_000]], [[7_000, 33_000]], 600_000)).toEqual([]);
   expect(kept.union([[30, 40], [7, 33], [50, 60]])).toEqual([[7, 40], [50, 60]]);
   expect(transcribe.hearsAll({ heard: [[7, 33], [33, 63]] }, [[10, 60]])).toBe(true);
+  // A gap shorter than a hearing's leftover is never heard on its own: taken as heard, not asked for again and again.
+  expect(transcribe.hearsAll({ heard: [[97, 203], [204, 260]] }, [[100, 250]])).toBe(true);
+  expect(transcribe.hearsAll({ heard: [[97, 203], [210, 260]] }, [[100, 250]])).toBe(false);
+  // Apple's words an older build kept without `heard` are rough too.
+  expect(kept.asKept({ model: "apple-speech", words: [{ text: "rough", start: 0, end: 1 }] })).toMatchObject({ heard: [], rough: "apple-speech" });
 });
 
 test("Scribe's words replace the rough ones over what was heard, a later round's voices its own", () => {
@@ -124,6 +130,16 @@ test("each hearing says plainly which model it was, whether it was paid, and wha
   expect([log.clock(1298), log.clock(3723), log.took(155_000)]).toEqual(["21:38", "1:02:03", "2 min 35 s"]);
 });
 
+test("the watch's corrections find their words again when kept stretches were heard meanwhile", () => {
+  const before = [{ text: "rough", start: 1, end: 1.4 }, { text: "Where", start: 12, end: 12.3 }, { text: "after", start: 50, end: 50.4 }];
+  expect(watch.wordAt(before, before)(1)).toBe(1);
+  // Scribe's words came in over 7–33 s: "Where" is now third, a word that's gone is left alone.
+  const now = [{ text: "rough", start: 1, end: 1.4 }, { text: "Oh", start: 11, end: 11.2 }, { text: "Where", start: 12, end: 12.3 }, { text: "after", start: 50, end: 50.4 }];
+  const at = watch.wordAt(before, now);
+  expect([at(0), at(1), at(2)]).toEqual([0, 2, 3]);
+  expect(watch.wordAt(before, now.slice(0, 2))(1)).toBe(-1);
+});
+
 test("a transcript says who heard what: Scribe over `heard`, the free model the rest", () => {
   const rough = { model: realSpeech.MODEL, words: [{ text: "rough", start: 50, end: 50.4 }], heard: [] as [number, number][], rough: realSpeech.MODEL };
   const once = kept.merged(rough, [[7_000, 33_000]], [[{ text: "Where", start: 12_000, end: 12_300, speaker: "speaker_0" }]], [], "scribe_v3");
@@ -176,6 +192,8 @@ async function settled(app: { media: { status(path: string): { transcript: strin
 test.skipIf(ffmpeg === null)("a long import is given free words, Scribe hears only what the cut keeps, and a cut that grows hears only its new footage", async () => {
   const { app, dir, cleanup } = fixtureHome("kept-edit");
   apple.on = true;
+  // Naming the voices heard is Claude's; here it answers at once and names no one.
+  (app.agents as { ask: unknown }).ask = async () => JSON.stringify({ speakers: [] });
   try {
     const media = tape(dir, "tape");
     const paid = () => relay.calls("/v1/transcribe", "POST").length;
@@ -220,6 +238,8 @@ test.skipIf(ffmpeg === null)("a long import is given free words, Scribe hears on
 test.skipIf(ffmpeg === null)("footage kept whole (a subtitled video) is heard whole, one request", async () => {
   const { app, dir, cleanup } = fixtureHome("kept-whole");
   apple.on = true;
+  // Naming the voices heard is Claude's; here it answers at once and names no one.
+  (app.agents as { ask: unknown }).ask = async () => JSON.stringify({ speakers: [] });
   try {
     const media = tape(dir, "whole");
     app.media.transcribe(media.path, true, [], false, true);
@@ -240,6 +260,8 @@ test.skipIf(ffmpeg === null)("footage kept whole (a subtitled video) is heard wh
 test.skipIf(ffmpeg === null)("Edit's own watch in the background never pays for Scribe on footage not cut yet", async () => {
   const { app, dir, cleanup } = fixtureHome("kept-watch");
   apple.on = true;
+  // Naming the voices heard is Claude's; here it answers at once and names no one.
+  (app.agents as { ask: unknown }).ask = async () => JSON.stringify({ speakers: [] });
   try {
     const media = tape(dir, "raw");
     app.media.transcribe(media.path, true, [], false, true);

@@ -116,6 +116,8 @@ export interface Transcript {
 
 /** How far a use may reach past what was heard (seconds) and still be taken as heard: a cut's word boundary moved. */
 const HEARD_SLACK = 0.25;
+/** Two heard stretches this close (seconds) are one: kept_hearing.ts never hears a leftover shorter than its LEFTOVER_MS (2 s). */
+const HEARD_GAP = 2 + HEARD_SLACK;
 
 /**
  * Whether `transcript` has Scribe's words for every range (seconds) in
@@ -124,11 +126,12 @@ const HEARD_SLACK = 0.25;
  */
 export function hearsAll(transcript: Pick<Transcript, "heard">, uses: readonly (readonly [number, number])[]): boolean {
   if (transcript.heard === undefined) return true;
-  // Stretches that touch are one: a use may run across both.
+  // Stretches that touch are one: a use may run across both. So are two less than a hearing's leftover apart
+  // (kept_hearing.ts LEFTOVER_MS): that gap is never heard on its own, so it's taken as heard, never asked again.
   const heard: [number, number][] = [];
   for (const [a, b] of [...transcript.heard].sort((x, y) => x[0] - y[0])) {
     const last = heard.at(-1);
-    if (last !== undefined && a <= last[1] + HEARD_SLACK) last[1] = Math.max(last[1], b);
+    if (last !== undefined && a <= last[1] + HEARD_GAP) last[1] = Math.max(last[1], b);
     else heard.push([a, b]);
   }
   return uses.every(([from, to]) => to - from <= 2 * HEARD_SLACK || heard.some(([a, b]) => from >= a - HEARD_SLACK && to <= b + HEARD_SLACK));

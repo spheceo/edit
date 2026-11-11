@@ -16,9 +16,9 @@ import type { Script } from "@edit/types/writer";
 import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
 import * as log from "../hearing_log.ts";
+import * as sharedWords from "../shared_words.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
-import { asKept } from "../kept_hearing.ts";
 import { hearsAll, MODEL as SCRIBE, serialize, type Transcript } from "../transcribe.ts";
 import * as drive from "./drive.ts";
 import * as hearing from "./hearing.ts";
@@ -43,6 +43,8 @@ export function segment(name: string): string {
 
 export const originalKey = (source: string, name: string): string => `edit/originals/${sourcePath(source)}/${segment(name)}`;
 export const transcriptKey = (source: string): string => `edit/analysis/${sourcePath(source)}/transcript.json`;
+/** Where a recording's analysis is (shared_words.ts names its words there). */
+export const analysisOf = (source: string): string => `edit/analysis/${sourcePath(source)}/`;
 
 /** A file from disk, named by its content as Edit names it. */
 export async function sha256Of(path: string): Promise<string> {
@@ -245,15 +247,12 @@ export async function share(data: string, id: string): Promise<string> {
  */
 async function shareWords(dir: string, script: Script, recording: Shared, done: string[]): Promise<void> {
   if (script.words.length === 0) return;
-  const at = transcriptKey(recording.source);
+  const prefix = analysisOf(recording.source);
   const words = transcriptOf(dir, script, recording);
-  if (await editCloud.has(at)) {
-    if (words.heard === undefined) return;
-    const there = await sharedThere(dir, at);
-    if (there === null || hearsAll(there, words.heard)) return;
-  }
-  const text = serialize(words);
-  await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
+  // A whole hearing there is never replaced; one that heard as much as these words, or more, stays.
+  const there = await sharedWords.read(prefix, dir);
+  if (there !== null && (sharedWords.isWhole(there) || (words.heard !== undefined && hearsAll(there, words.heard)))) return;
+  await sharedWords.write(prefix, words, serialize(words));
   const heardS = (words.heard ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
   log.line(
     words.heard === undefined
@@ -261,22 +260,6 @@ async function shareWords(dir: string, script: Script, recording: Shared, done: 
       : `${recording.source}: Script mode's words to Edit, ${log.said(SCRIBE)} over ${words.heard.length} stretches (${log.clock(heardS)} of ${log.clock(recording.lengthMs / 1000)}), ${log.said(words.rough)} the rest (${log.count(words.words.length)} words)`,
   );
   done.push(words.heard === undefined ? `shared the words of ${recording.name}` : `shared the words of ${recording.name}'s chosen stretches`);
-}
-
-/** What Edit's analysis has at `key`: its stretches heard (none: heard whole), or null when it can't be read (it's left as it is). */
-async function sharedThere(dir: string, key: string): Promise<Pick<Transcript, "heard"> | null> {
-  const copy = join(dir, `.shared-words-${process.pid}.json`);
-  try {
-    await editCloud.download(key, copy);
-    // YouTube's captions an older Edit kept there (no `heard`) are rough words, not a hearing.
-    const found = asKept(JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript);
-    return Array.isArray(found.heard) ? { heard: found.heard } : {};
-  } catch {
-    return null;
-  } finally {
-    fs.rmSync(copy, { force: true });
-    fs.rmSync(editCloud.partialPath(copy), { force: true });
-  }
 }
 
 /**

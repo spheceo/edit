@@ -66,6 +66,7 @@ import * as cloud from "./cloud.ts";
 import { PLAYBACK_ROUTE, playbackKey, playbackPath } from "./cloud_playback.ts";
 import * as diag from "./diag.ts";
 import * as log from "./hearing_log.ts";
+import * as sharedWords from "./shared_words.ts";
 import { serveFile } from "./http/files.ts";
 import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
@@ -2560,7 +2561,16 @@ export function stranded(project: Project): string[] {
  * answers (`watch/<hash>.json`). Under `edit/analysis/<source path>/<file>`.
  */
 // faces-yunet-v1.json: Linux's faces (crates/edit-engine/src/face_model.rs), shared between Linux machines; a Mac reads its own Vision file.
-const ANALYSIS = ["transcript.json", "faces-v1.json", "faces-yunet-v1.json", "seats-v2.json"];
+const ANALYSIS = ["transcript.json", "transcript-kept.json", "faces-v1.json", "faces-yunet-v1.json", "seats-v2.json"];
+/** The name a cache dir's transcript is shared under: `transcript-kept.json` while Scribe heard only its kept stretches. */
+function keptOrWhole(path: string): string {
+  try {
+    return sharedWords.nameOf(JSON.parse(fs.readFileSync(path, "utf8")) as Transcript);
+  } catch {
+    return sharedWords.WHOLE;
+  }
+}
+
 /** What went up from (or came down to) a cache dir: file → size and mtime, so each version goes once. */
 const SHARED = "cloud-shared.json";
 /**
@@ -2588,7 +2598,10 @@ export function isAnalysis(name: string): boolean {
 
 /** The shared analysis in a media's cache dir: (name, file). */
 function analysisFiles(dir: string): [string, string][] {
-  const files: [string, string][] = ANALYSIS.map((name): [string, string] => [name, join(dir, name)]).filter(([, path]) => isFile(path));
+  const files: [string, string][] = ANALYSIS.map((name): [string, string] => [name, join(dir, name)])
+    .filter(([, path]) => isFile(path))
+    // Heard only in its kept stretches: shared under its own name, which builds from before Nov 11 don't read (shared_words.ts).
+    .map(([name, path]): [string, string] => [name === sharedWords.WHOLE ? keptOrWhole(path) : name, path]);
   let names: string[] = [];
   try {
     names = fs.readdirSync(join(dir, "watch"));
@@ -2755,20 +2768,9 @@ export async function wholeTranscript(source: string, target: string, scratch: s
   const [from = "0", to] = [found[3], found[4]];
   const prefix = analysisPrefix(`${kind}:${id}`);
   if (prefix === null) return false;
-  const copy = join(scratch, `whole-${kind}-${id}-${process.pid}.json`);
-  let whole: Transcript;
-  try {
-    // Footage nobody has heard yet has none: looked up first, so that's no failure in the log.
-    if (!(await cloud.has(`${prefix}transcript.json`))) return false;
-    await cloud.download(`${prefix}transcript.json`, copy);
-    whole = JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript;
-  } catch {
-    return false;
-  } finally {
-    fs.rmSync(copy, { force: true });
-    fs.rmSync(cloud.partialPath(copy), { force: true });
-  }
-  if (!Array.isArray(whole.words)) return false;
+  // Footage nobody has heard yet has none (shared_words.ts looks first, so that's no failure in the log).
+  const whole = await sharedWords.read(prefix, scratch);
+  if (whole === null) return false;
   const [start, end] = [Number(from) / 1000, to === undefined ? Number.POSITIVE_INFINITY : Number(to) / 1000];
   // Rough words with a script's stretches heard (writer/handoff.ts): the excerpt takes its words and the stretches
   // inside it, `heard` on its own clock; Scribe hears what its edit keeps beyond them (media.ts `refine`).
@@ -2852,6 +2854,8 @@ async function fetchAnalysisOf(source: string, dir: string): Promise<number> {
     if (!object.key.startsWith(prefix)) return;
     const name = object.key.slice(prefix.length);
     const local = join(dir, name);
+    // The words, whole or kept, are taken below: the best of the two.
+    if (name === sharedWords.WHOLE || name === sharedWords.KEPT) return;
     if (!isAnalysis(name)) return;
     // Another machine's keys add to this one's.
     const merge = name === WATCH_KEYS && fs.existsSync(local);
@@ -2880,6 +2884,17 @@ async function fetchAnalysisOf(source: string, dir: string): Promise<number> {
   };
   for (let index = 0; index < objects.length; index += ANALYSIS_AT_ONCE) {
     await Promise.all(objects.slice(index, index + ANALYSIS_AT_ONCE).map(one));
+  }
+  const words = join(dir, sharedWords.WHOLE);
+  if (!fs.existsSync(words) && objects.some((object) => object.key === `${prefix}${sharedWords.WHOLE}` || object.key === `${prefix}${sharedWords.KEPT}`)) {
+    const best = await sharedWords.read(prefix, dir);
+    if (best !== null) {
+      fs.mkdirSync(dir, { recursive: true });
+      writeAtomic(words, serialize(best));
+      // Came from the cloud under that name: nothing to send back.
+      shared[sharedWords.nameOf(best)] = stamp(words);
+      fetched += 1;
+    }
   }
   if (fetched > 0) writeShared(dir, shared);
   return fetched;

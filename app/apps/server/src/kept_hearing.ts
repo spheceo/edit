@@ -56,8 +56,9 @@ const CAPTIONS = "youtube-captions";
  * dropped. Others as they are.
  */
 export function asKept(transcript: Transcript): Transcript {
-  if (transcript.model !== CAPTIONS || transcript.heard !== undefined) return transcript;
-  return { ...transcript, words: transcript.words.map(({ text, start, end }) => ({ text, start, end })), speakers: {}, roles: {}, colors: {}, heard: [], rough: CAPTIONS };
+  // Free words with no `heard` (captions kept before Nov 11, or a file an older build stripped of it): none heard.
+  if ((transcript.model !== CAPTIONS && transcript.model !== "apple-speech") || transcript.heard !== undefined) return transcript;
+  return { ...transcript, words: transcript.words.map(({ text, start, end }) => ({ text, start, end })), speakers: {}, roles: {}, colors: {}, heard: [], rough: transcript.model };
 }
 
 /** An Edit file's transcript, or null when it's not there or unreadable. */

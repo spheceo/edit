@@ -76,6 +76,7 @@ import * as patches from "./patch.ts";
 import * as framePicks from "./frame_picks.ts";
 import * as progress from "./progress.ts";
 import * as styles from "./styles.ts";
+import { asKept } from "./kept_hearing.ts";
 import type { Transcript } from "./transcribe.ts";
 
 type Args = Record<string, unknown>;
@@ -1822,7 +1823,8 @@ function readTranscript(path: string): Transcript | null {
     if (typeof own.text !== "string" || typeof own.start !== "number" || typeof own.end !== "number") return null;
     if (!isNull(own.speaker) && typeof own.speaker !== "string") return null;
   }
-  return value as Transcript;
+  // YouTube's captions kept before Nov 11 are rough words: their ">>" turns aren't voices (kept_hearing.ts).
+  return asKept(value as Transcript);
 }
 
 /** The transcripts already made for the project's media (footage only, or every file with sound: voice-overs too). */

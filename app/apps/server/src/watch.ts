@@ -1110,6 +1110,18 @@ export function watchInBackground(app: App, projectId: string): void {
     .finally(() => jobs.end(app.store.home, job));
 }
 
+/** Where the word the watch saw at `index` (of `watched`) is in `now`: the same place while nothing moved, else found by its start and text (-1: gone). */
+export function wordAt(watched: readonly Word[], now: readonly Word[]): (index: number) => number {
+  const same = watched.length === now.length && watched.every((word, index) => word.start === now[index]!.start && word.text === now[index]!.text);
+  if (same) return (index) => index;
+  const places = new Map<string, number>();
+  now.forEach((word, index) => places.set(`${word.start}|${word.text}`, index));
+  return (index) => {
+    const word = watched[index];
+    return word === undefined ? -1 : (places.get(`${word.start}|${word.text}`) ?? -1);
+  };
+}
+
 /** Runs `work` over `items` at most `limit` at a time; each result (or what it threw), in order. */
 async function limited<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
   const out: PromiseSettledResult<R>[] = new Array(items.length);
@@ -1514,14 +1526,18 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       examples.push({ time: round(at * 100.0) / 100.0, text, from: nameOf(old), to: voice });
     }
     changed += list.length;
+    const watchedWords = transcripts.get(mediaId)?.words ?? [];
     await seams.speakers.editTranscript(app, media.path, (transcript) => {
+      // The words as they are now: kept stretches heard meanwhile (media.ts refine) replace words and move the rest,
+      // so a word the watch named by its place is found again by its start and text, and one gone is left.
+      const at = wordAt(watchedWords, transcript.words);
       transcript.roles ??= {};
       transcript.speakers ??= {};
       const roles = transcript.roles;
       const speakers = transcript.speakers;
       for (const [words, voice] of list) {
         for (const index of words) {
-          const word = transcript.words[index];
+          const word = transcript.words[at(index)];
           if (word !== undefined) word.speaker = voice;
         }
       }
@@ -1585,7 +1601,7 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
       // The second looks last: they settle what two windows disagreed on.
       for (const [words, voice] of bridged.get(mediaId) ?? []) {
         for (const index of words) {
-          const word = transcript.words[index];
+          const word = transcript.words[at(index)];
           if (word !== undefined && word.speaker !== voice) {
             word.speaker = voice;
             moved += 1;

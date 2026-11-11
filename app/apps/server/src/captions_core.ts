@@ -60,8 +60,8 @@ export async function transcriptOf(app: App, media: Media, project?: Project, re
         if (transcript.heard !== undefined && project !== undefined && refine) {
           const uses = soundUses(project, media.id);
           if (!hearsAll(transcript, uses) && (await app.media.refine(path, uses, names))) {
-            // Its new voices are named behind it, as a file's are once its words are in (speakers.watch).
-            (await import("./speakers.ts")).ensure(app, path);
+            // Its new voices named before the subtitles read them (unnamed, they'd show as "speaker_0", white).
+            await (await import("./speakers.ts")).nameNow(app, path).catch((error: unknown) => diag.warn("speakers", `${media.name}: naming the kept footage's voices: ${diag.messageOf(error)}`));
             continue;
           }
         }
@@ -76,7 +76,7 @@ export async function transcriptOf(app: App, media: Media, project?: Project, re
         if (transcript.heard !== undefined && transcript.heard.length > 0 && project !== undefined && refine && !covers(transcript.keyterms, names) && !reheard.has(asked)) {
           reheard.add(asked);
           if (await app.media.refine(path, soundUses(project, media.id), names, true)) {
-            (await import("./speakers.ts")).ensure(app, path);
+            await (await import("./speakers.ts")).nameNow(app, path).catch((error: unknown) => diag.warn("speakers", `${media.name}: naming the kept footage's voices: ${diag.messageOf(error)}`));
             continue;
           }
         }

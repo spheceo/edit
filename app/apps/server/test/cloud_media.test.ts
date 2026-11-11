@@ -378,7 +378,7 @@ test("opening cloud media streams proxies without downloads, including read-only
   try {
     const cache = store.cacheDir();
     mock.cloud.put("edit/proxies/sha256/beef.mp4", "a proxy");
-    mock.cloud.put("edit/analysis/sha256/beef/transcript.json", '{"from":"kenobi"}');
+    mock.cloud.put("edit/analysis/sha256/beef/transcript.json", '{"model":"scribe_v3","language":"eng","words":[{"text":"kenobi","start":0,"end":0.5}]}');
     const cloudMediaOf = (hex: string) => ({ source: `sha256:${hex}`, original: `edit/originals/sha256/${hex}/clip.mov`, proxy: `edit/proxies/sha256/${hex}.mp4`, size: 7 });
     const ids: string[] = [];
     for (const name of ["mine", "theirs"]) {
@@ -403,7 +403,7 @@ test("opening cloud media streams proxies without downloads, including read-only
     }
     // …and the analysis kenobi shared came too.
     const local = store.get(ids[0]!)!.project.media[0]!.path;
-    expect(fs.readFileSync(`${cache}/${mediaKey(local)}/transcript.json`, "utf8")).toBe('{"from":"kenobi"}');
+    expect(JSON.parse(fs.readFileSync(`${cache}/${mediaKey(local)}/transcript.json`, "utf8")).words[0].text).toBe("kenobi");
     // Nothing to do the second time.
     const rev = store.get(ids[0]!)!.rev;
     await cloudMedia.ensureLocal(app, ids[0]!);
@@ -812,6 +812,27 @@ test("an excerpt of a rough recording takes its words and the stretches Script m
   expect(await cloudMedia.wholeTranscript(`sha256:${hex}`, `${dir}/c.json`, dir)).toBe(true);
   expect(JSON.parse(fs.readFileSync(`${dir}/c.json`, "utf8")).heard).toEqual(partial.heard);
   expect(sharedSourceOf("/c", `/c/cloud/proxies/sha256/${hex}.mp4`)).toBe(`sha256:${hex}`);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("shared words: a whole hearing is transcript.json, kept stretches transcript-kept.json, and the reader takes the best", async () => {
+  const sharedWords = await import("../src/shared_words.ts");
+  const dir = fs.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/shared-words-`);
+  const at = "edit/analysis/youtube/ZZZZZZZZZZZ/";
+  const kept = { model: "scribe_v3", rough: "apple-speech", words: [{ text: "Where", start: 12, end: 12.3, speaker: "speaker_0" }], heard: [[7, 33]] };
+  // Kept stretches go under their own name: an older build reading transcript.json never takes Apple's words for Scribe's.
+  expect(sharedWords.nameOf(kept as never)).toBe("transcript-kept.json");
+  await sharedWords.write(at, kept as never, JSON.stringify(kept));
+  expect(mock.cloud.objects.has(`${at}transcript-kept.json`)).toBe(true);
+  expect(mock.cloud.objects.has(`${at}transcript.json`)).toBe(false);
+  expect((await sharedWords.read(at, dir))?.heard).toEqual([[7, 33]]);
+  // An older Edit's captions there: rough, so the kept stretches win.
+  mock.cloud.put(`${at}transcript.json`, JSON.stringify({ model: "youtube-captions", words: [{ text: "caption", start: 0, end: 1 }] }));
+  expect((await sharedWords.read(at, dir))?.heard).toEqual([[7, 33]]);
+  // A whole hearing wins over any stretches.
+  mock.cloud.put(`${at}transcript.json`, JSON.stringify({ model: "scribe_v3", words: [{ text: "Heard", start: 0, end: 1 }] }));
+  expect((await sharedWords.read(at, dir))?.words[0]?.text).toBe("Heard");
+  expect(await sharedWords.read("edit/analysis/youtube/nothing/", dir)).toBeNull();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

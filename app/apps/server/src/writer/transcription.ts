@@ -25,7 +25,7 @@ import { isFile, join } from "../paths.ts";
 import * as macSpeech from "../mac_speech.ts";
 import { appleCached, appleHear } from "../first_hearing.ts";
 import * as editCloud from "../cloud.ts";
-import { asKept } from "../kept_hearing.ts";
+import * as sharedWords from "../shared_words.ts";
 
 export { appleCached, appleHear, appleStage } from "../first_hearing.ts";
 import type { Transcript } from "../transcribe.ts";
@@ -126,20 +126,9 @@ export async function fromEdit(source: string | null, work: string, signal?: Abo
 const FROM_EDIT_MS = 10_000;
 
 async function lookUp(source: string, work: string): Promise<Transcript | null> {
-  const key = `edit/analysis/${source.replace(":", "/")}/transcript.json`;
-  const copy = join(work, ".from-edit.json");
-  let found: Transcript;
-  try {
-    if (!(await editCloud.has(key))) return null;
-    fs.mkdirSync(work, { recursive: true });
-    await editCloud.download(key, copy);
-    found = asKept(JSON.parse(fs.readFileSync(copy, "utf8")) as Transcript);
-  } catch {
-    return null;
-  } finally {
-    fs.rmSync(copy, { force: true });
-    fs.rmSync(editCloud.partialPath(copy), { force: true });
-  }
+  // Whole or kept, the best of what Edit shared (shared_words.ts).
+  const found = await sharedWords.read(`edit/analysis/${source.replace(":", "/")}/`, work);
+  if (found === null) return null;
   if (!Array.isArray(found.words) || found.words.length === 0) return null;
   if (found.heard === undefined) {
     if (!found.model.startsWith("scribe")) return null;
@@ -223,8 +212,9 @@ export async function transcribe(app: App, script: Script, dir: string, onProgre
     const kept = local !== null && local.words.length > 0 ? local : null;
     const url = wantCaptions ? (youtube[index] ?? null) : null;
     let transcript: Transcript | null = script.status !== "ready" ? kept : null;
-    // What Edit mode heard of it already (its kept stretches, or all of it): never paid for twice.
-    transcript ??= await fromEdit(sources[index] ?? null, work, signal);
+    // What Edit mode heard of it already (its kept stretches, or all of it): never paid for twice. A hearing of its own
+    // here comes first, a completion's too.
+    if (kept === null) transcript ??= await fromEdit(sources[index] ?? null, work, signal);
     transcript ??= url === null ? null : await captions.transcript(app, url, work, signal);
     transcript ??= script.status === "ready" ? kept : null;
     // Free rough words before paid ones: Scribe hears only what the build chooses (exact.ts).

@@ -7,7 +7,7 @@ import { media, type EdgeCache } from "./media";
 import { ideasRoute, mayIdeas, NO_IDEAS } from "./ideas";
 import { fromOtherRelay, openartReady, openartRoute, openartToken, type OpenArtEnv } from "./openart";
 import { MAX_JOB_BYTES, transcribeJobs, type JobsEnv } from "./transcribe_jobs";
-import { diarizeJobs, diarizeOn, type DiarizeEnv } from "./diarize_jobs";
+import { diarizeJobs, diarizeOn, voicesOf, type DiarizeEnv } from "./diarize_jobs";
 import { google, mayUseDrive } from "./google";
 
 export { DriveToR2 } from "./jobs";
@@ -93,7 +93,7 @@ export default {
     if (url.pathname === "/.well-known/spheceo-app.json" && request.method === "GET") {
       return new Response(JSON.stringify(manifest()), { headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=3600" } });
     }
-    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), diarize: diarizeOn(env), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY), openart: openartReady(env) });
+    if (url.pathname === "/health") return json(200, { ok: true, transcription: Boolean(mainKey(env)), jobs: Boolean(mainKey(env) && env.ELEVENLABS_WEBHOOK_ID && env.R2_BUCKET), diarize: diarizeOn(env), voices: voicesOf(env), speech: Boolean(speechKey(env) || (extraVoiceIds(env).size && env.ELEVENLABS_VOICES_KEY)), maps: Boolean(env.GOOGLE_MAPS_KEY), cloud: Boolean(env.R2_BUCKET && env.CONVEX_URL), google: Boolean(env.GOOGLE_DOCS_REFRESH_TOKEN), proxy: Boolean(env.PROXY_URL), trello: Boolean(env.TRELLO_API_KEY && env.TRELLO_TOKEN), youtube: Boolean(env.YOUTUBE_API_KEY), openart: openartReady(env) });
     if (url.pathname.startsWith("/v1/cloud/")) return cloud(request, url, env);
     // The team's Google Drive, with its sign-in kept here (google.ts): only the calls Edit makes.
     if (url.pathname.startsWith("/v1/google/")) return google(request, url, env);

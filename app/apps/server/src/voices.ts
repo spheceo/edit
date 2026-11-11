@@ -55,7 +55,9 @@ export async function on(): Promise<boolean> {
   let found = false;
   try {
     const answer = await fetch(`${asked}/health`, { signal: AbortSignal.timeout(20_000) });
-    found = answer.ok && ((await answer.json()) as { diarize?: unknown }).diarize === true;
+    // `voices` from relays of Nov 11 on (`diarize` stays on there for older builds); `diarize` from older relays.
+    const said = answer.ok ? ((await answer.json()) as { diarize?: unknown; voices?: unknown }) : {};
+    found = typeof said.voices === "string" ? said.voices === "pyannote" : said.diarize === true;
   } catch {
     // Unreachable: Scribe's voices, as before.
   }

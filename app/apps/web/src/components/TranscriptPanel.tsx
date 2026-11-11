@@ -94,8 +94,12 @@ function speakerName(transcript: Transcript, voice?: string) {
   if (!voice) return undefined;
   const named = transcript.speakers?.[voice];
   if (named) return named;
-  const number = /^speaker_(\d+)$/.exec(voice)?.[1];
-  return number === undefined ? voice : `Speaker ${Number(number) + 1}`;
+  // A later hearing's own voices ("h2:speaker_0", kept stretches heard after the first) and a long file's parts' ("2:speaker_0").
+  const found = /^(?:(h?)(\d+):)?speaker_(\d+)$/.exec(voice);
+  if (found === null) return voice;
+  const [, round, part, number] = found;
+  const base = `Speaker ${Number(number) + 1}`;
+  return part === undefined ? base : `${base} (${round === "h" ? "hearing" : "part"} ${part})`;
 }
 
 /** Phrases break on a pause or a change of voice. */

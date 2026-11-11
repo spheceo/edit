@@ -23,7 +23,7 @@ import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import { FIRST_PASS_FROM_S, firstWords } from "./first_hearing.ts";
 import * as log from "./hearing_log.ts";
-import { hearJoined, merged, PAD_MS, readKept, toHear, WHOLE_SHARE } from "./kept_hearing.ts";
+import { hearJoined, merged, readKept, toHear, WHOLE_SHARE } from "./kept_hearing.ts";
 import * as transcribe from "./transcribe.ts";
 import * as voices from "./voices.ts";
 
@@ -479,10 +479,11 @@ export class Processor {
       const input = await this.inputOf(source);
       // A long file's first words are free (first_hearing.ts): the agent cuts on them, and Scribe hears only
       // what's kept (`refine`). Heard again on purpose (`again`): Scribe, whole.
-      if (!again && !whole && (await transcribe.seconds(input)) > FIRST_PASS_FROM_S) {
+      const seconds = again || whole ? 0 : await transcribe.seconds(input);
+      if (!again && !whole && seconds > FIRST_PASS_FROM_S) {
         const work = join(parent(target) ?? ".", "first");
         try {
-          if (await firstWords(this.store.home, this.cloudSource(source), input, target, work)) return;
+          if (await firstWords(this.store.home, this.cloudSource(source), input, target, work, seconds)) return;
         } finally {
           fs.rmSync(work, { recursive: true, force: true });
         }
@@ -558,9 +559,10 @@ export class Processor {
     const length = Math.round((await transcribe.seconds(input)) * 1000) || Math.max(0, ...kept.map(([, to]) => to * 1000), ...transcript.words.map((word) => word.end * 1000));
     const heardMs = transcript.heard.map(([from, to]): [number, number] => [from * 1000, to * 1000]);
     // Again (for the case's names, heard without them): everything heard so far and what's kept, heard once more.
-    const spans = again
-      ? toHear([...kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]), ...heardMs.map(([from, to]): [number, number] => [from + PAD_MS, to - PAD_MS])], [], length)
-      : toHear(kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]), heardMs, length);
+    // Again (for the case's names, heard without them): what's kept now, heard once more; stretches heard
+    // before that the edit no longer keeps aren't paid for again.
+    const keptMs = kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]);
+    const spans = toHear(keptMs, again ? [] : heardMs, length);
     if (spans.length === 0) return false;
     const total = spans.reduce((sum, [from, to]) => sum + to - from, 0);
     const work = join(parent(target) ?? ".", "kept");
@@ -583,8 +585,14 @@ export class Processor {
           `${name}: Scribe to hear the ${spans.length} kept stretch${spans.length === 1 ? "" : "es"} ${again ? `again, for the case's ${keyterms.length} names` : "it hasn't yet"}, ${log.clock(total / 1000)} of its ${log.clock(length / 1000)} (${log.clock(heardBefore)} heard before); the rest stays ${log.said(rough)}`,
         );
         const words = await hearJoined(work, input, spans, [...keyterms]);
-        // Re-read: naming or the watch may have written meanwhile.
-        const now = readKept(target) ?? transcript;
+        // Re-read: naming or the watch may have written meanwhile. Heard whole meanwhile (Transcribe, heard again) or
+        // gone, it's left as it is: these stretches never turn a whole hearing back into a partial one.
+        const now = readKept(target);
+        if (now === null || now.heard === undefined) {
+          log.line(`${name}: heard whole or cleared while its kept stretches were heard; those words left out`);
+          fs.rmSync(work, { recursive: true, force: true });
+          return false;
+        }
         const next = merged(now, spans, words, keyterms, transcribe.MODEL, again);
         writeAtomic(target, transcribe.serialize(next));
         const heardNow = (next.heard ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
@@ -592,9 +600,13 @@ export class Processor {
           `${name}: ${log.said(next.model)} heard the ${spans.length} kept stretch${spans.length === 1 ? "" : "es"} (${log.clock(total / 1000)}), ${log.count(words.flat().length)} words, in ${log.took(Date.now() - began)}; Scribe has now heard ${log.clock(heardNow)} of its ${log.clock(length / 1000)}, ${log.said(next.rough ?? rough)} the rest`,
         );
       }
-    } finally {
-      fs.rmSync(work, { recursive: true, force: true });
+    } catch (error) {
+      // What Scribe answered is kept in `work` (writer/hearing.ts, transcribe.ts `saved`): a retry of the same
+      // stretches reads it instead of paying again.
+      log.line(`${name}: Scribe's hearing of the kept stretches failed (${diag.messageOf(error)}); what it answered is kept for the next try`);
+      throw error;
     }
+    fs.rmSync(work, { recursive: true, force: true });
     this.store.emit({ type: "transcript", path: source });
     return true;
   }

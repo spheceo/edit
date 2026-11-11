@@ -29,6 +29,8 @@ export interface DiarizeEnv extends CloudEnv, AuthEnv {
   PYANNOTE_API_KEY?: string;
   /** "pyannote": voices from pyannote; anything else (or unset), Scribe's as before. */
   DIARIZE?: string;
+  /** "pyannote": builds from Nov 11 on take pyannote's voices too (`voicesOf`); anything else, Scribe's alone. */
+  VOICES?: string;
   TRANSCRIBE_BURST: { limit(options: { key: string }): Promise<{ success: boolean }> };
 }
 
@@ -43,6 +45,17 @@ const ID = /^[A-Za-z0-9_-]{6,100}$/;
 /** Whether this relay gives Edit pyannote's voices (the flag on, the key and R2 here). */
 export function diarizeOn(env: DiarizeEnv): boolean {
   return env.DIARIZE === "pyannote" && Boolean(env.PYANNOTE_API_KEY) && r2Config(env) !== null;
+}
+
+/**
+ * Whose voices Edit builds from Nov 11 on lay over Scribe's words (its
+ * /health `voices`): "scribe" (Scribe's own) unless VOICES is "pyannote" and
+ * pyannote is on. Apart from `diarize`, which older builds read: they keep
+ * pyannote until they update (with it off, they'd hear each long file twice
+ * in Scribe, in pieces and whole), then DIARIZE can go "off" too.
+ */
+export function voicesOf(env: DiarizeEnv): "pyannote" | "scribe" {
+  return env.VOICES === "pyannote" && diarizeOn(env) ? "pyannote" : "scribe";
 }
 
 export async function diarizeJobs(request: Request, url: URL, env: DiarizeEnv): Promise<Response> {

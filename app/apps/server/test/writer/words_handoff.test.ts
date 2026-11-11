@@ -25,6 +25,8 @@ afterAll(() => {
 
 const ID = "6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
 const KEY = "edit/analysis/youtube/vGj1b3p6mQk/transcript.json";
+/** Where words heard only in their kept stretches go: builds from before Nov 11 never read it (shared_words.ts). */
+const KEPT = "edit/analysis/youtube/vGj1b3p6mQk/transcript-kept.json";
 
 /** A YouTube script read from captions, two stretches heard exactly, its footage cleared from this Mac. */
 function rough(home: string): string {
@@ -52,7 +54,9 @@ test("a rough script's words go to Edit before its edit, with the footage cleare
     // An older Edit kept YouTube's captions there: rough words, not a hearing, so they're replaced.
     mock.cloud.put(KEY, JSON.stringify({ model: "youtube-captions", words: [{ text: "caption", start: 0, end: 1, speaker: "caption_turn_1" }] }));
     expect(await handoff.shareWordsNow(data, ID)).toHaveLength(1);
-    const shared = JSON.parse(new TextDecoder().decode(mock.cloud.objects.get(KEY)!));
+    const shared = JSON.parse(new TextDecoder().decode(mock.cloud.objects.get(KEPT)!));
+    // The captions an older build reads stay as they were.
+    expect(JSON.parse(new TextDecoder().decode(mock.cloud.objects.get(KEY)!)).model).toBe("youtube-captions");
     expect([shared.model, shared.heard, shared.keyterms, shared.words.map((word: { text: string; speaker?: string }) => [word.text, word.speaker])]).toEqual([
       "scribe_v3", [[10, 20]], ["Kimberly"], [["rough", undefined], ["Where", "speaker_0"]],
     ]);

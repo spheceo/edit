@@ -83,10 +83,12 @@ export interface Draft {
   outline: Outline | null;
   /** A section's note for the finish, once `finish_section` is called. */
   sectionNote: string | null;
+  /** Each tool call by name, a refused one with what it was told: the log's account of a turn that ended unfinished. */
+  trail: string[];
 }
 
 export function newDraft(phase: Phase, script: Script, peaks: ArrayLike<number>): Draft {
-  return { phase, script, format: formatOfScript(script), peaks, items: [], opening: null, next: 0, calls: 0, refused: 0, biggestCall: 0, done: null, best: null, offTargetFinishes: 0, afterCutIn: false, outline: null, sectionNote: null };
+  return { phase, script, format: formatOfScript(script), peaks, items: [], opening: null, next: 0, calls: 0, refused: 0, biggestCall: 0, done: null, best: null, offTargetFinishes: 0, afterCutIn: false, outline: null, sectionNote: null, trail: [] };
 }
 
 const drafts = new Map<string, Draft>();
@@ -202,10 +204,14 @@ export function call(draft: Draft, name: string, args: Args): [string, boolean] 
   try {
     const refusal = outOfPhase(draft.phase, name);
     if (refusal !== null) throw new Error(refusal);
-    return [run(draft, name, args), false];
+    const said = run(draft, name, args);
+    draft.trail.push(name);
+    return [said, false];
   } catch (error) {
     draft.refused++;
-    return [diag.messageOf(error), true];
+    const said = diag.messageOf(error);
+    draft.trail.push(`${name} (refused: ${[...said].slice(0, 160).join("")})`);
+    return [said, true];
   }
 }
 
@@ -426,8 +432,8 @@ function close(token: string): Draft | null {
 let port = 7700;
 
 /** One Opus turn on a draft's tools, asked twice more (20 s, then a minute later) when it failed before any tool call: Claude busy, or the connection lost for a moment. */
-async function ask(system: string, prompt: string, token: string, effort: claude.Question["effort"] | null, maxTurns: number, label: string, signal?: AbortSignal): Promise<claude.Answer> {
-  const question: claude.Question = { model: claude.OPUS, system, prompt, tools: `http://127.0.0.1:${port}/mcp/writer/${token}`, maxTurns, label, ...(effort ? { effort } : {}), ...(signal ? { signal } : {}) };
+async function ask(system: string, prompt: string, token: string, effort: claude.Question["effort"] | null, maxTurns: number, label: string, signal?: AbortSignal, resume: string | null = null): Promise<claude.Answer> {
+  const question: claude.Question = { model: claude.OPUS, system, prompt, tools: `http://127.0.0.1:${port}/mcp/writer/${token}`, maxTurns, label, ...(effort ? { effort } : {}), ...(signal ? { signal } : {}), ...(resume ? { resume } : {}) };
   for (const wait of [20_000, 60_000, null]) {
     try {
       return await claude.ask(question);
@@ -466,6 +472,52 @@ function built(draft: Draft, answer: claude.Answer | null, failure: unknown, cos
   throw claude.stoppedShort(answer?.result ?? {}) ?? new Error("Claude stopped before the plan was finished. Build again; nothing was changed.");
 }
 
+/** What a turn that ended without `finish` is told when it's asked once more, in the same session. */
+export const UNFINISHED = "You ended your turn without calling finish, so the plan isn't saved yet. Call review_plan, fix what it reports by ID, then call finish with your report.";
+
+/** Whether a turn that should end on `finish` stopped short of it by itself: no plan saved, nothing failed, nobody stopped it. */
+export const stoppedShort = (draft: Draft, failure: unknown, signal?: AbortSignal): boolean => draft.done === null && draft.best === null && failure === null && signal?.aborted !== true;
+
+/**
+ * The draft's plan saved as `finish` saves it (passing, or kept off target),
+ * when Claude stopped without calling it even when asked again: the plan is
+ * whole, so a build isn't thrown away for the one call it lacks (JJ's Mac,
+ * Nov 4-11: 9 of 39 builds ended "Claude stopped before the plan was
+ * finished", each losing its outline and sections). False when the plan
+ * doesn't compile: then the build fails as before.
+ */
+export function keepAnyway(draft: Draft, report: string): boolean {
+  const [said, outcome] = review(draft);
+  if (outcome === null) {
+    diag.warn("writer", `the plan Claude left unfinished isn't kept: ${said}`);
+    return false;
+  }
+  const [done, miss] = outcome;
+  const saved = reportOf(planOf(draft, report));
+  if (miss === null) draft.done = [done, saved];
+  else draft.best = [done, saved, miss];
+  return true;
+}
+
+/** A turn's tool calls for the log, the last 40. */
+const trailOf = (draft: Draft): string => (draft.trail.length === 0 ? "none" : `${draft.trail.length > 40 ? "… " : ""}${draft.trail.slice(-40).join(", ")}`);
+
+/**
+ * A turn on `token` that should end on `finish`, asked once more in its own
+ * session (cached, so cheap) when it ended without it. The answers, the
+ * first's cost carried into the second's, and whether it failed.
+ */
+async function toFinish(draft: Draft, first: () => Promise<claude.Answer>, again: (session: string) => Promise<claude.Answer>, label: string, signal?: AbortSignal): Promise<[claude.Answer | null, unknown, number]> {
+  const [answer, failure] = await settle(first());
+  if (!stoppedShort(draft, failure, signal) || answer?.session == null) return [answer, failure, 0];
+  diag.warn("writer", `${label}: ended without finish (${claude.whyStopped(answer.result)}; its calls: ${trailOf(draft)}); asking once more`);
+  draft.trail = [];
+  const [next, nextFailure] = await settle(again(answer.session));
+  if (stoppedShort(draft, nextFailure, signal)) diag.warn("writer", `${label}: ended without finish again (${next === null ? "no answer" : claude.whyStopped(next.result)}; its calls: ${trailOf(draft)})`);
+  // The first turn's work stands even when the second fails to start: the plan is the draft's either way.
+  return next === null && nextFailure !== null && !signal?.aborted ? [answer, null, 0] : [next, nextFailure, answer.costUsd];
+}
+
 async function settle(promise: Promise<claude.Answer>): Promise<[claude.Answer | null, unknown]> {
   try {
     return [await promise, null];
@@ -477,13 +529,22 @@ async function settle(promise: Promise<claude.Answer>): Promise<[claude.Answer |
 /** Builds the script in steps. Nothing is saved to it unless a plan passes. */
 export async function buildInSteps(script: Script, note: string, research: Research | null, peaks: ArrayLike<number>, signal?: AbortSignal): Promise<Built> {
   const prompt = `${evidence(script, research)}\n\n${request(script, note)}`;
-  const token = open(newDraft("steps", script, peaks));
-  const [answer, failure] = await settle(ask(stepsSystem(script, formatOfScript(script)), prompt, token, null, MAX_TURNS, "Claude opus building in steps", signal));
+  const steps = newDraft("steps", script, peaks);
+  const token = open(steps);
+  const system = stepsSystem(script, formatOfScript(script));
+  const label = "Claude opus building in steps";
+  const [answer, failure, before] = await toFinish(
+    steps,
+    () => ask(system, prompt, token, null, MAX_TURNS, label, signal),
+    (session) => ask(system, UNFINISHED, token, null, MAX_TURNS, `${label} (asked again)`, signal, session),
+    label,
+    signal,
+  );
   const draft = close(token);
   if (draft === null) throw new Error("Edit lost track of the build. Build again; nothing was changed.");
   diag.info("writer", `steps build: ${draft.calls} tool calls, ${draft.refused} refused, the biggest ${draft.biggestCall} bytes, ${draft.items.length} items in the draft, ${outcomeOf(draft)}`);
   const stats = { engine: "sdk", toolCalls: draft.calls, refused: draft.refused, biggestCallBytes: draft.biggestCall, outputTokens: outputTokens(answer), turns: turnsOf(answer) };
-  return built(draft, answer, failure, answer?.costUsd ?? 0, stats);
+  return built(draft, answer, failure, before + (answer?.costUsd ?? 0), stats);
 }
 
 /** How hard a fast build's Opus thinks, the same in every phase so the cache holds: `WRITER_FAST_EFFORT` (comparisons), or the person's pick in the model menu. */
@@ -611,10 +672,18 @@ export async function buildFast(script: Script, note: string, research: Research
 
   stage("Reviewing the joined script");
   const finishing = open(joined);
-  const [answer, failure] = await settle(ask(system_, finishPhase(outline, notes, missing), finishing, effort, MAX_TURNS, "Claude opus finishing", signal));
+  const [answer, failure, before] = await toFinish(
+    joined,
+    () => ask(system_, finishPhase(outline, notes, missing), finishing, effort, MAX_TURNS, "Claude opus finishing", signal),
+    (session) => ask(system_, UNFINISHED, finishing, effort, MAX_TURNS, "Claude opus finishing (asked again)", signal, session),
+    "fast build's finish",
+    signal,
+  );
   const draft = close(finishing);
   if (draft === null) throw new Error("Edit lost track of the build. Build again; nothing was changed.");
   count(answer, draft);
+  totals.cost += before;
+  if (stoppedShort(draft, failure, signal) && keepAnyway(draft, outline.report)) diag.info("writer", `fast build: Claude didn't call finish, so the joined plan is kept as finish would keep it (${outcomeOf(draft)})`);
   const finishedAt = Date.now();
   diag.info("writer", `fast build: finished in ${Math.round((finishedAt - writtenAt) / 1000)} s, ${totals.calls} tool calls in all, ${totals.refused} refused, the biggest ${totals.biggest} bytes, ${draft.items.length} items in the draft, ${outcomeOf(draft)}`);
   const stats = {

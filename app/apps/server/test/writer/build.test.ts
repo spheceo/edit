@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import type { Script, Word } from "@edit/types/writer";
 
-import { call, finishPhase, newDraft, sectionPhase, stepsSystem, toolsOf, type Draft } from "../../src/writer/build.ts";
+import { call, finishPhase, keepAnyway, newDraft, sectionPhase, stepsSystem, stoppedShort, toolsOf, type Draft } from "../../src/writer/build.ts";
 import { formatOf } from "../../src/writer/formats.ts";
 
 function script(): Script {
@@ -96,4 +96,32 @@ test("the prompt asks for tools, not one answer", () => {
   expect(prompt).not.toContain("answer ONCE");
   expect(prompt).toContain("WRITING THE PLAN WITH WRITER'S TOOLS");
   expect(prompt).not.toContain("your answer is the build_script plan");
+});
+
+test("a whole plan Claude stopped without finishing is kept as finish would keep it; one that doesn't compile isn't", () => {
+  // JJ's Mac, Nov 4-11: 9 of 39 builds' finish turns ended without calling finish, each build thrown away.
+  const whole = steps();
+  call(whole, "add_section", { items: [{ kind: "clip", firstWordId: "w0", lastWordId: "w4" }, { kind: "cut-in", narration: "An intro." }, { kind: "clip", firstWordId: "w5", lastWordId: "w9" }, { kind: "cut-in", narration: "A middle." }, { kind: "clip", firstWordId: "w0", lastWordId: "w9" }, { kind: "cut-in", narration: "The outro." }] });
+  expect(call(whole, "review_plan", {})[0]).toStartWith("It passes");
+  expect(stoppedShort(whole, null)).toBe(true);
+  expect(stoppedShort(whole, new Error("overloaded"))).toBe(false);
+  expect(stoppedShort(whole, null, AbortSignal.abort())).toBe(false);
+  expect(keepAnyway(whole, "A short case.")).toBe(true);
+  expect(whole.done ?? whole.best).not.toBeNull();
+  expect((whole.done ?? whole.best)![1]).toBe("A short case.");
+  expect(stoppedShort(whole, null)).toBe(false);
+  // No outro: it doesn't compile, so nothing is saved and the build fails as before.
+  const partial = steps();
+  call(partial, "add_section", { items: [{ kind: "clip", firstWordId: "w0", lastWordId: "w4" }, { kind: "cut-in", narration: "An intro." }] });
+  expect(keepAnyway(partial, "Done.")).toBe(false);
+  expect(partial.done).toBeNull();
+  expect(partial.best).toBeNull();
+});
+
+test("the log keeps each tool call, a refused one with what it was told", () => {
+  const draft = steps();
+  call(draft, "read_plan", {});
+  call(draft, "finish", { report: "Done." });
+  expect(draft.trail[0]).toBe("read_plan");
+  expect(draft.trail[1]).toStartWith("finish (refused: ");
 });

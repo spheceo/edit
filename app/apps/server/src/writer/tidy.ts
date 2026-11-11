@@ -45,7 +45,8 @@ export const breathe = (words: Word[], startMs: number, endMs: number, durationM
 
 const CLOSERS = /["”’')\]]+$/u;
 
-function finished(text: string): boolean {
+/** A word that ends a sentence. */
+export function finished(text: string): boolean {
   return /[.?!…]$/u.test(text.replace(CLOSERS, ""));
 }
 
@@ -67,7 +68,7 @@ const HESITANT = new Set(["so", "and", "but", "well", "like", "okay", "ok", "yea
 const trailing = (text: string): boolean => noise(core(text), true, true) || TRAILING.has(core(text));
 /** Hesitations that leave a line hanging wherever they fall. */
 const hanging = (text: string): boolean => noise(core(text), false, false) || HANGING.has(core(text));
-const hesitant = (text: string): boolean => noise(core(text), true, false) || HESITANT.has(core(text));
+export const hesitant = (text: string): boolean => noise(core(text), true, false) || HESITANT.has(core(text));
 
 /** A clip edge that probably doesn't land where the thought does, with the word to move it to and how many words that cuts or (`adds`) brings in. */
 export interface Issue {

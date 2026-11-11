@@ -341,6 +341,10 @@ test("footage cut inside a word is flagged, with where the word ends; a cut the 
   p.clips.push(sound("vo2", sound25.track, "vo", 140, 52, { name: "Voice-over" }));
   const [back] = cutMidWord(p, new Map([["m7", TEASER]])) as Record<string, unknown>[];
   expect(back).toMatchObject({ clip: "c25", side: "in", word: "baby.", fix: expect.stringContaining("trim its start to after the word (to 274.9 s") });
+  // The line's own first word cut there is put back, never trimmed off: an intro teaser after its hook (JJ, Nov 11, "We were out there").
+  const opening = bodycam([["We", 274.45, 274.8], ["were", 274.85, 275.1]]);
+  const [own] = cutMidWord(p, new Map([["m7", opening]])) as Record<string, unknown>[];
+  expect(own).toMatchObject({ clip: "c25", side: "in", word: "We", fix: expect.stringContaining("extend_clip") });
 });
 
 test("a desktop profile's lines are timed to the narration that says them, and flagged when they're off it", () => {

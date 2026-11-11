@@ -39,9 +39,9 @@ import { hearJoined, JOIN_MS, less, PAD_MS } from "../kept_hearing.ts";
 export { split } from "../kept_hearing.ts";
 import { caseNames } from "./names.ts";
 import { clock } from "./paragraphs.ts";
-import type { Plan } from "./plan.ts";
+import { wordAt, type Plan } from "./plan.ts";
 import * as spills from "./spills.ts";
-import { breathe, PEAK_MS, partAt } from "./tidy.ts";
+import { breathe, finished, hesitant, PEAK_MS, partAt } from "./tidy.ts";
 
 /** A run each side heard differently, word for word, this short is Scribe's. */
 const SWAP_RUN = 3;
@@ -351,6 +351,7 @@ async function askOnce(kept: string, prompt: string, signal?: AbortSignal): Prom
 /** Clips cut on the words' earlier times, moved onto the same words' exact times (found by id: words Scribe alone heard may sit between them now): each clip's first and last whole word, with room to breathe. */
 export function remapFrom(before: Word[], clips: Clip[], after: Word[], durationMs: number): Clip[] {
   const at = new Map(after.map((word, index) => [word.id, index]));
+  const known = new Set(before.map((word) => word.id));
   return clips.map((clip) => {
     if (isCutIn(clip)) return clip;
     let first = before.findIndex((word) => word.startMs >= clip.startMs);
@@ -361,9 +362,54 @@ export function remapFrom(before: Word[], clips: Clip[], after: Word[], duration
     const from = at.get(before[first]!.id);
     const to = at.get(before[last - 1]!.id);
     if (from === undefined || to === undefined || to < from) return clip;
-    const [startMs, endMs] = breathe(after, after[from]!.startMs, after[to]!.endMs, durationMs);
+    const [a, b] = grown(after, known, from, to);
+    const [startMs, endMs] = breathe(after, after[a]!.startMs, after[b]!.endMs, durationMs);
     return { ...clip, startMs, endMs };
   });
+}
+
+/** How close an added word runs into the clip's word beside it to be part of the same line. */
+const JOINED_MS = 300;
+
+/**
+ * A clip's first and last words (indexes into `after`) grown over the words
+ * this hearing added (ids not in `known`) that run straight into its first
+ * word or on from its last: the plan named the words the rough hearing had,
+ * and an added one there is the line's own, never a cut's room (JJ, Nov 11:
+ * "We were out there last night" played "Were out there last night", the
+ * rough words having only "Were"). Not over a filler, a pause, or a sentence's end.
+ */
+export function grown(after: Word[], known: ReadonlySet<string>, from: number, to: number): [number, number] {
+  const added = (word: Word | undefined): word is Word => word !== undefined && !known.has(word.id) && !hesitant(word.text);
+  let a = from;
+  for (let before = after[a - 1]; added(before) && after[a]!.startMs - before.endMs <= JOINED_MS && !finished(before.text); before = after[a - 1]) a--;
+  let b = to;
+  for (let next = after[b + 1]; added(next) && next.startMs - after[b]!.endMs <= JOINED_MS && !finished(after[b]!.text); next = after[b + 1]) b++;
+  return [a, b];
+}
+
+/**
+ * A plan read back before a hearing (word IDs are places in `before`, as
+ * `wordAt` reads them) as the same words' places in `after`, which has the
+ * added words in it: without this, every clip after an added word started
+ * and ended that many words early. Each clip grows over added words that are
+ * its line's own (`grown`).
+ */
+export function replan(plan: Plan, before: Word[], after: Word[]): Plan {
+  const at = new Map(after.map((word, index) => [word.id, index]));
+  const known = new Set(before.map((word) => word.id));
+  const items = (plan.items ?? []).map((item) => {
+    if (item.kind !== "clip") return item;
+    const first = wordAt(before, item.firstWordId);
+    const last = wordAt(before, item.lastWordId);
+    if (first === null || last === null) return item;
+    const from = at.get(before[first]!.id);
+    const to = at.get(before[last]!.id);
+    if (from === undefined || to === undefined || to < from) return item;
+    const [a, b] = grown(after, known, from, to);
+    return { ...item, firstWordId: `w${a}`, lastWordId: `w${b}` };
+  });
+  return { ...plan, items };
 }
 
 /** A built script's plan, read back from its clips: each run of footage the tightening cut into pieces is one clip again; each cut-in keeps its narration. */
@@ -373,7 +419,8 @@ export function planOf(script: Script): Plan {
   const items: NonNullable<Plan["items"]> = [];
   let open: [number, number, number] | null = null;
   const close = () => {
-    if (open !== null) items.push({ kind: "clip", firstWordId: words[open[0]]!.id, lastWordId: words[open[1]]!.id });
+    // Word IDs as places in the words, as the agent sees them and `wordAt` reads them (a stored id isn't one once a hearing added words).
+    if (open !== null) items.push({ kind: "clip", firstWordId: `w${open[0]}`, lastWordId: `w${open[1]}` });
     open = null;
   };
   for (const clip of script.clips) {

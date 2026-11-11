@@ -33,7 +33,7 @@ export interface JobsEnv extends CloudEnv, AuthEnv {
 }
 
 const SCRIBE = "https://api.elevenlabs.io/v1/speech-to-text";
-const MODEL = "scribe_v3";
+const MODEL = "scribe_v2";
 /** Where Edit puts a recording to be heard this way. */
 export const JOB_AUDIO = /^edit\/transcribe\/[A-Za-z0-9_-]{8,100}\.ogg$/;
 /** What Scribe said of a job that failed, by its request (and transcription) id. */

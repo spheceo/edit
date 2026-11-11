@@ -144,8 +144,6 @@ export type Script = {
   rough?: boolean;
   /** The stretches (ms) of rough footage heard exactly since: their words have Scribe's times and spelling. */
   exact?: [number, number][];
-  /** The case's names every exact hearing listened for (those heard with fewer keep only theirs), handed to Edit with the stretches' words (handoff.ts). */
-  exactKeyterms?: string[];
   /** Being shared for review now (it runs on its own: the dialog can close, other scripts can share meanwhile). `stage` is how far it is, as the share dialog prints it. */
   sharing?: { startedAt: number; stage?: string };
   /** The last share failed: why. */

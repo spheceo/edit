@@ -65,7 +65,6 @@ import * as pieces from "./proxy_pieces.ts";
 import * as cloud from "./cloud.ts";
 import { PLAYBACK_ROUTE, playbackKey, playbackPath } from "./cloud_playback.ts";
 import * as diag from "./diag.ts";
-import * as log from "./hearing_log.ts";
 import { serveFile } from "./http/files.ts";
 import * as endpoints from "./endpoints.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
@@ -2747,12 +2746,10 @@ export async function shareAnalysis(app: App, id: string): Promise<number> {
  */
 export async function wholeTranscript(source: string, target: string, scratch: string): Promise<boolean> {
   if (!cloud.enabled() || fs.existsSync(target)) return false;
-  // An excerpt, or the whole recording (its words as they are; a file from disk is only ever whole).
-  const found = /^(drive|youtube):([^#]+)(?:#(\d+)-(\d+))?$|^(sha256):([a-f0-9]{64})$/u.exec(source);
+  // An excerpt, or the whole recording (its words as they are).
+  const found = /^(drive|youtube):([^#]+)(?:#(\d+)-(\d+))?$/u.exec(source);
   if (found === null) return false;
-  const kind = found[1] ?? found[5]!;
-  const id = found[2] ?? found[6]!;
-  const [from = "0", to] = [found[3], found[4]];
+  const [, kind, id, from = "0", to] = found;
   const prefix = analysisPrefix(`${kind}:${id}`);
   if (prefix === null) return false;
   const copy = join(scratch, `whole-${kind}-${id}-${process.pid}.json`);
@@ -2770,16 +2767,11 @@ export async function wholeTranscript(source: string, target: string, scratch: s
   }
   if (!Array.isArray(whole.words)) return false;
   const [start, end] = [Number(from) / 1000, to === undefined ? Number.POSITIVE_INFINITY : Number(to) / 1000];
-  // Rough words with a script's stretches heard (writer/handoff.ts): the excerpt takes its words and the stretches
-  // inside it, `heard` on its own clock; Scribe hears what its edit keeps beyond them (media.ts `refine`).
-  const stretches = Array.isArray(whole.heard)
-    ? whole.heard.flatMap(([a, b]): [number, number][] => (b <= start || a >= end ? [] : [[Math.max(a, start) - start, Math.min(b, end) - start]]))
-    : null;
   // A shared transcript that stops before the excerpt does isn't its words: the excerpt is heard itself (Killer
   // Pastor in dev, Nov 8: its recording's shared transcript stopped at 3 minutes, and three excerpts later in it
   // were given none).
   const last = whole.words.at(-1)?.end ?? 0;
-  if (stretches === null && (Number.isFinite(end) ? last < Math.min(end, start + 30) : last < start)) {
+  if (Number.isFinite(end) ? last < Math.min(end, start + 30) : last < start) {
     diag.warn("cloud", `${source}: its recording's shared transcript stops at ${Math.round(last)} s, before this excerpt: heard on its own`);
     return false;
   }
@@ -2787,14 +2779,8 @@ export async function wholeTranscript(source: string, target: string, scratch: s
     .filter((word) => word.end > start && word.start < end)
     .map((word) => ({ ...word, start: Math.max(word.start - start, 0), end: Math.max(word.end - start, 0) }));
   fs.mkdirSync(parent(target) ?? ".", { recursive: true });
-  const { heard: _whole, ...rest } = whole;
-  writeAtomic(target, serialize({ ...rest, words, ...(stretches !== null ? { heard: stretches, rough: whole.rough ?? "youtube-captions" } : {}) }));
-  const heardS = (stretches ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
-  log.line(
-    stretches === null
-      ? `${source}: ${words.length.toLocaleString("en-US")} words from the shared transcript, ${log.said(whole.model)} for all of it; nothing heard again`
-      : `${source}: ${words.length.toLocaleString("en-US")} words from Script mode's shared transcript, ${log.said(whole.model)} over ${stretches.length} stretches (${log.clock(heardS)}), ${log.said(whole.rough ?? "youtube-captions")} the rest; nothing heard again`,
-  );
+  writeAtomic(target, serialize({ ...whole, words }));
+  diag.info("cloud", `${source}: ${words.length} words from its recording's shared transcript (not heard again)`);
   return true;
 }
 

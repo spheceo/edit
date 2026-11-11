@@ -7,7 +7,7 @@ import { voiceFor } from "./styles.ts";
 import * as fs from "node:fs";
 
 import type { App } from "./app.ts";
-import { parseTranscript, transcriptOf } from "./captions_core.ts";
+import { parseTranscript } from "./captions_core.ts";
 import { clipFrom } from "./clips.ts";
 import * as diag from "./diag.ts";
 import { copyFile, ioMessage } from "./files.ts";
@@ -939,8 +939,7 @@ export async function tighten(
     if (words.has(mediaId)) continue;
     const found = mediaOf(project, mediaId);
     if (found === undefined) continue;
-    // Footage's pauses are measured on Scribe's times: what the timeline keeps of it is heard (kept_hearing.ts).
-    words.set(mediaId, footage ? (await transcriptOf(app, found, project)).words : await transcript(app, found));
+    words.set(mediaId, await transcript(app, found));
   }
   const seconds = (frames: number) => round((frames / fps) * 100) / 100;
   const describe = (pause: Pause) => ({

@@ -92,9 +92,11 @@ export async function open(opening: Opening): Promise<Page> {
   );
   started.add(child);
   void child.exited.then(() => started.delete(child));
+  // The profile goes once Chrome has gone: removed while it was still closing, Chrome wrote parts of it back and
+  // they were left (Nov 11, on kenobi: 169 profiles, 619 MB, from renders started and stopped).
   const stop = () => {
     child.kill();
-    fs.rmSync(profile, { recursive: true, force: true });
+    void child.exited.then(() => fs.rmSync(profile, { recursive: true, force: true }));
   };
   try {
     return await connect(profile, opening, stop);

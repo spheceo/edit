@@ -67,7 +67,8 @@ test("an effect's page is served shut in: no origin, no network, only its own fo
     expect(policy).toContain("sandbox allow-scripts;");
     expect(policy).not.toContain("allow-same-origin");
     expect(policy).toContain("connect-src 'none'");
-    expect(policy).toContain(`img-src 127.0.0.1:7700${base} data: blob:`);
+    // With its scheme, both of them: WebKit matches a source without one to nothing for a page with no origin (Nov 11, Edit.app's window).
+    expect(policy).toContain(`img-src http://127.0.0.1:7700${base} https://127.0.0.1:7700${base} data: blob:`);
     expect(page.headers.get("cache-control")).toBe("no-store");
     const text = await page.text();
     expect(text.startsWith('<!doctype html>\n<style>\n@font-face { font-family: "Geist"; font-weight: 400; src: url(edit-fonts/Geist-Regular.ttf); }')).toBe(true);
@@ -290,6 +291,8 @@ test.skipIf(chrome === null)("an effect on the timeline is rendered from its cod
     expect(fs.existsSync(media.path.replace(/\.mp4$/, ".frames"))).toBe(false);
     const counted = Bun.spawnSync(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", media.path]).stdout.toString().trim().replace(/,$/, "");
     expect(counted).toBe("60");
+    // Video range, as footage is: the JPEG frames are full range, which FFmpeg otherwise carries through (seen on kenobi, Nov 11).
+    expect(Bun.spawnSync(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=pix_fmt,color_range", "-of", "csv=p=0", media.path]).stdout.toString().trim().replace(/,$/, "")).toBe("yuv420p,tv");
     // Rendered: nothing more to wait for.
     await seams.broll.waitForMaps(app, id, 10);
     // A change to its code is a new version: the render is outdated until it's made again.

@@ -281,12 +281,22 @@ function policy(own: string): string {
   ].join("; ");
 }
 
-/** The effect's own folder as the page's browser names it: the host it asked (already checked against the hosts Edit answers to) and the folder's path, in whichever scheme the page came by. */
+/**
+ * The effect's own folder as the page's browser names it: the host it asked
+ * (already checked against the hosts Edit answers to) and the folder's path,
+ * by either scheme (behind Tailscale's HTTPS the page came by https, which
+ * this server never sees). The scheme has to be there: a page with no origin
+ * has no scheme of its own for a source to borrow, and WebKit then matches a
+ * source without one to nothing (Nov 11, Edit.app's window on kenobi: the
+ * evidence board's photos and fonts refused, its `ready` failed, the page
+ * black; Chrome let it through, so the Linux checks passed).
+ */
 function ownSource(request: Request, project: string, name: string): string {
   const host = request.headers.get("host") ?? "";
-  // A policy can't name an IPv6 address: the whole of Edit's own address then, which the missing origin still keeps it out of.
+  // A policy can't name an IPv6 address: the whole of Edit's own address then, which works in Chrome only (WebKit has no origin to match 'self' against).
   if (!/^[A-Za-z0-9.-]+(:\d+)?$/.test(host)) return "'self'";
-  return `${host}${addressOf(project, name)}`;
+  const path = `${host}${addressOf(project, name)}`;
+  return `http://${path} https://${path}`;
 }
 
 /** The page with Edit's runtime and faces ahead of its own code. */
@@ -605,6 +615,20 @@ function rendersDir(store: Store, project: string): string {
 /** A render that stopped because the code changed under it: it's started again for the new code. */
 class Outdated extends Error {}
 
+/** Waits for an effect's code to stay the same for `SETTLE_MS` (at most ten minutes of changes). */
+async function settled(app: App, project: string, name: string): Promise<void> {
+  const until = Date.now() + 10 * 60_000;
+  let before = "";
+  while (Date.now() < until) {
+    const live = app.store.get(project);
+    if (live === null) return;
+    const now = sourceKey(filesIn(folder(app.store, project, name)), frameOf(live.project));
+    if (now === before) return;
+    before = now;
+    await Bun.sleep(SETTLE_MS);
+  }
+}
+
 /** One effect's render: what it's for and how far it's got. */
 interface Render {
   project: string;
@@ -658,7 +682,9 @@ export function renderNow(app: App, project: string, name: string): Promise<void
   render.done = renderSlot
     .with(() => draw(app, render))
     .catch((error: unknown) => {
-      if (error instanceof Outdated) return renderNow(app, project, name);
+      // The code changed under it: started again once the code has settled, never at once (Nov 11, on kenobi: renders
+      // restarted every 60 frames for as long as the agent kept saving, and left 4.6 GB of frames behind).
+      if (error instanceof Outdated) return settled(app, project, name).then(() => renderNow(app, project, name));
       const said = diag.messageOf(error);
       failed.set(id(project, name, key), said);
       diag.warn("effects", `${project}: ${name} didn't render: ${said}`);
@@ -715,6 +741,10 @@ async function draw(app: App, render: Render): Promise<void> {
           }
         }),
       );
+    } catch (error) {
+      // Outrun by the code: its frames are of a version nobody will play.
+      if (error instanceof Outdated) fs.rmSync(frames, { recursive: true, force: true });
+      throw error;
     } finally {
       for (const page of opened) page.close();
     }
@@ -723,7 +753,7 @@ async function draw(app: App, render: Render): Promise<void> {
       // At most twice the bitrate of Edit's best export (export.rs: 0.14 bits a pixel), which is what the render goes into:
       // uncapped, the agent's first board (grain on every frame) was 204 MB for 12 s, too much to send up for the cloud.
       const cap = Math.round(frame.width * frame.height * frame.fps * 0.14 * 2);
-      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "format=yuv420p", "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-maxrate", String(cap), "-bufsize", String(cap * 2), "-an", "-movflags", "+faststart", partial]);
+      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "scale=in_range=pc:out_range=tv,format=yuv420p", "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-maxrate", String(cap), "-bufsize", String(cap * 2), "-an", "-movflags", "+faststart", partial]);
       fs.renameSync(partial, out);
     } catch (error) {
       fs.rmSync(partial, { force: true });

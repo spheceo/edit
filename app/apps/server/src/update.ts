@@ -230,7 +230,19 @@ export class Updater implements UpdaterSeam {
  * Asks GitHub for the newest build on `channel`; null when this one is current
  * (or the newest has no build for this machine).
  */
+/**
+ * The channel this machine is offered builds from. Linux has no nightlies
+ * (release.yml builds Linux for releases only, Sphe, Nov 11), so on Linux the
+ * nightly channel offers releases: asked for nightlies, it found each one's tag
+ * without a build for it and took it for one still uploading, asking every
+ * 3 minutes for good.
+ */
+export function channelHere(channel: Channel, platform: NodeJS.Platform = process.platform): Channel {
+  return platform === "linux" ? "stable" : channel;
+}
+
 export async function check(channel: Channel, api = `https://api.github.com/repos/${REPO}/releases`, feed: string | null = FEED): Promise<Release | null> {
+  channel = channelHere(channel);
   // The feed's tags as they were at the last answer: unchanged, so is the answer.
   const tags = feed === null ? null : await feedTags(feed).catch(() => null);
   const last = lastAnswer.get(`${channel} ${api}`);

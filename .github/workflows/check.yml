@@ -10,6 +10,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A stable release (release.yml, a v* tag) runs Linux's parts through this.
+  workflow_call:
+    inputs:
+      parts:
+        type: string
+        default: default
 
 permissions:
   contents: read
@@ -30,28 +36,26 @@ defaults:
 
 jobs:
   check:
-    # On each platform releases are built for: a Mac, and Linux since Nov 7
-    # (its engine runs FFmpeg where a Mac runs AVFoundation, so each checks
-    # its own).
-    # In parts side by side (Sphe, Nov 11: Check took ~15 minutes): the Rust
-    # (`just check-rust`); on Linux the TypeScript that's the same anywhere
-    # (`just check-ts`); the server's tests in two halves (`just check-tests
-    # 1/2`, `2/2`) on each; and on the Mac the acceptance run.
+    # The Mac's parts and the TypeScript that's the same anywhere, side by
+    # side (Sphe, Nov 11: Check took ~15 minutes): the Rust (`just
+    # check-rust`), the server's tests in two halves (`just check-tests 1/2`,
+    # `2/2`), the acceptance run, and `just check-ts` on a Linux runner.
+    # Linux's own parts (its Rust and its halves of the server's tests) run
+    # only for a stable release (`parts: linux`, release.yml): nightlies are
+    # the Mac's alone (Sphe, Nov 11: "exclude linux from the nightlies and
+    # only have it on the stable vx.x.x releases").
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
-        part: [rust, ts, tests-1, tests-2, acceptance]
-        exclude:
-          - os: macos-latest
-            part: ts
-          - os: ubuntu-24.04
-            part: acceptance
-        include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+        include: ${{ fromJSON(inputs.parts == 'linux' && '[
+          {"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","part":"rust"},
+          {"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","part":"tests-1"},
+          {"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","part":"tests-2"}]' || '[
+          {"os":"macos-latest","target":"aarch64-apple-darwin","part":"rust"},
+          {"os":"macos-latest","target":"aarch64-apple-darwin","part":"tests-1"},
+          {"os":"macos-latest","target":"aarch64-apple-darwin","part":"tests-2"},
+          {"os":"macos-latest","target":"aarch64-apple-darwin","part":"acceptance"},
+          {"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","part":"ts"}]') }}
     name: check (${{ matrix.os }}, ${{ matrix.part }})
     runs-on: ${{ matrix.os }}
     steps:

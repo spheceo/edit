@@ -98,8 +98,10 @@ jobs:
           if [ "$status" != completed ]; then echo "::error::Check for $SHA didn't finish in 70 minutes"; exit 1; fi
           jobs="$(gh api "repos/$GH_REPO/actions/runs/$id/jobs?per_page=50" --jq '.jobs[] | "\(.conclusion)|\(.name)"')"
           echo "$jobs"
-          # Both platforms' legs must be there and green; a job skipped by design (the self-hosted Mac's, until one is enrolled) is fine.
-          for leg in "check (macos" "check (ubuntu"; do
+          # The Mac's legs and the TypeScript's (on a Linux runner) must be there and green; a job skipped by design
+          # (the self-hosted Mac's, until one is enrolled) is fine. Linux's own parts aren't in a push's Check: a
+          # stable release runs them itself (`linux-check` below).
+          for leg in "check (macos" "check (ubuntu-24.04, ts)"; do
             if ! grep -q "^success|$leg" <<<"$jobs"; then
               echo "::error::Check's '$leg…' leg didn't pass for $SHA: https://github.com/$GH_REPO/actions/runs/$id (fix it on main and tag the fixed commit; there is no override)"
               exit 1
@@ -109,7 +111,7 @@ jobs:
             echo "::error::Check failed for $SHA: https://github.com/$GH_REPO/actions/runs/$id (fix it on main and tag the fixed commit; there is no override)"
             exit 1
           fi
-          echo "Check passed for $SHA on both platforms."
+          echo "Check passed for $SHA."
 
   # Everything up to publishing runs beside Check, not after it (Sphe, Nov 11:
   # a nightly took ~35 minutes): the draft and its archives are made while
@@ -204,14 +206,16 @@ jobs:
     needs: web
     strategy:
       fail-fast: false
+      # Linux on 22.04: glibc 2.35, so the addon loads on 22.04 and newer.
+      # Its window is Chrome's (apps/server/src/linux_desktop.ts): no helper.
+      # Not for a nightly (Sphe, Nov 11: Linux on stable releases only; a
+      # Linux install on the nightly channel is offered releases, update.ts
+      # channelHere); a release and a test build (run by hand) have it.
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          # Linux on 22.04: glibc 2.35, so the addon loads on 22.04 and newer.
-          # Its window is Chrome's (apps/server/src/linux_desktop.ts): no helper.
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+        include: ${{ fromJSON(startsWith(github.ref_name, 'nightly-') && '[
+          {"target":"aarch64-apple-darwin","os":"macos-latest"}]' || '[
+          {"target":"aarch64-apple-darwin","os":"macos-latest"},
+          {"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -367,9 +371,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" --clobber dist/*
 
+  # A stable release (a v* tag) is checked on Linux too: Linux's parts of
+  # check.yml, which a push's Check leaves out (nightlies are the Mac's alone).
+  linux-check:
+    if: github.event_name == 'push' && startsWith(github.ref_name, 'v')
+    uses: ./.github/workflows/check.yml
+    with:
+      parts: linux
+
   publish:
-    needs: [upload, checked]
-    if: github.event_name == 'push'
+    needs: [upload, checked, linux-check]
+    # linux-check is skipped for a nightly; for a release it must have passed.
+    if: >-
+      github.event_name == 'push' && !cancelled()
+      && needs.upload.result == 'success' && needs.checked.result == 'success'
+      && (needs.linux-check.result == 'success' || (needs.linux-check.result == 'skipped' && startsWith(github.ref_name, 'nightly-')))
     runs-on: ubuntu-latest
     permissions:
       contents: write

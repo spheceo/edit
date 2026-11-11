@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 
 import * as fs from "node:fs";
 
-import { ahead, appBundle, assetTarget, building, feedTags, installApp, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
+import { ahead, appBundle, assetTarget, building, channelHere, feedTags, installApp, enabled, latestBuild, newer, programs, readChannel, swapAll, Updater } from "../src/update.ts";
 import { scratch } from "./helpers/home.ts";
 
 test("newer_compares_numerically", () => {
@@ -174,4 +174,13 @@ test("a tag in the feed whose build isn't out yet is asked about again soon, a s
   expect(building("nightly-16 v0.0.0", "stable", null, "0.0.0", 15)).toBe(false);
   expect(building("v0.0.0 v0.0.1", "stable", null, "0.0.0", null)).toBe(true);
   expect(building("v0.0.0 v0.0.1", "stable", "v0.0.1", "0.0.0", null)).toBe(false);
+});
+
+test("Linux, which has no nightlies, is offered releases on the nightly channel too", () => {
+  expect(channelHere("nightly", "linux")).toBe("stable");
+  expect(channelHere("stable", "linux")).toBe("stable");
+  expect(channelHere("nightly", "darwin")).toBe("nightly");
+  expect(channelHere("stable", "darwin")).toBe("stable");
+  // So a nightly's tag (no Linux build) isn't taken for one still uploading there.
+  expect(building("nightly-74 v0.0.0", channelHere("nightly", "linux"), null, "0.0.0", 73)).toBe(false);
 });

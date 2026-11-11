@@ -2729,7 +2729,7 @@
   },
   {
     "name": "import_link",
-    "description": "Bring in a video the person linked in their message: a YouTube video, a Google Drive file, or the video on any other page (an Instagram, X or TikTok post, a news site's player, a direct link to a file). It's downloaded whole, however long, added to the project's media (not the timeline) and transcribed whole, with who speaks. It answers at once while it works: wait {for: [\"link\"]} for its progress, then call it again with the same url for its media id, duration and words. Then place it where and how the person asked.",
+    "description": "Bring in a video the person linked, whole. It can be a YouTube video, a Google Drive file, or the video on any other page (an Instagram, X or TikTok post, a news site's player, a direct link to a file). It's downloaded whole, however long, added to the project's media (not the timeline) and transcribed whole, with who speaks. It answers at once while it works: wait {for: [\"link\"]} for its progress, then call it again with the same url for its media id, duration and words. Then place it where and how the person asked.",
     "inputSchema": {
       "type": "object",
       "properties": {

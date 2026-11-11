@@ -6,6 +6,8 @@
 //   window.duration   its length in seconds
 //   window.ready      a Promise: pictures decoded, fonts loaded
 //   window.seek(t)    draw the frame for second t; the same t, the same pixels
+//                     (it may return a Promise, for footage it has to seek
+//                     first: Edit waits for it, and for the picture to paint)
 //
 // The page has no origin of its own and no network, and never sees the app:
 // the playhead comes in by message from the viewer (live), or by a call from
@@ -57,12 +59,24 @@
     if (typeof window.seek !== "function") return { error: "The page has no window.seek(t)." };
     seed = (Math.imul(Math.round(t * 1000) | 0, 0x85ebca6b) ^ 0x9e3779b9) >>> 0;
     const from = performance.now();
+    let drawn;
     try {
-      window.seek(t);
+      drawn = window.seek(t);
     } catch (error) {
       const text = String((error && error.stack) || error);
       failed(`seek(${t}) threw: ${text}`);
       return { error: text };
+    }
+    // Footage to seek first: done once its promise is, and two refreshes later, when the video's frame is on screen.
+    if (drawn && typeof drawn.then === "function") {
+      return Promise.resolve(drawn).then(
+        () => new Promise((resolve) => frame(() => frame(() => resolve({ spent: performance.now() - from })))),
+        (error) => {
+          const text = String((error && error.stack) || error);
+          failed(`seek(${t}) failed: ${text}`);
+          return { error: text };
+        },
+      );
     }
     const spent = performance.now() - from;
     if (!state.sought) {
@@ -98,11 +112,32 @@
       frame(tick);
     });
 
+  // Live: the playhead's moments as they come, each drawn when the one before is done; a page that seeks footage
+  // can't keep up with every refresh, so only the latest waits, never a pile of them.
+  let busy = false;
+  let latest = null;
+  const live = (t) => {
+    if (busy) {
+      latest = t;
+      return;
+    }
+    const drawn = seek(t);
+    if (!drawn || typeof drawn.then !== "function") return;
+    busy = true;
+    drawn.then(() => {
+      busy = false;
+      if (latest === null) return;
+      const next = latest;
+      latest = null;
+      live(next);
+    });
+  };
+
   window.addEventListener("message", (event) => {
     if (event.source !== host) return;
     const message = event.data && event.data.edit;
     if (!message) return;
-    if (typeof message.seek === "number" && state.ready) seek(message.seek);
+    if (typeof message.seek === "number" && state.ready) live(message.seek);
   });
   window.addEventListener("error", (event) => failed(event.message + (event.filename ? ` (${event.filename.split("/").pop()}:${event.lineno})` : "")));
   window.addEventListener("unhandledrejection", (event) => failed(String((event.reason && event.reason.message) || event.reason)));

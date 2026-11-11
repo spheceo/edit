@@ -348,10 +348,11 @@ function file(context: RouteContext<App>): Response {
   }
   const response = serveFile(request, path);
   for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
-  // A page with no origin asks for its fonts and its script modules as a stranger would, and a browser hands those
-  // over only when the server says a page of no origin may read them. Said for those alone: the pictures beside
-  // them (the case's photos) are shown by the page and stay unreadable to anything else that asks.
-  if (/\.(ttf|otf|woff2?|m?js|css)$/i.test(path)) response.headers.set("access-control-allow-origin", "null");
+  // A page with no origin asks for its files as a stranger would, and a browser lets it read one (a font, a module,
+  // a picture's or a video's pixels on a canvas) only when the server says a page of no origin may. Said for every
+  // file of its folder: it's the agent's to do anything with (Sphe, Nov 11: "FULL control"), and no other page can
+  // name one (the key in the address).
+  response.headers.set("access-control-allow-origin", "null");
   return response;
 }
 
@@ -586,6 +587,139 @@ export async function give(app: App, projectId: string, name: string, mediaId: s
   const file = `${stem}.png`;
   await native().saveStill(structuredClone(media), time, join(dir, file));
   return { file, width: media.width, height: media.height };
+}
+
+/** The longest stretch of footage an effect is given at once: an effect is a graphic, not the edit's footage. */
+const MOST_FOOTAGE_S = 180;
+/** The frequency bands a sound's levels are given in, low to high, spaced as the ear hears them. */
+const BANDS = 16;
+
+export interface Given {
+  /** The footage's moving picture beside scene.html (an H.264 MP4, no sound), when it has one. */
+  video: string | null;
+  /** Its sound's levels beside scene.html, a script that puts them at `window.levels[key]`, when it has sound. */
+  levels: string | null;
+  /** Their key in `window.levels`. */
+  key: string;
+  width: number;
+  height: number;
+  /** Seconds of the media the files hold. */
+  start: number;
+  duration: number;
+}
+
+/**
+ * A stretch of one of the project's videos or sounds put into an effect's
+ * folder (Sphe, Nov 11: the agent has "FULL control… just write code and go
+ * crazy"): its picture as a video the page plays and seeks itself, and its
+ * sound's levels, frame by frame, for the page to draw from (a waveform, a
+ * pulse, anything). The sound itself stays on the timeline as an audio clip.
+ */
+export async function giveFootage(app: App, projectId: string, name: string, mediaId: string, from: number | null, to: number | null, as: string | null): Promise<Given> {
+  const live = app.store.get(projectId);
+  if (live === null) throw new Error("no such project");
+  const media = live.project.media.find((one) => one.id === mediaId);
+  if (media === undefined) throw new Error(`no media ${mediaId}`);
+  if (media.kind === "image") throw new Error(`${mediaId} is a picture: effect_picture gives one`);
+  if (media.effect !== undefined && media.effect !== null) throw new Error(`${mediaId} is an effect itself`);
+  const start = Math.max(0, from ?? 0);
+  const end = Math.min(media.duration, to ?? media.duration);
+  if (!(end > start)) throw new Error(`start and end are seconds of ${mediaId}, 0 to ${media.duration.toFixed(2)}, start before end`);
+  if (end - start > MOST_FOOTAGE_S) throw new Error(`at most ${MOST_FOOTAGE_S} s of footage at once (asked ${(end - start).toFixed(1)} s): give the stretch the effect shows`);
+  const dir = folder(app.store, projectId, name);
+  fs.mkdirSync(dir, { recursive: true });
+  const stem = (as ?? media.name).replace(/\.[A-Za-z0-9]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "footage";
+  const { width, fps } = frameOf(live.project);
+  const range = ["-ss", start.toFixed(3), "-to", end.toFixed(3), "-i", media.path];
+  let video: string | null = null;
+  if (media.kind === "video") {
+    video = `${stem}.mp4`;
+    const partial = join(dir, `${stem}.partial.mp4`);
+    // Keyframes every third of a second, so a seek anywhere is quick in the page (and in the render, which seeks every frame).
+    await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", ...range, "-an", "-vf", `scale='min(${width},iw)':-2`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-g", "10", "-pix_fmt", "yuv420p", "-movflags", "+faststart", partial]);
+    fs.renameSync(partial, join(dir, video));
+  }
+  let levels: string | null = null;
+  if (media.kind === "audio" || media.has_audio) {
+    // A script, not JSON: the page has no network, so it can't fetch data; a script from its own folder it can load.
+    levels = `${stem}.levels.js`;
+    const pcm = await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", ...range, "-vn", "-ac", "1", "-ar", "24000", "-f", "f32le", "-"]);
+    const data = JSON.stringify(levelsOf(new Float32Array(pcm.buffer, pcm.byteOffset, Math.floor(pcm.byteLength / 4)), 24000, fps));
+    writeAtomic(join(dir, levels), `(window.levels = window.levels || {})[${JSON.stringify(stem)}] = ${data};\n`);
+  }
+  return { video, levels, key: stem, width: media.width, height: media.height, start, duration: end - start };
+}
+
+/**
+ * A sound's levels for a page to draw from, a frame of the project at a time:
+ * `rms[i]`, how loud frame i is, and `bands[i]`, its loudness in 16 bands from
+ * 40 Hz to 12 kHz; each 0 (silence, -60 dB) to 1 (full scale).
+ */
+export function levelsOf(samples: Float32Array, rate: number, fps: number): { fps: number; frames: number; rms: number[]; bands: number[][] } {
+  const frames = Math.floor((samples.length / rate) * fps);
+  const size = 1024;
+  const edges = Array.from({ length: BANDS + 1 }, (_, band) => 40 * Math.pow(12_000 / 40, band / BANDS));
+  const scale = (power: number) => Math.round(Math.min(1, Math.max(0, (10 * Math.log10(Math.max(power, 1e-12)) + 60) / 60)) * 1000) / 1000;
+  const rms: number[] = [];
+  const bands: number[][] = [];
+  const re = new Float64Array(size);
+  const im = new Float64Array(size);
+  for (let index = 0; index < frames; index++) {
+    const from = Math.floor((index / fps) * rate);
+    const to = Math.min(samples.length, Math.floor(((index + 1) / fps) * rate));
+    let sum = 0;
+    for (let at = from; at < to; at++) sum += samples[at]! * samples[at]!;
+    rms.push(scale(to > from ? sum / (to - from) : 0));
+    // The frame's spectrum, a Hann window round its middle.
+    const middle = Math.floor((from + to) / 2);
+    for (let at = 0; at < size; at++) {
+      const sample = samples[middle - size / 2 + at] ?? 0;
+      re[at] = sample * (0.5 - 0.5 * Math.cos((2 * Math.PI * at) / (size - 1)));
+      im[at] = 0;
+    }
+    fft(re, im);
+    const row: number[] = [];
+    for (let band = 0; band < BANDS; band++) {
+      const low = Math.max(1, Math.floor((edges[band]! * size) / rate));
+      const high = Math.max(low + 1, Math.floor((edges[band + 1]! * size) / rate));
+      let power = 0;
+      for (let bin = low; bin < high && bin < size / 2; bin++) power += (re[bin]! * re[bin]! + im[bin]! * im[bin]!) / ((size / 4) * (size / 4));
+      row.push(scale(power / (high - low)));
+    }
+    bands.push(row);
+  }
+  return { fps, frames, rms, bands };
+}
+
+/** In-place radix-2 FFT (`re.length` a power of two). */
+function fft(re: Float64Array, im: Float64Array): void {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [re[i], re[j]] = [re[j]!, re[i]!];
+      [im[i], im[j]] = [im[j]!, im[i]!];
+    }
+  }
+  for (let length = 2; length <= n; length <<= 1) {
+    const angle = (-2 * Math.PI) / length;
+    for (let i = 0; i < n; i += length) {
+      for (let k = 0; k < length / 2; k++) {
+        const wr = Math.cos(angle * k);
+        const wi = Math.sin(angle * k);
+        const ar = re[i + k + length / 2]!;
+        const ai = im[i + k + length / 2]!;
+        const tr = ar * wr - ai * wi;
+        const ti = ar * wi + ai * wr;
+        re[i + k + length / 2] = re[i + k]! - tr;
+        im[i + k + length / 2] = im[i + k]! - ti;
+        re[i + k] = re[i + k]! + tr;
+        im[i + k] = im[i + k]! + ti;
+      }
+    }
+  }
 }
 
 /** The effects a project's timeline shows, by the clips of their media. */

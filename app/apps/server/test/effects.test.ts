@@ -100,10 +100,10 @@ test("an effect's page is served shut in: no origin, no network, only its own fo
     expect(policy).toContain("frame-ancestors 'self'");
     expect(page.headers.get("x-frame-options")).toBeNull();
     expect((await asked(`/api/projects/${id}`, {}))!.headers.get("x-frame-options")).toBe("DENY");
-    // A font may be read by the page (which has no origin); a picture is only ever shown.
+    // Every file of its folder may be read by the page (which has no origin): a font, and a picture's pixels too.
     write(app, id, "bar", { "fonts/hand.ttf": "font", "img/photo.jpg": "photo" });
     expect((await get(app, `${base}fonts/hand.ttf`)).headers.get("access-control-allow-origin")).toBe("null");
-    expect((await get(app, `${base}img/photo.jpg`)).headers.get("access-control-allow-origin")).toBeNull();
+    expect((await get(app, `${base}img/photo.jpg`)).headers.get("access-control-allow-origin")).toBe("null");
     // Nothing from outside the folder: not by a path, and not by a link in it.
     fs.writeFileSync(join(effects.root(app.store, id), "secret.txt"), "another effect's");
     expect((await get(app, `${base}..%2Fsecret.txt`)).status).toBe(404);
@@ -312,6 +312,84 @@ test.skipIf(chrome === null)("an effect on the timeline is rendered from its cod
     await seams.broll.waitForMaps(app, id, 90_000);
     const third = effects.list(app.store, id)[0]!.key;
     expect(fs.readdirSync(join(app.store.uploadsDir(id), "effect-renders")).sort()).toEqual([`bar-${now}.mp4`, `bar-${third}.mp4`].sort());
+  } finally {
+    await server.stop(true);
+    cleanup();
+  }
+}, 240_000);
+
+test("a sound's levels: how loud each frame is, and in which band", () => {
+  const rate = 24000;
+  // One second of a loud 1 kHz tone, then one of silence.
+  const samples = new Float32Array(rate * 2);
+  for (let at = 0; at < rate; at++) samples[at] = 0.5 * Math.sin((2 * Math.PI * 1000 * at) / rate);
+  const levels = effects.levelsOf(samples, rate, 30);
+  expect(levels.frames).toBe(60);
+  expect(levels.rms.length).toBe(60);
+  expect(levels.rms[10]!).toBeGreaterThan(0.8);
+  expect(levels.rms[45]).toBe(0);
+  // The tone is loudest in the band holding 1 kHz (the bands run 40 Hz to 12 kHz, spaced as the ear hears).
+  const bands = levels.bands[10]!;
+  expect(bands.length).toBe(16);
+  const loudest = bands.indexOf(Math.max(...bands));
+  const edge = (band: number) => 40 * Math.pow(12_000 / 40, band / 16);
+  expect(edge(loudest) <= 1000 && 1000 < edge(loudest + 1)).toBe(true);
+  expect(Math.max(...levels.bands[45]!)).toBe(0);
+});
+
+test.skipIf(chrome === null)("an effect plays footage it's given: seeked to each moment, drawn there, rendered frame by frame", async () => {
+  const { app, cleanup, id, dir: scratchDir } = hq("effects-footage");
+  const router = buildRouter();
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (request) => (await respond(app, router, request, null)) ?? new Response(null, { status: 404 }) });
+  try {
+    app.port = server.port!;
+    await app.store.update(id, "test", (project) => {
+      project.hq = true;
+    });
+    // Footage: a counter on screen, a tone under it, three seconds.
+    const clip = join(scratchDir, "clip.mp4");
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=3", "-f", "lavfi", "-i", "sine=frequency=440:duration=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", clip]).exitCode).toBe(0);
+    const media = "m9";
+    await app.store.update(id, "test", (project) => {
+      project.media.push({ id: media, name: "clip.mp4", path: clip, kind: "video", duration: 3, width: 640, height: 360, fps: 30, has_audio: true });
+    });
+    const given = await effects.giveFootage(app, id, "framed", media, 1, 3, "shot");
+    expect(given).toMatchObject({ video: "shot.mp4", levels: "shot.levels.js", key: "shot", width: 640, height: 360, start: 1, duration: 2 });
+    const folder = effects.folder(app.store, id, "framed");
+    const script = fs.readFileSync(join(folder, "shot.levels.js"), "utf8");
+    expect(script.startsWith('(window.levels = window.levels || {})["shot"] = {"fps":30,"frames":60,')).toBe(true);
+    await expect(effects.giveFootage(app, id, "framed", media, 2.5, 2, null)).rejects.toThrow("start and end are seconds");
+    await expect(effects.giveFootage(app, id, "framed", "m404", 0, 1, null)).rejects.toThrow("no media m404");
+    // A page that plays the footage in a rounded frame, a meter from its sound beside it, seek waiting for the video.
+    write(app, id, "framed", {
+      "scene.html": `<!doctype html><body style="margin:0;background:#000"><script src="shot.levels.js"></script>
+        <video id="v" src="shot.mp4" muted playsinline style="position:absolute;left:100px;top:300px;width:960px;border-radius:40px"></video>
+        <div id="m" style="position:absolute;left:1300px;top:300px;width:120px;background:#fff"></div><script>
+        const v = document.getElementById("v"), levels = window.levels.shot;
+        window.duration = 2;
+        window.ready = new Promise((resolve) => v.addEventListener("loadeddata", resolve, { once: true }));
+        window.seek = (t) => {
+          document.getElementById("m").style.height = Math.round(400 * levels.rms[Math.min(levels.frames - 1, Math.floor(t * levels.fps))]) + "px";
+          return new Promise((resolve) => { v.addEventListener("seeked", resolve, { once: true }); v.currentTime = t; });
+        };
+      </script></body>`,
+    });
+    const look = await effects.look(app, id, "framed", [0.2, 1.5]);
+    expect(look.errors).toEqual([]);
+    expect(look.problems).toEqual([]);
+    expect(Buffer.from(look.stills[0]!.picture).equals(Buffer.from(look.stills[1]!.picture))).toBe(false);
+    // Rendered, every frame waiting for its seek.
+    const added = await effects.add(app, id, "framed");
+    await app.store.update(id, "test", (project) => {
+      project.tracks.push({ id: "t1", kind: "video", name: "V1", hidden: false, muted: false, locked: false } as unknown as (typeof project.tracks)[number]);
+      project.clips.push({ id: "c1", type: "video", track: "t1", start: 0, duration: 60, media: added.media, source_in: 0 } as unknown as (typeof project.clips)[number]);
+    });
+    await seams.broll.waitForMaps(app, id, 90_000);
+    const rendered = app.store.get(id)!.project.media.find((one) => one.id === added.media)!;
+    expect(rendered.kind).toBe("video");
+    // The footage moves in the render: its first and last frames differ where the video sits.
+    const frameAt = (t: number) => Bun.spawnSync(["ffmpeg", "-v", "error", "-ss", String(t), "-i", rendered.path, "-frames:v", "1", "-vf", "crop=960:540:100:300,scale=96:54,format=gray", "-f", "rawvideo", "-"]).stdout;
+    expect(Buffer.from(frameAt(0.1)).equals(Buffer.from(frameAt(1.8)))).toBe(false);
   } finally {
     await server.stop(true);
     cleanup();

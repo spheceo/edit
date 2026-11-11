@@ -3630,5 +3630,41 @@
       "type": "object"
     },
     "name": "effect_picture"
+  },
+  {
+    "description": "Give a coded effect moving footage or a sound's levels (a Bodycam HQ project). A stretch of one of the project's videos is copied into the effect's folder as a video its page plays and seeks itself (seek(t) may return a Promise that resolves once the frame is shown), and its sound's levels as data, frame by frame (rms and 16 bands from low to high, each 0 to 1), for anything that moves with the sound. A sound gives only its levels. The sound itself goes on the timeline as an audio clip under the effect. Answers the files' names to load in the page and the footage's size.",
+    "inputSchema": {
+      "properties": {
+        "as": {
+          "description": "What to call the files, without an ending (default: the media's name).",
+          "type": "string"
+        },
+        "end": {
+          "description": "Seconds of the media (default its end; at most 180 s after start).",
+          "type": "number"
+        },
+        "media_id": {
+          "type": "string"
+        },
+        "name": {
+          "description": "The effect: its folder's name under effects/.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "start": {
+          "description": "Seconds of the media (default 0).",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "media_id"
+      ],
+      "type": "object"
+    },
+    "name": "effect_footage"
   }
 ]

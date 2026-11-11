@@ -30,6 +30,10 @@ if (process.argv.includes("--dev")) {
   delete process.env.EDIT_RELAY_URL;
 }
 
+// The server's modules in the order the server loads them (cli.ts is its entry; importing it starts nothing): started
+// from accounts.ts, reviews.ts ran before busy.ts had finished and the script died on start (Nov 11, "Cannot access
+// 'others' before initialization").
+await import("../src/cli.ts");
 const { ConvexClient } = await import("convex/browser");
 const { makeFunctionReference } = await import("convex/server");
 const accounts = await import("../src/accounts.ts");

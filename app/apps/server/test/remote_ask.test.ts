@@ -102,3 +102,10 @@ test("cpu says the server's CPU, how late its event loop ran, its threads and it
   expect(answer).toContain("JS heap:");
   expect(answer).toMatch(/#0 \d+\.\d% now/);
 }, 15_000);
+
+test("the remote script starts: its help prints without the server's modules tripping over each other", () => {
+  const run = Bun.spawnSync(["bun", "scripts/remote.ts", "help"], { cwd: `${import.meta.dir}/..`, env: { ...process.env, EDIT_HOME: "/nonexistent-edit-home" } });
+  expect(run.stderr.toString()).not.toContain("before initialization");
+  expect(run.exitCode).toBe(0);
+  expect(run.stdout.toString()).toContain("ask");
+}, 60_000);

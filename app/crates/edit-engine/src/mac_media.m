@@ -13,7 +13,21 @@ static void fail(char *error, size_t capacity, NSString *message) {
     if (capacity) snprintf(error, capacity, "%s", message.UTF8String ?: "AVFoundation failed");
 }
 
-int edit_image_info(const char *path, uint32_t *width, uint32_t *height) {
+// AVFoundation, VideoToolbox, Vision and ImageIO can throw an Objective-C
+// exception (an AVAssetWriter asked to end a session it has failed or
+// finished, a frame processor that gives up), and one can't cross into Rust:
+// it unwound through the engine's frames to a render thread's start, where
+// Rust aborts the whole process ("Rust cannot catch foreign exceptions",
+// CI's Mac, Nov 11, caught under lldb; four SIGTRAPs in Check that day). Each
+// bridge call that reaches them catches it here, says it on stderr and returns
+// it as its error, so an export tries FFmpeg instead of the server dying.
+static void caught(NSException *exception, const char *where, char *error, size_t capacity) {
+    NSString *said = [NSString stringWithFormat:@"%@ (%@)", exception.reason ?: @"no reason given", exception.name];
+    fprintf(stderr, "edit: %s threw %s\n", where, said.UTF8String ?: "an exception");
+    if (error && capacity) fail(error, capacity, [NSString stringWithFormat:@"Native media framework stopped: %@", said]);
+}
+
+static int edit_image_info_unguarded(const char *path, uint32_t *width, uint32_t *height) {
     @autoreleasepool {
         CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:@(path)], NULL);
         if (!source) return 0;
@@ -26,8 +40,11 @@ int edit_image_info(const char *path, uint32_t *width, uint32_t *height) {
         return *width > 0 && *height > 0;
     }
 }
+int edit_image_info(const char *path, uint32_t *width, uint32_t *height) {
+    @try { return edit_image_info_unguarded(path, width, height); } @catch (NSException *exception) { caught(exception, "edit_image_info", NULL, 0); return 0; }
+}
 
-int edit_image_frame(const char *path, uint32_t width, uint32_t height, uint8_t *rgba, size_t length) {
+static int edit_image_frame_unguarded(const char *path, uint32_t width, uint32_t height, uint8_t *rgba, size_t length) {
     @autoreleasepool {
         if (length != (size_t)width * height * 4) return 0;
         CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:@(path)], NULL);
@@ -58,8 +75,11 @@ int edit_image_frame(const char *path, uint32_t width, uint32_t height, uint8_t 
         return 1;
     }
 }
+int edit_image_frame(const char *path, uint32_t width, uint32_t height, uint8_t *rgba, size_t length) {
+    @try { return edit_image_frame_unguarded(path, width, height, rgba, length); } @catch (NSException *exception) { caught(exception, "edit_image_frame", NULL, 0); return 0; }
+}
 
-int edit_image_thumbnail(const char *path, const char *output) {
+static int edit_image_thumbnail_unguarded(const char *path, const char *output) {
     @autoreleasepool {
         CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:@(path)], NULL);
         if (!source) return 0;
@@ -79,11 +99,14 @@ int edit_image_thumbnail(const char *path, const char *output) {
         return ok;
     }
 }
+int edit_image_thumbnail(const char *path, const char *output) {
+    @try { return edit_image_thumbnail_unguarded(path, output); } @catch (NSException *exception) { caught(exception, "edit_image_thumbnail", NULL, 0); return 0; }
+}
 
 // Encodes an opaque RGBA picture (rows `stride` bytes apart) as JPEG (`jpeg`,
 // at `quality`) or PNG. Returns a CFData the caller releases with
 // edit_data_release, or NULL.
-void *edit_image_encode(const uint8_t *rgba, uint32_t width, uint32_t height, size_t stride,
+static void *edit_image_encode_unguarded(const uint8_t *rgba, uint32_t width, uint32_t height, size_t stride,
                         int jpeg, double quality) {
     @autoreleasepool {
         if (!width || !height || stride < (size_t)width * 4) return NULL;
@@ -112,6 +135,10 @@ void *edit_image_encode(const uint8_t *rgba, uint32_t width, uint32_t height, si
         return (void *)out;
     }
 }
+void *edit_image_encode(const uint8_t *rgba, uint32_t width, uint32_t height, size_t stride,
+                        int jpeg, double quality) {
+    @try { return edit_image_encode_unguarded(rgba, width, height, stride, jpeg, quality); } @catch (NSException *exception) { caught(exception, "edit_image_encode", NULL, 0); return NULL; }
+}
 
 const uint8_t *edit_data_bytes(void *data) { return CFDataGetBytePtr((CFDataRef)data); }
 size_t edit_data_length(void *data) { return (size_t)CFDataGetLength((CFDataRef)data); }
@@ -120,7 +147,7 @@ void edit_data_release(void *data) { CFRelease((CFDataRef)data); }
 // Faces in a BGRA picture (Vision's face rectangles, profiles included): up
 // to `max` of them into `out` as x0, y0, x1, y1 (0..1 from the top left) and
 // confidence, `count` set to how many. The pixels are only read during the call.
-int edit_faces(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride,
+static int edit_faces_unguarded(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride,
                float *out, size_t max, size_t *count) {
     @autoreleasepool {
         *count = 0;
@@ -149,6 +176,10 @@ int edit_faces(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stri
         }
         return 1;
     }
+}
+int edit_faces(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride,
+               float *out, size_t max, size_t *count) {
+    @try { return edit_faces_unguarded(bgra, width, height, stride, out, max, count); } @catch (NSException *exception) { caught(exception, "edit_faces", NULL, 0); return 0; }
 }
 
 // A picture's subject lifted out (Vision's foreground instances, what Photos'
@@ -201,10 +232,13 @@ static int subject_cutout(const char *input, const char *output, double x, doubl
     }
 }
 
-int edit_subject_cutout(const char *input, const char *output, double x, double y, double *bounds, char *error, size_t capacity) {
+static int edit_subject_cutout_unguarded(const char *input, const char *output, double x, double y, double *bounds, char *error, size_t capacity) {
     if (@available(macOS 14.0, *)) return subject_cutout(input, output, x, y, bounds, error, capacity);
     fail(error, capacity, @"Lifting a subject out needs macOS 14 or later");
     return 0;
+}
+int edit_subject_cutout(const char *input, const char *output, double x, double y, double *bounds, char *error, size_t capacity) {
+    @try { return edit_subject_cutout_unguarded(input, output, x, y, bounds, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_subject_cutout", error, capacity); return 0; }
 }
 
 // Words in a BGRA picture (Vision's text recognition, the fast level, no
@@ -212,7 +246,7 @@ int edit_subject_cutout(const char *input, const char *output, double x, double 
 // per piece of text, "x0 y0 x1 y1 confidence<TAB>text" (0..1 from the top
 // left), as CFData the caller releases; NULL when Vision fails. The pixels
 // are only read during the call.
-void *edit_text(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride) {
+static void *edit_text_unguarded(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride) {
     @autoreleasepool {
         if (!width || !height || stride < (size_t)width * 4) return NULL;
         CVPixelBufferRef pixel = NULL;
@@ -240,6 +274,9 @@ void *edit_text(const uint8_t *bgra, uint32_t width, uint32_t height, size_t str
         }
         return (void *)CFBridgingRetain([lines dataUsingEncoding:NSUTF8StringEncoding]);
     }
+}
+void *edit_text(const uint8_t *bgra, uint32_t width, uint32_t height, size_t stride) {
+    @try { return edit_text_unguarded(bgra, width, height, stride); } @catch (NSException *exception) { caught(exception, "edit_text", NULL, 0); return NULL; }
 }
 
 // High-quality resample of a 4-channel 8-bit picture (any channel order).
@@ -337,7 +374,7 @@ int edit_scale(const uint8_t *source, uint32_t sw, uint32_t sh, size_t sstride,
 }
 @end
 
-void *edit_reader_open(const char *path, uint32_t width, uint32_t height,
+static void *edit_reader_open_unguarded(const char *path, uint32_t width, uint32_t height,
                        char *error, size_t capacity) {
     @autoreleasepool {
         EditReader *r = [EditReader new];
@@ -371,11 +408,15 @@ void *edit_reader_open(const char *path, uint32_t width, uint32_t height,
         return (__bridge_retained void *)r;
     }
 }
+void *edit_reader_open(const char *path, uint32_t width, uint32_t height,
+                       char *error, size_t capacity) {
+    @try { return edit_reader_open_unguarded(path, width, height, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_reader_open", error, capacity); return NULL; }
+}
 
 // Copies the frame nearest `time` into `out` (BGRA, or RGBA with `rgba`).
 // Returns 1, or 2 without copying when `if_changed` and it is the picture the
 // last call copied, or 0 on failure.
-int edit_reader_frame(void *handle, double time, uint8_t *out, size_t length, int rgba,
+static int edit_reader_frame_unguarded(void *handle, double time, uint8_t *out, size_t length, int rgba,
                       int if_changed, char *error, size_t capacity) {
     @autoreleasepool {
         EditReader *r = (__bridge EditReader *)handle;
@@ -468,19 +509,29 @@ int edit_reader_frame(void *handle, double time, uint8_t *out, size_t length, in
         return 1;
     }
 }
+int edit_reader_frame(void *handle, double time, uint8_t *out, size_t length, int rgba,
+                      int if_changed, char *error, size_t capacity) {
+    @try { return edit_reader_frame_unguarded(handle, time, out, length, rgba, if_changed, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_reader_frame", error, capacity); return 0; }
+}
 
 // Where the video track's pictures end (seconds), and one frame's length:
 // asked past `end`, the reader holds its last picture.
-void edit_reader_span(void *handle, double *end, double *step) {
+static void edit_reader_span_unguarded(void *handle, double *end, double *step) {
     @autoreleasepool {
         EditReader *r = (__bridge EditReader *)handle;
         *end = r.end;
         *step = r.step;
     }
 }
+void edit_reader_span(void *handle, double *end, double *step) {
+    @try { edit_reader_span_unguarded(handle, end, step); } @catch (NSException *exception) { caught(exception, "edit_reader_span", NULL, 0); }
+}
 
-void edit_reader_close(void *handle) {
+static void edit_reader_close_unguarded(void *handle) {
     @autoreleasepool { EditReader *r = (__bridge_transfer EditReader *)handle; (void)r; }
+}
+void edit_reader_close(void *handle) {
+    @try { edit_reader_close_unguarded(handle); } @catch (NSException *exception) { caught(exception, "edit_reader_close", NULL, 0); }
 }
 
 // ---------------------------------------------------------------------------
@@ -513,7 +564,7 @@ void edit_reader_close(void *handle) {
 @end
 
 // A file's sound, opened once and shared by the readers of its stretches.
-void *edit_sound_open(const char *path, char *error, size_t capacity) {
+static void *edit_sound_open_unguarded(const char *path, char *error, size_t capacity) {
     @autoreleasepool {
         EditSound *s = [EditSound new];
         s.asset = [AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:@(path)] options:nil];
@@ -530,12 +581,18 @@ void *edit_sound_open(const char *path, char *error, size_t capacity) {
         return (__bridge_retained void *)s;
     }
 }
-
-void edit_sound_close(void *handle) {
-    @autoreleasepool { EditSound *s = (__bridge_transfer EditSound *)handle; (void)s; }
+void *edit_sound_open(const char *path, char *error, size_t capacity) {
+    @try { return edit_sound_open_unguarded(path, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_sound_open", error, capacity); return NULL; }
 }
 
-void *edit_sound_reader_open(void *sound, double start, double duration, char *error, size_t capacity) {
+static void edit_sound_close_unguarded(void *handle) {
+    @autoreleasepool { EditSound *s = (__bridge_transfer EditSound *)handle; (void)s; }
+}
+void edit_sound_close(void *handle) {
+    @try { edit_sound_close_unguarded(handle); } @catch (NSException *exception) { caught(exception, "edit_sound_close", NULL, 0); }
+}
+
+static void *edit_sound_reader_open_unguarded(void *sound, double start, double duration, char *error, size_t capacity) {
     @autoreleasepool {
         EditSound *s = (__bridge EditSound *)sound;
         NSError *problem = nil;
@@ -560,10 +617,13 @@ void *edit_sound_reader_open(void *sound, double start, double duration, char *e
         return (__bridge_retained void *)r;
     }
 }
+void *edit_sound_reader_open(void *sound, double start, double duration, char *error, size_t capacity) {
+    @try { return edit_sound_reader_open_unguarded(sound, start, duration, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_sound_reader_open", error, capacity); return NULL; }
+}
 
 // Fills up to `frames` stereo frames from where the last call stopped; sets
 // `written` (fewer at the end of the file). Returns 0 on failure.
-int edit_sound_read(void *handle, float *out, size_t frames, size_t *written, char *error, size_t capacity) {
+static int edit_sound_read_unguarded(void *handle, float *out, size_t frames, size_t *written, char *error, size_t capacity) {
     @autoreleasepool {
         EditSoundReader *r = (__bridge EditSoundReader *)handle;
         size_t done = 0;
@@ -614,9 +674,15 @@ int edit_sound_read(void *handle, float *out, size_t frames, size_t *written, ch
         return 1;
     }
 }
+int edit_sound_read(void *handle, float *out, size_t frames, size_t *written, char *error, size_t capacity) {
+    @try { return edit_sound_read_unguarded(handle, out, frames, written, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_sound_read", error, capacity); return 0; }
+}
 
-void edit_sound_reader_close(void *handle) {
+static void edit_sound_reader_close_unguarded(void *handle) {
     @autoreleasepool { EditSoundReader *r = (__bridge_transfer EditSoundReader *)handle; (void)r; }
+}
+void edit_sound_reader_close(void *handle) {
+    @try { edit_sound_reader_close_unguarded(handle); } @catch (NSException *exception) { caught(exception, "edit_sound_reader_close", NULL, 0); }
 }
 
 // ---------------------------------------------------------------------------
@@ -792,7 +858,7 @@ void edit_speaker_close(void *handle) {
 }
 @end
 
-void *edit_sound_writer_open(const char *path, uint32_t bitrate, char *error, size_t capacity) {
+static void *edit_sound_writer_open_unguarded(const char *path, uint32_t bitrate, char *error, size_t capacity) {
     @autoreleasepool {
         EditSoundWriter *w = [EditSoundWriter new];
         NSError *problem = nil;
@@ -825,8 +891,11 @@ void *edit_sound_writer_open(const char *path, uint32_t bitrate, char *error, si
         return (__bridge_retained void *)w;
     }
 }
+void *edit_sound_writer_open(const char *path, uint32_t bitrate, char *error, size_t capacity) {
+    @try { return edit_sound_writer_open_unguarded(path, bitrate, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_sound_writer_open", error, capacity); return NULL; }
+}
 
-int edit_sound_writer_write(void *handle, const float *samples, size_t frames, char *error, size_t capacity) {
+static int edit_sound_writer_write_unguarded(void *handle, const float *samples, size_t frames, char *error, size_t capacity) {
     @autoreleasepool {
         EditSoundWriter *w = (__bridge EditSoundWriter *)handle;
         // A second at a time: bounded buffers and the writer's readiness obeyed.
@@ -860,10 +929,17 @@ int edit_sound_writer_write(void *handle, const float *samples, size_t frames, c
         return 1;
     }
 }
+int edit_sound_writer_write(void *handle, const float *samples, size_t frames, char *error, size_t capacity) {
+    @try { return edit_sound_writer_write_unguarded(handle, samples, frames, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_sound_writer_write", error, capacity); return 0; }
+}
 
-int edit_sound_writer_finish(void *handle, char *error, size_t capacity) {
+static int edit_sound_writer_finish_unguarded(void *handle, char *error, size_t capacity) {
     @autoreleasepool {
         EditSoundWriter *w = (__bridge EditSoundWriter *)handle;
+        if (w.writer.status != AVAssetWriterStatusWriting) {
+            fail(error, capacity, w.writer.error.localizedDescription ?: [NSString stringWithFormat:@"Native sound encoder isn't writing (status %ld)", (long)w.writer.status]);
+            return 0;
+        }
         [w.input markAsFinished];
         dispatch_semaphore_t done = dispatch_semaphore_create(0);
         [w.writer finishWritingWithCompletionHandler:^{ dispatch_semaphore_signal(done); }];
@@ -874,9 +950,15 @@ int edit_sound_writer_finish(void *handle, char *error, size_t capacity) {
         return 1;
     }
 }
+int edit_sound_writer_finish(void *handle, char *error, size_t capacity) {
+    @try { return edit_sound_writer_finish_unguarded(handle, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_sound_writer_finish", error, capacity); return 0; }
+}
 
-void edit_sound_writer_close(void *handle) {
+static void edit_sound_writer_close_unguarded(void *handle) {
     @autoreleasepool { EditSoundWriter *w = (__bridge_transfer EditSoundWriter *)handle; (void)w; }
+}
+void edit_sound_writer_close(void *handle) {
+    @try { edit_sound_writer_close_unguarded(handle); } @catch (NSException *exception) { caught(exception, "edit_sound_writer_close", NULL, 0); }
 }
 
 // ---------------------------------------------------------------------------
@@ -895,7 +977,7 @@ void edit_sound_writer_close(void *handle) {
 
 // `flags`: 1 = a finished export (B-frames, High profile), 2 = move the index
 // to the front (only when nothing rewrites the file afterwards).
-void *edit_writer_open(const char *path, uint32_t width, uint32_t height, double fps,
+static void *edit_writer_open_unguarded(const char *path, uint32_t width, uint32_t height, double fps,
                        int hevc, uint64_t bitrate, int key_interval, int flags,
                        char *error, size_t capacity) {
     @autoreleasepool {
@@ -941,10 +1023,15 @@ void *edit_writer_open(const char *path, uint32_t width, uint32_t height, double
         return (__bridge_retained void *)w;
     }
 }
+void *edit_writer_open(const char *path, uint32_t width, uint32_t height, double fps,
+                       int hevc, uint64_t bitrate, int key_interval, int flags,
+                       char *error, size_t capacity) {
+    @try { return edit_writer_open_unguarded(path, width, height, fps, hevc, bitrate, key_interval, flags, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_writer_open", error, capacity); return NULL; }
+}
 
 // Appends one picture: `pixels` rows are `stride` bytes apart, RGBA (`rgba`)
 // or BGRA. The copy into the encoder's buffer also drops any row padding.
-int edit_writer_frame(void *handle, int64_t frame, const uint8_t *pixels, size_t length,
+static int edit_writer_frame_unguarded(void *handle, int64_t frame, const uint8_t *pixels, size_t length,
                       size_t stride, int rgba, char *error, size_t capacity) {
     @autoreleasepool {
         EditWriter *w = (__bridge EditWriter *)handle;
@@ -992,10 +1079,20 @@ int edit_writer_frame(void *handle, int64_t frame, const uint8_t *pixels, size_t
         return ok;
     }
 }
+int edit_writer_frame(void *handle, int64_t frame, const uint8_t *pixels, size_t length,
+                      size_t stride, int rgba, char *error, size_t capacity) {
+    @try { return edit_writer_frame_unguarded(handle, frame, pixels, length, stride, rgba, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_writer_frame", error, capacity); return 0; }
+}
 
-int edit_writer_finish(void *handle, int64_t frames, char *error, size_t capacity) {
+static int edit_writer_finish_unguarded(void *handle, int64_t frames, char *error, size_t capacity) {
     @autoreleasepool {
         EditWriter *w = (__bridge EditWriter *)handle;
+        // Only a writer still writing can end its session: asked when it has failed (the encoder gave up) or
+        // finished, AVAssetWriter throws ("Cannot call method when status is 3").
+        if (w.writer.status != AVAssetWriterStatusWriting) {
+            fail(error, capacity, w.writer.error.localizedDescription ?: [NSString stringWithFormat:@"Native encoder isn't writing (status %ld)", (long)w.writer.status]);
+            return 0;
+        }
         [w.writer endSessionAtSourceTime:CMTimeMakeWithSeconds(frames / w.fps, 600000)];
         [w.input markAsFinished];
         dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -1007,9 +1104,15 @@ int edit_writer_finish(void *handle, int64_t frames, char *error, size_t capacit
         return 1;
     }
 }
+int edit_writer_finish(void *handle, int64_t frames, char *error, size_t capacity) {
+    @try { return edit_writer_finish_unguarded(handle, frames, error, capacity); } @catch (NSException *exception) { caught(exception, "edit_writer_finish", error, capacity); return 0; }
+}
 
-void edit_writer_close(void *handle) {
+static void edit_writer_close_unguarded(void *handle) {
     @autoreleasepool { EditWriter *w = (__bridge_transfer EditWriter *)handle; (void)w; }
+}
+void edit_writer_close(void *handle) {
+    @try { edit_writer_close_unguarded(handle); } @catch (NSException *exception) { caught(exception, "edit_writer_close", NULL, 0); }
 }
 
 // ---------------------------------------------------------------------------

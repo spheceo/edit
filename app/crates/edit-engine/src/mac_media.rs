@@ -984,6 +984,33 @@ mod tests {
         }
     }
 
+    /// An Objective-C exception can't cross into Rust: one from AVAssetWriter
+    /// unwound to a render thread's start and Rust aborted the whole test
+    /// binary (CI's Mac, Nov 11: "Rust cannot catch foreign exceptions",
+    /// under lldb; SIGTRAP in Check). Asked what AVFoundation throws on, the
+    /// bridge says so as an error and the process carries on.
+    #[test]
+    fn what_avfoundation_would_throw_on_is_an_error_not_an_abort() {
+        let dir = temp_dir("native-throws");
+        // A finished writer asked to finish again: AVAssetWriter throws when a
+        // session it has finished (or failed) is ended.
+        let path = dir.join("twice.mp4");
+        let mut writer = Writer::open(&path, 64, 32, 30.0, proxy_options()).unwrap();
+        for frame in 0..5 {
+            writer
+                .frame(frame, &vec![128; 64 * 32 * 4], 64 * 4, Order::Rgba)
+                .unwrap();
+        }
+        writer.finish(5).unwrap();
+        let again = writer.finish(5).unwrap_err();
+        assert!(again.contains("Native encoder"), "{again}");
+        drop(writer);
+        // A picture no encoder makes: refused, never thrown through Rust.
+        let refused = Writer::open(&dir.join("none.mp4"), 0, 0, 30.0, proxy_options());
+        assert!(refused.is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[test]
     fn native_roundtrip_seeks_rotates_and_preserves_fractional_rate() {
         let dir = temp_dir("native");

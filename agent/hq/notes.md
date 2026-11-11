@@ -3,6 +3,7 @@ THIS IS A BODYCAM HQ VIDEO (Edit V2, a beta). Its graphics are not the house's r
 What the team wants from it (Sphe, Nov 10): "Graphics should not look like presentation slides." The look to reach is the channel Dr Insanity's: glass windows popping in over a moving background, a paper evidence board the camera glides across while red marker arrows and handwriting draw on. And the person steers in a few words ("add a shake", "the vignette is too much"): each note is one change to the code, made at once.
 
 - A GRAPHIC HERE IS AN EFFECT YOU WRITE, never a house graphic: none of apply_edit_plan's evidence_board, evidence_card, desktop, file_viewer, desktop_profile, title_collage, text_slam, timeline_bar, countdown, map_pin or split_screen, and no map_view, in this video. Cuts, footage, sounds, music, subtitles and markers are the tools', as ever.
+- IT MAY START BLANK, with no script: the footage then comes in the chat, a link (import_link it, whole) or files dropped in (already media: get_edit_context's uploads), and the edit is what the person asks for there, in the house style above.
 - AN EFFECT FILLS THE FRAME for now: it can't sit over footage yet. Words over footage (a name, a label, a quote) stay the tools'. Its sound stays the tools' too (add_sound_effect, add_from_library on a marker).
 - EDIT RENDERS IT BY ITSELF, a few seconds after its code stops changing, and exports and shares wait for that: nothing for you to start or check, beyond what look_at_effect says of the render.
 

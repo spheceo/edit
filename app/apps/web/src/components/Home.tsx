@@ -2181,6 +2181,8 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
       if (input !== "" && allowed !== null && !allowed.has(kind)) throw new Error("Your account can’t make full edits: an admin can give you an Edit style at accounts.spheceo.com.");
       const { project } = await api.createProject({ name: title.trim(), style: kind, ...(asHq ? { hq: true } : {}), ...(kind === "shorts" ? SHORTS_FORMAT : FORMAT) });
       if (input === "") {
+        // A blank project: the first message, if there is one, goes to its agent at once (Bodycam HQ's footage comes in the chat).
+        if (extra !== "") await api.firstPrompt(project.id, extra);
         onClose();
         navigate(`/p/${project.id}`);
         return;
@@ -2251,7 +2253,9 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
                 ? commentary
                   ? "Paste the sources: videos, articles, posts. The first is the brief."
                   : "Paste the footage: YouTube or Drive videos, or a Trello card. A case the channel already covered goes in as a reuse."
-                : NARRATION[kind] === "recording"
+                : asHq
+                  ? "Paste the script’s Google Doc, or leave this empty to start blank and send the footage in the chat."
+                  : NARRATION[kind] === "recording"
                   ? "Paste the script’s Google Doc, or all its text (copied from the Doc, links and all), and “Voice-over:” with the recording’s Drive link."
                   : "Paste the script’s Google Doc, or all its text (copied from the Doc, links and all). A finished video added under it goes in whole, as a reuse."
             }
@@ -2377,7 +2381,7 @@ export function NewProject({ open, onClose, only = null, start = null }: { open:
           <input
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            placeholder={writing ? "Added to “Start the script workflow” once the footage is in" : "Added to “Start the editing workflow” once the footage is in"}
+            placeholder={writing ? "Added to “Start the script workflow” once the footage is in" : input === "" ? "Sent to the agent as the project opens: the footage’s links, and what you want" : "Added to “Start the editing workflow” once the footage is in"}
             className={field}
           />
         </label>

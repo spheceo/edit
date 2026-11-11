@@ -2769,12 +2769,11 @@ export async function wholeTranscript(source: string, target: string, scratch: s
   }
   if (!Array.isArray(whole.words)) return false;
   const [start, end] = [Number(from) / 1000, to === undefined ? Number.POSITIVE_INFINITY : Number(to) / 1000];
-  // A script's chosen stretches only (writer/handoff.ts): the excerpt takes those inside it, `heard` on its own
-  // clock, and Edit hears it itself if its edit plays past them (captions_core.transcriptOf). None inside: heard now.
+  // Rough words with a script's stretches heard (writer/handoff.ts): the excerpt takes its words and the stretches
+  // inside it, `heard` on its own clock; Scribe hears what its edit keeps beyond them (media.ts `refine`).
   const stretches = Array.isArray(whole.heard)
     ? whole.heard.flatMap(([a, b]): [number, number][] => (b <= start || a >= end ? [] : [[Math.max(a, start) - start, Math.min(b, end) - start]]))
     : null;
-  if (stretches !== null && stretches.length === 0) return false;
   // A shared transcript that stops before the excerpt does isn't its words: the excerpt is heard itself (Killer
   // Pastor in dev, Nov 8: its recording's shared transcript stopped at 3 minutes, and three excerpts later in it
   // were given none).

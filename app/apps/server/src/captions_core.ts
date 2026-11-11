@@ -14,6 +14,7 @@ import { covers, joined } from "./names.ts";
 import * as seams from "./seams.ts";
 import { charCount, f32, F32_MAX, parseHex, serdeParse, splitWhitespace, trim } from "./rust.ts";
 import { soundUses } from "./project.ts";
+import { asKept } from "./kept_hearing.ts";
 import { hearsAll, type Transcript } from "./transcribe.ts";
 import * as voices from "./voices.ts";
 
@@ -36,7 +37,7 @@ const reheard = new Set<string>();
  * them (and the names it had), once: the team's interrogation subtitles said
  * "John Rutten" and "John Bruton" for John Ruetten, who's in every article.
  */
-export async function transcriptOf(app: App, media: Media, project?: Project): Promise<Transcript> {
+export async function transcriptOf(app: App, media: Media, project?: Project, refine = true): Promise<Transcript> {
   const path = media.path;
   // Not a voice-over: it's read from the script, whose words it already has
   // (the interrogation's takes heard again took 11 minutes behind the relay's limit).
@@ -54,22 +55,15 @@ export async function transcriptOf(app: App, media: Media, project?: Project): P
           throw new Error(ioMessage(error));
         }
         const transcript = parseTranscript(text);
-        // YouTube's captions kept before Nov 8 (they have no voices): heard by Scribe, once (media.ts).
-        const captionsAgain = `${path}\ncaptions`;
-        if (transcript.model === "youtube-captions" && !reheard.has(captionsAgain)) {
-          reheard.add(captionsAgain);
-          diag.info("media", `${media.name}: heard by Scribe rather than YouTube's captions`);
-          app.media.transcribe(path, true, names, true);
-          continue;
-        }
-        // Only a script's chosen stretches were heard (writer/handoff.ts) and the timeline plays more of the file
-        // now (a clip lengthened or added): heard itself, whole, once, as footage with no script's words is.
-        const wholeAgain = `${path}\nwhole`;
-        if (project !== undefined && !hearsAll(transcript, soundUses(project, media.id)) && !reheard.has(wholeAgain)) {
-          reheard.add(wholeAgain);
-          diag.info("media", `${media.name}: the timeline plays more than the script's stretches Scribe heard; hearing it whole`);
-          app.media.transcribe(path, true, names, true);
-          continue;
+        // Rough first words (first_hearing.ts; YouTube's captions kept before): Scribe hears what the timeline
+        // keeps of the file now, only that and only once (kept_hearing.ts), and its voices are named.
+        if (transcript.heard !== undefined && project !== undefined && refine) {
+          const uses = soundUses(project, media.id);
+          if (!hearsAll(transcript, uses) && (await app.media.refine(path, uses, names))) {
+            // Its new voices are named behind it, as a file's are once its words are in (speakers.watch).
+            (await import("./speakers.ts")).ensure(app, path);
+            continue;
+          }
         }
         // Heard before pyannote's voices were on (voices.ts): given them now, once, and named again.
         if (transcript.voices !== voices.MODEL && (await voices.revoice(app.store.cacheDir(), await app.media.analysisInput(path), app.media.paths(path).transcript, app.media.cloudSource(path)))) {
@@ -78,7 +72,8 @@ export async function transcriptOf(app: App, media: Media, project?: Project): P
           continue;
         }
         const asked = `${path}\n${names.map((name) => name.toLowerCase()).sort().join("\n")}`;
-        if (transcript.model !== "youtube-captions" && !covers(transcript.keyterms, names) && !reheard.has(asked)) {
+        // Heard whole without the names: heard again with them. Kept stretches keep the names they were heard with.
+        if (transcript.heard === undefined && !covers(transcript.keyterms, names) && !reheard.has(asked)) {
           reheard.add(asked);
           diag.info("media", `${media.name}: heard again with the case's names (${names.length})`);
           app.media.transcribe(path, true, joined(names, transcript.keyterms ?? []), true);
@@ -125,7 +120,7 @@ export function parseTranscript(text: string): Transcript {
   }
   if (!Array.isArray(object.keyterms)) delete object.keyterms;
   if (!Array.isArray(object.heard) || !(object.heard as unknown[]).every((range) => Array.isArray(range) && range.length === 2 && range.every((at) => typeof at === "number"))) delete object.heard;
-  return object as unknown as Transcript;
+  return asKept(object as unknown as Transcript);
 }
 
 /** "#00e5c7" → a colour. */

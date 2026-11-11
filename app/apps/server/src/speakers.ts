@@ -185,7 +185,8 @@ export function ensure(app: App, source: string): void {
   const transcript = read(target);
   if (transcript === null) return;
   const voices = new Set(transcript.words.map((word) => word.speaker).filter((voice) => voice !== undefined));
-  if (voices.size === 0 || (keys(transcript.speakers).length > 0 && keys(transcript.roles).length > 0)) return;
+  // Every voice named already (a later hearing of kept footage brings voices of its own: kept_hearing.ts).
+  if (voices.size === 0 || [...voices].every((voice) => get(transcript.speakers, voice!) !== undefined && get(transcript.roles, voice!) !== undefined)) return;
   if (naming.has(source)) return;
   naming.add(source);
   void (async () => {
@@ -196,10 +197,6 @@ export function ensure(app: App, source: string): void {
     }
     naming.delete(source);
   })();
-}
-
-function keys(map: Record<string, string> | undefined): string[] {
-  return map === undefined || map === null ? [] : Object.keys(map);
 }
 
 /** The transcript at `path`, its maps present (empty when it had none); null when unreadable. */

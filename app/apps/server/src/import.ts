@@ -201,27 +201,25 @@ async function addMedia(
     }
     return added;
   });
-  // Footage brought into a project with no script is a subtitled video in
-  // the making: its transcript is the first thing it needs, so the
-  // transcriber starts now instead of when the watcher first asks for it,
-  // but only once the case's names are in (names.ts): heard without them,
-  // it's heard again, whole and in pieces, when the research comes, which
-  // made Oct 21's 13.5 hours of footage cost 62 hours of Scribe.
-  // (A script's import transcribes its own footage; voice-overs have theirs.)
+  // Footage brought into a project with no script: its words are the first thing the agent needs (to cut a long
+  // file down, or to subtitle all of it). A long file's first words are free (first_hearing.ts: YouTube's captions
+  // or Apple's) and need no names, so they're had now; Scribe hears only what the agent keeps (kept_hearing.ts).
+  // Footage with no free words is heard by Scribe now only once the case's names are in (names.ts): heard without
+  // them, it was heard again when the research came, which made Oct 21's 13.5 hours of footage cost 62 hours.
+  // (A script's import hears its own footage; voice-overs have theirs.)
   const noScript = (live.project.script === undefined || live.project.script === null) && origin !== "voice" && origin !== "script";
   const names = noScript ? seams.research.knownNames(app, live.project) : [];
-  const transcribe = noScript && names.length > 0;
   const transcribing: string[] = [];
   for (const { path, probe } of items) {
-    if (transcribe && probe.kind === "video" && probe.has_audio) {
-      app.media.transcribe(path, true, names);
+    if (noScript && probe.kind === "video" && probe.has_audio) {
+      app.media.transcribe(path, true, names, false, names.length === 0);
       transcribing.push(path);
     }
     if (probe.has_audio) app.media.warmLoudness(path);
     app.media.ensure(path, probe);
   }
   if (noScript && names.length === 0 && items.some(({ probe }) => probe.kind === "video" && probe.has_audio)) {
-    diag.info("media", `${id}: no research for the case's names yet; its footage is heard when the subtitles ask, with them`);
+    diag.info("media", `${id}: no research for the case's names yet; footage with no free words is heard by Scribe when the subtitles ask, with them`);
   }
   if (transcribing.length > 0) {
     // Then the watcher, in the background, once the words are in: asking for

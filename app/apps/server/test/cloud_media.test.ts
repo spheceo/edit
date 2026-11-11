@@ -775,8 +775,8 @@ test("an excerpt takes its words from its recording's shared transcript instead 
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("an excerpt of a recording whose script's stretches alone were heard takes those, and says which it has", async () => {
-  // Script mode heard 30–40 s and 100–110 s of the recording exactly (writer/exact.ts) and shared only those.
+test("an excerpt of a rough recording takes its words and the stretches Script mode heard inside it, and says which", async () => {
+  // Script mode's rough words, with 30–40 s and 100–110 s heard exactly (writer/exact.ts).
   const partial = {
     model: "scribe_v3",
     language: null,
@@ -784,6 +784,7 @@ test("an excerpt of a recording whose script's stretches alone were heard takes 
       { text: "Where", start: 31.0, end: 31.3, speaker: "speaker_0" },
       { text: "were", start: 31.3, end: 31.5, speaker: "speaker_0" },
       { text: "you?", start: 31.5, end: 31.9, speaker: "speaker_0" },
+      { text: "rough", start: 70.0, end: 70.4 },
       { text: "Home.", start: 101.0, end: 101.5, speaker: "speaker_1" },
     ],
     speakers: { speaker_0: "Detective", speaker_1: "Suspect" },
@@ -801,8 +802,10 @@ test("an excerpt of a recording whose script's stretches alone were heard takes 
   expect(made.words.map((word: { text: string }) => word.text)).toEqual(["Where", "were", "you?"]);
   expect(made.heard).toEqual([[10, 20]]);
   expect(made.keyterms).toEqual(["Kimberly"]);
-  // One between the stretches has none of them: it's heard itself.
-  expect(await cloudMedia.wholeTranscript("youtube:JTr4372yI1g#50000-90000", `${dir}/b.json`, dir)).toBe(false);
+  // One between the stretches takes the rough words, none of it heard: Scribe hears what its edit keeps (media.ts refine).
+  expect(await cloudMedia.wholeTranscript("youtube:JTr4372yI1g#50000-90000", `${dir}/b.json`, dir)).toBe(true);
+  const between = JSON.parse(fs.readFileSync(`${dir}/b.json`, "utf8"));
+  expect([between.words.map((word: { text: string; start: number }) => [word.text, word.start]), between.heard]).toEqual([[["rough", 20]], []]);
   // A file from disk shares its words the same way, whole.
   const hex = "a".repeat(64);
   mock.cloud.put(`edit/analysis/sha256/${hex}/transcript.json`, JSON.stringify(partial));

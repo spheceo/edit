@@ -23,7 +23,9 @@ import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
 import * as macSpeech from "../mac_speech.ts";
-import { ffmpeg } from "../tools.ts";
+import { appleCached, appleHear } from "../first_hearing.ts";
+
+export { appleCached, appleHear, appleStage } from "../first_hearing.ts";
 import type { Transcript } from "../transcribe.ts";
 import * as captions from "./captions.ts";
 import * as hearing from "./hearing.ts";
@@ -75,67 +77,9 @@ function recordingKey(dir: string, script: Script, index: number, reuse: string 
   return has(reuseKey) || !has(legacy) ? reuseKey : legacy;
 }
 
-/** Where Apple's words of a recording are kept, apart from a paid hearing. */
-const APPLE = "apple.json";
-
-/** Apple's words heard before. */
-export function appleCached(work: string): Transcript | null {
-  try {
-    const found = JSON.parse(fs.readFileSync(join(work, APPLE), "utf8")) as Transcript;
-    return found.model === macSpeech.MODEL && Array.isArray(found.words) && found.words.length > 0 ? found : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Whether a recording's words here are rough (captions or Apple's) with no paid hearing beside them. */
 export function roughOnly(work: string): boolean {
   return hearing.cached(work) === null && (captions.cached(work) !== null || appleCached(work) !== null);
-}
-
-/**
- * The import's stage line for what Apple's recogniser says it's doing
- * (mac_speech.ts `hear`'s progress), or null for what needs no line. Its
- * en-US model is downloaded once a Mac on first use, about a minute: said
- * as such, so the first import on a Mac isn't a transcription that looks stuck.
- */
-export function appleStage(said: string): string | null {
-  if (said === "downloading the en-US model") return "Downloading Apple's speech model, once for this Mac.";
-  const percent = /^model (\d+)%$/u.exec(said);
-  if (percent !== null) return `Downloading Apple's speech model, once for this Mac: ${percent[1]}%.`;
-  if (said === "model installed") return "Transcribing.";
-  return null;
-}
-
-/** A recording (or its `span` of the footage, in ms) heard by Apple on this Mac, kept in `work`; null where there's no Apple recogniser or it heard nothing (then Scribe hears it). `onStage` is told what the person should see meanwhile (`appleStage`). */
-export async function appleHear(file: string, span: [number, number] | null, work: string, signal?: AbortSignal, onStage?: (text: string) => void): Promise<Transcript | null> {
-  const kept = appleCached(work);
-  if (kept !== null) return kept;
-  if (!(await macSpeech.available()) || !isFile(file)) return null;
-  fs.mkdirSync(work, { recursive: true });
-  const cut = join(work, "apple-stretch.m4a");
-  try {
-    let source = file;
-    if (span !== null) {
-      const child = Bun.spawn([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-ss", (span[0] / 1000).toFixed(3), "-t", ((span[1] - span[0]) / 1000).toFixed(3), "-i", file, "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "96k", cut], { stdout: "ignore", stderr: "pipe", ...(signal ? { signal } : {}) });
-      const stderr = await new Response(child.stderr).text();
-      if ((await child.exited) !== 0) throw new Error(`could not take the sound out of the footage: ${diag.gist(stderr)}`);
-      source = cut;
-    }
-    const heard = await macSpeech.hear(source, join(work, APPLE), signal, (said) => {
-      const text = appleStage(said);
-      if (text !== null) onStage?.(text);
-    });
-    if (heard.words.length === 0) return null;
-    writeAtomic(join(work, APPLE), JSON.stringify({ ...heard, model: macSpeech.MODEL }));
-    return appleCached(work);
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    diag.warn("writer", `${file}: Apple's recogniser didn't hear it (${diag.messageOf(error)}); Scribe hears it`);
-    return null;
-  } finally {
-    fs.rmSync(cut, { force: true });
-  }
 }
 
 /** Each recording's YouTube link, in the order of `recordings`. */

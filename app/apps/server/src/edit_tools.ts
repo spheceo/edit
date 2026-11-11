@@ -60,7 +60,6 @@ import {
   insertTime,
   merge,
   mergeClip,
-  soundUses,
   tidyTracks,
   touchesPeople,
   trackLabel,
@@ -77,7 +76,7 @@ import * as patches from "./patch.ts";
 import * as framePicks from "./frame_picks.ts";
 import * as progress from "./progress.ts";
 import * as styles from "./styles.ts";
-import { hearsAll, type Transcript } from "./transcribe.ts";
+import type { Transcript } from "./transcribe.ts";
 
 type Args = Record<string, unknown>;
 type Json = unknown;
@@ -1826,8 +1825,8 @@ export function cachedTranscripts(app: App, project: Project, footageOnly: boole
   for (const media of project.media) {
     if (!media.has_audio || (footageOnly && media.kind !== "video")) continue;
     const transcript = readTranscript(app.media.paths(media.path).transcript);
-    // A script's stretches only, and the timeline plays past them: not heard there yet (the subtitles and the watch hear it whole).
-    if (transcript !== null && hearsAll(transcript, soundUses(project, media.id))) out.set(media.id, transcript);
+    // Rough words where nothing kept was heard yet (kept_hearing.ts) still read: the agent cuts on them.
+    if (transcript !== null) out.set(media.id, transcript);
   }
   return out;
 }

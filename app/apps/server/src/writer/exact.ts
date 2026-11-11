@@ -28,34 +28,20 @@ import * as fs from "node:fs";
 
 import type { Clip, Script, Word } from "@edit/types/writer";
 
-import * as diag from "../diag.ts";
-import { covers } from "../names.ts";
 import { join } from "../paths.ts";
-import { ffmpeg, isUrl, protocols, urlArgs } from "../tools.ts";
 import * as transcribe from "../transcribe.ts";
 import { isCutIn } from "./blocks.ts";
 import * as claude from "./claude.ts";
-import { cached, hear, normal, type Heard } from "./hearing.ts";
+import { normal, type Heard } from "./hearing.ts";
+import { hearJoined, JOIN_MS, less, PAD_MS } from "../kept_hearing.ts";
+
+export { split } from "../kept_hearing.ts";
 import { caseNames } from "./names.ts";
-import { STOPPED } from "./proc.ts";
 import { clock } from "./paragraphs.ts";
 import type { Plan } from "./plan.ts";
 import * as spills from "./spills.ts";
 import { breathe, PEAK_MS, partAt } from "./tidy.ts";
 
-/** Heard either side of a clip, so its first and last words are heard whole. */
-const PAD_MS = 3_000;
-/** Clips closer than this are heard as one stretch. */
-const JOIN_MS = 6_000;
-/** What's left of a stretch beside one heard before, shorter than this, is inside the earlier one's 3 s either side already. */
-const LEFTOVER_MS = 2_000;
-/** Quiet between stretches joined into one recording, so no word runs from one into the next. */
-const GAP_S = 1;
-/** The joined recording's sound: 16 kHz mono 16-bit, 32,000 bytes a second. */
-const RATE = 16_000;
-const BYTES_PER_S = RATE * 2;
-/** Stretches cut from the footage at once. */
-const AT_ONCE = 4;
 /** A run each side heard differently, word for word, this short is Scribe's. */
 const SWAP_RUN = 3;
 /** A run each side heard differently is Scribe's when ours is at most this long and Scribe's at most SWAP_RUN longer. */
@@ -97,17 +83,7 @@ export function stretches(script: Script, clips: Clip[]): [number, number][] {
     else joined.push([from, to]);
   }
   // Less what was heard before.
-  const left: [number, number][] = [];
-  for (const span of joined) {
-    let pieces: [number, number][] = [span];
-    for (const [a, b] of script.exact ?? []) {
-      pieces = pieces.flatMap(([x, y]): [number, number][] =>
-        b <= x || a >= y ? [[x, y]] : ([[x, a], [b, y]] as [number, number][]).filter(([p, q]) => q > p && q - p >= LEFTOVER_MS),
-      );
-    }
-    left.push(...pieces);
-  }
-  return left;
+  return less(joined, script.exact ?? []);
 }
 
 /** Hears the stretches `clips` play and corrects the script's words there: their times and spelling, then who says each line. */
@@ -118,7 +94,7 @@ export async function run(script: Script, dir: string, footage: string, clips: C
   const keyterms = await caseNames(dir, script);
   report.heardMs = spans.reduce((sum, [from, to]) => sum + to - from, 0);
   onStep(`Hearing the chosen footage exactly: ${clock(report.heardMs)} of ${clock(report.footageMs)}`);
-  const heard = await hearAll(dir, footage, spans, keyterms, signal);
+  const heard = await hearJoined(join(dir, "exact"), footage, spans, keyterms, signal);
   let heardVoices: (string | null)[] = script.words.map(() => null);
   const inserts: Insert[] = [];
   spans.forEach(([from, to], index) => {
@@ -138,132 +114,6 @@ export async function run(script: Script, dir: string, footage: string, clips: C
   script.exactKeyterms = before.length === 0 ? [...keyterms] : keyterms.filter((name) => had.has(name.toLowerCase()));
   script.exact = [...before, ...spans].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return report;
-}
-
-/**
- * The stretches joined into one recording, a second of quiet between them,
- * and heard by Scribe once, whole, so one voice is one letter across every
- * stretch. Times are ms into the footage.
- */
-async function hearAll(dir: string, footage: string, spans: [number, number][], keyterms: string[], signal?: AbortSignal): Promise<Heard[][]> {
-  const name = new Bun.CryptoHasher("sha256").update(JSON.stringify(spans)).digest("hex").slice(0, 16);
-  const work = join(dir, "exact", `joined-${name}`);
-  const lengthsFile = join(work, "lengths.json");
-  const audio = join(work, "joined.wav");
-  fs.mkdirSync(work, { recursive: true });
-  let lengths: number[] | null = null;
-  try {
-    lengths = JSON.parse(fs.readFileSync(lengthsFile, "utf8")) as number[];
-  } catch {
-    // Not joined yet.
-  }
-  const kept = cached(work);
-  try {
-    if (lengths === null || lengths.length !== spans.length || kept === null || !covers(kept.keyterms, keyterms)) {
-      lengths = await joined(footage, spans, work, audio, signal);
-      fs.writeFileSync(lengthsFile, JSON.stringify(lengths));
-    }
-    const heard = await hear(audio, null, work, keyterms, signal);
-    return split(heard.words, spans, lengths);
-  } finally {
-    fs.rmSync(audio, { force: true });
-  }
-}
-
-/** Each stretch's sound cut from the footage and joined, in order, into `audio` (WAV), a second of quiet between them: the seconds each stretch runs. */
-async function joined(footage: string, spans: [number, number][], work: string, audio: string, signal?: AbortSignal): Promise<number[]> {
-  const cuts = spans.map((_, index) => join(work, `cut-${index}.raw`));
-  try {
-    let next = 0;
-    // A cut that fails stops the others taking more.
-    let failed = false;
-    const lane = async () => {
-      for (let index = next++; index < spans.length && !failed; index = next++) {
-        if (signal?.aborted) throw new Error(STOPPED);
-        const [from, to] = spans[index]!;
-        const child = Bun.spawn(
-          [
-            ffmpeg(), "-hide_banner", "-loglevel", "error", "-y",
-            // The footage may be the cloud's preview (exact_after.ts): only this stretch's bytes are read.
-            ...(isUrl(footage) ? ["-protocol_whitelist", protocols(footage), ...urlArgs(footage)] : []),
-            "-ss", (from / 1000).toFixed(3), "-t", ((to - from) / 1000).toFixed(3), "-i", footage,
-            "-map", "0:a:0", "-vn", "-ac", "1", "-ar", String(RATE), "-f", "s16le", cuts[index]!,
-          ],
-          { stdout: "ignore", stderr: "pipe", ...(signal ? { signal } : {}) },
-        );
-        const stderr = await new Response(child.stderr).text();
-        if (signal?.aborted) throw new Error(STOPPED);
-        if ((await child.exited) !== 0) throw new Error(`Could not take the sound out of the footage: ${diag.gist(stderr)}`);
-      }
-    };
-    // Every lane settled before the cuts are removed either way: one still cutting would write after them.
-    const lanes = await Promise.allSettled(
-      Array.from({ length: Math.min(AT_ONCE, spans.length) }, () =>
-        lane().catch((error: unknown) => {
-          failed = true;
-          throw error;
-        }),
-      ),
-    );
-    const first = lanes.find((settled) => settled.status === "rejected");
-    if (first !== undefined) throw first.reason;
-    const sizes = cuts.map((cut) => fs.statSync(cut).size);
-    const gap = Buffer.alloc(GAP_S * BYTES_PER_S);
-    const data = sizes.reduce((sum, size) => sum + size, 0) + gap.length * Math.max(spans.length - 1, 0);
-    const out = fs.openSync(audio, "w");
-    try {
-      fs.writeSync(out, wavHeader(data));
-      cuts.forEach((cut, index) => {
-        if (index > 0) fs.writeSync(out, gap);
-        fs.writeSync(out, fs.readFileSync(cut));
-      });
-    } finally {
-      fs.closeSync(out);
-    }
-    return sizes.map((size) => size / BYTES_PER_S);
-  } finally {
-    for (const cut of cuts) fs.rmSync(cut, { force: true });
-  }
-}
-
-/** A 16 kHz mono 16-bit WAV file's header for `data` bytes of sound. */
-function wavHeader(data: number): Buffer {
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0, "ascii");
-  header.writeUInt32LE(36 + data, 4);
-  header.write("WAVEfmt ", 8, "ascii");
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(RATE, 24);
-  header.writeUInt32LE(BYTES_PER_S, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36, "ascii");
-  header.writeUInt32LE(data, 40);
-  return header;
-}
-
-/** The joined recording's words back on each stretch, in ms into the footage: a word belongs to the stretch it's mostly in. */
-export function split(words: readonly transcribe.Word[], spans: readonly [number, number][], lengths: readonly number[]): Heard[][] {
-  const starts: number[] = [];
-  let at = 0;
-  for (const length of lengths) {
-    starts.push(at);
-    at += length + GAP_S;
-  }
-  const out: Heard[][] = spans.map(() => []);
-  for (const word of words) {
-    const middle = (word.start + word.end) / 2;
-    let index = starts.length - 1;
-    while (index > 0 && starts[index]! > middle) index -= 1;
-    const length = lengths[index]!;
-    const from = spans[index]![0];
-    const start = Math.min(Math.max(word.start - starts[index]!, 0), length);
-    const end = Math.min(Math.max(word.end - starts[index]!, start), length);
-    out[index]!.push({ ...word, start: from + start * 1000, end: from + end * 1000 });
-  }
-  return out;
 }
 
 /** Words only Scribe heard, to go in after the script's word at `after`. */

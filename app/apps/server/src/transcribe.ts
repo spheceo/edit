@@ -320,6 +320,11 @@ const lengthOf = Effect.fn("transcribe.lengthOf")(function* (audio: string) {
   return Number.isFinite(seconds) ? seconds : 0;
 });
 
+/** How long a file is, in seconds (0 when FFprobe can't say). */
+export function seconds(path: string): Promise<number> {
+  return runPromise(lengthOf(path));
+}
+
 /** A file that's removed when the scope it was made in closes, whatever happened. */
 const temporary = (path: string) => Effect.acquireRelease(Effect.succeed(path), () => Effect.sync(() => fs.rmSync(path, { force: true })));
 

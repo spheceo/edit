@@ -24,7 +24,8 @@ import { named } from "./jobs.ts";
 import * as media from "./media.ts";
 import { partSources, partTargets } from "./parts.ts";
 import * as store from "./store.ts";
-import { recordings, roughOnly } from "./transcription.ts";
+import * as captions from "./captions.ts";
+import { appleCached, recordings, roughOnly } from "./transcription.ts";
 import { THIS_MACHINE } from "../machine.ts";
 
 /** A source's place in Edit's keys: `drive/<id>`, `youtube/<id>`, `sha256/<hex>`. */
@@ -84,9 +85,10 @@ async function shared(dir: string, script: Script): Promise<Shared[]> {
 /**
  * A recording's words in Edit's format: as the script has them, with the
  * voices settled and named, unless a hearing made after them says otherwise.
- * A recording whose words are rough (captions or Apple's) gives only the
- * stretches Scribe heard exactly (exact.ts, `Script.exact`), with `heard`
- * saying which: Edit hears the rest of a file itself if its edit plays it.
+ * A recording whose words are rough (captions or Apple's) gives them all,
+ * Scribe's over the stretches heard exactly (exact.ts, `Script.exact`) and
+ * `heard` saying which; voices only there. Edit's agent cuts on the rough
+ * words and Scribe hears only what it keeps (kept_hearing.ts).
  */
 export function transcriptOf(dir: string, script: Script, recording: Shared): Transcript {
   const work = join(dir, "transcript", recording.key);
@@ -97,9 +99,10 @@ export function transcriptOf(dir: string, script: Script, recording: Shared): Tr
   const exact = (script.exact ?? []).flatMap(([from, to]): [number, number][] => (to <= recording.offsetMs || from >= end ? [] : [[Math.max(from, recording.offsetMs), Math.min(to, end)]]));
   const words = script.words
     .filter((word) => word.startMs >= recording.offsetMs && word.startMs < end)
-    .filter((word) => !rough || exact.some(([from, to]) => (word.startMs + word.endMs) / 2 >= from && (word.startMs + word.endMs) / 2 < to))
     .map((word) => {
-      const speaker = word.speaker == null ? null : strip(word.speaker);
+      // Rough words have no voices Edit keeps: who speaks there waits for Scribe (kept_hearing.ts).
+      const heardHere = !rough || exact.some(([from, to]) => (word.startMs + word.endMs) / 2 >= from && (word.startMs + word.endMs) / 2 < to);
+      const speaker = word.speaker == null || !heardHere ? null : strip(word.speaker);
       return { text: word.text, start: (word.startMs - recording.offsetMs) / 1000, end: Math.max(word.endMs - recording.offsetMs, 0) / 1000, ...(speaker !== null ? { speaker } : {}) };
     });
   const derived = whole !== null && whole.words.length === words.length && whole.words.every((word, at) => word.text === words[at]!.text);
@@ -107,8 +110,9 @@ export function transcriptOf(dir: string, script: Script, recording: Shared): Tr
   const speakers = Object.fromEntries(Object.entries(script.speakers ?? {}).flatMap(([label, name]) => (strip(label) === null ? [] : [[strip(label)!, name]])));
   if (rough) {
     const heard = exact.map(([from, to]): [number, number] => [(from - recording.offsetMs) / 1000, (to - recording.offsetMs) / 1000]);
-    const keyterms = script.exactKeyterms ?? [];
-    return { model: SCRIBE, language: null, words, speakers, ...(keyterms.length > 0 ? { keyterms } : {}), heard };
+    const keyterms = heard.length > 0 ? (script.exactKeyterms ?? []) : [];
+    const model = heard.length > 0 ? SCRIBE : (captions.cached(work)?.model ?? appleCached(work)?.model ?? SCRIBE);
+    return { model, language: null, words, speakers, ...(keyterms.length > 0 ? { keyterms } : {}), heard };
   }
   return { model: whole?.model || SCRIBE, language: whole?.language ?? null, words, speakers, ...(whole?.keyterms ? { keyterms: whole.keyterms } : {}) };
 }
@@ -228,15 +232,15 @@ export async function share(data: string, id: string): Promise<string> {
 
 /**
  * A recording's words to Edit's analysis, where the script has them: heard
- * whole, or rough with stretches heard exactly since (only those go, never
- * rough words alone: Edit's subtitles want heard words). A whole hearing
- * there stays; stretches shared before are replaced when more were heard.
+ * whole, or rough with the stretches heard exactly since, `heard` naming
+ * them (Edit hears what it keeps before subtitles or the watch read it). A
+ * whole hearing there stays; rough words shared before are replaced when
+ * more was heard.
  */
 async function shareWords(dir: string, script: Script, recording: Shared, done: string[]): Promise<void> {
   if (script.words.length === 0) return;
   const at = transcriptKey(recording.source);
   const words = transcriptOf(dir, script, recording);
-  if (words.heard !== undefined && words.heard.length === 0) return;
   if (await editCloud.has(at)) {
     if (words.heard === undefined) return;
     const there = await sharedThere(dir, at);

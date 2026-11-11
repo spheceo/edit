@@ -28,11 +28,24 @@ export function said(model: string | undefined | null): string {
 export function labelOf(path: string): string {
   const key = /[?&]key=([^&]+)/u.exec(path)?.[1];
   if (key !== undefined) {
-    const decoded = decodeURIComponent(key);
-    return decoded.replace(/^edit\/(proxies|originals|excerpts)\//u, "");
+    const place = decodeURIComponent(key).replace(/^edit\/(proxies|originals|excerpts)\//u, "");
+    return names.get(place) ?? place;
   }
   if (/\/joined-[0-9a-f]+\/joined\.wav$/u.test(path)) return "the kept stretches, joined into one recording";
-  return path.split("/").pop() || path;
+  return names.get(path) ?? (path.split("/").pop() || path);
+}
+
+/** What files named by their content are called (a proxy's key is its hash alone): the name each came in with. */
+const names = new Map<string, string>();
+
+/**
+ * Names a file whose key or path says only its content (`sha256/80f2….mp4`, a
+ * dropped or linked file's proxy) by the name it came in with, so its hearing
+ * reads "MOORE REDACTED BWC.mp4" (Nov 11: a Drive file's line gave its hash).
+ */
+export function knownAs(keysOrPaths: readonly string[], name: string): void {
+  if (names.size > 5_000) names.clear();
+  for (const one of keysOrPaths) names.set(one.replace(/^edit\/(proxies|originals|excerpts)\//u, ""), name);
 }
 
 /** Seconds as a clock: "21:38", "1:02:03". */

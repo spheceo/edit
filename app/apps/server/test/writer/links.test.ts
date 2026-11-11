@@ -138,6 +138,18 @@ echo "EDIT-FILE $out/Dashcam [x1].mp4"
     const withPage = { ...now, parts: [now.parts![0]!, { ...now.parts![1]!, mediaSource: original, originalKey: `edit/originals/sha256/${"a".repeat(64)}/Dashcam [x1].mp4` }] };
     expect(partSources(dir, withPage)[1]).toEqual([original, "Dashcam [x1].mp4"]);
 
+    // Start the edit gives each recording its voices' names: the script's own people ("p1", the turns pass's, no
+    // recording mark) in Recording 1 as well (Nov 11: once a link made the script two recordings, Recording 1 went to
+    // Edit with no speakers, and Edit's agent said its transcript didn't say who speaks).
+    const { transcriptOf } = await import("../../src/writer/handoff.ts");
+    const { recordings } = await import("../../src/writer/transcription.ts");
+    const all = recordings(dir, now);
+    const shared = all.map((one, index) => transcriptOf(dir, now, { file: null, source: `s${index}`, name: "x", offsetMs: one.offsetMs, lengthMs: one.lengthMs, tag: String(index + 1), key: one.key }));
+    expect(shared[0]!.words.map((one) => one.speaker)).toEqual(["p1", "p1"]);
+    expect(shared[0]!.speakers).toEqual({ p1: "Driver" });
+    expect(shared[1]!.words.map((one) => one.speaker)).toEqual(["p9", "p9"]);
+    expect(shared[1]!.speakers).toEqual({ p9: "Officer" });
+
     // Carried on after a restart, the same link isn't added twice.
     await bringLinks(fx.app, data, ID, ["https://news.example.com/dashcam"], request, { kind: "none" } as never, { ...job, resumed: true });
     expect(store.read(dir).parts).toHaveLength(2);

@@ -4,6 +4,7 @@
 import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
+import { knownAs, labelOf } from "../src/hearing_log.ts";
 import { bringIn, bytesSaid, linkOf } from "../src/links.ts";
 import * as progress from "../src/progress.ts";
 import { videoLinks } from "../src/writer/links.ts";
@@ -31,6 +32,18 @@ test("a revision's message names its video links, not its Docs or Edit's own", (
   const message = "Put this after the intro https://youtu.be/4mqGp1IgqEw and this clip (https://x.com/someone/status/123), see https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/edit and https://youtu.be/4mqGp1IgqEw again";
   expect(videoLinks(message)).toEqual(["https://www.youtube.com/watch?v=4mqGp1IgqEw", "https://x.com/someone/status/123"]);
   expect(videoLinks("Make the opening tighter")).toEqual([]);
+});
+
+test("a file named by its content is heard under the name it came in with", () => {
+  // Nov 11, a Drive file on the Mac: "Scribe v3 … heard sha256/80f2….mp4", where it was MOORE REDACTED BWC.mp4.
+  const hex = "80f2".padEnd(64, "0");
+  expect(labelOf(`https://r2.example/get?key=${encodeURIComponent(`edit/proxies/sha256/${hex}.mp4`)}`)).toBe(`sha256/${hex}.mp4`);
+  knownAs([`edit/proxies/sha256/${hex}.mp4`, `edit/originals/sha256/${hex}/MOORE REDACTED BWC.mp4`, `/cache/previews/sha256/${hex}.mp4`], "MOORE REDACTED BWC.mp4");
+  expect(labelOf(`https://r2.example/get?key=${encodeURIComponent(`edit/proxies/sha256/${hex}.mp4`)}&x=1`)).toBe("MOORE REDACTED BWC.mp4");
+  expect(labelOf(`https://r2.example/get?key=${encodeURIComponent(`edit/originals/sha256/${hex}/MOORE REDACTED BWC.mp4`)}`)).toBe("MOORE REDACTED BWC.mp4");
+  expect(labelOf(`/cache/previews/sha256/${hex}.mp4`)).toBe("MOORE REDACTED BWC.mp4");
+  // Anything else as before.
+  expect(labelOf("https://r2.example/get?key=edit%2Fproxies%2Fyoutube%2FvGj1b3p6mQk%2F384384-957495.mp4")).toBe("youtube/vGj1b3p6mQk/384384-957495.mp4");
 });
 
 test("its progress reads as a person would say it", () => {

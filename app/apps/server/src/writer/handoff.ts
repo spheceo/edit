@@ -98,7 +98,11 @@ export function transcriptOf(dir: string, script: Script, recording: Shared): Tr
   const work = join(dir, "transcript", recording.key);
   const whole = hearing.cached(work);
   const rough = roughOnly(work);
-  const strip = (speaker: string): string | null => (recording.tag === null ? speaker : speaker.startsWith(`${recording.tag}:`) ? speaker.slice(recording.tag.length + 1) : null);
+  // A voice marked with its recording ("2:speaker_0") is that recording's; one with no mark is the script's own
+  // person ("p1" from the turns pass, which reads every recording at once), the same in each recording it speaks in.
+  // Taking only marked ones dropped every name of a script's first recording once a linked video made it one of two.
+  const strip = (speaker: string): string | null =>
+    recording.tag === null ? speaker : speaker.startsWith(`${recording.tag}:`) ? speaker.slice(recording.tag.length + 1) : speaker.includes(":") ? null : speaker;
   const end = recording.offsetMs + recording.lengthMs;
   const exact = (script.exact ?? []).flatMap(([from, to]): [number, number][] => (to <= recording.offsetMs || from >= end ? [] : [[Math.max(from, recording.offsetMs), Math.min(to, end)]]));
   const words = script.words
@@ -111,7 +115,9 @@ export function transcriptOf(dir: string, script: Script, recording: Shared): Tr
     });
   const derived = whole !== null && whole.words.length === words.length && whole.words.every((word, at) => word.text === words[at]!.text);
   if (whole !== null && whole.words.length > 0 && !derived) return whole;
-  const speakers = Object.fromEntries(Object.entries(script.speakers ?? {}).flatMap(([label, name]) => (strip(label) === null ? [] : [[strip(label)!, name]])));
+  // The names of the voices that speak here.
+  const here = new Set(words.flatMap((word) => (word.speaker === undefined ? [] : [word.speaker])));
+  const speakers = Object.fromEntries(Object.entries(script.speakers ?? {}).flatMap(([label, name]) => { const id = strip(label); return id === null || (recording.tag !== null && !here.has(id)) ? [] : [[id, name]]; }));
   if (rough) {
     const heard = exact.map(([from, to]): [number, number] => [(from - recording.offsetMs) / 1000, (to - recording.offsetMs) / 1000]);
     const keyterms = heard.length > 0 ? (script.exactKeyterms ?? []) : [];

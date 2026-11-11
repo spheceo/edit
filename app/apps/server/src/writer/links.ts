@@ -103,9 +103,17 @@ async function addOne(app: App, dir: string, url: string, which: string, job: Jo
   if (!isFile(base)) await storage.bringBack(app, store.dataDir(app.store.home), script.id, job, true);
   if (!isFile(base)) throw new Error(`the preview isn't on ${THIS_MACHINE} or in the cloud: restore the footage first`);
   const link = linkOf(url);
+  // How long each step took, said with the result: where a slow one went is in the log.
+  const steps: string[] = [];
+  let at = Date.now();
+  const took = (step: string) => {
+    steps.push(`${step} ${Math.round((Date.now() - at) / 1000)} s`);
+    at = Date.now();
+  };
   job.stage(`Downloading the linked video${which}`);
   const got = await fetchLink(app, link, (bytes, total, name) => job.stage(`Downloading “${titleOf(name)}”${which} · ${bytesSaid(bytes, total)}`));
   checkStopped(job);
+  took("download");
   const title = titleOf(got.name);
   // Kept out of the cloud (a dot folder) until the footage is joined.
   const folder = join(dir, ".link");
@@ -117,27 +125,38 @@ async function addOne(app: App, dir: string, url: string, which: string, job: Jo
     const held = await media.playableMs(got.path, found.durationMs);
     const segment = join(folder, "segment.mp4");
     await media.joinLike([{ path: got.path, streams: { ...found, durationMs: held } }], segment, base, (percent) => job.stage(`Preparing “${title}” · ${percent}%`), job.signal);
+    took("prepare");
     const joined = join(folder, "footage.mp4");
     job.stage(`Adding “${title}” to the footage`);
     await media.append(base, [segment], joined, (percent) => job.stage(`Adding “${title}” to the footage · ${percent}%`), job.signal);
     const lengthMs = (await media.streams(segment)).durationMs;
+    took("join");
     // Heard whole by Scribe now, from the download itself (full quality), kept as the recording's own hearing.
     // Its place among the recordings: after Video 1 when the script had one recording and no parts yet.
     const index = Math.max((script.parts ?? []).length, 1);
     const key = `part-${String(index + 1).padStart(2, "0")}`;
     const work = join(dir, "transcript", key);
     const keyterms = await caseNames(dir, script).catch(() => []);
+    took("names");
+    // While Scribe hears it: its sound's peaks read, and its original shared with Edit so Start the edit finds it on
+    // any Mac (a link Edit fetches itself names it; any other goes to Edit's originals). After the hearing, these held
+    // the stage on "Transcribing" for two minutes on a Mac (a 21:56 video's peaks).
     job.stage(`Transcribing “${title}”`);
-    const heard = found.audio ? await hearing.hear(got.path, null, work, keyterms, job.signal) : null;
+    const [heard, shared, before, added] = await Promise.all([
+      found.audio ? hearing.hear(got.path, null, work, keyterms, job.signal) : Promise.resolve(null),
+      shareOriginal(dir, url, got.path, got.name),
+      Promise.resolve(readPeaks(dir)).then((kept) => kept ?? media.peaks(base, job.signal).catch(() => new Float32Array())),
+      media.peaks(segment, job.signal).catch(() => new Float32Array()),
+    ]);
     checkStopped(job);
+    took("hearing");
     const startMs = script.durationMs;
     const words: Word[] = heard === null ? [] : onClock(heard, startMs, lengthMs, null).map((word) => ({ ...word, id: `w-${crypto.randomUUID()}` }));
-    // Shared with Edit so Start the edit finds it on any Mac: a link Edit can fetch itself names it; any other is put in Edit's originals.
-    const part: Part = { title, startMs, durationMs: lengthMs, audio: !found.video, url, ...(await shareOriginal(dir, url, got.path, got.name)) };
+    const part: Part = { title, startMs, durationMs: lengthMs, audio: !found.video, url, ...shared };
     // The sound, extended: each 20 ms of the new footage after the old.
     const resized = (values: ArrayLike<number>, length: number) => Array.from({ length }, (_, at) => values[at] ?? 0);
-    const peaks = resized(readPeaks(dir) ?? (await media.peaks(base, job.signal).catch(() => new Float32Array())), Math.floor(script.durationMs / 20));
-    peaks.push(...resized(await media.peaks(segment, job.signal).catch(() => new Float32Array()), Math.floor(lengthMs / 20)));
+    const peaks = resized(before, Math.floor(script.durationMs / 20));
+    peaks.push(...resized(added, Math.floor(lengthMs / 20)));
     // Into the script as it is now: only the footage, its words and sound are this job's to write.
     const now = store.read(dir);
     if (now.durationMs !== script.durationMs || (now.parts ?? []).length !== (script.parts ?? []).length || now.words.length !== script.words.length || now.revision !== script.revision) {
@@ -163,6 +182,7 @@ async function addOne(app: App, dir: string, url: string, which: string, job: Jo
     if (words.length > 0) {
       job.stage(`Reading who speaks in “${title}”`);
       await nameNewVoices(now, dir, words.length, String(index + 1), job.signal);
+      took("voices");
     }
     checkStopped(job);
     if (store.read(dir).revision !== now.revision) throw new Error("the script changed while the video was being heard: ask again (the download and its words are kept)");
@@ -171,7 +191,7 @@ async function addOne(app: App, dir: string, url: string, which: string, job: Jo
     now.revision++;
     now.updatedAt = Date.now();
     store.write(dir, now);
-    diag.info("writer", `${now.id}: brought in ${url} as Video ${index + 1} (${title}, ${Math.round(lengthMs / 1000)} s, ${words.length} words)`);
+    diag.info("writer", `${now.id}: brought in ${url} as Video ${index + 1} (${title}, ${Math.round(lengthMs / 1000)} s, ${words.length} words; ${steps.join(", ")})`);
     // With the cloud on, the download isn't kept here: the script plays its preview, Edit fetches the link
     // (or its original, shared above) when the edit starts, and hours of footage never sit on this disk.
     if (editCloud.enabled()) fs.rmSync(parent(got.path) ?? got.path, { recursive: true, force: true });

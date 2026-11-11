@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { useAgent } from "../lib/agent";
 import { effectAddress, effectsAt, playedLive, showings, useEffects } from "../lib/effects";
 import { pictureRect } from "../lib/note-shapes";
 import { playhead } from "../lib/playback";
@@ -17,6 +18,12 @@ import { rate } from "../lib/types";
  * is loaded beside the one showing, which stays up until the new one is ready.
  * Once the server has rendered the code as it is (a few seconds after it stops
  * changing), the player plays the render instead and the page goes.
+ *
+ * And the effect being made shows before it's placed (Sphe, Nov 11: "the model
+ * having something to show even before it's ready"): the newest effect not yet
+ * on the timeline plays on a loop from its first save, every save after it on
+ * screen as it lands, while the agent works (or while there's nothing else to
+ * see), wherever the playhead isn't on another effect.
  */
 export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
   const project = useEditor((state) => state.project);
@@ -24,6 +31,15 @@ export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
   // Only what's changed since its render plays live: the rest is footage now, played (and exported) as the render.
   const shown = useMemo(() => (project ? playedLive(showings(project), effects) : []), [project, effects]);
   const fps = project ? rate(project.settings) : 30;
+  const working = useAgent((state) => state.running);
+  // The effect being made: the newest not on the timeline, while the agent works or the timeline shows nothing.
+  const bench = useMemo(() => {
+    if (!project || (!working && project.clips.some((clip) => clip.type === "video"))) return null;
+    const placed = new Set(showings(project).map((showing) => showing.name));
+    return [...effects].filter((effect) => !placed.has(effect.name)).sort((a, b) => b.changed - a.changed)[0]?.name ?? null;
+  }, [project, effects, working]);
+  /** Each page's length, as it said when ready (seconds), for the bench's loop. */
+  const lengths = useRef(new WeakMap<Window, number>());
   /** The frames by `name:changed`, and the pages that have said they're ready. */
   const frames = useRef(new Map<string, HTMLIFrameElement>());
   const ready = useRef(new WeakSet<Window>());
@@ -32,9 +48,11 @@ export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
   const [size, setSize] = useState({ width: 0, height: 0 });
   // Which pages to have loaded and which to show: these change at a clip's edge, not every frame.
   const key = useSyncExternalStore(playhead.subscribe, () => {
-    if (shown.length === 0) return "|";
-    const { playing, near } = effectsAt(shown, fps, playhead.frame);
-    return `${playing?.name ?? ""}|${near.join(",")}`;
+    const { playing, near } = shown.length === 0 ? { playing: null, near: [] as string[] } : effectsAt(shown, fps, playhead.frame);
+    // The bench while no placed effect is on the playhead.
+    const showing = playing?.name ?? (bench ?? "");
+    const loaded = bench !== null && !near.includes(bench) ? [...near, bench] : near;
+    return `${showing}|${loaded.join(",")}|${playing === null && bench !== null ? "bench" : ""}`;
   });
   useEffect(() => {
     if (wrap === null) return;
@@ -45,11 +63,14 @@ export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
 
   // The playhead's moment to the page it's on, once a frame at most; and to a page the moment it's ready.
   useEffect(() => {
-    if (shown.length === 0) return;
+    const onBench = key.endsWith("|bench");
+    if (shown.length === 0 && !onBench) return;
     let queued = 0;
+    const benchFrom = performance.now();
     const tell = () => {
       queued = 0;
-      const { playing } = effectsAt(shown, fps, playhead.frame);
+      let { playing } = shown.length === 0 ? { playing: null } : effectsAt(shown, fps, playhead.frame);
+      if (playing === null && onBench && bench !== null) playing = { name: bench, seconds: 0 };
       // The newest of its pages that's ready.
       let best: { frame: HTMLIFrameElement; changed: number } | null = null;
       for (const [id, frame] of frames.current) {
@@ -59,18 +80,27 @@ export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
         if (best === null || changed > best.changed) best = { frame, changed };
       }
       for (const frame of frames.current.values()) frame.style.visibility = frame === best?.frame ? "visible" : "hidden";
+      if (best !== null && playing !== null && onBench && playing.name === bench) {
+        // The bench plays by itself, round and round, whatever the playhead does.
+        const length = best.frame.contentWindow === null ? 0 : (lengths.current.get(best.frame.contentWindow) ?? 0);
+        const seconds = length > 0 ? ((performance.now() - benchFrom) / 1000) % length : 0;
+        best.frame.contentWindow?.postMessage({ edit: { seek: seconds } }, "*");
+        soon();
+        return;
+      }
       if (best !== null && playing !== null) best.frame.contentWindow?.postMessage({ edit: { seek: playing.seconds } }, "*");
     };
     const soon = () => {
       if (queued === 0) queued = requestAnimationFrame(tell);
     };
     const heard = (event: MessageEvent) => {
-      const said = (event.data as { edit?: { ready?: boolean } } | null)?.edit;
+      const said = (event.data as { edit?: { ready?: boolean; duration?: number } } | null)?.edit;
       if (said?.ready !== true || event.source === null) return;
       for (const [id, frame] of frames.current) {
         const page = frame.contentWindow;
         if (page === null || page !== event.source) continue;
         ready.current.add(page);
+        if (typeof said.duration === "number") lengths.current.set(page, said.duration);
         const [name, changed] = [id.slice(0, id.lastIndexOf(":")), Number(id.slice(id.lastIndexOf(":") + 1))];
         setLast((before) => ((before[name] ?? 0) >= changed ? before : { ...before, [name]: changed }));
         soon();
@@ -84,10 +114,10 @@ export function EffectLayer({ wrap }: { wrap: HTMLDivElement | null }) {
       stop();
       if (queued !== 0) cancelAnimationFrame(queued);
     };
-  }, [shown, fps, effects, key, last]);
+  }, [shown, fps, effects, key, last, bench]);
 
-  if (!project || size.width === 0 || key === "|") return null;
-  const near = key.slice(key.indexOf("|") + 1).split(",");
+  const near = key.split("|")[1]!.split(",").filter((name) => name !== "");
+  if (!project || size.width === 0 || near.length === 0) return null;
   const rect = pictureRect(size.width, size.height, project.settings.width, project.settings.height);
   const pages: { name: string; changed: number; page: string }[] = [];
   for (const effect of effects) {

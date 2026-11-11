@@ -3,7 +3,7 @@
 import { expect, test } from "vitest";
 
 import type { AgentEntry } from "./agent";
-import { buildTurns, callTitle, editWorked, formatSpan, formatWorking, groupSummary, isWorking, shortSpan, shownText, thinkingWord } from "./agentTurns";
+import { buildTurns, callTitle, editWorked, formatSpan, formatWorking, groupSummary, hqActivity, isWorking, shortSpan, shownText, thinkingWord } from "./agentTurns";
 
 test("a turn is working once it calls a tool or a few seconds in", () => {
   expect(isWorking(1200, false)).toBe(false);
@@ -69,4 +69,17 @@ test("between its steps Claude's word moves on every few seconds, not the same T
   expect(thinkingWord(0, 3600)).not.toBe(first);
   expect(new Set(Array.from({ length: 30 }, (_, step) => thinkingWord(0, step * 3500))).size).toBeGreaterThan(10);
   expect(shortSpan(72_000)).toBe("1m 12s");
+});
+
+test("Bodycam HQ's stage words follow what its agent is doing", () => {
+  const user = { id: "u", kind: "user" as const, text: "make a board", at: 1_000 };
+  const tool = (name: string, status: "running" | "done") => ({ id: name, kind: "tool" as const, text: "", tool: name, status });
+  expect(hqActivity([user, tool("import_link", "running")], 2_000)).toBe("Bringing the video in");
+  expect(hqActivity([user, tool("import_link", "done"), tool("look_at_media", "running")], 2_000)).toBe("Studying the reference");
+  expect(hqActivity([user, tool("Write", "running")], 2_000)).toBe("Writing the graphic");
+  expect(hqActivity([user, tool("look_at_effect", "running")], 2_000)).toBe("Looking at what it made");
+  expect(hqActivity([user, tool("add_effect", "running")], 2_000)).toBe("Placing it");
+  expect(hqActivity([user, tool("something_new", "running")], 2_000)).toBe("Working");
+  // Between steps it's thinking: one of the thinking words, as the chat says it.
+  expect(hqActivity([user, tool("Write", "done")], 2_000)).toBe(thinkingWord(1_000, 1_000));
 });

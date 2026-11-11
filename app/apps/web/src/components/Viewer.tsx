@@ -17,6 +17,10 @@ import { importProgress } from "../lib/import_progress";
 import { toggleNote, useNotes } from "../lib/notes";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
+import { AnimatePresence, motion } from "motion/react";
+import { hqActivity } from "../lib/agentTurns";
+import { useEffects } from "../lib/effects";
+import { useNow } from "../lib/now";
 import { EffectLayer } from "./EffectLayer";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { ProblemView } from "./ProblemView";
@@ -192,6 +196,8 @@ export function Viewer() {
   }, [native, nativeShown]);
 
   const empty = project && project.clips.length === 0;
+  // An effect being made plays on an empty timeline (EffectLayer's bench): nothing to say over it.
+  const benchShown = useEffects((state) => state.effects.length > 0);
   const job = useEditor((state) => state.scriptJob);
   const importing = job !== null && job.state !== "done" ? importProgress(job) : null;
 
@@ -217,6 +223,7 @@ export function Viewer() {
         <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
         {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
         <EffectLayer wrap={wrap} />
+        {hq && !fullscreen && <HqWorking />}
         {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
         {!fullscreen && <NoteBoxLayer wrap={wrap} />}
         {!fullscreen && <NoteDraft />}
@@ -262,7 +269,7 @@ export function Viewer() {
             <span className="text-[11px] text-faint tabular">{Math.round(importing.fraction * 100)}% · the edit appears here as soon as it’s laid out</span>
           </button>
         )}
-        {!error && empty && importing === null && (
+        {!error && empty && importing === null && !(hq && benchShown) && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[13px] text-faint">
             Import footage or add a title to start
           </div>
@@ -396,6 +403,40 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
       </div>
     </div>
     </div>
+  );
+}
+
+/**
+ * While Bodycam HQ's agent works, the viewer says so as the thumbnail page
+ * does (Sphe, Nov 11: "something like the thumbnail page… where we see a cool
+ * animation and the stage it's at"): its light turning round the picture's
+ * edge, a sheen across it, and the stage on a dark pill with the turning orb.
+ */
+function HqWorking() {
+  const running = useAgent((state) => state.running);
+  const entries = useAgent((state) => state.entries);
+  const now = useNow(running);
+  const doing = hqActivity(entries, now);
+  const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0.5, ease: [0.2, 0, 0, 1] } } as const;
+  return (
+    <AnimatePresence>
+      {running && (
+        <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-[inherit]">
+          <div className="working-sheen" />
+          <div className="working-ring" />
+          <div className="absolute inset-x-0 top-3 flex justify-center">
+            <motion.div layout transition={{ type: "spring", stiffness: 420, damping: 34 }} className="flex h-7 items-center gap-2 rounded-full bg-[#0b0b0b] pr-3.5 pl-2 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_8px_24px_#000c]">
+              <span className="working-orb" />
+              <AnimatePresence mode="popLayout" initial={false}>
+                <motion.span key={doing} initial={{ opacity: 0, y: 6, filter: "blur(3px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -6, filter: "blur(3px)" }} transition={{ duration: 0.26, ease: [0.2, 0, 0, 1] }} className="text-[12.5px] font-medium whitespace-nowrap text-white">
+                  {doing}
+                </motion.span>
+              </AnimatePresence>
+            </motion.div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 

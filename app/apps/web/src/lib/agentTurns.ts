@@ -205,6 +205,39 @@ export function thumbActivity(run: ThumbRun | null, now = Date.now()): string {
   return thinkingWord(run.startedAt, now - run.startedAt);
 }
 
+/** What Bodycam HQ's agent (Edit V2) is doing, in the stage words its viewer shows while it works. */
+const HQ_STAGES: Record<string, string> = {
+  import_link: "Bringing the video in",
+  wait: "Bringing the video in",
+  get_edit_context: "Reading the edit",
+  skill: "Reading its notes",
+  look_at_media: "Studying the reference",
+  media_transcript: "Studying the reference",
+  listen: "Studying the reference",
+  read_transcript: "Studying the reference",
+  Read: "Reading its code",
+  Glob: "Reading its code",
+  Grep: "Reading its code",
+  Write: "Writing the graphic",
+  Edit: "Writing the graphic",
+  effect_picture: "Bringing a picture in",
+  look_at_effect: "Looking at what it made",
+  add_effect: "Placing it",
+  add_clip: "Placing it",
+  apply_edit_plan: "Placing it",
+  batch: "Working",
+};
+
+/** The stage an HQ turn is at, from its chat: the tool running, else writing its reply, else thinking. */
+export function hqActivity(entries: readonly AgentEntry[], now = Date.now()): string {
+  const live = [...entries].reverse().find((entry) => entry.status === "running");
+  if (live?.kind === "tool" && live.tool !== undefined) return HQ_STAGES[live.tool] ?? "Working";
+  if (live?.kind === "assistant") return "Writing to you";
+  const asked = [...entries].reverse().find((entry) => entry.kind === "user");
+  const since = asked?.at ?? now;
+  return thinkingWord(since, now - since);
+}
+
 /** A short, human title for one call. */
 export function callTitle(entry: AgentEntry): string {
   if (entry.tool !== undefined && SCRIPT_TOOLS.has(entry.tool) && entry.text) return entry.text;

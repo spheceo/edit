@@ -68,14 +68,18 @@ export function Viewer() {
   const [framed, setFramed] = useState(preview.framed);
   const [native, setNative] = useState(preview.native);
   const fullscreen = useFullscreen();
+  // Bodycam HQ (Edit V2) watches like a video: its controls float over the picture, as a video site's do.
+  const hq = useEditor((state) => state.project?.hq === true);
+  const playing = usePlaying();
+  const overlay = fullscreen || hq;
   const [idle, setIdle] = useState(false);
   const idleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const wake = () => {
     setIdle(false);
     clearTimeout(idleTimer.current);
-    if (fullscreen) idleTimer.current = setTimeout(() => setIdle(true), IDLE_MS);
+    if (overlay) idleTimer.current = setTimeout(() => setIdle(true), IDLE_MS);
   };
-  useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [fullscreen]);
+  useEffect(() => { wake(); return () => clearTimeout(idleTimer.current); }, [overlay]);
 
   const versions = useEditor(selectVersions);
 
@@ -191,20 +195,22 @@ export function Viewer() {
   const job = useEditor((state) => state.scriptJob);
   const importing = job !== null && job.state !== "done" ? importProgress(job) : null;
 
-  const hidden = fullscreen && idle;
+  // Full screen's controls go when the mouse rests; HQ's only while it plays, and when the mouse leaves the picture.
+  const hidden = fullscreen ? idle : hq && idle && playing;
   return (
     <section
       ref={(element) => { viewer = element; }}
-      onPointerMove={fullscreen ? wake : undefined}
+      onPointerMove={overlay ? wake : undefined}
+      onPointerLeave={hq && !fullscreen ? () => setIdle(true) : undefined}
       className={fullscreen
         ? cx("relative flex bg-black", hidden && "cursor-none")
-        : cx("flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line", native ? "bg-transparent" : "bg-panel")}
+        : cx("flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line", hq && "relative", hidden && "cursor-none", native ? "bg-transparent" : "bg-panel")}
     >
       <div ref={(element) => { wrapRef.current = element; setWrap(element); }} className={cx("relative min-h-0 flex-1", native ? "bg-transparent" : "bg-black")}>
         {/* Fullscreen is for watching: a click plays or pauses instead of moving the selection. */}
         {/* Drawn by Edit.app's window under the page when `native` (still here for its clicks and drags). */}
         <canvas ref={canvasRef} className={cx("absolute inset-0 size-full", native && "opacity-0")}
-          onPointerDown={(event) => { if (fullscreen) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
+          onPointerDown={(event) => { if (overlay) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
           onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
         />
         {/* Smooth playback over the canvas; clicks go through to it. */}
@@ -262,11 +268,17 @@ export function Viewer() {
           </div>
         )}
       </div>
-      <div className={fullscreen
-        ? cx("absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur transition-opacity duration-300", hidden && "pointer-events-none opacity-0")
-        : native ? "bg-panel" : undefined}>
-        <Transport fullscreen={fullscreen} />
-      </div>
+      {hq ? (
+        <div className={cx("absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent pt-14 transition-opacity duration-300", hidden && "pointer-events-none opacity-0")}>
+          <VideoControls fullscreen={fullscreen} />
+        </div>
+      ) : (
+        <div className={fullscreen
+          ? cx("absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur transition-opacity duration-300", hidden && "pointer-events-none opacity-0")
+          : native ? "bg-panel" : undefined}>
+          <Transport fullscreen={fullscreen} />
+        </div>
+      )}
     </section>
   );
 }
@@ -313,8 +325,6 @@ function dragTransform(event: React.PointerEvent, wrap: HTMLDivElement) {
 }
 
 function Transport({ fullscreen }: { fullscreen: boolean }) {
-  // A video made the new way has no timeline on screen (Editor.tsx): the bar full screen has is its way through the edit.
-  const hq = useEditor((state) => state.project?.hq === true);
   const frame = useFrame();
   const playing = usePlaying();
   const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
@@ -325,7 +335,7 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
   const speed = useSpeed();
   return (
     <div className="flex flex-col">
-      {(fullscreen || hq) && <ScrubBar frame={frame} duration={duration} />}
+      {fullscreen && <ScrubBar frame={frame} duration={duration} />}
       <div className={cx("flex h-11 shrink-0 items-center px-3", !fullscreen && "border-t border-line")}>
       <div className="w-[220px] font-mono text-[13px] text-fg tabular">{timecode(frame, fps)}</div>
       <div className="flex flex-1 items-center justify-center gap-0.5">
@@ -389,12 +399,70 @@ function Transport({ fullscreen }: { fullscreen: boolean }) {
   );
 }
 
+/** A time as a video site says it: 0:04, 12:30, 1:02:09. */
+function clock(frame: number, fps: number): string {
+  const seconds = Math.max(0, Math.floor(frame / fps));
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds % 60)}` : `${minutes}:${pad(seconds % 60)}`;
+}
+
+/**
+ * Bodycam HQ's controls (Edit V2; Sphe, Nov 11: "much cleaner, without the
+ * clumsy background almost like a youtube video controls"): a thin line to
+ * scrub along, then play and the time on the left, a note, the speed and full
+ * screen on the right, over a shade that fades up from the picture's foot.
+ * Frame steps and the ends are the keys' (arrows, Home, End).
+ */
+function VideoControls({ fullscreen }: { fullscreen: boolean }) {
+  const frame = useFrame();
+  const playing = usePlaying();
+  const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
+  const duration = useEditor((state) => (state.project ? projectDuration(state.project) : 0));
+  const noting = useNotes((state) => state.draft !== null);
+  const speed = useSpeed();
+  const light = "text-white/90 hover:bg-white/10 hover:text-white";
+  return (
+    <div className="flex flex-col px-3 pb-1">
+      <ScrubBar frame={frame} duration={duration} thin />
+      <div className="flex h-10 items-center gap-1">
+        <IconButton label={playing ? "Pause (Space)" : "Play (Space)"} onClick={() => preview.toggle()} className={cx("size-8", light)}>
+          {playing ? <Pause size={18} fill="currentColor" strokeWidth={0} /> : <Play size={18} fill="currentColor" strokeWidth={0} className="translate-x-px" />}
+        </IconButton>
+        <span className="ml-1.5 text-[13px] text-white/90 tabular">
+          {clock(frame, fps)}
+          <span className="text-white/50"> / {clock(duration, fps)}</span>
+        </span>
+        <div className="ml-auto flex items-center gap-1">
+          {!fullscreen && (
+            <IconButton label={noting ? "Close the note" : "Leave a note here (Q)"} active={noting} aria-pressed={noting} onClick={toggleNote} className={noting ? undefined : light}>
+              <MessageSquarePlus size={16} />
+            </IconButton>
+          )}
+          <IconButton
+            label={speed === 1 ? "Play at 2× speed (L while playing)" : "Play at normal speed (L while playing)"}
+            aria-pressed={speed !== 1}
+            onClick={() => preview.setSpeed(speed === 1 ? 2 : 1)}
+            className={cx("w-auto px-1.5 text-[12.5px] font-medium tabular", speed !== 1 ? "text-white" : light)}
+          >
+            {speed}×
+          </IconButton>
+          <IconButton label={fullscreen ? "Exit full screen (F)" : "Full screen (F)"} onClick={toggleFullscreen} className={light}>
+            {fullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+          </IconButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Fullscreen's scrub bar (no border above the controls there, Nov 3): a
  * tall hit area over a playhead-pink track; click or drag to move through
  * the edit while watching.
  */
-function ScrubBar({ frame, duration }: { frame: number; duration: number }) {
+function ScrubBar({ frame, duration, thin = false }: { frame: number; duration: number; thin?: boolean }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const fraction = duration > 0 ? Math.min(1, Math.max(0, frame / duration)) : 0;
   const seekFrom = (clientX: number) => {
@@ -410,7 +478,7 @@ function ScrubBar({ frame, duration }: { frame: number; duration: number }) {
       aria-valuemax={Math.round(duration)}
       aria-valuenow={Math.round(frame)}
       title="Click or drag to scrub"
-      className="group flex h-6 cursor-pointer touch-none items-center px-3"
+      className={cx("group flex cursor-pointer touch-none items-center", thin ? "h-4" : "h-6 px-3")}
       onPointerDown={(event) => {
         (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
         seekFrom(event.clientX);
@@ -425,9 +493,9 @@ function ScrubBar({ frame, duration }: { frame: number; duration: number }) {
         window.addEventListener("pointercancel", up);
       }}
     >
-      <div ref={trackRef} className="relative h-1.5 w-full rounded-full bg-white/20 transition-[height] group-hover:h-2">
+      <div ref={trackRef} className={cx("relative w-full rounded-full bg-white/20 transition-[height]", thin ? "h-[3px] group-hover:h-[5px]" : "h-1.5 group-hover:h-2")}>
         <div className="absolute inset-y-0 left-0 rounded-full bg-playhead" style={{ width: `${fraction * 100}%` }} />
-        <div className="absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100" style={{ left: `${fraction * 100}%` }} />
+        <div className={cx("absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100", thin ? "size-3" : "size-3.5")} style={{ left: `${fraction * 100}%` }} />
       </div>
     </div>
   );

@@ -24,6 +24,13 @@ export type Work = "smooth" | "map" | "watch" | "export" | "import" | "link";
  */
 const typical: Record<Work, number> = { smooth: 190_000, map: 300_000, watch: 130_000, export: 600_000, import: 240_000, link: 600_000 };
 
+/**
+ * A pasted link has no usual length (19 s or three hours): its time is said
+ * only once its download measures it, never guessed. A guessed "about 10
+ * min" was told to the person for a download that took 46 s (Nov 11).
+ */
+const UNGUESSED: readonly Work[] = ["link"];
+
 interface Entry {
   kind: Work;
   project: string;
@@ -94,7 +101,7 @@ export function end(kind: Work, project: string, part: string, ok = true): void 
 /** The watcher's windows at once (watch.ts AT_ONCE). */
 export const WATCH_AT_ONCE = 12;
 
-/** Milliseconds one entry has left. */
+/** Milliseconds one entry has left (0: not known yet, a link's before it's measured). */
 function left(entry: Entry, now: number): number {
   const elapsed = now - entry.started;
   if (entry.first !== null && entry.total > 0 && entry.done > entry.first[1]) {
@@ -103,6 +110,7 @@ function left(entry: Entry, now: number): number {
     const rate = (entry.done - from) / Math.max(now - at, 1);
     return Math.max((entry.total - entry.done) / rate, 1000);
   }
+  if (UNGUESSED.includes(entry.kind)) return 0;
   if (entry.kind === "watch" && entry.total > 0) {
     const rounds = Math.ceil((entry.total - entry.done) / WATCH_AT_ONCE);
     return Math.max(rounds * typical.watch - (entry.done === 0 ? elapsed : 0), 15_000);
@@ -146,6 +154,7 @@ export function summary(project: string, kinds?: readonly Work[]): string | null
   const mine = pending(project, kinds);
   const ms = remainingMs(project, kinds);
   if (mine.length === 0 || ms === null) return null;
+  const when = ms > 0 ? `: done in ${about(ms)}` : "";
   const count = (kind: Work, one: string, many: string) => {
     const n = mine.filter((entry) => entry.kind === kind).length;
     return n === 0 ? [] : [n === 1 ? one : `${n} ${many}`];
@@ -159,15 +168,29 @@ export function summary(project: string, kinds?: readonly Work[]): string | null
     ...count("import", "a B-roll import downloading", "B-roll imports downloading"),
     ...mine.filter((entry) => entry.kind === "link").map((entry) => `a link ${entry.say ?? "downloading"}`),
   ];
-  return `${parts.join(", ")}: done in ${about(ms)}`;
+  return `${parts.join(", ")}${when}`;
 }
 
 /** The line a reply gives for work it started: how long, and to wait once. */
 export function lookAgain(project: string, kinds?: readonly Work[]): string {
   const said = summary(project, kinds);
   if (said === null) return "";
+  // A link is waited on a minute at a time, the person told how far it is after each (links.ts): "wait once" had the
+  // agent wait out the whole of it in one call, and the person heard nothing until it was in (Nov 11).
+  if (linking(project, kinds)) return ` ${said}. ${LINK_WAIT}`;
   return ` ${said}. Go on with other work; when you need it done, wait once (wait) rather than reading the project again to see.`;
 }
+
+/** Whether a pasted link is coming in for a project (of these kinds). */
+export function linking(project: string, kinds?: readonly Work[]): boolean {
+  return pending(project, kinds).some((entry) => entry.kind === "link");
+}
+
+/** The longest one wait for a link lasts, so the person hears how far it is about once a minute. */
+export const LINK_WAIT_S = 60;
+
+/** What the agent does while a link comes in: a line to the person after each minute's wait. */
+export const LINK_WAIT = `Tell the person in one short line what it's doing now, as this says (its stage; downloading, the size and the share done), then wait {for: ["link"]} again (it waits at most ${LINK_WAIT_S} s at a time); go on with anything else they asked meanwhile.`;
 
 /**
  * Waits until a project's work of these kinds is done, or `limitMs` has

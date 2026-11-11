@@ -2640,7 +2640,7 @@
   },
   {
     "name": "wait",
-    "description": "Wait once for background work (smoothing, map shots, the watcher, an export, B-roll imports still downloading, a link coming in) for as long as it says it has left, instead of reading the project again to see. Returns when it's done, or after at_most seconds (default: its estimate, at most 300) with what's still running.",
+    "description": "Wait once for background work (smoothing, map shots, the watcher, an export, B-roll imports still downloading, a link coming in) for as long as it says it has left, instead of reading the project again to see. Returns when it's done, or after at_most seconds (default: its estimate, at most 300; a link: at most 60, so you can tell the person how far it is between waits) with what's still running.",
     "inputSchema": {
       "properties": {
         "for": {

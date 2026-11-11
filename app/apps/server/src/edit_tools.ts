@@ -205,12 +205,16 @@ async function waitTool({ app, args, projectId }: ToolCall): Promise<Content[]> 
   const before = progress.summary(projectId, kinds) ?? (exporting() ? "the export into its file" : null);
   if (before === null) return text("nothing of that is running: go on");
   const estimate = progress.remainingMs(projectId, kinds) ?? 0;
-  const most = clamp(uint(args.at_most) ?? Math.ceil(estimate / 1000) + 5, 1, 300);
+  // A link coming in is waited on a minute at most, so the person hears how far it is in between (progress.LINK_WAIT).
+  const linking = progress.linking(projectId, kinds);
+  const asked = uint(args.at_most) ?? (linking ? progress.LINK_WAIT_S : Math.ceil(estimate / 1000) + 5);
+  const most = clamp(linking ? Math.min(asked, progress.LINK_WAIT_S) : asked, 1, 300);
   const started = progress.timing.now();
   const done = await progress.waitFor(projectId, kinds, most * 1000, exporting);
   const waited = `${Math.round((progress.timing.now() - started) / 1000)} s`;
   if (done) return text(`done (waited ${waited}; it was ${before})`);
   const still = progress.summary(projectId, kinds) ?? (exporting() ? before : null);
+  if (progress.linking(projectId, kinds)) return text(`still running after ${waited}: ${still ?? before}. ${progress.LINK_WAIT}`);
   return text(`still running after ${waited}: ${still ?? before}. Go on with other work, or wait once more for that long.`);
 }
 

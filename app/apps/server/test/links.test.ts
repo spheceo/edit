@@ -37,10 +37,13 @@ test("its progress reads as a person would say it", () => {
   expect(bytesSaid(1_200_000_000, 3_400_000_000)).toBe("1.2 GB of 3.4 GB, 35%");
   expect(bytesSaid(52_000_000, null)).toBe("52 MB");
   progress.begin("link", "p1", "a");
+  // A link has no usual length: no time is said until its download measures one (a guessed "about 10 min" was told
+  // to the person for a download of 46 s, Nov 11).
   progress.stage("link", "p1", "a", "download", `downloading “Bodycam 4”: ${bytesSaid(400e6, 800e6)}`, 400e6, 800e6);
-  expect(progress.summary("p1", ["link"])).toStartWith("a link downloading “Bodycam 4”: 400 MB of 800 MB, 50%: done in");
+  expect(progress.summary("p1", ["link"])).toBe("a link downloading “Bodycam 4”: 400 MB of 800 MB, 50%");
+  expect(progress.lookAgain("p1")).toContain(progress.LINK_WAIT);
   progress.stage("link", "p1", "a", "words", "being transcribed (“Bodycam 4”)");
-  expect(progress.summary("p1")).toStartWith("a link being transcribed (“Bodycam 4”): done in");
+  expect(progress.summary("p1")).toBe("a link being transcribed (“Bodycam 4”)");
 });
 
 /** A yt-dlp stand-in that "downloads" `video` into the folder it's given, saying its progress as yt-dlp does. */

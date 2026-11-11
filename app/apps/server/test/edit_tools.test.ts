@@ -860,6 +860,32 @@ test("wait waits once for background work and says what's left", async () => {
   progress.end("watch", id, "watch", false);
 });
 
+test("a link is waited on a minute at a time, the person told how far it is, and its time never guessed", async () => {
+  // Nov 11 on a Mac: the agent told the person "about 10 min" (the guess for a link) and waited 300 s in one call.
+  const { app, id } = setUp("wait-link");
+  const real = { ...progress.timing };
+  let clock = 0;
+  progress.timing.now = () => clock;
+  progress.timing.sleep = async (ms: number) => {
+    clock += ms;
+  };
+  try {
+    progress.begin("link", id, "l");
+    progress.stage("link", id, "l", "download", "downloading YouTube video abc");
+    expect(await said(app, "review_edit", {})).toContain(`"background":"a link downloading YouTube video abc. Tell the person in one short line what it's doing now`);
+    expect(await said(app, "wait", { for: ["link"], at_most: 300 })).toBe(`still running after 60 s: a link downloading YouTube video abc. ${progress.LINK_WAIT}`);
+    expect(clock).toBe(60_000);
+    // Measured: 100 MB in 10 s, so 600 MB more in a minute.
+    progress.stage("link", id, "l", "download", "downloading “Raid”: 100 MB of 800 MB, 12%", 100e6, 800e6);
+    clock = 70_000;
+    progress.stage("link", id, "l", "download", "downloading “Raid”: 200 MB of 800 MB, 25%", 200e6, 800e6);
+    expect(progress.summary(id, ["link"])).toBe("a link downloading “Raid”: 200 MB of 800 MB, 25%: done in about 1 min");
+  } finally {
+    progress.end("link", id, "l", false);
+    Object.assign(progress.timing, real);
+  }
+});
+
 test("a plan's audit gives the issues where it worked and counts the rest, so a long edit's context isn't filled by the whole audit after every plan", async () => {
   const { changedSpan, scopedAudit } = await import("../src/edit_tools.ts");
   const before = new Map<string, [number, number, string]>([["a", [0, 100, "a"]], ["b", [1000, 1100, "b"]], ["gone", [2000, 2050, "g"]]]);

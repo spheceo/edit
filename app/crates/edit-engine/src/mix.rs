@@ -19,7 +19,7 @@ use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use edit_core::{mute_gain, AudioSegment, Mute, SoundChannel, MUTE_FADE_SECONDS};
+use edit_core::{crossfade_gain, mute_gain, AudioSegment, Mute, SoundChannel, MUTE_FADE_SECONDS};
 
 pub const RATE: usize = 48_000;
 /// Frames mixed at a time (4 s: 1.5 MB of stereo float).
@@ -77,12 +77,20 @@ pub fn parts(
 /// fades (`edit_core::eval`'s `fade_factor`) differ on purpose: they count
 /// whole frames (`(local + 1) / (fade + 1)`) and take the lower of the two
 /// where a fade in and a fade out overlap, rather than multiplying.
+///
+/// A cut's crossfade (`cross_in`, `cross_out`: `edit_core::audio_segments`)
+/// takes the place of the clip's own fade at that end, on the equal-power
+/// curve (`edit_core::crossfade_gain`) where a fade is linear.
 fn fade_gain(segment: &AudioSegment, original: f64, time: f64) -> f32 {
     let mut gain = 1.0;
-    if segment.fade_in > 0.0 {
+    if segment.cross_in > 0.0 {
+        gain *= crossfade_gain(time / segment.cross_in);
+    } else if segment.fade_in > 0.0 {
         gain *= (time / segment.fade_in).clamp(0.0, 1.0);
     }
-    if segment.fade_out > 0.0 {
+    if segment.cross_out > 0.0 {
+        gain *= crossfade_gain((original - time) / segment.cross_out);
+    } else if segment.fade_out > 0.0 {
         gain *= ((original - time) / segment.fade_out).clamp(0.0, 1.0);
     }
     gain as f32
@@ -342,12 +350,12 @@ impl<'a> Volume<'a> {
         }
     }
 
-    /// The gain `time` seconds into the clip.
+    /// The gain `time` seconds into the segment (its clip's frames from `lead` on, as `AudioSegment::volume_at`).
     fn at(&mut self, time: f64) -> f32 {
         if self.segment.volume_keys.is_empty() {
             return self.from;
         }
-        let frame = time * self.segment.fps;
+        let frame = (time - self.segment.lead).max(0.0) * self.segment.fps;
         let below = frame.floor();
         if below != self.below {
             let gain = |frame: f64| 10_f32.powf(self.segment.volume_db_at(frame as f32) / 20.0);
@@ -1440,6 +1448,9 @@ mod tests {
             fps: 30.0,
             fade_in: 0.0,
             fade_out: 0.0,
+            lead: 0.0,
+            cross_in: 0.0,
+            cross_out: 0.0,
             mutes: vec![],
             channel: None,
         }
@@ -1535,6 +1546,48 @@ mod tests {
         let right = out[(1.4 * RATE as f64) as usize * 2 + 1];
         assert!((right - 0.25 * volume * 0.5).abs() < 2e-3, "{right}");
         assert_eq!(left(&out, 1.75), 0.0, "silent after it");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A cut's crossfade (edit_core::audio_segments): the sound going out
+    /// plays on past the cut and the one coming in starts before it, on the
+    /// equal-power curve, in place of their fades at the cut.
+    #[test]
+    fn a_crossfade_blends_both_sounds_across_the_cut_on_the_equal_power_curve() {
+        let dir = temp_dir("crossfade");
+        let path = ramp(&dir, "ramp.wav");
+        // The cut at 1 s; 0.12 s either side of it.
+        let mut out_going = segment(0.0, 1.12, 2.0);
+        out_going.fade_out = 0.2;
+        out_going.cross_out = 0.24;
+        let mut in_coming = segment(0.88, 1.12, 5.88);
+        in_coming.fade_in = 0.2;
+        in_coming.lead = 0.12;
+        in_coming.cross_in = 0.24;
+        let out = mixed(&[part(&path, out_going), part(&path, in_coming)], RATE * 3);
+        let right = |seconds: f64| out[(seconds * RATE as f64).round() as usize * 2 + 1];
+        // Each side of the crossfade, one sound at full level (the fades at the cut aren't applied).
+        assert!((right(0.8) - 0.25).abs() < 2e-4, "{}", right(0.8));
+        assert!((right(1.2) - 0.25).abs() < 2e-4, "{}", right(1.2));
+        for at in [0.94, 1.0, 1.06] {
+            let x = (at - 0.88) / 0.24;
+            let gains = edit_core::crossfade_gain(1.0 - x) + edit_core::crossfade_gain(x);
+            assert!(
+                (right(at) - 0.25 * gains as f32).abs() < 1e-3,
+                "{at}: {}",
+                right(at)
+            );
+        }
+        // The incoming sound's source runs from its lead: 0.12 s before the cut it plays 5.88 s.
+        let left_in = |seconds: f64| out[(seconds * RATE as f64).round() as usize * 2];
+        let x = (1.1 - 0.88) / 0.24;
+        let expected =
+            0.31 * edit_core::crossfade_gain(1.0 - x) + 0.61 * edit_core::crossfade_gain(x);
+        assert!(
+            (left_in(1.1) - expected as f32).abs() < 2e-3,
+            "{}",
+            left_in(1.1)
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 

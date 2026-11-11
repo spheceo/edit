@@ -12,6 +12,7 @@ import type { PhotoFrame } from "./PhotoFrame";
 import type { Rgba } from "./Rgba";
 import type { Shake } from "./Shake";
 import type { SoundChannel } from "./SoundChannel";
+import type { SoundRoom } from "./SoundRoom";
 import type { TextAnimation } from "./TextAnimation";
 import type { TextStyle } from "./TextStyle";
 import type { Transform } from "./Transform";
@@ -79,7 +80,16 @@ mutes?: Array<Mute>,
  * sound is in one ear (JJ, Nov 6: "we only have audio in the left ear").
  * None: the source's own stereo.
  */
-channel?: SoundChannel, } | { "type": "text", text: string, style: TextStyle, transform: Transform, animation: TextAnimation, opacity: number, 
+channel?: SoundChannel, 
+/**
+ * The source around the clip that has no word in it (seconds of
+ * the media, from before `source_in` to past where the clip ends):
+ * how far a crossfade at a cut may play the clip's sound beyond its
+ * own edges (`eval`'s `audio_segments`). Edit writes it from the
+ * file's words on every save (the server's `sound_room.ts`); None
+ * (no words known): its cuts aren't crossfaded.
+ */
+room?: SoundRoom, } | { "type": "text", text: string, style: TextStyle, transform: Transform, animation: TextAnimation, opacity: number, 
 /**
  * Frames from the clip start at which each word appears (the `words` preset).
  */

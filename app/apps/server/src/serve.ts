@@ -54,6 +54,7 @@ import * as writerStore from "./writer/store.ts";
 import * as ideas from "./ideas/index.ts";
 import * as thumbnails from "./thumbnails/index.ts";
 import { BUILD, NIGHTLY, RELEASE } from "./version.ts";
+import { transcriptWords } from "./sound_room.ts";
 
 /** A place to listen: an IP and port, as Rust's SocketAddr shows it ("127.0.0.1:7700", "[::1]:7700"). */
 export interface Address {
@@ -285,6 +286,9 @@ export function start(home: string, host: string | null, port: number): { app: A
     services: { exports: new ExportRegistry(home), updater: new update.Updater(home) },
   });
   seams.cloudMedia.configurePlayback(app);
+  // Every save gives footage's sounds their crossfade room from the file's words (sound_room.ts).
+  const words = transcriptWords();
+  store.setWords((media) => words(app.media.paths(media.path).transcript));
   // Smoothing waits while an export runs (previews and proxies do in the addon).
   pauseForExports(() => app.exports.localRunning?.() ?? app.exports.running());
   // Slowed cut-in shots are smoothed unless asked not to, where it takes seconds.

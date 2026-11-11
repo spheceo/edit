@@ -21,8 +21,9 @@ import * as diag from "./diag.ts";
 import * as kinds from "./kinds.ts";
 import { enforceOneLine } from "./one_line.ts";
 import { enforcePointers } from "./pointers.ts";
+import { enforceSoundRoom, type Words } from "./sound_room.ts";
 import { copyFile, ioMessage, nextFileId, nowMs, writeAtomic } from "./files.ts";
-import type { Clip, DriveFile, Project, ProjectSummary, Settings, Style } from "./model.ts";
+import type { Clip, DriveFile, Media, Project, ProjectSummary, Settings, Style } from "./model.ts";
 import { native, type Prepared } from "./native/index.ts";
 import { canonical, extension, fileStem, join } from "./paths.ts";
 import { clipEnd, duration, mediaOf, newProject } from "./project.ts";
@@ -133,12 +134,31 @@ export class Store {
   readonly events = new Events();
   private cloudHook: CloudHook | null = null;
   private resolveMedia: ((project: Project) => void) | null = null;
+  /** A file's words on this machine, for its sounds' crossfade room (sound_room.ts); tests' stores have none. */
+  private words: ((media: Media) => Words | null) | null = null;
 
   /** Machine-local media locations, applied on every read and save, including cloud pulls. */
   setMediaResolver(resolve: (project: Project) => void): void {
     if (this.projects.size !== 0) throw new Error("configure media playback before loading projects");
     this.resolveMedia = resolve;
     this.summaries.clear();
+  }
+
+  /** Where a file's words are read from, so every save gives its sounds their crossfade room (sound_room.ts). */
+  setWords(read: (media: Media) => Words | null): void {
+    this.words = read;
+  }
+
+  /** Each footage sound's crossfade room from its file's words, as the house rules are kept: on every save. */
+  private enforceRoom(before: Project | null, project: Project): void {
+    const read = this.words;
+    if (read === null) return;
+    try {
+      enforceSoundRoom(before, project, read);
+    } catch (error) {
+      // Only the crossfades go without: never a save refused for them.
+      diag.warn("store", `${project.id}: the sounds' crossfade room: ${diag.messageOf(error)}`);
+    }
   }
 
   /**
@@ -567,6 +587,8 @@ export class Store {
       const clash = patches.overlap(patches.diff(knew.project, current.project), patches.diff(current.project, project));
       if (clash.length > 0) throw new Error(revisionConflict(knew.rev, current.rev, clash));
     }
+    // After the check: a room it sets is Edit's own, never a clash with what changed since the agent read.
+    this.enforceRoom(current.project, project);
     try {
       const live = this.commitUnguarded(id, current.rev, this.prepare(id, project), origin);
       cloud?.wrote(id);
@@ -610,6 +632,7 @@ export class Store {
     const project = Object.isFrozen(given) ? (structuredClone(given) as Project) : given;
     enforceOneLine(before?.project ?? null, project);
     enforcePointers(before?.project ?? null, project);
+    this.enforceRoom(before?.project ?? null, project);
     // Invalid before refused: a bad save says what's wrong with it first.
     const prepared = this.prepare(id, project);
     const refused = before === undefined ? null : refusalOf(before.project, project);

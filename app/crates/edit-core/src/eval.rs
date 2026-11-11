@@ -844,6 +844,13 @@ pub struct AudioSegment {
     pub fps: f64,
     pub fade_in: f64,
     pub fade_out: f64,
+    /// Seconds the segment starts before its clip does: a crossfade's sound
+    /// from before the clip's `source_in` (its volume keys read from the clip's start).
+    pub lead: f64,
+    /// Seconds of an equal-power crossfade at the segment's start and end
+    /// ([`crossfade_gain`]), each in place of the clip's own fade there.
+    pub cross_in: f64,
+    pub cross_out: f64,
     /// Stretches silenced, in seconds of the source (see `Mute`).
     pub mutes: Vec<Mute>,
     /// Only this side of the source, in both ears (the clip's `channel`).
@@ -856,15 +863,16 @@ impl AudioSegment {
         sample(&self.volume_keys, frame).unwrap_or(self.volume_db)
     }
 
-    /// The volume (linear) `seconds` into the clip: the keyed volume sampled
+    /// The volume (linear) `seconds` into the segment: the keyed volume sampled
     /// on the frames either side and interpolated linearly in gain, the
     /// preview's `linearRampToValueAtTime` between one frame's value and the next.
+    /// A crossfade's sound before the clip starts (`lead`) holds its first frame's.
     pub fn volume_at(&self, seconds: f64) -> f32 {
         let gain = |frame: f32| 10_f32.powf(self.volume_db_at(frame) / 20.0);
         if self.volume_keys.is_empty() {
             return gain(0.0);
         }
-        let frame = seconds * self.fps;
+        let frame = (seconds - self.lead).max(0.0) * self.fps;
         let below = frame.floor();
         let t = (frame - below) as f32;
         let (from, to) = (gain(below as f32), gain(below as f32 + 1.0));
@@ -912,9 +920,25 @@ fn heard(project: &Project, frame: i64, media: Option<&str>) -> Vec<WaveSource> 
         .collect()
 }
 
+/// The most a cut's crossfade reaches either side of it (seconds): JJ, Nov 10,
+/// "the two sounds overlapping and blended" where footage meets footage, in
+/// place of one sound fading down and the next fading up (a dip that sounds
+/// like the speaker pausing). It goes only as far as the source has no word
+/// (`ClipContent::Audio::room`), so nothing cut out is heard in it.
+pub const CROSSFADE_REACH: f64 = 0.12;
+/// A crossfade shorter than this in all is no blend: the cut stays as it was.
+pub const CROSSFADE_LEAST: f64 = 0.01;
+
+/// The equal-power curve of a crossfade `x` of the way through it (0 to 1):
+/// the sound coming in at `sin`, the one going out at its mirror, so two
+/// unrelated sounds (wind on two takes) keep their loudness all through.
+pub fn crossfade_gain(x: f64) -> f64 {
+    (x.clamp(0.0, 1.0) * std::f64::consts::FRAC_PI_2).sin()
+}
+
 pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {
     let fps = project.fps();
-    project
+    let mut segments: Vec<(&Clip, AudioSegment)> = project
         .clips
         .iter()
         .filter(|clip| {
@@ -930,24 +954,139 @@ pub fn audio_segments(project: &Project) -> Vec<AudioSegment> {
                 volume_db,
                 mutes,
                 channel,
-            } => Some(AudioSegment {
-                clip: clip.id.clone(),
-                media: media.clone(),
-                start: clip.start as f64 / fps,
-                duration: clip.duration as f64 / fps,
-                source_in: *source_in,
-                speed: *speed,
-                volume_db: *volume_db,
-                volume_keys: clip.keyframes.get("volume_db").cloned().unwrap_or_default(),
-                fps,
-                fade_in: clip.fade_in as f64 / fps,
-                fade_out: clip.fade_out as f64 / fps,
-                mutes: mutes.clone(),
-                channel: *channel,
-            }),
+                ..
+            } => Some((
+                clip,
+                AudioSegment {
+                    clip: clip.id.clone(),
+                    media: media.clone(),
+                    start: clip.start as f64 / fps,
+                    duration: clip.duration as f64 / fps,
+                    source_in: *source_in,
+                    speed: *speed,
+                    volume_db: *volume_db,
+                    volume_keys: clip.keyframes.get("volume_db").cloned().unwrap_or_default(),
+                    fps,
+                    fade_in: clip.fade_in as f64 / fps,
+                    fade_out: clip.fade_out as f64 / fps,
+                    lead: 0.0,
+                    cross_in: 0.0,
+                    cross_out: 0.0,
+                    mutes: mutes.clone(),
+                    channel: *channel,
+                },
+            )),
             _ => None,
         })
-        .collect()
+        .collect();
+    // Each cut between two sounds on one track: the clip after it starts where the one before ends.
+    segments.sort_by(|(a, _), (b, _)| a.track.cmp(&b.track).then(a.start.cmp(&b.start)));
+    let cuts: Vec<Option<Crossfade>> = segments
+        .windows(2)
+        .map(|pair| match pair {
+            [(before, _), (after, _)] => crossfade(project, before, after),
+            _ => None,
+        })
+        .collect();
+    for (index, cut) in cuts.into_iter().enumerate() {
+        let Some(cut) = cut else { continue };
+        if let Some((_, out)) = segments.get_mut(index) {
+            out.duration += cut.tail;
+            out.cross_out = cut.fade_out + cut.tail;
+        }
+        if let Some((_, into)) = segments.get_mut(index + 1) {
+            into.start -= cut.lead;
+            into.duration += cut.lead;
+            into.source_in -= cut.lead * into.speed;
+            into.lead = cut.lead;
+            into.cross_in = cut.lead + cut.fade_in;
+        }
+    }
+    segments.into_iter().map(|(_, segment)| segment).collect()
+}
+
+/// A cut's crossfade, in seconds: the incoming sound starts `lead` before
+/// the cut (source it plays early) and rises until `fade_in` after it; the
+/// outgoing one falls from `fade_out` before the cut and plays on `tail` past
+/// it. Each fades only where its file has no word: the source either side
+/// of the clip that the edit cut out, and its own quiet at its edge. So a
+/// word on either side of a cut is never heard faded, or heard at all if it
+/// was cut out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Crossfade {
+    lead: f64,
+    fade_in: f64,
+    fade_out: f64,
+    tail: f64,
+}
+
+/// The crossfade at the cut from `before` to `after` (two audio clips on one
+/// track, one starting where the other ends). None for no cut, sound from
+/// the team's library (music and effects have their own fades), one take
+/// carrying on (a clip split), or no quiet to fade in.
+fn crossfade(project: &Project, before: &Clip, after: &Clip) -> Option<Crossfade> {
+    if before.track != after.track || before.end() != after.start {
+        return None;
+    }
+    let (
+        ClipContent::Audio {
+            media: from_media,
+            source_in: from_in,
+            speed: from_speed,
+            room: from_room,
+            ..
+        },
+        ClipContent::Audio {
+            media: to_media,
+            source_in: to_in,
+            speed: to_speed,
+            room: to_room,
+            ..
+        },
+    ) = (&before.content, &after.content)
+    else {
+        return None;
+    };
+    let fps = project.fps();
+    let footage = |id: &str| {
+        project
+            .media(id)
+            .filter(|media| media.library.is_none() && media.has_audio)
+    };
+    let (Some(from_file), Some(_)) = (footage(from_media), footage(to_media)) else {
+        return None;
+    };
+    let from_out = from_in + before.duration as f64 / fps * from_speed;
+    let carries_on = from_media == to_media
+        && (to_in - from_out).abs() < 0.5 / fps
+        && (to_speed - from_speed).abs() < 1e-9;
+    if carries_on {
+        return None;
+    }
+    let (Some(from_room), Some(to_room)) = (from_room, to_room) else {
+        return None;
+    };
+    let (from_length, to_length) = (before.duration as f64 / fps, after.duration as f64 / fps);
+    // Seconds of quiet each way, on the timeline: what the edit cut out either side, and each clip's own edge.
+    let quiet = |seconds: f64, speed: f64, most: f64| {
+        (seconds.max(0.0) / speed).min(CROSSFADE_REACH).min(most)
+    };
+    let cut = Crossfade {
+        lead: quiet(to_in - to_room.from.max(0.0), *to_speed, from_length),
+        fade_in: quiet(to_room.words_from - to_in, *to_speed, to_length / 2.0),
+        fade_out: quiet(
+            from_out - from_room.words_to,
+            *from_speed,
+            from_length / 2.0,
+        ),
+        tail: quiet(
+            from_room.to.min(from_file.duration) - from_out,
+            *from_speed,
+            to_length,
+        ),
+    };
+    (cut.lead + cut.fade_in >= CROSSFADE_LEAST || cut.fade_out + cut.tail >= CROSSFADE_LEAST)
+        .then_some(cut)
 }
 
 /// Per-glyph reveal state for text presets: (opacity, y offset in px, scale).
@@ -1394,6 +1533,7 @@ mod tests {
                 volume_db: -3.0,
                 mutes: Vec::new(),
                 channel: None,
+                room: None,
             },
         });
         let segments = audio_segments(&project);
@@ -1425,6 +1565,121 @@ mod tests {
         let mut still = segment.clone();
         still.volume_keys.clear();
         assert!((still.volume_at(0.5) - 10_f32.powf(-3.0 / 20.0)).abs() < 1e-6);
+    }
+
+    /// Two footage sounds on one track, back to back at frame 90 (3 s), each
+    /// with `room` as given: seconds with no word before it and after it in
+    /// its file, and inside it at each of its ends.
+    fn cut_project(room: Option<(f64, f64, f64)>, second_in: f64) -> Project {
+        let mut project = project();
+        let a1 = project
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Audio)
+            .map(|track| track.id.clone())
+            .unwrap_or_default();
+        let sound = |id: &str, start: i64, source_in: f64| Clip {
+            id: id.into(),
+            track: a1.clone(),
+            start,
+            duration: 90,
+            color: ClipColor::Green,
+            name: None,
+            link: None,
+            fade_in: 6,
+            fade_out: 6,
+            keyframes: Default::default(),
+            person: None,
+            parent: None,
+            content: ClipContent::Audio {
+                media: "m1".into(),
+                source_in,
+                speed: 1.0,
+                volume_db: 0.0,
+                mutes: Vec::new(),
+                channel: None,
+                room: room.map(|(before, after, inside)| SoundRoom {
+                    from: source_in - before,
+                    to: source_in + 3.0 + after,
+                    words_from: source_in + inside,
+                    words_to: source_in + 3.0 - inside,
+                }),
+            },
+        };
+        project.clips.push(sound("s1", 0, 10.0));
+        project.clips.push(sound("s2", 90, second_in));
+        project
+    }
+
+    #[test]
+    fn a_cut_between_footage_crossfades_its_sound_as_far_as_no_word_is_cut_into() {
+        let segments = audio_segments(&cut_project(Some((1.0, 1.0, 1.0)), 30.0));
+        let [first, second] = segments.as_slice() else {
+            panic!("two segments: {segments:?}");
+        };
+        let reach = CROSSFADE_REACH;
+        // Quiet all round: the first plays on past the cut, the second starts before it, over one span centred on the cut.
+        assert!((first.start - 0.0).abs() < 1e-9 && (first.duration - (3.0 + reach)).abs() < 1e-9);
+        assert!((second.start - (3.0 - reach)).abs() < 1e-9);
+        assert!((second.source_in - (30.0 - reach)).abs() < 1e-9);
+        assert!((second.lead - reach).abs() < 1e-9);
+        assert!((first.cross_out - 2.0 * reach).abs() < 1e-9);
+        assert!((second.cross_in - 2.0 * reach).abs() < 1e-9);
+        // The ends away from the cut keep their own fades.
+        assert_eq!((first.cross_in, second.cross_out), (0.0, 0.0));
+        // Equal power: the two gains' squares sum to one all through it.
+        for step in 0..=10 {
+            let x = step as f64 / 10.0;
+            let sum = crossfade_gain(x).powi(2) + crossfade_gain(1.0 - x).powi(2);
+            assert!((sum - 1.0).abs() < 1e-9, "{x}: {sum}");
+        }
+
+        // A word right after the first clip's end, cut out: the first stops at the cut, falling only before it.
+        let segments = audio_segments(&cut_project(Some((1.0, 0.0, 1.0)), 30.0));
+        assert!((segments[0].duration - 3.0).abs() < 1e-9);
+        assert!((segments[0].cross_out - reach).abs() < 1e-9);
+        assert!((segments[1].lead - reach).abs() < 1e-9);
+        // Only 40 ms of quiet before the second clip: it reaches back 40 ms.
+        let segments = audio_segments(&cut_project(Some((0.04, 1.0, 1.0)), 30.0));
+        assert!((segments[1].lead - 0.04).abs() < 1e-9);
+        assert!((segments[1].cross_in - (0.04 + reach)).abs() < 1e-9);
+        // Words right up to the cut on both sides, quiet beyond: what's kept plays whole, and only what
+        // was cut out fades, under it. The second is at full level from the cut, the first until it.
+        let segments = audio_segments(&cut_project(Some((1.0, 1.0, 0.0)), 30.0));
+        assert!(
+            (segments[1].lead - reach).abs() < 1e-9 && (segments[1].cross_in - reach).abs() < 1e-9
+        );
+        assert!(
+            (segments[0].duration - (3.0 + reach)).abs() < 1e-9
+                && (segments[0].cross_out - reach).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn a_cut_is_left_as_it_was_without_room_a_take_carrying_on_or_library_sound() {
+        let plain = |project: &Project| {
+            audio_segments(project).iter().all(|segment| {
+                segment.lead == 0.0 && segment.cross_in == 0.0 && segment.cross_out == 0.0
+            })
+        };
+        // No words known: no room, no crossfade, the clips' own fades.
+        assert!(plain(&cut_project(None, 30.0)));
+        // Words all through the cut, kept and cut out.
+        assert!(plain(&cut_project(Some((0.0, 0.0, 0.0)), 30.0)));
+        // The second clip is the first one's source carrying on (a split): nothing to blend.
+        assert!(plain(&cut_project(Some((1.0, 1.0, 1.0)), 13.0)));
+        // Music and sound effects keep their own fades.
+        let mut music = cut_project(Some((1.0, 1.0, 1.0)), 30.0);
+        if let Some(media) = music.media.get_mut(0) {
+            media.library = Some(LibraryKind::Music);
+        }
+        assert!(plain(&music));
+        // A gap between them.
+        let mut apart = cut_project(Some((1.0, 1.0, 1.0)), 30.0);
+        if let Some(clip) = apart.clips.iter_mut().find(|clip| clip.id == "s2") {
+            clip.start += 1;
+        }
+        assert!(plain(&apart));
     }
 
     #[test]

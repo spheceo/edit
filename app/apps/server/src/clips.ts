@@ -66,6 +66,7 @@ const PHOTO_FRAME = struct("PhotoFrame", [
 ]);
 
 const MUTE = struct("Mute", [required("from", "f64"), required("to", "f64")]);
+const SOUND_ROOM = struct("SoundRoom", [required("from", "f64"), required("to", "f64"), required("words_from", "f64"), required("words_to", "f64")]);
 
 export const GLOW = struct("Glow", [
   field("enabled", "bool", true),
@@ -236,6 +237,7 @@ const VARIANTS: Record<(typeof CLIP_TYPES)[number], Struct> = {
     field("volume_db", "f32", 0),
     field("mutes", { vec: { struct: MUTE } }, [], isEmpty),
     optional("channel", enumOf("SoundChannel", ["left", "right"])),
+    optional("room", { struct: SOUND_ROOM }),
   ]),
   text: struct("Text", [
     required("text", "string"),

@@ -5,6 +5,7 @@ import { api, fetchRetrying, mediaHost, mediaUrl } from "./api";
 import { Decoder, videoTime } from "./decoder";
 import { addContext, note, recordTiming, tell } from "./diagnostics";
 import { AUDIO_CHUNK_SECONDS } from "./decoder.protocol";
+import { crossfadeGain, crossfades, type SoundEdges } from "@edit/types/crossfades";
 import { clipEnd, paramAt, projectDuration, validateClips, validateProject } from "./edit";
 import { peopleProblem } from "./people";
 import { mutePoints } from "./mutes";
@@ -54,6 +55,14 @@ let wasmReady: Promise<unknown> | null = null;
 let fontBytes: Promise<[string, number, Uint8Array][]> | null = null;
 
 type AudioClip = Extract<Clip, { type: "audio" }>;
+
+/**
+ * An audio clip as its sound plays: a cut's crossfade starts it early and
+ * carries it on past its end (`edges`, @edit/types/crossfades, as the export's
+ * edit-core `audio_segments`), so `start`, `duration` and `source_in` are the
+ * sound's (frames, maybe fractional), and `clip` is the clip itself.
+ */
+type Sound = AudioClip & { clip: AudioClip; edges: SoundEdges | null };
 interface PictureSource { clip: string; media: string; time: number }
 /** A stretch of a clip's sound queued on the audio clock, and what it was cut from. */
 interface ScheduledSound { source: AudioBufferSourceNode; gain: GainNode; mute?: GainNode; clip: string; url: string }
@@ -167,8 +176,11 @@ class Preview {
   /** The engine hasn't seen the latest project yet: it's sent once per frame, before drawing. */
   private engineStale = false;
   private clips: Clip[] = [];
-  private clipsByTrack = new Map<string, Clip[]>();
   private clipsById = new Map<string, Clip>();
+  /** The heard sounds by track (by start), with their crossfades' reach; and the clips whose crossfades changed with the last edit. */
+  private soundsByTrack = new Map<string, Sound[]>();
+  private soundEdges = new Map<string, SoundEdges | null>();
+  private reshaped = new Set<string>();
   private tracks = new Map<string, Track>();
   private media = new Map<string, Media>();
   private sources = new Map<string, string>();
@@ -1071,23 +1083,37 @@ class Preview {
     this.invalidate();
   }
 
-  /** The clips by time, by id and by track, and the edit's length. */
+  /** The clips by time and by id, the edit's length, and the sounds by track. */
   private index(project: Project) {
     this.clips = [...project.clips].sort((a, b) => a.start - b.start);
     this.clipsById = new Map(project.clips.map((clip) => [clip.id, clip]));
-    this.clipsByTrack.clear();
-    for (const clip of this.clips) {
-      const clips = this.clipsByTrack.get(clip.track) ?? [];
-      clips.push(clip);
-      this.clipsByTrack.set(clip.track, clips);
-    }
     this.duration = projectDuration(project);
+    // Each sound as it plays, its crossfades' sound before and after it included.
+    const fps = rate(project.settings);
+    const reach = crossfades(project);
+    const was = this.soundEdges;
+    this.soundEdges = new Map();
+    this.reshaped.clear();
+    this.soundsByTrack.clear();
+    for (const clip of this.clips) {
+      if (clip.type !== "audio") continue;
+      const edges = reach.get(clip.id) ?? null;
+      const old = was.get(clip.id) ?? null;
+      if (old?.lead !== edges?.lead || old?.tail !== edges?.tail || old?.crossIn !== edges?.crossIn || old?.crossOut !== edges?.crossOut) this.reshaped.add(clip.id);
+      const lead = (edges?.lead ?? 0) * fps;
+      const tail = (edges?.tail ?? 0) * fps;
+      const sound: Sound = { ...clip, start: clip.start - lead, duration: clip.duration + lead + tail, source_in: clip.source_in - (edges?.lead ?? 0) * clip.speed, clip, edges };
+      this.soundEdges.set(clip.id, edges);
+      const list = this.soundsByTrack.get(clip.track) ?? [];
+      list.push(sound);
+      this.soundsByTrack.set(clip.track, list);
+    }
   }
 
   /** A queued sound whose clip changed, went quiet or now reads another file. */
   private outdated(sound: ScheduledSound, changed: Set<string>) {
     const clip = this.clipsById.get(sound.clip);
-    return changed.has(sound.clip) || !clip || !this.audible(clip) || this.sounds.get(clip.media) !== sound.url;
+    return changed.has(sound.clip) || this.reshaped.has(sound.clip) || !clip || !this.audible(clip) || this.sounds.get(clip.media) !== sound.url;
   }
 
   /**
@@ -1330,33 +1356,23 @@ class Preview {
     playhead.emit();
   }
 
-  /** Active clips are found by binary search rather than scanning the full edit per tick. */
-  private activeClips(frame: number) {
-    const active: Clip[] = [];
-    for (const clips of this.clipsByTrack.values()) {
-      let lo = 0, hi = clips.length;
+  /**
+   * Sounds playing at `frame` or starting by `until`. A track's sounds overlap
+   * only where a cut crossfades, so each track's that started by `frame` are
+   * looked at back to the first still playing.
+   */
+  private soundsAround(frame: number, until: number): Sound[] {
+    const found: Sound[] = [];
+    for (const sounds of this.soundsByTrack.values()) {
+      let lo = 0, hi = sounds.length;
       while (lo < hi) {
         const mid = (lo + hi) >>> 1;
-        if (clips[mid].start <= frame) lo = mid + 1; else hi = mid;
+        if (sounds[mid].start <= frame) lo = mid + 1; else hi = mid;
       }
-      if (lo && frame < clipEnd(clips[lo - 1])) active.push(clips[lo - 1]);
+      for (let i = lo - 1; i >= 0 && i >= lo - 2; i--) if (frame < clipEnd(sounds[i])) found.push(sounds[i]);
+      for (let i = lo; i < sounds.length && sounds[i].start <= until; i++) found.push(sounds[i]);
     }
-    return active;
-  }
-
-  /**
-   * Clips playing at `frame` or starting by `until`: the active one on each
-   * track (a track's clips never overlap) and those just ahead, by binary search.
-   */
-  private clipsAround(frame: number, until: number) {
-    const clips = this.activeClips(frame);
-    let lo = 0, hi = this.clips.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (this.clips[mid].start <= frame) lo = mid + 1; else hi = mid;
-    }
-    for (let i = lo; i < this.clips.length && this.clips[i].start <= until; i++) clips.push(this.clips[i]);
-    return clips;
+    return found;
   }
 
   private audible(clip: Clip): clip is AudioClip {
@@ -1476,11 +1492,10 @@ class Preview {
     for (const source of sources) this.requestPicture(source, lanes);
     // Scrubbing needs one picture, not concurrent audio and future-cut decodes.
     if (!playhead.playing) {
-      if (this.settled) for (const clip of this.activeClips(frame)) this.requestSound(clip, frame, lanes);
+      if (this.settled) for (const sound of this.soundsAround(frame, frame)) if (sound.start <= frame) this.requestSound(sound, frame, lanes);
       this.decoder.retain(lanes);
       return;
     }
-    const active = this.activeClips(frame);
     // Cue upcoming cuts, including a different moment of the same source.
     let lo = 0, hi = this.clips.length;
     while (lo < hi) {
@@ -1492,7 +1507,7 @@ class Preview {
     for (const clip of upcoming) if (clip.type === "video" && !this.tracks.get(clip.track)?.hidden) {
       this.requestPicture({ clip: clip.id, media: clip.media, time: clip.source_in }, lanes);
     }
-    for (const clip of [...active, ...upcoming]) this.requestSound(clip, frame, lanes);
+    for (const sound of this.soundsAround(frame, frame + fps * this.speed * LOOK_AHEAD)) this.requestSound(sound, frame, lanes);
     this.decoder.retain(lanes);
   }
 
@@ -1516,7 +1531,7 @@ class Preview {
     if (!this.project) return true;
     const fps = rate(this.project.settings);
     const until = frame + ahead * fps * this.speed;
-    return this.clipsAround(frame, until).every((clip) => {
+    return this.soundsAround(frame, until).every((clip) => {
       if (!this.audible(clip)) return true;
       const media = this.media.get(clip.media)!;
       const time = clip.source_in + Math.max(0, frame - clip.start) / fps * clip.speed;
@@ -1537,7 +1552,7 @@ class Preview {
     // Frames of the edit that go by in a second of the speaker's clock.
     const pace = fps * this.speed;
     const until = frame + pace * AUDIO_AHEAD;
-    for (const clip of this.clipsAround(frame, until)) {
+    for (const clip of this.soundsAround(frame, until)) {
       if (!this.audible(clip)) continue;
       const url = this.sounds.get(clip.media)!;
       const media = this.media.get(clip.media)!;
@@ -1567,17 +1582,26 @@ class Preview {
         source.playbackRate.value = 1; // Worker PCM is already stretched, with pitch preserved.
         const gain = audio.createGain();
         const at = Math.max(audio.currentTime, when);
-        // Automation follows the same frame fades and volume keys as the native mixer.
-        for (let sample = start + late * pace; sample <= end; sample = Math.min(end, sample + 1)) {
+        // Automation follows the same frame fades, crossfades and volume keys as the native mixer.
+        const crossIn = (clip.edges?.crossIn ?? 0) * fps;
+        const crossOut = (clip.edges?.crossOut ?? 0) * fps;
+        for (let sample = start + late * pace; sample <= end;) {
           const local = sample - clip.start;
-          let volume = 10 ** (paramAt(clip, "volume_db", sample) / 20);
-          // Linear from silence at the clip's start and to silence at its end, as the export's (mix.rs fade_gain).
-          if (clip.fade_in > 0) volume *= Math.min(1, Math.max(0, local / clip.fade_in));
-          if (clip.fade_out > 0) volume *= Math.min(1, Math.max(0, (clip.duration - local) / clip.fade_out));
+          // The volume keys are the clip's own, from its start (a crossfade's lead holds the first).
+          let volume = 10 ** (paramAt(clip.clip, "volume_db", Math.max(sample, clip.clip.start)) / 20);
+          // A cut's crossfade on the equal-power curve, else the clip's own fade: linear from silence at its start
+          // and to silence at its end, as the export's (mix.rs fade_gain).
+          if (crossIn > 0) volume *= crossfadeGain(local / crossIn);
+          else if (clip.fade_in > 0) volume *= Math.min(1, Math.max(0, local / clip.fade_in));
+          if (crossOut > 0) volume *= crossfadeGain((clip.duration - local) / crossOut);
+          else if (clip.fade_out > 0) volume *= Math.min(1, Math.max(0, (clip.duration - local) / clip.fade_out));
           const t = at + (sample - start - late * pace) / pace;
           if (sample === start + late * pace) gain.gain.setValueAtTime(volume, t);
           else gain.gain.linearRampToValueAtTime(volume, t);
           if (sample === end) break;
+          // A quarter frame at a time through a crossfade, so its curve is followed, not cut into straight lines.
+          const curving = (crossIn > 0 && local < crossIn) || (crossOut > 0 && clip.duration - local < crossOut);
+          sample = Math.min(end, sample + (curving ? 0.25 : 1));
         }
         // Mutes (source seconds) on a gain of their own, at their exact times with the export's cosine ramps.
         let mute: GainNode | undefined;

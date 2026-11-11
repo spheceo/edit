@@ -656,6 +656,22 @@ pub struct Mute {
     pub to: f64,
 }
 
+/// Where an audio clip's file has words, around and inside it
+/// (`ClipContent::Audio::room`), in seconds of the media: a crossfade at a
+/// cut fades a sound only where it has none.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct SoundRoom {
+    /// The earliest second of the source a crossfade into the clip may start playing (the end of the word before it).
+    pub from: f64,
+    /// The latest second of the source a crossfade out of the clip may play to (the start of the word after it).
+    pub to: f64,
+    /// Where the clip's own first word starts (its end when it has none): before it the clip may fade in.
+    pub words_from: f64,
+    /// Where its last word ends (its start when it has none): after it the clip may fade out.
+    pub words_to: f64,
+}
+
 /// One side of a stereo source (an audio clip's `channel`).
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -757,6 +773,15 @@ pub enum ClipContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[cfg_attr(feature = "ts", ts(optional))]
         channel: Option<SoundChannel>,
+        /// The source around the clip that has no word in it (seconds of
+        /// the media, from before `source_in` to past where the clip ends):
+        /// how far a crossfade at a cut may play the clip's sound beyond its
+        /// own edges (`eval`'s `audio_segments`). Edit writes it from the
+        /// file's words on every save (the server's `sound_room.ts`); None
+        /// (no words known): its cuts aren't crossfaded.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "ts", ts(optional))]
+        room: Option<SoundRoom>,
     },
     Text {
         text: String,
@@ -2451,12 +2476,20 @@ fn content_finite(content: &ClipContent) -> bool {
                 })
         }
         ClipContent::Audio {
-            volume_db, mutes, ..
+            volume_db,
+            mutes,
+            room,
+            ..
         } => {
             volume_db.is_finite()
                 && mutes
                     .iter()
                     .all(|mute| mute.from.is_finite() && mute.to.is_finite())
+                && room.is_none_or(|room| {
+                    [room.from, room.to, room.words_from, room.words_to]
+                        .iter()
+                        .all(|value| value.is_finite())
+                })
         }
         ClipContent::Solid {
             fill,
@@ -2953,8 +2986,10 @@ mod validation_tests {
             volume_db: 0.0,
             mutes: Vec::new(),
             channel: None,
+            room: None,
         })
         .unwrap();
+        assert!(!silent.contains("room"));
         assert!(!silent.contains("mutes"));
         assert!(!silent.contains("channel"));
         let left: ClipContent =

@@ -330,24 +330,15 @@ rust_crates := if os() == "macos" { "--workspace" } else { "--workspace --exclud
 
 check: check-rust check-app
 
-# Check's two halves, which CI runs as jobs side by side on each platform.
+# Check's parts, which CI runs as jobs side by side on each platform (Nov 11: Check in ~5 minutes).
 check-rust:
     cargo fmt --all --check
     cargo clippy {{rust_crates}} --all-targets -- -D warnings
     cargo test {{rust_crates}}
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
 
-# CI's Mac: what only a Mac can tell, the addon on AVFoundation and VideoToolbox and the server's tests on it,
-# `shard` of them (1/2, 2/2: two jobs side by side; the first also tests the addon). One after another, not in
-# parallel: on CI's three-core Mac, tests in parallel hung on the hardware encoder (Nov 11: two at 30 s, 224 s in
-# all). The rest of check-app is the same TypeScript anywhere: Linux's Check runs it.
-check-mac shard="1/1":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    case "{{shard}}" in 1/*) just native-test ;; *) just native debug ;; esac
-    cd apps/server && bun test --timeout=30000 --timings=test/timings.json --shard={{shard}}
-
-check-app: types
+# Everything but the server's tests: the same TypeScript anywhere, so CI runs it on Linux alone.
+check-ts: types
     # The generated TS types are committed: they must match the Rust.
     git diff --exit-code -- packages/edit-types
     test -z "$(git status --porcelain -- packages/edit-types)"
@@ -358,4 +349,15 @@ check-app: types
     bun run --cwd apps/web test
     bun run --cwd apps/server typecheck
     just lint
+
+# `shard` of the server's tests (1/2, 2/2: CI's two jobs side by side, balanced by test/timings.json) after the
+# addon's own, one after another: in parallel on CI's runners FFmpeg- and encoder-heavy tests timed out (Nov 11:
+# two hung on the Mac's hardware encoder, three thumbnail tests at 60 s on Linux), where one after another they
+# always passed.
+check-tests shard="1/1":
+    just native-test
+    cd apps/server && bun test --timeout=30000 --timings=test/timings.json --shard={{shard}}
+
+# Here, on a desk with the cores for it: the server's tests in parallel (package.json's test).
+check-app: check-ts
     bun run --cwd apps/server test

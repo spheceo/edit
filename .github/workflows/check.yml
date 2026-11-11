@@ -24,19 +24,17 @@ jobs:
     # (its engine runs FFmpeg where a Mac runs AVFoundation, so each checks
     # its own).
     # In parts side by side (Sphe, Nov 11: Check took ~15 minutes): the Rust
-    # (`just check-rust`); the app, on Linux all of it (`just check-app`: the
-    # types, the addon, the TypeScript, the server's tests in parallel) and on
-    # the Mac what only a Mac can tell (`just check-mac`: the addon and the
-    # server's tests, half in `app` and half in `tests`); and on the Mac the
-    # acceptance run.
+    # (`just check-rust`); on Linux the TypeScript that's the same anywhere
+    # (`just check-ts`); the server's tests in two halves (`just check-tests
+    # 1/2`, `2/2`) on each; and on the Mac the acceptance run.
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-24.04]
-        part: [rust, app, tests, acceptance]
+        part: [rust, ts, tests-1, tests-2, acceptance]
         exclude:
-          - os: ubuntu-24.04
-            part: tests
+          - os: macos-latest
+            part: ts
           - os: ubuntu-24.04
             part: acceptance
         include:
@@ -55,17 +53,17 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: app
-          # Each half builds different things (tests and clippy; the addon and the types): a cache of its own.
-          key: ${{ matrix.part }}
+          # Two caches: the Rust tests and clippy's, and the debug addon's (every other part builds that).
+          key: ${{ matrix.part == 'rust' && 'rust' || 'app' }}
       # The web typecheck needs the WASM preview engine (gitignored, built
       # from Rust): engine-cache.yml's copy when there is one, else built.
       - id: wasm
-        if: matrix.part == 'acceptance' || (matrix.part == 'app' && runner.os == 'Linux')
+        if: matrix.part == 'acceptance' || matrix.part == 'ts'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: app/apps/web/src/engine/pkg
           key: wasm-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**', 'app/scripts/build-wasm.sh') }}
-      - if: (matrix.part == 'acceptance' || (matrix.part == 'app' && runner.os == 'Linux')) && steps.wasm.outputs.cache-hit != 'true'
+      - if: (matrix.part == 'acceptance' || matrix.part == 'ts') && steps.wasm.outputs.cache-hit != 'true'
         run: scripts/build-wasm.sh
       # Pinned, as in release.yml: what Edit is built and checked with.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -94,7 +92,7 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Check
         if: matrix.part != 'acceptance'
-        run: just ${{ runner.os != 'macOS' && format('check-{0}', matrix.part) || matrix.part == 'rust' && 'check-rust' || matrix.part == 'app' && 'check-mac 1/2' || 'check-mac 2/2' }}
+        run: just ${{ matrix.part == 'tests-1' && 'check-tests 1/2' || matrix.part == 'tests-2' && 'check-tests 2/2' || format('check-{0}', matrix.part) }}
       - name: The addon, for acceptance
         if: matrix.part == 'acceptance'
         run: just native debug

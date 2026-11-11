@@ -127,6 +127,16 @@ echo "EDIT-FILE $out/Dashcam [x1].mp4"
     expect(told[0]).toContain('Recording 2 ("Dashcam") is the footage from https://news.example.com/dashcam');
     expect(stages.some((stage) => stage.startsWith("Downloading “Dashcam”"))).toBe(true);
     expect(stages).toContain("Transcribing “Dashcam”");
+    expect(stages.at(-1)).toBe("Editing the script");
+
+    // Edit finds it by its link, so Start the edit takes its words (Nov 11: a YouTube script's linked recording had no
+    // source, its words weren't shared and Edit would have heard it again); a link Edit can't fetch is by its original.
+    const { partSources } = await import("../../src/writer/parts.ts");
+    const withYoutube = { ...now, parts: [now.parts![0]!, { ...now.parts![1]!, title: "Bodycam 4", url: "https://youtu.be/abcdefghijk" }] };
+    expect(partSources(dir, withYoutube)).toEqual([["youtube:4mqGp1IgqEw", "Traffic stop [4mqGp1IgqEw].mp4"], ["youtube:abcdefghijk", "Bodycam 4 [abcdefghijk].mp4"]]);
+    const original = `sha256:${"a".repeat(64)}`;
+    const withPage = { ...now, parts: [now.parts![0]!, { ...now.parts![1]!, mediaSource: original, originalKey: `edit/originals/sha256/${"a".repeat(64)}/Dashcam [x1].mp4` }] };
+    expect(partSources(dir, withPage)[1]).toEqual([original, "Dashcam [x1].mp4"]);
 
     // Carried on after a restart, the same link isn't added twice.
     await bringLinks(fx.app, data, ID, ["https://news.example.com/dashcam"], request, { kind: "none" } as never, { ...job, resumed: true });

@@ -116,8 +116,12 @@ export function partSources(dir: string, script: Script): ([string, string] | nu
     listed = videos === null ? [] : keptVideos(videos).map(([, video]) => ofLink(video.url, video.title));
   } else if (script.sourceKind === "youtube") listed = [ofLink(script.sourceUrl, script.title)];
   else listed = [null];
+  // A recording joined from a link in a revision (links.ts) comes after the import's own: its source is its link, or
+  // the original it was shared as. Left out, its words never went to Edit, which heard it again (Nov 11).
+  const own = listed.length;
   parts.forEach((part, index) => {
-    if (part.mediaSource && part.originalKey && index < listed.length) listed[index] = [part.mediaSource, part.originalKey.split("/").pop() ?? "case.mp4"];
+    if (part.mediaSource && part.originalKey) listed[index] = [part.mediaSource, part.originalKey.split("/").pop() ?? "case.mp4"];
+    else if (index >= own && part.url !== undefined) listed[index] = ofLink(part.url, part.title);
   });
   if (parts.length <= 1) return [listed[0] ?? null];
   return parts.map((part, index) => (part.reuse ? null : (listed[index] ?? null)));

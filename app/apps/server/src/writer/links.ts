@@ -88,6 +88,8 @@ export async function bringLinks(app: App, data: string, id: string, urls: strin
   const told = named.length === 0 ? request : `${request}\n\n(The footage linked here is in the script now, its words heard: ${named.join("; ")}. Use it as asked.)`;
   // What couldn't come in is said first, in its own line: the revision goes on with the rest.
   if (failed.length > 0) chat.add(dir, "editor", `${failed.join(". ")}.`, null, true);
+  // Claude's turn says so, as a revision's does (it read "Reading who speaks in …" until the answer came, Nov 11).
+  job.stage("Editing the script");
   return await reviseWith(data, id, told, request, focus, false, { ...job, resumed: true });
 }
 

@@ -14,6 +14,12 @@ on:
   push:
     tags: ["v*", "nightly-*"]
   workflow_dispatch:
+    inputs:
+      as:
+        description: "A test build as a nightly makes it (the Mac's alone) or as a release (Linux too, and Linux's tests)"
+        type: choice
+        options: [release, nightly]
+        default: release
 
 # Read-only by default: only the jobs that make and publish the release get
 # write, and the token reaches only their gh steps (the audit, Oct 23: every
@@ -203,21 +209,18 @@ jobs:
 
   build:
     needs: web
+    # The Mac's for a nightly, the Mac's and Linux's for a release (Sphe, Nov
+    # 11: Linux on stable releases only; Linux installs take releases only,
+    # update.ts channelHere). One axis, its list chosen by one expression:
+    # `exclude` can't take an entry `include` added (nightly-74's first run
+    # made no build job). A test build run by hand builds as `inputs.as` says.
+    # Linux on 22.04: glibc 2.35, so the addon loads on 22.04 and newer; its
+    # window is Chrome's (apps/server/src/linux_desktop.ts): no helper.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-          # Linux on 22.04: glibc 2.35, so the addon loads on 22.04 and newer.
-          # Its window is Chrome's (apps/server/src/linux_desktop.ts): no helper.
-          # Built for nightlies too, for now: a matrix leaving it out for a
-          # nightly (fromJSON, then an exclude) never made its build job
-          # (nightly-74, Nov 11). Linux installs take releases only (update.ts
-          # channelHere), so a nightly's Linux build is offered to no one.
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-    runs-on: ${{ matrix.os }}
+        target: ${{ fromJSON((startsWith(github.ref_name, 'nightly-') || inputs.as == 'nightly') && '["aarch64-apple-darwin"]' || '["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"]') }}
+    runs-on: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'ubuntu-22.04' || 'macos-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The addon and window helper engine-cache.yml built on main for these
@@ -372,9 +375,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" --clobber dist/*
 
+  # A release (a v* tag, or a test build `as: release`) is checked on Linux
+  # too: Linux's parts of check.yml, which a push's Check leaves out.
+  linux-check:
+    if: (github.event_name == 'push' && startsWith(github.ref_name, 'v')) || (github.event_name == 'workflow_dispatch' && inputs.as == 'release')
+    uses: ./.github/workflows/check.yml
+    with:
+      parts: linux
+
   publish:
-    needs: [upload, checked]
-    if: github.event_name == 'push'
+    needs: [upload, checked, linux-check]
+    # linux-check is skipped for a nightly; for a release it must have passed.
+    if: >-
+      github.event_name == 'push' && !cancelled()
+      && needs.upload.result == 'success' && needs.checked.result == 'success'
+      && (needs.linux-check.result == 'success' || (needs.linux-check.result == 'skipped' && startsWith(github.ref_name, 'nightly-')))
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -27,7 +27,8 @@ permissions:
 # release.yml `checked`) has a group of its own: never cancelled, and it
 # cancels nothing.
 concurrency:
-  group: check-${{ github.ref }}-${{ github.run_attempt == 1 && 'first' || github.run_id }}
+  # Called by a release (`parts: linux`), a group of its own: it never cancels a push's Check, nor is cancelled by one.
+  group: check-${{ inputs.parts || 'push' }}-${{ github.ref }}-${{ github.run_attempt == 1 && 'first' || github.run_id }}
   cancel-in-progress: true
 
 defaults:

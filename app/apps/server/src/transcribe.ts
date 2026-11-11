@@ -3,50 +3,49 @@
 // source file so the same footage is never paid for twice.
 //
 // Every transcript in Edit comes from here (media.ts's `transcribe`), so this
-// is the one transcription system: Scribe v3 hears a file once, whole, for
-// its words, their times and who speaks (Sphe, Nov 10: one transcriber, not
-// Scribe and pyannote). Scribe v2 had placed words late on a long file (a
-// line at 5:50 of a 25-minute bodycam came out 26 s late), so until Nov 10 a
-// long file was heard twice: in 40-second pieces for its words and whole for
-// its voices. v3 doesn't drift: on Nov 10's bench (five recordings, 27 to 112
-// minutes, ~/.edit-dev/bench-scribe-v3) a file heard whole put 0.15–0.6% of
-// its words more than half a second from where 10-minute pieces put them,
-// and 0.7% against 40-second pieces, and its voices held from start to end.
-// Then cameras.ts splits a voice heard on two bodycams (two officers Scribe
-// heard as one), and speakers.ts names the voices. While the relay's flag is
-// on, pyannote's voices are laid over Scribe's (voices.ts, from media.ts);
-// it's off from Nov 10, kept to turn back on if speakers get worse.
+// is the one transcription system: a long file is heard twice at once.
+// Scribe places words late on a long file (a line at 5:50 of a 25-minute
+// bodycam came out 26 s late), so its words and times come from 40-second
+// pieces heard on their own (`plan`, `join`); but a piece only numbers the
+// voices in it, so who speaks comes from the whole file heard in one go,
+// whose voice numbers hold from start to end (`voicesFrom`). Then
+// cameras.ts splits a voice heard on two bodycams (two officers Scribe heard
+// as one), and speakers.ts names the voices. While the relay's flag is on
+// (Nov 8), the voices are pyannote's instead (voices.ts, from media.ts after
+// the words are in): the whole hearing isn't asked for (`wholeVoices`).
 //
-// A file longer than `ByLinkFrom` goes by link (`jobHearing`): no connection
-// held open while Scribe works. A file longer than Scribe hears in one go
-// (`Longest`, 9½ hours) is heard in parts that long at most, joined where
-// both heard the same word (`join`); each part's voices are its own.
-//
-// What's heard is kept as it comes in (`saved`), so a run cut short (the
-// day's allowance, a restart) never pays for it again.
+// What's heard is kept as it comes in (`saved`): each piece beside the
+// transcript until the file is done, so a run cut short (the day's allowance,
+// a restart) pays only for the pieces it hadn't heard; and the whole file's
+// hearing for good, so hearing it again for the case's names asks only for
+// the pieces (voices don't change with the names).
 //
 // In Effect since Nov 1 (docs/plans/2026-11-01-effect.md, part 1). Every way
 // the relay can answer is its own error, and whether it's asked again is the
 // retry policy's (`Retries`), not an `if` in a loop: the busy relay, the
 // gateway and a dropped connection are asked again; the day's allowance, a
 // refusal and a request too big for the relay are not, since asking again
-// gets the same answer. Sent in one request, a file is encoded to fit the
-// relay's limit (`wholeBitrate`): at 32 kbps, a recording over ~3 h 7 min was
+// gets the same answer. The pieces and the whole hearing run together, and
+// one failing interrupts the other (its FFmpeg killed, its request
+// abandoned). The whole hearing is encoded to fit the relay's limit for one
+// request (`wholeBitrate`): sent at 32 kbps, a recording over ~3 h 7 min was
 // refused with a 413 every time (Nov 1, Mathias's FOIA interviews of 4 h 39
-// min and 5 h 1 min).
+// min and 5 h 1 min: two imports of ~41 minutes each stopped, then resumed 13
+// times). A file too long even for that keeps its words from the pieces and
+// goes without voices (the watch names who speaks) rather than stop.
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
 import { Cause, Clock, Context, Duration, Effect, Option, Predicate, Schedule, Schema } from "effect";
 
 import * as cameras from "./cameras.ts";
-import * as log from "./hearing_log.ts";
 import * as diag from "./diag.ts";
 import * as proc from "./effect/proc.ts";
 import { inArea, runPromise } from "./effect/runtime.ts";
 import * as service from "./effect/service.ts";
 import { ioMessage, writeAtomic } from "./files.ts";
-import { fileName, withExtension } from "./paths.ts";
+import { withExtension } from "./paths.ts";
 import * as paidWork from "./paid.ts";
 import * as relay from "./relay.ts";
 import { serdeParse } from "./rust.ts";
@@ -60,9 +59,6 @@ export interface Word {
   /** Scribe's voice number, if it heard more than one person. */
   speaker?: string;
 }
-
-/** The model every hearing is made with (the relay asks Scribe for it). */
-export const MODEL = "scribe_v3";
 
 export interface Transcript {
   model: string;
@@ -99,39 +95,6 @@ export interface Transcript {
    * (voices.ts), so a transcript is given pyannote's voices once.
    */
   voices?: string;
-  /**
-   * The stretches (seconds) Scribe heard, when it heard only those: a
-   * script's chosen footage, heard in Script mode (writer/exact.ts) and
-   * handed to Edit (writer/handoff.ts), the rest of the file unheard and
-   * without words. Absent: the whole file was heard.
-   */
-  heard?: [number, number][];
-  /**
-   * The free model whose words fill what `heard` leaves out
-   * ("apple-speech", "youtube-captions"): `model` is who heard `heard`.
-   * Absent when the whole file was heard by `model`.
-   */
-  rough?: string;
-}
-
-/** How far a use may reach past what was heard (seconds) and still be taken as heard: a cut's word boundary moved. */
-const HEARD_SLACK = 0.25;
-
-/**
- * Whether `transcript` has Scribe's words for every range (seconds) in
- * `uses`: always for a file heard whole; a script's stretches only where
- * the uses stay inside them.
- */
-export function hearsAll(transcript: Pick<Transcript, "heard">, uses: readonly (readonly [number, number])[]): boolean {
-  if (transcript.heard === undefined) return true;
-  // Stretches that touch are one: a use may run across both.
-  const heard: [number, number][] = [];
-  for (const [a, b] of [...transcript.heard].sort((x, y) => x[0] - y[0])) {
-    const last = heard.at(-1);
-    if (last !== undefined && a <= last[1] + HEARD_SLACK) last[1] = Math.max(last[1], b);
-    else heard.push([a, b]);
-  }
-  return uses.every(([from, to]) => to - from <= 2 * HEARD_SLACK || heard.some(([a, b]) => from >= a - HEARD_SLACK && to <= b + HEARD_SLACK));
 }
 
 /**
@@ -162,8 +125,6 @@ export function serialize(transcript: Transcript): string {
   }
   if (transcript.keyterms !== undefined && transcript.keyterms.length > 0) text += `,"keyterms":${JSON.stringify(transcript.keyterms)}`;
   if (typeof transcript.voices === "string" && transcript.voices !== "") text += `,"voices":${JSON.stringify(transcript.voices)}`;
-  if (Array.isArray(transcript.heard)) text += `,"heard":${JSON.stringify(transcript.heard)}`;
-  if (Array.isArray(transcript.heard) && typeof transcript.rough === "string" && transcript.rough !== "") text += `,"rough":${JSON.stringify(transcript.rough)}`;
   return `${text}}`;
 }
 
@@ -208,7 +169,7 @@ export class AudioUnreadable extends Schema.TaggedError<AudioUnreadable>()("Audi
 /** The transcript couldn't be written (a full disk, a folder gone). */
 export class TranscriptUnwritable extends Schema.TaggedError<TranscriptUnwritable>()("TranscriptUnwritable", { message: Schema.String }) {}
 
-/** The relay can't hear a recording by link (an older relay, or not set up there): sent in one request instead. */
+/** The relay can't hear a recording by link (an older relay, or not set up there): heard the old way. */
 export class JobsUnavailable extends Schema.TaggedError<JobsUnavailable>()("JobsUnavailable", { message: Schema.String }) {}
 
 /** Scribe said a recording heard by link failed. */
@@ -251,9 +212,10 @@ export interface RetryPolicy {
   readonly busy: Schedule.Schedule<Duration.Duration>;
   /**
    * The gateway or the connection: after 20 and 60 s. Oct 30, one 524 on one
-   * request stopped a 6.7-hour import after every other recording was heard.
-   * The request may have been billed; asking again costs its hearing once
-   * more, far less than an import stopped for it.
+   * 40-second piece stopped a 6.7-hour import after every other recording was
+   * heard. The request may have been billed; asking again costs a piece (or,
+   * for a whole file, its hearing) once more, far less than an import stopped
+   * for it.
    */
   readonly gateway: Schedule.Schedule<Duration.Duration>;
 }
@@ -277,12 +239,14 @@ export const timing = { instant: false };
 
 // ── What's sent ─────────────────────────────────────────────────────────────
 
-/** Seconds heard either side of a part of a very long file, so a word across its edge is heard whole by one of them. */
+/** Seconds of speech each piece of a long file is heard for, besides its context. */
+export const PIECE = 40;
+/** Seconds heard either side of a piece, so a word across its edge is heard whole by one of them. */
 export const CONTEXT = 4;
-/** The longest Scribe hears in one hearing (it takes up to 10 h); a longer file is heard in parts this long at most. Tests make it short. */
-export const Longest = Context.Reference<number>("edit/transcribe/Longest", { defaultValue: () => 9.5 * 3600 });
-/** Parts of a very long file heard at once. */
-const PARTS_AT_ONCE = 2;
+/** Files up to this long are heard in one go: short enough not to drift. */
+export const WHOLE_UP_TO = 90;
+/** Pieces heard at once (the relay takes 60 a minute from one connection). */
+const PIECES_AT_ONCE = 4;
 
 /** The most the relay takes in one request: its `MAX_UPLOAD_BYTES` (apps/relay/wrangler.toml; a test keeps the two the same). */
 export const RELAY_MAX_BYTES = 45_000_000;
@@ -290,13 +254,13 @@ export const RELAY_MAX_BYTES = 45_000_000;
 export const RelayMaxBytes = Context.Reference<number>("edit/transcribe/RelayMaxBytes", { defaultValue: () => RELAY_MAX_BYTES });
 /** The audio sent, normally (Opus, mono, 16 kHz): ~14.4 MB an hour. */
 const KBPS = 32;
-/** The least a file sent in one request is sent at: still clear speech for telling voices apart. */
+/** The least a whole hearing is sent at: still clear speech for telling voices apart. */
 const MIN_WHOLE_KBPS = 8;
 /** Room left under the limit for Opus going over its target rate and the Ogg pages around it. */
 const HEADROOM = 0.85;
 
 /**
- * The rate a file of `seconds` is sent at so it fits in one request:
+ * The rate a whole hearing of `seconds` is sent at so it fits in one request:
  * 32 kbps up to ~2 h 39 min, less for longer files, down to 8 kbps (~10 h 38
  * min); null for a file too long even for that.
  */
@@ -327,11 +291,6 @@ const lengthOf = Effect.fn("transcribe.lengthOf")(function* (audio: string) {
   const seconds = Option.match(probed, { onNone: () => Number.NaN, onSome: (done) => Number.parseFloat(done.stdout.trim()) });
   return Number.isFinite(seconds) ? seconds : 0;
 });
-
-/** How long a file is, in seconds (0 when FFprobe can't say). */
-export function seconds(path: string): Promise<number> {
-  return runPromise(lengthOf(path));
-}
 
 /** A file that's removed when the scope it was made in closes, whatever happened. */
 const temporary = (path: string) => Effect.acquireRelease(Effect.succeed(path), () => Effect.sync(() => fs.rmSync(path, { force: true })));
@@ -472,7 +431,7 @@ const saved = <E, R>(file: string, tag: string, hear: Effect.Effect<Transcript, 
 
 // ── Heard by link ───────────────────────────────────────────────────────────
 //
-// A long recording heard as a job on the relay (apps/relay/src/
+// A long recording's whole hearing as a job on the relay (apps/relay/src/
 // transcribe_jobs.ts): the audio put in R2, Scribe fetching it itself and the
 // result asked for on a schedule, so no connection is held open while Scribe
 // works (Nov 1: Mathias's 6 h 20 min and 7 h 43 min recordings, sent whole,
@@ -484,8 +443,6 @@ const saved = <E, R>(file: string, tag: string, hear: Effect.Effect<Transcript, 
 export interface JobsService {
   /** Puts the recording at `path` in R2 at `key`. */
   readonly upload: (path: string, key: string) => Effect.Effect<void, RelayUnreachable>;
-  /** Files longer than this (seconds) are heard by link; shorter ones in one request, which answers sooner. */
-  readonly longerThan: number;
   /** How often the result is asked for. */
   readonly pollEvery: Duration.Input;
   /** How long a job may take before it's given up (Scribe takes up to 10 h of audio). */
@@ -500,7 +457,6 @@ export class Jobs extends Context.Reference<JobsService>("edit/transcribe/Jobs",
         try: async () => (await import("./cloud.ts")).uploadFile(path, key),
         catch: (error) => new RelayUnreachable({ message: `putting the recording in the cloud: ${diag.messageOf(error)}` }),
       }),
-    longerThan: 20 * 60,
     pollEvery: "15 seconds",
     deadline: "4 hours",
   }),
@@ -513,14 +469,9 @@ const JobStarted = Schema.Struct({ id: Schema.String, request: Schema.String });
 /** A job older than this isn't asked about again: a new one is started. */
 const JOB_KEPT_MS = 24 * 3600_000;
 
-const startJob = Effect.fn("transcribe.startJob")(function* (key: string, keyterms: readonly string[], again: boolean) {
+const startJob = Effect.fn("transcribe.startJob")(function* (key: string, again: boolean) {
   const answer = yield* service
-    .request(
-      "the transcription relay",
-      `${relay.url()}/v1/transcribe/jobs`,
-      { method: "POST", headers: { ...relay.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ key, again, ...(keyterms.length > 0 ? { keyterms } : {}) }) },
-      120_000,
-    )
+    .request("the transcription relay", `${relay.url()}/v1/transcribe/jobs`, { method: "POST", headers: { ...relay.authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ key, again }) }, 120_000)
     .pipe(
       Effect.catchTags({
         ServiceUnreachable: (error) => Effect.fail(new RelayUnreachable({ message: error.message })),
@@ -565,11 +516,12 @@ const jobsAvailable = Effect.fn("transcribe.jobsAvailable")(function* () {
   );
 });
 
-/** `audio` (`seconds` long) heard by link, kept as `job`; `JobsUnavailable` when the relay can't. */
-const jobHearing = Effect.fn("transcribe.jobHearing")(function* (source: string, audio: string, seconds: number, file: string, keyterms: readonly string[], again: boolean) {
+/** `audio` (the whole file, `seconds` long) heard by link for its voices; `JobsUnavailable` when the relay can't. */
+const jobHearing = Effect.fn("transcribe.jobHearing")(function* (source: string, audio: string, seconds: number, target: string, again: boolean) {
   const jobs = yield* Jobs;
-  // The file it's for, by its whole seconds (its audio is made again on a restart, a few ms either way), and the names asked with.
-  const tag = [String(Math.round(seconds)), ...keyterms].join("|");
+  const file = withExtension(target, "whole.job.json");
+  // The file it's for, by its whole seconds (its audio is made again on a restart, a few ms either way).
+  const tag = String(Math.round(seconds));
   const now = yield* Clock.currentTimeMillis;
   const kept = yield* Effect.sync(() => {
     try {
@@ -581,181 +533,183 @@ const jobHearing = Effect.fn("transcribe.jobHearing")(function* (source: string,
   let job: KeptJob;
   if (Option.isSome(kept) && kept.value.tag === tag && now - kept.value.at < JOB_KEPT_MS) {
     job = kept.value;
-    yield* Effect.logInfo(`${source}: carrying on its hearing by link (job ${job.id})`);
+    yield* Effect.logInfo(`${source}: carrying on its whole hearing by link (job ${job.id})`);
   } else {
     if (!(yield* jobsAvailable())) return yield* new JobsUnavailable({ message: "its /health has no jobs" });
     const key = `edit/transcribe/${crypto.randomUUID()}.ogg`;
     yield* jobs.upload(audio, key);
-    const started = yield* startJob(key, keyterms, again);
+    const started = yield* startJob(key, again);
     job = { ...started, key, tag, at: now };
     yield* Effect.try(() => writeAtomic(file, JSON.stringify(job))).pipe(Effect.catch((error) => Effect.logWarning(`keeping its job in ${file}: ${ioMessage(error.cause)}`)));
-    yield* Effect.logInfo(`${source}: heard by link (${hours(seconds)}, job ${job.id})`);
+    yield* Effect.logInfo(`${source}: heard whole by link for its voices (${hours(seconds)}, job ${job.id})`);
   }
   const forget = Effect.sync(() => fs.rmSync(file, { force: true }));
   // A look that fails for a moment (offline, the gateway) is waited out; the job goes on in the cloud.
   const look = pollJob(job).pipe(
     Effect.catchIf(service.isTemporary, (failed) =>
-      failed._tag === "JobFailed" ? Effect.fail(failed) : Effect.logWarning(`${source}: asking for its hearing by link: ${failed.message}; asking again`).pipe(Effect.as(Option.none<Transcript>())),
+      failed._tag === "JobFailed" ? Effect.fail(failed) : Effect.logWarning(`${source}: asking for its whole hearing: ${failed.message}; asking again`).pipe(Effect.as(Option.none<Transcript>())),
     ),
   );
   const heard = yield* look.pipe(
     Effect.repeat({ schedule: Schedule.spaced(jobs.pollEvery), until: Option.isSome }),
     Effect.timeoutOrElse({
       duration: jobs.deadline,
-      orElse: () => Effect.fail(new RelayTimedOut({ message: `its hearing by link didn't finish within ${Math.round(Duration.toMinutes(Duration.fromInputUnsafe(jobs.deadline)))} min` })),
+      orElse: () => Effect.fail(new RelayTimedOut({ message: `its whole hearing by link didn't finish within ${Math.round(Duration.toMinutes(Duration.fromInputUnsafe(jobs.deadline)))} min` })),
     }),
     // However it ends but stopped, the job is done with: a new run starts afresh.
     Effect.onError((cause) => (Cause.hasInterruptsOnly(cause) ? Effect.void : forget)),
   );
   yield* forget;
-  if (Option.isNone(heard)) return yield* new JobFailed({ message: "its hearing by link came back empty" });
+  if (Option.isNone(heard)) return yield* new JobFailed({ message: "its whole hearing came back empty" });
   return heard.value;
 });
 
 // ── Hearing a file ──────────────────────────────────────────────────────────
 
-/** A part's words on the file's clock; with more than one part, each part's voices are its own (`2:speaker_0`). */
-const shifted = (words: readonly Word[], by: number, part: string | null): Word[] =>
-  words.map((word) => ({
-    text: word.text,
-    start: round3(word.start + by),
-    end: round3(word.end + by),
-    ...(word.speaker === undefined ? {} : { speaker: part === null ? word.speaker : `${part}:${word.speaker}` }),
-  }));
+/** Times into the file, not the piece. */
+const shifted = (words: readonly Word[], by: number): Word[] => words.map((word) => ({ text: word.text, start: round3(word.start + by), end: round3(word.end + by) }));
+
+/** The whole hearing given up: the words stand from the pieces, who speaks is left for the watch. */
+const withoutVoices = (source: string, why: string) =>
+  Effect.logWarning(`${source}: hearing it whole for its voices failed (${why}); its words are from the pieces and who speaks is left for the watch`).pipe(Effect.as(Option.none<Transcript>()));
 
 /**
- * `audio` (`seconds` long) in one hearing: by link when it's long (kept as
- * `target`'s `.job.json` while Scribe works), else in one request at the
- * rate that fits the relay's limit.
+ * A long file heard in pieces for its words and whole for its voices, both
+ * at once: the pieces four at a time, any failure interrupting the rest.
  */
-const hearOnce = Effect.fn("transcribe.hearOnce")(function* (source: string, audio: string, seconds: number, target: string, keyterms: readonly string[], again: boolean) {
-  const jobs = yield* Jobs;
-  if (seconds > jobs.longerThan) {
-    const byLink = yield* jobHearing(source, audio, seconds, withExtension(target, "job.json"), keyterms, again).pipe(
+const hearLong = Effect.fn("transcribe.hearLong")(function* (source: string, audio: string, seconds: number, target: string, keyterms: readonly string[], again: boolean, wholeVoices: boolean) {
+  const pieces = plan(seconds);
+  const piecesDir = withExtension(target, "pieces");
+  const names = createHash("sha256").update(keyterms.join("\n")).digest("hex").slice(0, 12);
+  // How long each hearing took, for the log: the whole file's, and each piece's.
+  const began = yield* Clock.currentTimeMillis;
+  let wholeMs = 0;
+  const pieceMs: number[] = [];
+
+  // Any earlier hearing of the whole file will do: only its voices are used,
+  // so it's asked without the names (which cost a fifth more: the audit, Oct
+  // 23); the pieces spell them. Sent at the rate that fits one request.
+  const wholeHearing = Effect.gen(function* () {
+    // By link first: no connection held open, no cap on its size. An older relay hears it the old way.
+    const byLink = yield* jobHearing(source, audio, seconds, target, again).pipe(
       Effect.map(Option.some),
-      Effect.catchTag("JobsUnavailable", (unavailable) =>
-        Effect.logInfo(`${source}: the relay can't hear it by link (${unavailable.message}); sending it in one request`).pipe(Effect.as(Option.none<Transcript>())),
-      ),
+      Effect.catchTag("JobsUnavailable", (unavailable) => Effect.logInfo(`${source}: the relay can't hear it by link (${unavailable.message}); sending it whole`).pipe(Effect.as(Option.none<Transcript>()))),
     );
     if (Option.isSome(byLink)) return byLink.value;
-  }
-  const maxBytes = yield* RelayMaxBytes;
-  if (Bun.file(audio).size <= maxBytes) return yield* ask(audio, keyterms, again);
-  const kbps = wholeBitrate(seconds, maxBytes);
-  if (kbps === null) return yield* new TooLongForOneRequest({ bytes: Math.round((seconds * KBPS * 1000) / 8), message: `${hours(seconds)} is too long to hear in one request` });
-  return yield* Effect.scoped(
-    Effect.gen(function* () {
-      const smaller = yield* temporary(withExtension(target, "smaller.ogg"));
-      // Opus can run over its rate (a steady tone at "32k" is ~44 kbps), so a
-      // file that still comes out too big is made once more, smaller by as much
-      // as it was over.
-      let rate = kbps;
-      let bytes = 0;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        yield* encode(["-i", audio], smaller, "could not make the audio smaller", rate);
-        bytes = Bun.file(smaller).size;
-        if (bytes <= maxBytes) break;
-        rate = Math.floor((rate * maxBytes * 0.95) / bytes);
-        if (rate < MIN_WHOLE_KBPS) break;
-      }
-      if (bytes > maxBytes) return yield* new TooLongForOneRequest({ bytes, message: `${hours(seconds)} is ${bytes} bytes even at ${kbps} kbps, more than the relay's ${maxBytes}` });
-      yield* Effect.logInfo(`${source}: sent at ${rate} kbps (${hours(seconds)}: at ${KBPS} kbps it's more than one request takes)`);
-      return yield* ask(smaller, keyterms, again);
-    }),
-  );
-});
+    const maxBytes = yield* RelayMaxBytes;
+    const kbps = wholeBitrate(seconds, maxBytes);
+    if (kbps === null) {
+      return yield* new TooLongForOneRequest({ bytes: Math.round((seconds * KBPS * 1000) / 8), message: `${hours(seconds)} is too long to hear whole in one request` });
+    }
+    if (kbps === KBPS && Bun.file(audio).size <= maxBytes) return yield* ask(audio, [], again);
+    const smaller = yield* temporary(withExtension(target, "whole.ogg"));
+    // Opus can run over its rate (a steady tone at "32k" is ~44 kbps), so a
+    // file that still comes out too big is made once more, smaller by as much
+    // as it was over.
+    let rate = kbps;
+    let bytes = 0;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      yield* encode(["-i", audio], smaller, "could not make the whole file's audio smaller", rate);
+      bytes = Bun.file(smaller).size;
+      if (bytes <= maxBytes) break;
+      rate = Math.floor((rate * maxBytes * 0.95) / bytes);
+      if (rate < MIN_WHOLE_KBPS) break;
+    }
+    if (bytes > maxBytes) return yield* new TooLongForOneRequest({ bytes, message: `${hours(seconds)} is ${bytes} bytes even at ${kbps} kbps, more than the relay's ${maxBytes}` });
+    yield* Effect.logInfo(`${source}: heard whole at ${rate} kbps for its voices (${hours(seconds)}: at ${KBPS} kbps it's more than one request takes)`);
+    return yield* ask(smaller, [], again);
+  }).pipe(Effect.scoped);
 
-/**
- * `hearOnce`, and heard again without the case's names when it came back as
- * gibberish with them (Helpful Wife's m91 at 6:39–7:16 came back in a dozen
- * scripts, the same each time with the names): the clearer of the two stands.
- */
-const hearClear = Effect.fn("transcribe.hearClear")(function* (source: string, audio: string, seconds: number, target: string, keyterms: readonly string[], again: boolean) {
-  const heard = yield* hearOnce(source, audio, seconds, target, keyterms, again);
-  if (keyterms.length === 0 || garbledShare(heard.words) < 0.2) return heard;
-  const plain = yield* hearOnce(source, audio, seconds, target, [], false);
-  const clear = garbledShare(plain.words) < garbledShare(heard.words);
-  yield* Effect.logWarning(`${source}: came back garbled with the case's names; heard again without them${clear ? "" : ", still garbled: kept as first heard"}`);
-  return clear ? plain : heard;
-});
-
-/**
- * `audio` (`seconds` long) heard whole, or in parts no longer than Scribe
- * hears at once (`Longest`), joined where both heard the same word. Each
- * hearing is kept as it's heard (`saved`), so a run cut short never pays for
- * it again.
- */
-const hearFile = Effect.fn("transcribe.hearFile")(function* (source: string, audio: string, seconds: number, target: string, keyterms: readonly string[], again: boolean) {
-  const longest = yield* Longest;
-  const tag = (length: number) => `${fixed3(length)} ${keyterms.join("|")} ${again}`;
-  if (seconds <= longest) return yield* saved(withExtension(target, "heard.json"), tag(seconds), hearClear(source, audio, seconds, target, keyterms, again));
-  const parts = plan(seconds, longest);
-  yield* Effect.logInfo(`${source}: ${hours(seconds)} is longer than Scribe hears at once: heard in ${parts.length} parts`);
-  const heard = yield* Effect.forEach(
-    parts,
-    (part, index) => {
-      const own = withExtension(target, `part-${index}.json`);
-      return saved(
-        withExtension(own, "heard.json"),
-        `${tag(part.to - part.from)} ${fixed3(part.from)}`,
-        Effect.gen(function* () {
-          const file = yield* temporary(withExtension(own, "ogg"));
-          yield* encode(["-ss", fixed3(part.from), "-t", fixed3(part.to - part.from), "-i", audio], file, "could not cut the audio");
-          return yield* hearClear(source, file, part.to - part.from, own, keyterms, again);
-        }).pipe(Effect.scoped),
-      );
-    },
-    { concurrency: PARTS_AT_ONCE },
+  // Its voices from pyannote instead (voices.ts, after this): Scribe's whole hearing isn't paid for.
+  const whole = !wholeVoices ? Effect.succeed(Option.none<Transcript>()) : saved(withExtension(target, "whole.json"), fixed3(seconds), wholeHearing).pipe(
+    Effect.map(Option.some),
+    // Too long even at the least rate: its words still come from the pieces.
+    Effect.catchTag("TooLongForOneRequest", (refused) =>
+      Effect.logWarning(`${source}: ${refused.message}; its words are from the pieces and who speaks is left for the watch`).pipe(Effect.as(Option.none<Transcript>())),
+    ),
+    // The whole hearing is only for its voices, so once its own retries are
+    // spent it never stops the import either (Nov 1, Mathias's 6 h 20 min and
+    // 7 h 43 min FOIA recordings: the whole hearing held one request open for
+    // minutes, the connection dropped three times, and both imports stopped
+    // at Transcribing with their words heard). Only a temporary failure, by
+    // the one kinds rule (`service.kinds` above: a dropped connection, a
+    // timeout, the gateway, a busy relay): a refusal or an allowance used up
+    // stops the pieces too, so it's said as it is.
+    Effect.catchIf(service.isTemporary, (failed) => withoutVoices(source, failed.message)),
+    Effect.ensuring(Effect.sync(() => (wholeMs = Date.now() - began))),
   );
-  const words = join(
-    parts,
-    heard.map((part, index) => shifted(part.words, parts[index]!.from, String(index + 1))),
-  );
-  return { model: heard[0]!.model, language: heard[0]!.language ?? null, words } satisfies Transcript;
-});
 
-/** What `hearFile` kept as it heard: no longer needed once the transcript is written. */
-function forgetHeard(target: string): void {
-  const dir = target.slice(0, target.lastIndexOf("/")) || ".";
-  const stem = fileName(withExtension(target, "")) ?? "";
-  let names: string[] = [];
-  try {
-    names = fs.readdirSync(dir);
-  } catch {
-    return;
+  const piece = (stretch: Piece, index: number) =>
+    saved(
+      `${piecesDir}/${names}-${index}-${fixed3(stretch.from)}-${fixed3(stretch.to)}.json`,
+      "",
+      Effect.gen(function* () {
+        const file = yield* temporary(withExtension(target, `piece-${index}.ogg`));
+        const asked = yield* Clock.currentTimeMillis;
+        yield* encode(["-ss", fixed3(stretch.from), "-t", fixed3(stretch.to - stretch.from), "-i", audio], file, "could not cut the audio");
+        return yield* ask(file, keyterms, again).pipe(Effect.ensuring(Effect.sync(() => pieceMs.push(Date.now() - asked))));
+      }).pipe(Effect.scoped),
+    );
+
+  const [voices, parts] = yield* Effect.all([whole, Effect.forEach(pieces, piece, { concurrency: PIECES_AT_ONCE })], { concurrency: 2 });
+  const heard = parts.map((part, index) => shifted(part.words, pieces[index]!.from));
+
+  // A piece heard as gibberish (Helpful Wife's m91 at 6:39–7:16 came back in
+  // a dozen scripts, the same each time with the case's names): asked again
+  // without them, else the whole file's words for that stretch.
+  const latin = Option.match(voices, { onNone: () => true, onSome: (found) => garbledShare(found.words) < 0.2 });
+  for (const [index, stretch] of pieces.entries()) {
+    if (!latin || garbledShare(heard[index]!) < 0.2) continue;
+    const heardAgain = yield* Effect.gen(function* () {
+      const file = yield* temporary(withExtension(target, `piece-${index}-again.ogg`));
+      yield* encode(["-ss", fixed3(stretch.from), "-t", fixed3(stretch.to - stretch.from), "-i", audio], file, "could not cut the audio");
+      return shifted((yield* ask(file, [], false)).words, stretch.from);
+    }).pipe(Effect.scoped);
+    const clear = garbledShare(heardAgain) < 0.2;
+    const wholeWords = Option.match(voices, {
+      onNone: () => null,
+      onSome: (found) => found.words.filter((word) => word.start >= stretch.from && word.end <= stretch.to).map((word) => ({ text: word.text, start: word.start, end: word.end })),
+    });
+    heard[index] = clear ? heardAgain : (wholeWords ?? heard[index]!);
+    yield* Effect.logWarning(
+      `${source}: piece ${index} (${fixed3(stretch.from)}–${fixed3(stretch.to)} s) came back garbled; heard again${clear ? "" : wholeWords === null ? ", still garbled: kept as heard" : ", still garbled: the whole file's words stand"}`,
+    );
   }
-  for (const name of names) {
-    if (name === `${stem}.heard.json` || (name.startsWith(`${stem}.part-`) && name.endsWith(".heard.json"))) fs.rmSync(`${dir}/${name}`, { force: true });
-  }
-}
+
+  const words = join(pieces, heard);
+  if (Option.isSome(voices)) voicesFrom(words, voices.value.words);
+  yield* Effect.sync(() => fs.rmSync(piecesDir, { recursive: true, force: true }));
+  const now = yield* Clock.currentTimeMillis;
+  const sorted = [...pieceMs].sort((a, b) => a - b);
+  const secs = (ms: number) => `${Math.round(ms / 1000)} s`;
+  const timing =
+    sorted.length === 0
+      ? "all saved from before"
+      : `pieces typically ${secs(sorted[Math.floor(sorted.length / 2)]!)}, the slowest ${secs(sorted.at(-1)!)}${sorted.length < pieces.length ? `, ${pieces.length - sorted.length} saved from before` : ""}; the whole ${secs(wholeMs)}`;
+  yield* Effect.logInfo(
+    `${source}: heard in ${pieces.length} pieces for its words and ${Option.isSome(voices) ? "whole for its voices" : wholeVoices ? "not whole (no voices)" : "its voices from pyannote"} (${words.length} words) in ${secs(now - began)}: ${timing}`,
+  );
+  const first = Option.getOrElse(voices, () => parts[0]!);
+  return { model: first.model, language: first.language ?? null, words } satisfies Transcript;
+});
 
 /**
  * Extracts audio, sends it to the relay with the case's names to listen for
- * (`keyterms`), writes `target` (transcript JSON): heard whole (see the top),
- * then its voices split by bodycam. `again`: a finished file heard again for
- * the case's names, which the relay gives only a share of each day's
- * allowance (first hearings come first).
+ * (`keyterms`), writes `target` (transcript JSON). A file longer than
+ * `WHOLE_UP_TO` is heard in pieces for its words and whole for its voices
+ * (see the top), then its voices are split by bodycam. `again`: a finished
+ * file heard again for the case's names, which the relay gives only a share
+ * of each day's allowance (first hearings come first).
  */
-export const transcribeFile = Effect.fn("transcribe.file")(function* (source: string, target: string, keyterms: readonly string[] = [], again: boolean = false) {
+export const transcribeFile = Effect.fn("transcribe.file")(function* (source: string, target: string, keyterms: readonly string[] = [], again: boolean = false, wholeVoices: boolean = true) {
   // Asked before the media's other work has made its cache folder.
   yield* Effect.sync(() => fs.mkdirSync(target.slice(0, target.lastIndexOf("/")) || ".", { recursive: true }));
-  const began = yield* Clock.currentTimeMillis;
   const transcript: Transcript = yield* Effect.gen(function* () {
     const audio = yield* temporary(withExtension(target, "ogg"));
     yield* encode(["-protocol_whitelist", tools.protocols(source), ...tools.urlArgs(source), "-i", source, "-map", "0:a:0"], audio, "could not extract audio");
     const seconds = yield* lengthOf(audio);
-    const heard = yield* hearFile(source, audio, seconds, target, keyterms, again);
-    const took = (yield* Clock.currentTimeMillis) - began;
-    const longest = yield* Longest;
-    const jobs = yield* Jobs;
-    const how = seconds > longest ? `in ${plan(seconds, Bun.file(audio).size).length} parts` : seconds > jobs.longerThan ? "by link" : "in one request";
-    const voices = new Set(heard.words.map((word) => word.speaker).filter(Boolean)).size;
-    yield* Effect.sync(() =>
-      log.line(
-        `${log.said(heard.model)} heard ${log.labelOf(source)} (${log.clock(seconds)}) ${how}${again ? ", again" : ""}${keyterms.length > 0 ? `, listening for ${keyterms.length} names` : ""}: ${log.count(heard.words.length)} words, ${voices} voices, in ${log.took(took)}`,
-      ),
-    );
-    return heard;
+    // Kept as soon as it's heard, like a piece, so a restart before the transcript is written doesn't pay for it again.
+    return seconds <= WHOLE_UP_TO ? yield* saved(withExtension(target, "single.json"), `${fixed3(seconds)} ${keyterms.join("|")} ${again}`, ask(audio, keyterms, again)) : yield* hearLong(source, audio, seconds, target, keyterms, again, wholeVoices);
   }).pipe(Effect.scoped);
   // Heard again, it never comes out much shorter than the transcript it replaces (Killer Pastor in dev, Nov 8: its
   // 1 h 52 min recording heard again through a proxy that could only play its first 3 minutes left 323 words for
@@ -784,15 +738,14 @@ export const transcribeFile = Effect.fn("transcribe.file")(function* (source: st
     try: () => writeAtomic(target, serialize(transcript)),
     catch: (error) => new TranscriptUnwritable({ message: ioMessage(error) }),
   });
-  yield* Effect.sync(() => forgetHeard(target));
 });
 
 /** `effect` with the retry policy the Promise side's tests asked for (`timing.instant`). */
 export const asConfigured = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> => (timing.instant ? effect.pipe(Effect.provideService(Retries, Retries.instant)) : effect);
 
 /** `transcribeFile` for code that isn't Effect yet: rejects with the same words it always has. */
-export function run(source: string, target: string, keyterms: readonly string[] = [], again = false): Promise<void> {
-  return runPromise(asConfigured(transcribeFile(source, target, keyterms, again).pipe(inArea("media"))));
+export function run(source: string, target: string, keyterms: readonly string[] = [], again = false, wholeVoices = true): Promise<void> {
+  return runPromise(asConfigured(transcribeFile(source, target, keyterms, again, wholeVoices).pipe(inArea("media"))));
 }
 
 const round3 = (value: number) => Math.round(value * 1000) / 1000;
@@ -812,7 +765,7 @@ export function garbledShare(words: readonly { text: string }[]): number {
   return letters < 20 ? 0 : other / letters;
 }
 
-/** A part of a very long file: the stretch it speaks for (`core`) and what's sent (`from`–`to`, with context). */
+/** A piece of a long file: the stretch it speaks for (`core`) and what's sent (`from`–`to`, with context). */
 export interface Piece {
   coreFrom: number;
   coreTo: number;
@@ -820,9 +773,9 @@ export interface Piece {
   to: number;
 }
 
-/** A file of `seconds` cut into even parts of at most `size` seconds, each with `CONTEXT` either side. */
-export function plan(seconds: number, size: number): Piece[] {
-  const count = Math.max(Math.ceil(seconds / size), 1);
+/** A file of `seconds` cut into even pieces of at most `PIECE` seconds, each with `CONTEXT` either side. */
+export function plan(seconds: number): Piece[] {
+  const count = Math.max(Math.ceil(seconds / PIECE), 1);
   const pieces: Piece[] = [];
   for (let index = 0; index < count; index += 1) {
     const coreFrom = (seconds * index) / count;
@@ -833,7 +786,7 @@ export function plan(seconds: number, size: number): Piece[] {
 }
 
 /**
- * The parts' words as one transcript. Neighbours both hear the context
+ * The pieces' words as one transcript. Neighbours both hear the context
  * around their seam: it's handed over at a word both heard at the same moment
  * (the one nearest the seam), so no word is lost or heard twice; with no such
  * word, at the seam itself.
@@ -868,6 +821,42 @@ export function join(pieces: readonly Piece[], heard: readonly Word[][]): Word[]
   const words: Word[] = [];
   heard.forEach((piece, index) => words.push(...piece.slice(first[index], Math.max(last[index]!, first[index]!))));
   return words;
+}
+
+/**
+ * Gives each word the voice the whole file heard it in: the two transcripts'
+ * words are lined up by what they say (the whole file's times drift, so not
+ * by time); a word only the pieces heard takes its neighbours' voice.
+ */
+export function voicesFrom(words: Word[], whole: readonly Word[]): void {
+  const pairs = aligned(
+    words.map((word) => normal(word.text)),
+    whole.map((word) => normal(word.text)),
+  );
+  const voice: (string | undefined)[] = words.map(() => undefined);
+  for (const [a, b] of pairs) voice[a] = whole[b]!.speaker;
+  // Unmatched words: the voice of the nearer matched word, before or after ("Uh," before an answer is the answer's).
+  let before: number | null = null;
+  const after: (number | null)[] = words.map(() => null);
+  let next: number | null = null;
+  for (let index = words.length - 1; index >= 0; index -= 1) {
+    after[index] = next;
+    if (voice[index] !== undefined) next = index;
+  }
+  words.forEach((word, index) => {
+    if (voice[index] !== undefined) {
+      word.speaker = voice[index];
+      before = index;
+      return;
+    }
+    const prior: number | null = before;
+    const later = after[index] ?? null;
+    const gapBefore = prior === null ? Infinity : word.start - words[prior]!.end;
+    const gapAfter = later === null ? Infinity : words[later]!.start - word.end;
+    const chosen = gapAfter < gapBefore ? later : prior;
+    if (chosen !== null && voice[chosen] !== undefined) word.speaker = voice[chosen];
+    else delete word.speaker;
+  });
 }
 
 /** A word as compared across transcripts: lower case, letters and digits only. */
@@ -998,7 +987,7 @@ export function parseScribe(value: unknown): Transcript {
     words.push(word);
   }
   return {
-    model: MODEL,
+    model: "scribe_v2",
     language: typeof answer.language_code === "string" ? answer.language_code : null,
     words,
   };

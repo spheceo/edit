@@ -29,10 +29,10 @@ routes = [{ pattern = "media.spheceo.com", custom_domain = true }]
 
 [vars]
 MEDIA_HOST = "media.spheceo.com"  # media.ts hands out signed proxy URLs on it (MEDIA_SECRET, a secret)
-# Who speaks when (Nov 8, diarize_jobs.ts): "pyannote" lays pyannote's voices over Scribe's (with PYANNOTE_API_KEY), anything else Scribe's alone.
-# Off from Nov 10 (Sphe: one transcriber; Scribe v3 heard whole was as good at who speaks as pyannote on that day's bench,
-# ~/.edit-dev/bench-scribe-v3). Back on is "pyannote" and a relay deploy, no Edit release, if JJ's notes find speakers worse.
-DIARIZE = "off"
+# Who speaks when (Nov 8, diarize_jobs.ts): "pyannote" gives Edit pyannote's voices (with PYANNOTE_API_KEY), anything else Scribe's.
+# On for the team from Nov 8 (Sphe: "we'll need pyannote in prod"), proven on dev on three of JJ's projects;
+# turning it off is "off" and a relay deploy, no Edit release. Builds before it never ask.
+DIARIZE = "pyannote"
 # Comma-separated voice IDs belonging to ELEVENLABS_VOICES_KEY; all others
 # (including the existing house voice) use ELEVENLABS_MAIN_KEY.
 ELEVENLABS_VOICES_IDS = "vVj9i7yXuhHiV9JHF0kj,QWUeV5PUhJjaGUhu0cKp"
@@ -159,7 +159,7 @@ routes = [{ pattern = "media-dev.spheceo.com", custom_domain = true }]
 
 [env.dev.vars]
 MEDIA_HOST = "media-dev.spheceo.com"
-DIARIZE = "off"
+DIARIZE = "pyannote"
 CONVEX_CALLER = "1"  # dev Convex (determined-heron-867) has accounts 6d2c2a2's convex/access.ts
 # Thumbnails' OpenArt: the live relay holds the team's one sign-in (openart.ts); dev asks it.
 OPENART_UPSTREAM = "https://edit-relay.sphe-g-personal.workers.dev"

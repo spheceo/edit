@@ -18,7 +18,7 @@ declare const FixedLengthStream:{ new(size: number): { readable: ReadableStream<
  * Edit's relay. Holds the ElevenLabs key so Edit installs never do.
  *
  *   POST /v1/transcribe   body: audio (e.g. audio/ogg Opus), Content-Length required
- *                          → ElevenLabs Scribe v3 JSON (words with timings + speaker ids)
+ *                          → ElevenLabs Scribe v2 JSON (words with timings + speaker ids)
  *   POST /v1/transcribe/jobs, GET /v1/transcribe/jobs/<id>, POST /v1/transcribe/webhook
  *   POST /v1/diarize/jobs, GET /v1/diarize/jobs/<id>  who speaks when, from pyannote (diarize_jobs.ts; the DIARIZE flag)
  *                          a long recording heard from R2 without holding a connection open
@@ -84,7 +84,7 @@ export interface Env extends CloudEnv, AuthEnv, JobsEnv, OpenArtEnv, DiarizeEnv 
 }
 
 const SCRIBE = "https://api.elevenlabs.io/v1/speech-to-text";
-const MODEL = "scribe_v3";
+const MODEL = "scribe_v2";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import * as tools from "../../src/tools.ts";
-import { timing } from "../../src/transcribe.ts";
+import { plan, timing } from "../../src/transcribe.ts";
 import * as voices from "../../src/voices.ts";
 import { hear } from "../../src/writer/hearing.ts";
 import { scratch } from "../helpers/home.ts";
@@ -49,35 +49,27 @@ test.skipIf(ffmpeg === null)("a stretch is cut, heard and its cut removed; a sto
   }
 }, 30_000);
 
-test.skipIf(ffmpeg === null)("a long recording is heard by Scribe once, whole; with pyannote's flag on its voices are laid over Scribe's", async () => {
+test.skipIf(ffmpeg === null)("with pyannote's voices on, a long recording is heard by Scribe in pieces only, never whole, and its voices are pyannote's", async () => {
   const { dir, cleanup } = scratch("hearing-pyannote");
   try {
+    // Longer than one request hears whole (90 s): without pyannote it would be heard in pieces and whole.
     const source = `${dir}/long.wav`;
     expect(Bun.spawnSync([ffmpeg!, "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=100", source]).exitCode).toBe(0);
-    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Hello", "there."], "speaker_2")));
-    // Off: Scribe's voices.
-    voices.setOnForTests(false);
-    let before = mock.requests.length;
-    const own = await hear(source, null, `${dir}/own`, []);
-    expect(mock.requests.slice(before).filter((one) => one.method === "POST" && one.path === "/v1/transcribe")).toHaveLength(1);
-    expect(own.voices).toBeUndefined();
-    expect(new Set(own.words.map((word) => word.speaker))).toEqual(new Set(["speaker_2"]));
-    // On: Scribe heard once all the same, pyannote's voices over its words.
     mock.on("POST", "/v1/diarize/jobs", () => Response.json({ id: "job-writer" }, { status: 202 }));
     mock.on("GET", "/v1/diarize/jobs/job-writer", () => Response.json({ segments: [{ start: 0, end: 100, speaker: "SPEAKER_07" }] }));
     voices.setOnForTests(true);
     voices.timing.pollMs = 1;
-    before = mock.requests.length;
+    const before = mock.requests.length;
     const heard = await hear(source, null, `${dir}/work`, []);
     const asked = mock.requests.slice(before);
     expect(asked.filter((one) => one.path === "/v1/transcribe/jobs")).toHaveLength(0);
-    expect(asked.filter((one) => one.method === "POST" && one.path === "/v1/transcribe")).toHaveLength(1);
+    expect(asked.filter((one) => one.method === "POST" && one.path === "/v1/transcribe")).toHaveLength(plan(100).length);
     expect(asked.filter((one) => one.method === "POST" && one.path === "/v1/diarize/jobs")).toHaveLength(1);
     expect(heard.voices).toBe(voices.MODEL);
     expect(new Set(heard.words.map((word) => word.speaker))).toEqual(new Set(["speaker_7"]));
+    expect(fs.existsSync(`${dir}/work/transcript.whole.json`)).toBe(false);
   } finally {
     voices.setOnForTests(null);
-    mock.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer()));
     cleanup();
   }
 }, 30_000);

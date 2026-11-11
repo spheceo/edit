@@ -25,7 +25,6 @@ import * as fs from "node:fs";
 import * as cameras from "./cameras.ts";
 import * as cloud from "./cloud.ts";
 import * as diag from "./diag.ts";
-import * as log from "./hearing_log.ts";
 import { writeAtomic } from "./files.ts";
 import { join, parent } from "./paths.ts";
 import * as relay from "./relay.ts";
@@ -302,7 +301,7 @@ export async function revoice(cacheDir: string | null, source: string, target: s
     await cameras.split(source, now).catch((error: unknown) => diag.warn("voices", `${source}: reading its bodycams: ${diag.messageOf(error)}`));
     writeAtomic(target, serialize(now));
     const voices = new Set(now.words.map((word) => word.speaker).filter(Boolean)).size;
-    log.line(`${cloudSource ?? log.labelOf(source)}: ${log.said(MODEL)} gave its ${voices} voices, from ${from}, in ${log.took(Date.now() - began)}; Scribe's words stay`);
+    diag.info("voices", `${source}: pyannote's voices (${voices}) from ${from} in ${Math.round((Date.now() - began) / 1000)} s`);
     return true;
   } catch (error) {
     diag.warn("voices", `${source}: pyannote's voices: ${diag.messageOf(error)}; its voices stay as they were`);

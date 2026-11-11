@@ -243,8 +243,6 @@ test.skipIf(ffmpeg === null)("deleting a script stops its import first; Claude o
     writerJobs.start(data, id, "Stuck", { kind: "build", note: "" } as writerJobs.Work, () => new Promise(() => {}));
     expect(await writerJobs.stopAndWait(id, 100)).toBe(false);
   } finally {
-    // The stuck one never ends: forgotten, so no later test finds it still running.
-    writerJobs.resetForTests();
     cleanup();
   }
 }, 120_000);

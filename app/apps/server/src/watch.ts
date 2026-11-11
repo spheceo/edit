@@ -29,7 +29,7 @@ import { isBug } from "./guard.ts";
 import { mediaKey, Semaphore } from "./media.ts";
 import type { Project, Segment } from "./model.ts";
 import { join, parent } from "./paths.ts";
-import { clipEnd, clipMedia, duration as durationOf, fps as fpsOf, mediaOf, soundUses } from "./project.ts";
+import { clipEnd, clipMedia, duration as durationOf, fps as fpsOf, mediaOf } from "./project.ts";
 import { fixed, round, serdeParse, splitWhitespace, toI64, trim } from "./rust.ts";
 import * as seams from "./seams.ts";
 import type { TimedWord, Window, WatchOptions } from "./seams.ts";
@@ -39,7 +39,7 @@ import * as tools from "./tools.ts";
 import * as aiClaude from "./ai_claude.ts";
 import * as planLimit from "./plan_limit.ts";
 import * as claudeAsk from "./writer/claude.ts";
-import { hearsAll, type Transcript, type Word } from "./transcribe.ts";
+import type { Transcript, Word } from "./transcribe.ts";
 import * as progress from "./progress.ts";
 
 export type { Window, WatchOptions } from "./seams.ts";
@@ -1103,7 +1103,7 @@ export async function watchFootage(app: App, projectId: string, options: WatchOp
 export function watchInBackground(app: App, projectId: string): void {
   const job = jobs.begin(app.store.home, "watch", projectId, {});
   void diag
-    .timeAsync("watch", "watch footage (background)", () => watchFootage(app, projectId, { force: false, segments: null, background: true }))
+    .timeAsync("watch", "watch footage (background)", () => watchFootage(app, projectId, { force: false, segments: null }))
     .catch((error: unknown) => {
       diag.warn("watch", `background watch of ${projectId}: ${diag.messageOf(error)}`);
     })
@@ -1150,19 +1150,12 @@ async function watchNow(app: App, projectId: string, options: WatchOptions): Pro
   // waited on the transcriber ten times over.
   const wanted = [...new Set(sound.map(clipMedia).filter((id): id is string => id !== null))].sort(compareKeys);
   const medias = wanted.map((id) => mediaOf(project, id)).filter((media) => media !== undefined);
-  const fetched = await limited(medias, 4, (media) => transcriptOf(app, media, project, options.background !== true));
+  const fetched = await limited(medias, 4, (media) => transcriptOf(app, media, project));
   const transcripts = new Map<string, Transcript>();
   for (let index = 0; index < medias.length; index++) {
     const result = fetched[index]!;
     if (result.status === "rejected") throw result.reason;
     transcripts.set(medias[index]!.id, result.value);
-  }
-  // Rough words where the timeline plays (first_hearing.ts): the agent hasn't cut it yet, and who speaks waits for
-  // Scribe on what it keeps, which a watch the agent asks for (watch_footage, the subtitles) pays for.
-  const rough = medias.filter((media) => !hearsAll(transcripts.get(media.id)!, soundUses(project, media.id)));
-  if (options.background === true && rough.length > 0) {
-    diag.info("watch", `${projectId}: not watched in the background: ${rough.map((media) => media.name).join(", ")} has only rough words where it plays`);
-    return { watched: false, rough: rough.map((media) => media.name) };
   }
   const parts: Part[] = [];
   // An edit's clips, by file, to watch once per stretch they use.

@@ -39,6 +39,8 @@ export const HQ_TOOLS: readonly string[] = [
   "add_effect",
   "effect_picture",
   "effect_footage",
+  "effect_track",
+  "effect_beneath",
   "effect_versions",
   "restore_effect",
   "library",

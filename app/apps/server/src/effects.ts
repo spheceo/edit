@@ -1222,16 +1222,31 @@ function rateArg(project: Project): string {
  * project's timeline whose render isn't of its code now. Called on every
  * change to the project or its effects; cheap when there's nothing to do.
  */
+/**
+ * What runs before a project's effects are rendered (by name): what an effect
+ * is given from the timeline made again where it changed (effect_inputs.ts:
+ * the picture beneath it), so its code, and so its render, is of what's there.
+ */
+export const beforeRenders = new Map<string, (app: App, project: string) => Promise<void>>();
+
+async function readyToRender(app: App, project: string): Promise<void> {
+  for (const [what, before] of beforeRenders) {
+    await before(app, project).catch((error: unknown) => diag.warn("effects", `${project}: before its renders (${what}): ${diag.messageOf(error)}`));
+  }
+}
+
 export function renderSoon(app: App, project: string): void {
   standIn(app, project).catch((error: unknown) => diag.warn("effects", `${project}: its effects' clear pictures: ${diag.messageOf(error)}`));
   const waiting = settling.get(project);
   if (waiting !== undefined) clearTimeout(waiting);
   const timer = setTimeout(() => {
     settling.delete(project);
-    for (const effect of needed(app.store, project)) {
-      if (effect.fresh || effect.current === null) continue;
-      renderNow(app, project, effect.name).catch(() => {});
-    }
+    void readyToRender(app, project).then(() => {
+      for (const effect of needed(app.store, project)) {
+        if (effect.fresh || effect.current === null) continue;
+        renderNow(app, project, effect.name).catch(() => {});
+      }
+    });
   }, SETTLE_MS);
   timer.unref?.();
   settling.set(project, timer);
@@ -1262,6 +1277,7 @@ export function renderState(project: string, name: string, key: string): string 
  */
 export async function waitForRenders(app: App, project: string, limitMs: number): Promise<void> {
   const until = Date.now() + limitMs;
+  await readyToRender(app, project);
   for (const effect of needed(app.store, project)) {
     if (effect.fresh) continue;
     if (effect.current === null) throw new Error(`${effect.name} is a coded effect made on another computer and never rendered there: open the project there to render it`);

@@ -3668,6 +3668,109 @@
     "name": "effect_footage"
   },
   {
+    "name": "effect_track",
+    "description": "Track points in the footage under an effect and give the effect their path as data (Bodycam HQ): Edit's tracker follows each box through the footage at the timeline (carried by the camera's own move, found again after it's lost or a cut), and writes <as>.track.js into the effect's folder, one entry a frame: each point's centre and size in frame pixels. The effect's code reads window.tracks.<as>.at(name, t) and draws there, so anything you make sticks to what's in the footage, never keyed by hand. One point follows something; two give its scale and turn; four at a surface's corners let you warp onto it (a screen, a wall, a car door). It answers where it lost a point: look there and track again with boxes.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The effect's folder."
+        },
+        "time": {
+          "type": "number",
+          "description": "Timeline second the boxes are as given."
+        },
+        "points": {
+          "type": "array",
+          "description": "What to follow: {name (a short lower-case word), box, boxes?: [{time, box}] (the same thing at other moments, for a long or fast stretch or one that turns)}.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "box": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "description": "[x0, y0, x1, y1] in project pixels from the top-left, as render_frame shows the frame."
+              },
+              "boxes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "time": {
+                      "type": "number"
+                    },
+                    "box": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "description": "[x0, y0, x1, y1] in project pixels from the top-left, as render_frame shows the frame."
+                    }
+                  },
+                  "required": [
+                    "time",
+                    "box"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "name",
+              "box"
+            ]
+          }
+        },
+        "from": {
+          "type": "number",
+          "description": "Timeline second to track from (default: the start of the footage clip there). Place the effect's clip starting here."
+        },
+        "to": {
+          "type": "number",
+          "description": "Timeline second to track to (default: the end of that footage clip)."
+        },
+        "as": {
+          "type": "string",
+          "description": "The data's name (default track): another call with another name keeps both."
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Defaults to the project open in the UI."
+        }
+      },
+      "required": [
+        "name",
+        "time",
+        "points"
+      ]
+    }
+  },
+  {
+    "name": "effect_beneath",
+    "description": "Give an effect the picture beneath it (Bodycam HQ): what the tracks below its clip show over its span, rendered into its folder as beneath.mp4 (no sound; second t of it is second t of the effect), so its code can draw the footage itself, blurred, bent, refracted, magnified, shattered: a glass panel, a lens, a heat haze. Place the effect first. Edit keeps it in step by itself: when what's beneath changes or the clip moves, it's made again and the effect rendered again.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The effect's folder (its clip on the timeline)."
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Defaults to the project open in the UI."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  {
     "description": "An effect's versions in V2's cloud (Bodycam HQ). Every settled version of its code is kept there by itself once it renders, numbered, with when, who and why, and which one is in use: for going back (restore_effect) or seeing what changed.",
     "inputSchema": {
       "properties": {

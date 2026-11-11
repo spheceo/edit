@@ -7,6 +7,7 @@
 import type { App } from "./app.ts";
 import fs from "node:fs";
 import { join } from "node:path";
+import * as effectInputs from "./effect_inputs.ts";
 import * as effects from "./effects.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import { fixed } from "./rust.ts";
@@ -229,7 +230,44 @@ async function makeSound({ app, args, projectId }: ToolCall): Promise<Content[]>
   return text(`${name} is media ${made.media}: ${fixed(made.duration, 2)} s. Place it as an audio clip; make_sound again after changing its code (the same media plays the new sound).`);
 }
 
+/** A box [x0, y0, x1, y1] from the agent, or the error that says what one is. */
+function boxOf(value: unknown, what: string): [number, number, number, number] {
+  if (!Array.isArray(value) || value.length !== 4 || value.some((one) => typeof one !== "number" || !Number.isFinite(one))) throw new Error(`${what} is [x0, y0, x1, y1] in project pixels from the top-left`);
+  return value as [number, number, number, number];
+}
+
+async function effectTrack({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const name = named(app, projectId, args);
+  if (typeof args.time !== "number" || !Number.isFinite(args.time) || args.time < 0) throw new Error("time is required: the timeline second the boxes are as given");
+  if (!Array.isArray(args.points)) throw new Error("points is a list of {name, box, boxes?}");
+  const points = (args.points as unknown[]).map((given, at): effectInputs.Point => {
+    const point = (typeof given === "object" && given !== null ? given : {}) as Record<string, unknown>;
+    if (typeof point.name !== "string") throw new Error(`points[${at}] needs a name`);
+    const boxes = Array.isArray(point.boxes)
+      ? (point.boxes as unknown[]).map((more) => {
+          const one = (typeof more === "object" && more !== null ? more : {}) as Record<string, unknown>;
+          if (typeof one.time !== "number") throw new Error(`${point.name}'s boxes are {time, box}`);
+          return { time: one.time, box: boxOf(one.box, `${point.name}'s box at ${one.time}`) };
+        })
+      : [];
+    return { name: point.name, box: boxOf(point.box, `${point.name}'s box`), boxes };
+  });
+  const span: [number | null, number | null] = [typeof args.from === "number" ? args.from : null, typeof args.to === "number" ? args.to : null];
+  return text(await effectInputs.track(app, projectId, name, args.time, points, span, typeof args.as === "string" ? args.as : "track"));
+}
+
+async function effectBeneath({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const name = named(app, projectId, args);
+  const made = await effectInputs.beneath(app, projectId, name);
+  return text(
+    `effects/${name}/${effectInputs.BENEATH}: what the tracks below ${name}'s clip show over its ${fixed(made.seconds, 2)} s (no sound), second t of it at second t of the effect${made.made ? "" : " (already of what's there now)"}. ` +
+      `Play it in the page (a <video> you seek to t and wait for, as effect_footage's) and draw it as you like: blurred, bent, refracted, cut up. Edit makes it again by itself when what's beneath changes, or the clip moves; the effect is rendered again after it.`,
+  );
+}
+
 const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
+  ["effect_track", effectTrack],
+  ["effect_beneath", effectBeneath],
   ["effect_versions", effectVersions],
   ["restore_effect", restoreEffect],
   ["library", library],
@@ -247,6 +285,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
 
 /** Registers the effects' tools with the MCP server (once; later calls do nothing). */
 export function registerEffectTools(): void {
+  effectInputs.start();
   for (const [name, handler] of TOOLS) {
     if (handlerFor(name)?.handler === handler) continue;
     registerTool(name, handler);

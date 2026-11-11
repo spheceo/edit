@@ -552,14 +552,14 @@ export function glimpses(
 }
 
 /** Source pixels → project pixels from the frame's centre, through the clip's fit and transform. */
-function toProject(media: Media, transform: Transform, project: [number, number], point: [number, number]): [number, number] {
+export function toProject(media: Media, transform: Transform, project: [number, number], point: [number, number]): [number, number] {
   const [mw, mh] = [Math.max(media.width, 1), Math.max(media.height, 1)];
   const fit = Math.min(project[0] / mw, project[1] / mh) * f32(transform.scale);
   return [(point[0] - mw / 2.0) * fit + f32(transform.x), (point[1] - mh / 2.0) * fit + f32(transform.y)];
 }
 
 /** Project pixels from the frame's centre → source pixels (the inverse of `toProject`). */
-function toSource(media: Media, transform: Transform, project: [number, number], point: [number, number]): [number, number] {
+export function toSource(media: Media, transform: Transform, project: [number, number], point: [number, number]): [number, number] {
   const [mw, mh] = [Math.max(media.width, 1), Math.max(media.height, 1)];
   const fit = Math.min(project[0] / mw, project[1] / mh) * f32(transform.scale);
   return [(point[0] - f32(transform.x)) / fit + mw / 2.0, (point[1] - f32(transform.y)) / fit + mh / 2.0];
@@ -1636,7 +1636,7 @@ export async function placeCaptions(app: App, projectId: string, from: number, t
 }
 
 /** A footage clip's framing at timeline `frame`: its transform with its x, y and scale keyframes applied. */
-function footageFraming(footage: Clip, transform: Transform, frame: number): Transform {
+export function footageFraming(footage: Clip, transform: Transform, frame: number): Transform {
   const local = f32(frame - footage.start);
   const keyed = (name: string, base: number) => {
     const keys = footage.keyframes?.[name];

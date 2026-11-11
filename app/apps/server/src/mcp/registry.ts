@@ -50,6 +50,7 @@ export const HQ_TOOLS: readonly string[] = [
   "remember",
   "read_skill",
   "make_sound",
+  "feedback_reopen",
 ];
 
 /**

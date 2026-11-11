@@ -1551,6 +1551,26 @@
     "name": "feedback_answer"
   },
   {
+    "name": "feedback_reopen",
+    "description": "Bring back one of the team's comments (notes left in Edit) that was settled, done or left, when they ask for it again (\"bring back #3\", \"that one isn't fixed\"): it's open again, its pin back on the picture, and you do it as any open comment.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "note": {
+          "type": "string",
+          "description": "Its number (#3) or its id (app:…)."
+        },
+        "project_id": {
+          "type": "string",
+          "description": "Defaults to the project open in the UI."
+        }
+      },
+      "required": [
+        "note"
+      ]
+    }
+  },
+  {
     "description": "Shares a whole export for review on Repack. A 720p copy where anyone with the link comments at a moment of the video, as on Frame.io; the first share makes the review, later ones a new version under the same link. Their notes come back to Edit, which sets you on them. Returns the link.",
     "inputSchema": {
       "properties": {
@@ -2131,7 +2151,7 @@
     "name": "render_frame"
   },
   {
-    "description": "Render evenly spaced frames between start and end (seconds) into one grid image, to review motion or many moments at once. Each frame is labelled with its number and time, a ruler over each row; the sheet is sized for the model's eyes: 160 tokens and 140 a frame, at most 1,300 (detail \"fine\": twice that).",
+    "description": "Render evenly spaced frames between start and end (seconds) into one grid image, to review motion or many moments at once. Each frame is labelled with its number and time, a ruler over each row; the sheet is sized for the model's eyes: 160 tokens and 140 a frame, at most 1,300 (detail \"fine\": twice that). Or times: any moments side by side.",
     "inputSchema": {
       "properties": {
         "columns": {
@@ -2159,12 +2179,16 @@
             "fine"
           ],
           "type": "string"
+        },
+        "times": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "Instead of start/end: the moments (timeline seconds) to set side by side, in this order: before and after a change, a comment's moment and another like it, two places a look repeats. At most 24."
         }
       },
-      "required": [
-        "start",
-        "end"
-      ],
+      "required": [],
       "type": "object"
     },
     "name": "contact_sheet"

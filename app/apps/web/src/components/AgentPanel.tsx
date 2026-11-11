@@ -815,7 +815,8 @@ function Composer({ disabled, projectId }: { disabled: boolean; projectId: strin
         onSteer={(id) => void steerQueued(String(id)).catch((error: unknown) => toastError(error, "steer the agent"))}
       />
     ),
-    notes > 0 && <NoteQueue key="notes" />,
+    // Bodycam HQ's are pinned on the picture and the progress bar instead.
+    notes > 0 && !hq && <NoteQueue key="notes" />,
   ].filter(Boolean);
   return (
     <ChatComposer

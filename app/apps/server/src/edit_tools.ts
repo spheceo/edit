@@ -1095,16 +1095,25 @@ async function renderFrame({ app, args, projectId }: ToolCall): Promise<Content[
 async function contactSheet({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const found = live(app, projectId);
   const fps = fpsOf(found.project);
-  const start = num(args.start);
-  if (start === null) throw new Error("start is required");
-  const endGiven = num(args.end);
-  if (endGiven === null) throw new Error("end is required");
-  const end = Math.max(endGiven, start);
-  const count = clamp(uint(args.count) ?? 12, 1, 24);
-  const frames = Array.from({ length: count }, (_, index) => {
-    const t = count === 1 ? start : start + ((end - start) * index) / (count - 1);
-    return asInt(Math.floor(t * fps));
-  });
+  // Moments to set side by side, in the order given (before and after, two places a look repeats), or a stretch.
+  const given = Array.isArray(args.times) ? (args.times as unknown[]).filter((one): one is number => typeof one === "number" && Number.isFinite(one) && one >= 0) : null;
+  let frames: number[];
+  if (given !== null && given.length > 0) {
+    if (given.length > 24) throw new Error("times: at most 24 moments");
+    frames = given.map((time) => asInt(Math.floor(time * fps)));
+  } else {
+    const start = num(args.start);
+    if (start === null) throw new Error("start is required (or times, the moments to compare)");
+    const endGiven = num(args.end);
+    if (endGiven === null) throw new Error("end is required");
+    const end = Math.max(endGiven, start);
+    const count = clamp(uint(args.count) ?? 12, 1, 24);
+    frames = Array.from({ length: count }, (_, index) => {
+      const t = count === 1 ? start : start + ((end - start) * index) / (count - 1);
+      return asInt(Math.floor(t * fps));
+    });
+  }
+  const count = frames.length;
   const sheet = await onLiveAsync(app, found, (project) =>
     native().renderFrames({
       project,

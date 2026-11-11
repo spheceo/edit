@@ -14,7 +14,7 @@ import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart } from "../lib/timelineView";
 import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
-import { toggleNote, useNotes } from "../lib/notes";
+import { numbers, openComment, openComments, toggleNote, useNotes } from "../lib/notes";
 import { useEditor } from "../lib/store";
 import { timecode } from "../lib/time";
 import { AnimatePresence, motion } from "motion/react";
@@ -23,6 +23,7 @@ import { useEffects } from "../lib/effects";
 import { useNow } from "../lib/now";
 import { EffectLayer } from "./EffectLayer";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
+import { VideoComments } from "./VideoComments";
 import { ProblemView } from "./ProblemView";
 import { WaitingFiles } from "./ScriptPanel";
 import { cx, IconButton, Pulse } from "./ui";
@@ -227,8 +228,10 @@ export function Viewer() {
           {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
           <EffectLayer wrap={wrap} />
           {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
-          {!fullscreen && <NoteBoxLayer wrap={wrap} />}
-          {!fullscreen && <NoteDraft />}
+          {/* Bodycam HQ: the team's comments pinned on the picture (the thumbnail page's), left while paused. */}
+          {!fullscreen && hq && <VideoComments wrap={wrap} />}
+          {!fullscreen && !hq && <NoteBoxLayer wrap={wrap} />}
+          {!fullscreen && !hq && <NoteDraft />}
           {error && (
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />
@@ -496,12 +499,16 @@ function VideoControls({ fullscreen }: { fullscreen: boolean }) {
   const playing = usePlaying();
   const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
   const duration = useEditor((state) => (state.project ? projectDuration(state.project) : 0));
-  const noting = useNotes((state) => state.draft !== null);
+  const noting = useNotes((state) => state.commenting);
+  const notes = useNotes((state) => state.notes);
   const speed = useSpeed();
   const light = "text-white/90 hover:bg-white/10 hover:text-white";
+  // Where the open comments are, on the progress bar (Sphe, Nov 11).
+  const numbered = numbers(notes);
+  const marks = openComments(notes).map((note) => ({ id: note.id, n: numbered.get(note.id) ?? 0, frame: note.now, text: note.text }));
   return (
     <div className="flex flex-col px-3 pb-1">
-      <ScrubBar frame={frame} duration={duration} thin />
+      <ScrubBar frame={frame} duration={duration} thin marks={fullscreen ? [] : marks} />
       <div className="flex h-10 items-center gap-1">
         <IconButton label={playing ? "Pause (Space)" : "Play (Space)"} onClick={() => preview.toggle()} className={cx("size-8", light)}>
           {playing ? <Pause size={18} fill="currentColor" strokeWidth={0} /> : <Play size={18} fill="currentColor" strokeWidth={0} className="translate-x-px" />}
@@ -512,7 +519,7 @@ function VideoControls({ fullscreen }: { fullscreen: boolean }) {
         </span>
         <div className="ml-auto flex items-center gap-1">
           {!fullscreen && (
-            <IconButton label={noting ? "Close the note" : "Leave a note here (Q)"} active={noting} aria-pressed={noting} onClick={toggleNote} className={noting ? undefined : light}>
+            <IconButton label={noting ? "Stop commenting (Esc)" : "Comment on the picture (Q)"} active={noting} aria-pressed={noting} onClick={toggleNote} className={noting ? undefined : light}>
               <MessageSquarePlus size={16} />
             </IconButton>
           )}
@@ -538,7 +545,7 @@ function VideoControls({ fullscreen }: { fullscreen: boolean }) {
  * tall hit area over a playhead-pink track; click or drag to move through
  * the edit while watching.
  */
-function ScrubBar({ frame, duration, thin = false }: { frame: number; duration: number; thin?: boolean }) {
+function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number; duration: number; thin?: boolean; marks?: { id: string; n: number; frame: number; text: string }[] }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const fraction = duration > 0 ? Math.min(1, Math.max(0, frame / duration)) : 0;
   const seekFrom = (clientX: number) => {
@@ -572,6 +579,26 @@ function ScrubBar({ frame, duration, thin = false }: { frame: number; duration: 
       <div ref={trackRef} className={cx("relative w-full rounded-full bg-white/20 transition-[height]", thin ? "h-[3px] group-hover:h-[5px]" : "h-1.5 group-hover:h-2")}>
         <div className="absolute inset-y-0 left-0 rounded-full bg-playhead" style={{ width: `${fraction * 100}%` }} />
         <div className={cx("absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100", thin ? "size-3" : "size-3.5")} style={{ left: `${fraction * 100}%` }} />
+        {/* The open comments: a dot each over the bar; hovered, its words; clicked, its moment and its card. */}
+        {duration > 0 &&
+          marks.map((mark) => (
+            <button
+              key={mark.id}
+              type="button"
+              aria-label={`Comment ${mark.n}: ${mark.text}`}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                openComment(mark.id);
+              }}
+              className="group/mark absolute bottom-full mb-1.5 -translate-x-1/2"
+              style={{ left: `${Math.min(1, Math.max(0, mark.frame / duration)) * 100}%` }}
+            >
+              <span className="block size-[9px] rounded-full rounded-bl-none bg-white shadow-[0_1px_4px_#000a] ring-1 ring-black/40 transition-transform duration-150 group-hover/mark:scale-125" />
+              <span className="pointer-events-none absolute bottom-full left-1/2 mb-1.5 w-max max-w-[240px] -translate-x-1/2 truncate rounded-md bg-black/85 px-2 py-1 text-[11.5px] text-white opacity-0 transition-opacity duration-150 group-hover/mark:opacity-100">
+                <span className="font-semibold tabular">#{mark.n}</span> {mark.text}
+              </span>
+            </button>
+          ))}
       </div>
     </div>
   );

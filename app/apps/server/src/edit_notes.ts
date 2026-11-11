@@ -176,8 +176,20 @@ function clock(seconds: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
-/** One line per note: its [app:id], its moment now, the clip there and the box. */
-function lines(project: Project, notes: AppNote[]): string {
+/**
+ * Each note's number (#1, #2…, by when it was left, never reused while it's
+ * kept): what the team sees on its pin and both speak of (Sphe, Nov 11: the
+ * thumbnail comments system, on the player).
+ */
+export function numbered(notes: Pick<AppNote, "id" | "at">[]): Map<string, number> {
+  return new Map([...notes].sort((a, b) => a.at - b.at).map((note, index) => [note.id, index + 1]));
+}
+
+/** A box smaller than this (a share of the frame) is a spot pinned, not an area drawn. */
+export const SPOT = 0.005;
+
+/** One line per note: its [app:id] (and #number), its moment now, the clip there and the box. */
+function lines(project: Project, notes: AppNote[], numbers: Map<string, number> = new Map()): string {
   const fps = fpsOf(project);
   const { width, height } = project.settings;
   return notes
@@ -194,9 +206,11 @@ function lines(project: Project, notes: AppNote[]): string {
       }
       if (note.box !== null) {
         const box = note.box;
-        said.push(`the area they boxed: centre ${Math.round((box.x + box.w / 2 - 0.5) * width)}, ${Math.round((box.y + box.h / 2 - 0.5) * height)} px from the frame's centre, ${Math.round(box.w * width)}×${Math.round(box.h * height)} px`);
+        const centre = `${Math.round((box.x + box.w / 2 - 0.5) * width)}, ${Math.round((box.y + box.h / 2 - 0.5) * height)} px from the frame's centre`;
+        said.push(box.w < SPOT && box.h < SPOT ? `the spot they pinned: ${centre}` : `the area they boxed: centre ${centre}, ${Math.round(box.w * width)}×${Math.round(box.h * height)} px`);
       }
-      return `- [${PREFIX}${note.id}] at ${span} (${timeline}; ${said.join("; ")}): ${note.by?.name ?? "the team"}: ${JSON.stringify(note.text.replace(/\s+/gu, " ").trim())}`;
+      const n = numbers.get(note.id);
+      return `- ${n === undefined ? "" : `#${n} `}[${PREFIX}${note.id}] at ${span} (${timeline}; ${said.join("; ")}): ${note.by?.name ?? "the team"}: ${JSON.stringify(note.text.replace(/\s+/gu, " ").trim())}`;
     })
     .join("\n");
 }
@@ -220,6 +234,35 @@ export function context(project: Project, notes: AppNote[]): string {
     `If their message asks to implement the feedback, ${FIX.charAt(0).toLowerCase()}${FIX.slice(1)} ` +
     `If it doesn't, say you see them and ask whether to implement them; don't fix them unasked.\n${lines(project, notes)}`
   );
+}
+
+/**
+ * Bodycam HQ's comments, pinned on the picture (Sphe, Nov 11: the thumbnail
+ * comments system on the player; the agent pulls the unsettled ones when its
+ * turn starts): asks, done on this turn, each settled once done.
+ */
+export function hqContext(project: Project, notes: AppNote[], numbers: Map<string, number>): string {
+  return (
+    `The team's comments, pinned on the picture at these moments (${notes.length}): they're asks. ` +
+    "Look at each one's moment (render_frame at its time, or contact_sheet with times to compare it with another), do it, then settle it: " +
+    'feedback_done {note: "<its id, app: and all>", summary}; a question gets feedback_answer {note, answer}; one that can\'t be done, feedback_unfixed {note, reason}. ' +
+    "Speak of them by number (#3), as the team does. A settled one comes back with feedback_reopen when they ask for it.\n" +
+    lines(project, notes, numbers)
+  );
+}
+
+/** A settled note (done or left) put back in the queue, by its id or its number ("#3"), when someone asks for it again. */
+export async function reopen(app: App, projectId: string, key: string): Promise<AppNote> {
+  need();
+  const rows = ((await cloud.query("edit:listNotes", { projectId })) as AppNote[] | null) ?? [];
+  const numbers = numbered(rows);
+  const wanted = key.trim().replace(/^\[|\]$/g, "");
+  const found = rows.find((note) => note.id === (idOf(wanted) ?? wanted) || `#${numbers.get(note.id)}` === wanted || String(numbers.get(note.id)) === wanted);
+  if (found === undefined) throw new Error(`no comment ${key}: they're #1 to #${rows.length}`);
+  if (found.status === "queued" || found.status === "sent") throw new Error(`#${numbers.get(found.id)} is open already`);
+  await cloud.mutation("edit:resolveNote", { projectId, id: found.id, status: "queued" });
+  changed(app, projectId);
+  return found;
 }
 
 /** How often a turn is looked at to see it ended. */

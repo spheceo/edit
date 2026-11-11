@@ -2643,6 +2643,13 @@ registerTool("feedback_unfixed", async ({ app, args, projectId }: ToolCall) => {
   return text(`left ${note} open, saying why on the review`);
 });
 
+registerTool("feedback_reopen", async ({ app, args, projectId }: ToolCall) => {
+  const asked = str(args.note);
+  if (asked === null) throw new Error("note is required: its number (#3) or its id");
+  const note = await editNotes.reopen(app, projectId, asked);
+  return text(`${asked} is open again ("${note.text.replace(/\s+/gu, " ").slice(0, 120)}"): its pin is back on the picture; do it as any open comment`);
+});
+
 registerTool("feedback_answer", async ({ app, args, projectId }: ToolCall) => {
   const asked = str(args.note);
   const given = str(args.answer);

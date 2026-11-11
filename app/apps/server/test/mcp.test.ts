@@ -40,12 +40,12 @@ test("tool_reference_is_one_short_line_per_tool", () => {
   // (Nov 2: "implement the new feedback" from the review) one short line, the sheets' detail (Nov 2: sheets sized
   // for the model's eyes) a few words on three tools, wait (Nov 2: background work waited for once) one line,
   // listen (Nov 2: what's heard over a stretch) another, report_problem (Nov 2: the agent files a bug) another,
-  // import_link (Nov 11: a video linked in the person's message) another.
-  expect(reference.length).toBeLessThan(22_100);
+  // import_link (Nov 11: a video linked in the person's message) another, contact_sheet's times (Nov 11: any moments side by side) a few words.
+  expect(reference.length).toBeLessThan(22_200);
 });
 
 test("every tool takes project_id; the instructions list the skills", () => {
-  expect(TOOLS.length).toBe(117);
+  expect(TOOLS.length).toBe(118);
   for (const tool of TOOLS) {
     expect(tool.inputSchema.type).toBe("object");
     expect(tool.inputSchema.properties.project_id).toEqual({

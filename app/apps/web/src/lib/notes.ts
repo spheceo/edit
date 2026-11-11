@@ -27,9 +27,13 @@ interface NotesState {
   notes: AppNote[];
   /** The note being written on the player, or null. */
   draft: Draft | null;
+  /** Bodycam HQ: the comment tool is up (the cursor pins a comment where it's clicked, while paused). */
+  commenting: boolean;
+  /** Bodycam HQ: the comment open on the picture (its card showing), or null. */
+  opened: string | null;
 }
 
-export const useNotes = create<NotesState>(() => ({ project: null, notes: [], draft: null }));
+export const useNotes = create<NotesState>(() => ({ project: null, notes: [], draft: null, commenting: false, opened: null }));
 
 let timer: ReturnType<typeof setInterval> | null = null;
 if (typeof window !== "undefined") window.addEventListener("edit:notes", () => void loadNotes());
@@ -50,7 +54,7 @@ export async function loadNotes(project: string | null = useNotes.getState().pro
 /** Follows `project`'s notes (null: none open). */
 export function followNotes(project: string | null): void {
   if (useNotes.getState().project === project) return;
-  useNotes.setState({ project, notes: [], draft: null });
+  useNotes.setState({ project, notes: [], draft: null, commenting: false, opened: null });
   if (timer !== null) clearInterval(timer);
   timer = null;
   if (project === null) return;
@@ -69,10 +73,86 @@ export function cancelNote(): void {
   useNotes.setState({ draft: null });
 }
 
-/** The note button: opens a note, or closes the one open (Sphe, Nov 3: no reaching for Escape). */
+/** The note button: opens a note, or closes the one open (Sphe, Nov 3: no reaching for Escape). In Bodycam HQ, the comment tool. */
 export function toggleNote(): void {
-  if (useNotes.getState().draft === null) startNote();
+  if (useEditor.getState().project?.hq === true) setCommenting(!useNotes.getState().commenting);
+  else if (useNotes.getState().draft === null) startNote();
   else cancelNote();
+}
+
+// ---------------------------------------------------------------- Bodycam HQ's comments
+//
+// The team's notes as the thumbnail page's comments, on the player (Sphe,
+// Nov 11): pinned where they click on the picture (a spot, or an area
+// dragged) at the paused frame, numbered, on the progress bar, and taken by
+// the agent with the next message as asks it settles.
+
+/** The comment tool up or down; up, playback pauses so the moment holds (comments are left on a paused frame). */
+export function setCommenting(on: boolean): void {
+  if (on) preview.pause();
+  useNotes.setState({ commenting: on });
+}
+
+/** Each note's number, by when it was left (as the server numbers them for the agent: edit_notes.ts `numbered`). */
+export function numbers(notes: AppNote[]): Map<string, number> {
+  return new Map([...notes].sort((a, b) => a.at - b.at).map((note, index) => [note.id, index + 1]));
+}
+
+/** The open ones: waiting for the agent, or with it. */
+export function openComments(notes: AppNote[]): AppNote[] {
+  return notes.filter((note) => note.status === "queued" || note.status === "sent");
+}
+
+/** A share of the frame under which a box is a spot pinned, not an area drawn (the server's `SPOT`). */
+export const SPOT = 0.005;
+
+/**
+ * A comment left at `frame`, at once (as the thumbnail page's: the page shows
+ * it before the server answers); `box` the area dragged, or a spot. The
+ * error's words if it couldn't be left.
+ */
+export async function addComment(frame: number, box: NoteBox, text: string): Promise<string | null> {
+  const { project } = useNotes.getState();
+  if (project === null || text.trim() === "") return null;
+  const local: AppNote = { id: `local-${Math.random().toString(36).slice(2, 10)}`, text: text.trim(), frame, endFrame: null, now: frame, nowEnd: null, box, source: null, status: "queued", fix: null, reason: null, at: Date.now(), by: null };
+  useNotes.setState((state) => ({ notes: [...state.notes, local] }));
+  try {
+    const note = await api.addNote(project, { text: text.trim(), frame, box });
+    useNotes.setState((state) => ({ notes: [...state.notes.filter((one) => one.id !== local.id && one.id !== note.id), note] }));
+    return null;
+  } catch (error) {
+    useNotes.setState((state) => ({ notes: state.notes.filter((one) => one.id !== local.id) }));
+    const said = error instanceof Error ? error.message : String(error);
+    useEditor.getState().toast(`The comment wasn't left: ${said}`, "error");
+    return said;
+  }
+}
+
+/** A comment's words changed, shown at once. */
+export async function editComment(id: string, text: string): Promise<void> {
+  const project = useNotes.getState().project;
+  const was = useNotes.getState().notes.find((note) => note.id === id);
+  if (project === null || was === undefined || text.trim() === "") return;
+  useNotes.setState((state) => ({ notes: state.notes.map((note) => (note.id === id ? { ...note, text: text.trim() } : note)) }));
+  try {
+    await api.editNote(project, id, text.trim());
+  } catch (error) {
+    useNotes.setState((state) => ({ notes: state.notes.map((note) => (note.id === id ? was : note)) }));
+    useEditor.getState().toast(`The comment wasn't changed: ${error instanceof Error ? error.message : String(error)}`, "error");
+  }
+}
+
+/** A comment opened from the progress bar: the playhead goes to its moment and its card shows. */
+export function openComment(id: string): void {
+  const note = useNotes.getState().notes.find((one) => one.id === id);
+  if (note === undefined) return;
+  preview.pause();
+  preview.seek(note.now);
+  useNotes.setState({ opened: id });
+}
+
+export function setOpened(id: string | null): void {
+  useNotes.setState({ opened: id });
 }
 
 export function setDraftBox(box: NoteBox | null, drawing = false): void {

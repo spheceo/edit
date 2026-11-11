@@ -537,7 +537,12 @@ export async function messageContext(app: App, id: string, playhead: number | nu
       });
   if (taken.length === 0) return where;
   void editNotes.requeueAfterTurn(app, id, taken.map((note) => note.id)).catch((error: unknown) => diag.warn("notes", `${id}: putting unanswered notes back: ${diag.messageOf(error)}`));
-  return `${where}${where === "" ? "" : "\n\n"}${editNotes.context(live.project, taken)}`;
+  // Bodycam HQ's are comments on the picture, numbered as the team sees them, and asks: done whatever the message says.
+  const told =
+    live.project.hq === true
+      ? editNotes.hqContext(live.project, taken, editNotes.numbered(await editNotes.list(app, id).catch(() => taken)))
+      : editNotes.context(live.project, taken);
+  return `${where}${where === "" ? "" : "\n\n"}${told}`;
 }
 
 /** Takes a queued message out of a Bodycam HQ chat (its Cancel). */

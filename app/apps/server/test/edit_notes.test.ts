@@ -207,3 +207,51 @@ test("queued notes ride the next message, whatever it says (Sphe, Nov 3); the on
     cleanup();
   }
 });
+
+test("Bodycam HQ's comments: numbered as the team sees them, a spot or an area, asks the agent does, and a settled one brought back by its number", async () => {
+  const { app, cleanup } = fixtureHome("notes-hq");
+  let running = false;
+  const sent: { text: string; context: string }[] = [];
+  (app as unknown as { agents: unknown }).agents = {
+    chat: () => ({ running }),
+    send: async (_id: string, text: string, _model: null, _effort: null, context: string) => {
+      sent.push({ text, context });
+      running = true;
+    },
+  };
+  try {
+    const db = mamagi();
+    const id = await judge(app);
+    await app.store.update(id, "test", (project) => {
+      project.hq = true;
+    });
+    await editNotes.add(app, id, { text: "the ring is late", frame: 60, box: { x: 0.5, y: 0.25, w: 0.0025, h: 0.0025 } });
+    await editNotes.add(app, id, { text: "make this card bigger", frame: 90, box: { x: 0.1, y: 0.6, w: 0.3, h: 0.2 } });
+    const router = buildRouter();
+    await respond(
+      app,
+      router,
+      new Request(`http://localhost:7700/api/projects/${id}/agent`, { method: "POST", headers: { host: "localhost:7700", "content-type": "application/json" }, body: JSON.stringify({ text: "go" }) }),
+      null,
+    );
+    const told = sent[0]!.context;
+    // Asks, done whatever the message says, each by its number.
+    expect(told).toContain("they're asks");
+    expect(told).not.toContain("don't fix them unasked");
+    expect(told).toContain("#1 [app:n1]");
+    expect(told).toContain("#2 [app:n2]");
+    expect(told).toContain("the spot they pinned: 2, -269 px from the frame's centre");
+    expect(told).toContain("the area they boxed: centre -480, 216 px from the frame's centre, 576×216 px");
+    // Settled, then wanted again: back by its number.
+    db.rows[0]!.status = "done";
+    const reopen = handlerFor("feedback_reopen")!.handler;
+    const said = (await reopen({ app, args: { note: "#1" }, projectId: id, scope: id })) as { text: string }[];
+    expect(said[0]!.text).toContain("open again");
+    expect(db.rows[0]!.status).toBe("queued");
+    await expect(Promise.resolve(reopen({ app, args: { note: "#1" }, projectId: id, scope: id }))).rejects.toThrow("open already");
+    await expect(Promise.resolve(reopen({ app, args: { note: "#9" }, projectId: id, scope: id }))).rejects.toThrow("no comment #9");
+    running = false;
+  } finally {
+    cleanup();
+  }
+});

@@ -204,90 +204,94 @@ export function Viewer() {
   // Full screen's controls go when the mouse rests; HQ's only while it plays, and when the mouse leaves the picture.
   const hidden = fullscreen ? idle : hq && idle && playing;
   return (
-    <section
-      ref={(element) => { viewer = element; }}
-      onPointerMove={overlay ? wake : undefined}
-      onPointerLeave={hq && !fullscreen ? () => setIdle(true) : undefined}
-      className={fullscreen
-        ? cx("relative flex bg-black", hidden && "cursor-none")
-        : cx("flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line", hq && "relative", hidden && "cursor-none", native ? "bg-transparent" : "bg-panel")}
-    >
-      <div ref={(element) => { wrapRef.current = element; setWrap(element); }} className={cx("relative min-h-0 flex-1", native ? "bg-transparent" : "bg-black")}>
-        {/* Fullscreen is for watching: a click plays or pauses instead of moving the selection. */}
-        {/* Drawn by Edit.app's window under the page when `native` (still here for its clicks and drags). */}
-        <canvas ref={canvasRef} className={cx("absolute inset-0 size-full", native && "opacity-0")}
-          onPointerDown={(event) => { if (overlay) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
-          onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
-        />
-        {/* Smooth playback over the canvas; clicks go through to it. */}
-        <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
-        {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
-        <EffectLayer wrap={wrap} />
-        {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
-        {!fullscreen && <NoteBoxLayer wrap={wrap} />}
-        {!fullscreen && <NoteDraft />}
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center p-8">
-            <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />
-          </div>
-        )}
-        {/* Its first frame on the way: said in the middle, not a corner badge on a black screen (the user, Oct 30: "we need a better loading view"). */}
-        {!error && !framed && !empty && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <Loader size={32} label="Loading the preview…" />
-          </div>
-        )}
-        {!error && framed && buffering && (
-          <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
-            <Pulse size={12} /> Loading frame…
-          </div>
-        )}
-        {!error && buffering && stuck && (
-          <button
-            className={cx("absolute rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted underline underline-offset-2 hover:text-fg", framed ? "right-3 bottom-11" : "bottom-[calc(50%-64px)] left-1/2 -translate-x-1/2")}
-            onClick={() => openReport(`The preview has been stuck on "Loading frame…" at frame ${Math.floor(playhead.frame)}`)}
-          >
-            Stuck? Report it
-          </button>
-        )}
-        {!error && empty && importing !== null && job?.state === "waiting" && project && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-[13px]">
-            <span className="text-muted">{importing.line}</span>
-            <WaitingFiles project={project} job={job} />
-          </div>
-        )}
-        {!error && empty && importing !== null && job?.state !== "waiting" && (
-          <button
-            onClick={() => useEditor.getState().setMediaTab("downloads")}
-            className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[13px]"
-          >
-            <span className={cx("text-muted", job?.state !== "failed" && "shimmer")}>{importing.line}</span>
-            <span className="h-1 w-56 overflow-hidden rounded-full bg-white/10">
-              <span className={cx("block h-full rounded-full transition-[width] duration-500", job?.state === "failed" ? "bg-danger" : "bg-white/70")} style={{ width: `${Math.max(2, Math.round(importing.fraction * 100))}%` }} />
-            </span>
-            <span className="text-[11px] text-faint tabular">{Math.round(importing.fraction * 100)}% · the edit appears here as soon as it’s laid out</span>
-          </button>
-        )}
-        {!error && empty && importing === null && !(hq && benchShown) && (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[13px] text-faint">
-            Import footage or add a title to start
-          </div>
-        )}
-      </div>
-      {hq ? (
-        <div className={cx("absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent pt-14 transition-opacity duration-300", hidden && "pointer-events-none opacity-0")}>
-          <VideoControls fullscreen={fullscreen} />
+    // A frame round the viewer, for Bodycam HQ's working light: the thumbnail page's own glow and ring, round its edge and outside it, where nothing clips them.
+    <div className="relative isolate flex min-h-0 min-w-0 flex-1 rounded-xl">
+      {hq && !fullscreen && <WorkingFrame native={native} />}
+      <section
+        ref={(element) => { viewer = element; }}
+        onPointerMove={overlay ? wake : undefined}
+        onPointerLeave={hq && !fullscreen ? () => setIdle(true) : undefined}
+        className={fullscreen
+          ? cx("relative flex bg-black", hidden && "cursor-none")
+          : cx("flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line", hq && "relative", hidden && "cursor-none", native ? "bg-transparent" : "bg-panel")}
+      >
+        <div ref={(element) => { wrapRef.current = element; setWrap(element); }} className={cx("relative min-h-0 flex-1", native ? "bg-transparent" : "bg-black")}>
+          {/* Fullscreen is for watching: a click plays or pauses instead of moving the selection. */}
+          {/* Drawn by Edit.app's window under the page when `native` (still here for its clicks and drags). */}
+          <canvas ref={canvasRef} className={cx("absolute inset-0 size-full", native && "opacity-0")}
+            onPointerDown={(event) => { if (overlay) preview.toggle(); else dragTransform(event, wrapRef.current!); }}
+            onContextMenu={(event) => { if (!fullscreen) openMenu(event, viewerMenu()); }}
+          />
+          {/* Smooth playback over the canvas; clicks go through to it. */}
+          <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
+          {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
+          <EffectLayer wrap={wrap} />
+          {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
+          {!fullscreen && <NoteBoxLayer wrap={wrap} />}
+          {!fullscreen && <NoteDraft />}
+          {error && (
+            <div className="absolute inset-0 flex items-center justify-center p-8">
+              <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />
+            </div>
+          )}
+          {/* Its first frame on the way: said in the middle, not a corner badge on a black screen (the user, Oct 30: "we need a better loading view"). */}
+          {!error && !framed && !empty && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <Loader size={32} label="Loading the preview…" />
+            </div>
+          )}
+          {!error && framed && buffering && (
+            <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
+              <Pulse size={12} /> Loading frame…
+            </div>
+          )}
+          {!error && buffering && stuck && (
+            <button
+              className={cx("absolute rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted underline underline-offset-2 hover:text-fg", framed ? "right-3 bottom-11" : "bottom-[calc(50%-64px)] left-1/2 -translate-x-1/2")}
+              onClick={() => openReport(`The preview has been stuck on "Loading frame…" at frame ${Math.floor(playhead.frame)}`)}
+            >
+              Stuck? Report it
+            </button>
+          )}
+          {!error && empty && importing !== null && job?.state === "waiting" && project && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-[13px]">
+              <span className="text-muted">{importing.line}</span>
+              <WaitingFiles project={project} job={job} />
+            </div>
+          )}
+          {!error && empty && importing !== null && job?.state !== "waiting" && (
+            <button
+              onClick={() => useEditor.getState().setMediaTab("downloads")}
+              className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-[13px]"
+            >
+              <span className={cx("text-muted", job?.state !== "failed" && "shimmer")}>{importing.line}</span>
+              <span className="h-1 w-56 overflow-hidden rounded-full bg-white/10">
+                <span className={cx("block h-full rounded-full transition-[width] duration-500", job?.state === "failed" ? "bg-danger" : "bg-white/70")} style={{ width: `${Math.max(2, Math.round(importing.fraction * 100))}%` }} />
+              </span>
+              <span className="text-[11px] text-faint tabular">{Math.round(importing.fraction * 100)}% · the edit appears here as soon as it’s laid out</span>
+            </button>
+          )}
+          {!error && empty && importing === null && !(hq && benchShown) && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-[13px] text-faint">
+              Import footage or add a title to start
+            </div>
+          )}
         </div>
-      ) : (
-        <div className={fullscreen
-          ? cx("absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur transition-opacity duration-300", hidden && "pointer-events-none opacity-0")
-          : native ? "bg-panel" : undefined}>
-          <Transport fullscreen={fullscreen} />
-        </div>
-      )}
-      {/* On the viewer's own frame, over everything in it: its corners and edge are the ring's. */}
-      {hq && !fullscreen && <HqWorking />}
-    </section>
+        {hq ? (
+          <div className={cx("absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent pt-14 transition-opacity duration-300", hidden && "pointer-events-none opacity-0")}>
+            <VideoControls fullscreen={fullscreen} />
+          </div>
+        ) : (
+          <div className={fullscreen
+            ? cx("absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur transition-opacity duration-300", hidden && "pointer-events-none opacity-0")
+            : native ? "bg-panel" : undefined}>
+            <Transport fullscreen={fullscreen} />
+          </div>
+        )}
+        {/* On the viewer's own frame, over everything in it: its corners and edge are the ring's. */}
+        {hq && !fullscreen && <HqWorking />}
+      </section>
+    </div>
   );
 }
 
@@ -425,7 +429,6 @@ function HqWorking() {
       {running && (
         <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-xl">
           <div className="working-sheen" />
-          <EdgeLight />
           <div className="absolute inset-x-0 top-3 flex justify-center">
             <motion.div layout transition={{ type: "spring", stiffness: 420, damping: 34 }} className="flex h-7 items-center gap-2 rounded-full bg-[#0b0b0b] pr-3.5 pl-2 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_8px_24px_#000c]">
               <span className="working-orb" />
@@ -443,36 +446,32 @@ function HqWorking() {
 }
 
 /**
- * The light round the viewer's edge: one rounded rectangle on its border,
- * stroked only along a stretch that travels round it, with a soft glow under
- * it and a white head. Drawn as a shape, not the thumbnail's masked gradient,
- * whose corners Safari's engine left square and outside the viewer's rounded
- * frame (Sphe, Nov 11: "it is so broken").
+ * The thumbnail page's working light, round the viewer as it is round the
+ * thumbnail: a breathing aura and a soft glow behind it, and the ring of light
+ * turning on its edge, two pixels outside it (Sphe, Nov 11: "i love the
+ * thumbnail one soo much it blends so well"). Not the glow where Edit.app's
+ * window draws the picture under a see-through page: it would show over the
+ * picture.
  */
-function EdgeLight() {
-  const box = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const node = box.current;
-    if (node === null) return;
-    const observer = new ResizeObserver(() => setSize({ width: node.clientWidth, height: node.clientHeight }));
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-  // Its line on the frame's border, a pixel in, the frame's corner radius (rounded-xl, 12 px) a pixel less.
-  const edge = { x: 1, y: 1, width: Math.max(0, size.width - 2), height: Math.max(0, size.height - 2), rx: 11, pathLength: 100, fill: "none" };
+function WorkingFrame({ native }: { native: boolean }) {
+  const running = useAgent((state) => state.running);
+  const fade = { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0.5, ease: [0.2, 0, 0, 1] } } as const;
   return (
-    <div ref={box} className="absolute inset-0">
-      {size.width > 0 && (
-        <svg width={size.width} height={size.height} className="absolute inset-0" aria-hidden>
-          {/* The glow, the light, and its white head at the front: one stretch of the border, the same for all three. */}
-          <rect {...edge} className="edge-light" stroke="var(--color-agent)" strokeWidth={8} strokeDasharray="26 74" opacity={0.4} style={{ filter: "blur(6px)" }} />
-          <rect {...edge} className="edge-light" stroke="var(--color-agent)" strokeWidth={2} strokeDasharray="26 74" strokeLinecap="round" />
-          <rect {...edge} className="edge-light" stroke="var(--color-playhead)" strokeWidth={2} strokeDasharray="0 16 8 76" strokeLinecap="round" />
-          <rect {...edge} className="edge-light" stroke="#fff" strokeWidth={2} strokeDasharray="0 23 3 74" strokeLinecap="round" />
-        </svg>
+    <AnimatePresence>
+      {running && !native && (
+        // Behind the viewer (the frame is its own stacking context): seen only round its edge.
+        <motion.div key="glow" {...fade} className="pointer-events-none absolute inset-0 -z-10 rounded-[inherit]">
+          <div className="absolute -inset-x-4 -inset-y-2"><div className="working-aura" /></div>
+          <div className="working-glow" />
+        </motion.div>
       )}
-    </div>
+      {running && (
+        // On its edge, over it.
+        <motion.div key="ring" {...fade} className="pointer-events-none absolute inset-0 z-10 rounded-[inherit]">
+          <div className="working-ring" />
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 

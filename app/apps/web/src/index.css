@@ -314,16 +314,8 @@ html.native-preview .editor-root {
   background: radial-gradient(55% 50% at 50% 45%, color-mix(in srgb, var(--color-agent) 11%, transparent), transparent 72%);
   animation: working-breathe 3.2s ease-in-out infinite alternate;
 }
-/* Bodycam HQ's viewer: a stretch of light travelling round its rounded edge (Viewer.tsx EdgeLight), once every 3 s. */
-@keyframes edge-light {
-  from { stroke-dashoffset: 0; }
-  to { stroke-dashoffset: -100; }
-}
-.edge-light {
-  animation: edge-light 3s linear infinite;
-}
 @media (prefers-reduced-motion: reduce) {
-  .working-ring, .working-glow, .working-sheen, .working-aura, .working-orb, .edge-light { animation: none; }
+  .working-ring, .working-glow, .working-sheen, .working-aura, .working-orb { animation: none; }
   .working-sheen { display: none; }
 }
 

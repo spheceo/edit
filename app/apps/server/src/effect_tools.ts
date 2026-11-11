@@ -187,6 +187,10 @@ async function archiveInLibrary({ app, args, projectId }: ToolCall): Promise<Con
   return text(archived ? `${name} is put away: out of every list, its versions kept (archived: false brings it back).` : `${name} is back.`);
 }
 
+/** A memory is a line or two; a part of the edit (a skill with a note, read when needed) is longer, and still short. */
+const MEMORY_MOST = 400;
+const SKILL_MOST = 2_400;
+
 async function remember({ app, args, projectId }: ToolCall): Promise<Content[]> {
   named(app, projectId, { name: "-" });
   cloudOn();
@@ -194,11 +198,27 @@ async function remember({ app, args, projectId }: ToolCall): Promise<Content[]> 
   const skill = libraryName(args.skill, "skill");
   if (skill === v2cloud.GLOBAL) throw new Error("the global skill is Edit's own: give your own a name");
   if (typeof args.text !== "string" || args.text.trim() === "") throw new Error("text is required");
-  if (args.text.length > 400) throw new Error(`at most 400 characters (this is ${args.text.length}): a line or two, in the person's words`);
   if (typeof args.reason !== "string" || args.reason.trim() === "") throw new Error("reason is required: what the person said");
-  const saved = await v2cloud.saveSkill(skill, args.text.trim(), args.reason.trim());
+  const note = typeof args.note === "string" && args.note.trim() !== "" ? args.note.trim() : undefined;
+  if (note !== undefined && note.length > 160) throw new Error("note is at most 160 characters: when to read it");
+  await v2cloud.refreshSkills();
+  // A part's skill, or one already longer than a memory (the house rules, always in mind): saved whole again with the change.
+  const before = v2cloud.skill(skill);
+  const part = note !== undefined || before?.note !== undefined || (before?.text.length ?? 0) > MEMORY_MOST;
+  const most = part ? SKILL_MOST : MEMORY_MOST;
+  if (args.text.length > most) throw new Error(`at most ${most} characters (this is ${args.text.length}): ${part ? "keep the part's skill short: its rules, not their history" : "a line or two, in the person's words"}`);
+  const saved = await v2cloud.saveSkill(skill, args.text.trim(), args.reason.trim(), note);
   v2cloud.forgetSkills();
   return text(`Remembered as ${skill} (version ${saved.n}): every Bodycam HQ agent has it from its next turn.`);
+}
+
+async function readSkill({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  named(app, projectId, { name: "-" });
+  const name = libraryName(args.name, "name");
+  await v2cloud.refreshSkills();
+  const found = v2cloud.skill(name);
+  if (found === undefined) throw new Error(`no skill ${name}: the ones there are listed in your instructions`);
+  return text(found.text);
 }
 
 async function makeSound({ app, args, projectId }: ToolCall): Promise<Content[]> {
@@ -215,6 +235,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
   ["save_to_library", saveToLibrary],
   ["archive_in_library", archiveInLibrary],
   ["remember", remember],
+  ["read_skill", readSkill],
   ["make_sound", makeSound],
   ["effect_footage", effectFootage],
   ["look_at_effect", lookAtEffect],

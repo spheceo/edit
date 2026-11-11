@@ -46,11 +46,33 @@ export const HQ_TOOLS: readonly string[] = [
   "save_to_library",
   "archive_in_library",
   "remember",
+  "read_skill",
   "make_sound",
 ];
 
-/** What a Bodycam HQ chat isn't offered: the house's skills (it has its own) and its sound effects (it makes them as code). */
-export const NOT_IN_HQ: readonly string[] = ["skill", "add_sound_effect"];
+/**
+ * What a Bodycam HQ chat isn't offered: the house's skills (its own are in
+ * V2's cloud), the house's looks (it makes them as code), and what belongs to
+ * other niches (commentary, Shorts). The base edit's tools stay, the house's
+ * music and sound effects included (Sphe, Nov 11: "it should also use the
+ * same sfxs and music as it does now"; its own coded sounds come as it's taught).
+ */
+export const NOT_IN_HQ: readonly string[] = [
+  "skill",
+  "add_text",
+  "map_view",
+  "highlight_evidence",
+  "commentary_arrow",
+  "commentary_web",
+  "commentary_tweet",
+  "commentary_channel",
+  "commentary_rotate",
+  "commentary_reverb_out",
+  "youtube_reference",
+  "tweet_reference",
+  "shorts_callout",
+  "reframe",
+];
 
 /** The tools a chat in a project is offered. */
 export function toolsFor(hq: boolean): Tool[] {

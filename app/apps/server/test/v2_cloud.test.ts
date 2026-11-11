@@ -159,11 +159,22 @@ test("what the agent remembers: a line or two each, the global skill first and n
     // None of the house's instructions or skills: its own, short.
     expect(prompt).not.toContain("WORK FAST");
     expect(prompt).not.toContain("- skill(");
-    expect(prompt).not.toContain("- add_sound_effect(");
     expect((await call(app, id, "archive_in_library", { kind: "skill", name: "global" })).content[0]!.text).toContain("stays");
     await call(app, id, "archive_in_library", { kind: "skill", name: "pins" });
     await v2cloud.refreshSkills();
     expect(v2cloud.memories().map((one) => one.name)).toEqual(["global"]);
+    // A part of the edit's skill: named with when it fits, read when needed, longer than a memory and still short.
+    expect((await call(app, id, "remember", { skill: "subtitles", text: "y".repeat(500), reason: "the house's, cut down", note: "Subtitles after the intro." })).content[0]!.text).toContain("version 1");
+    expect((await call(app, id, "remember", { skill: "subtitles", text: "y".repeat(2_401), reason: "too long" })).content[0]!.text).toContain("at most 2400 characters");
+    await call(app, id, "remember", { skill: "subtitles", text: "- Locked bottom middle.", reason: "JJ" });
+    await v2cloud.refreshSkills();
+    expect(v2cloud.skill("subtitles")).toEqual({ name: "subtitles", text: "- Locked bottom middle.", note: "Subtitles after the intro." });
+    const withParts = agentInstructions(project);
+    expect(withParts).toContain("YOUR SKILLS");
+    expect(withParts).toContain("- subtitles: Subtitles after the intro.");
+    expect(withParts).not.toContain("Locked bottom middle");
+    expect((await call(app, id, "read_skill", { name: "subtitles" })).content[0]!.text).toBe("- Locked bottom middle.");
+    expect((await call(app, id, "read_skill", { name: "nope" })).content[0]!.text).toContain("no skill nope");
     // Every other project reads the house's, and none of this.
     const plain = app.store.create("Plain", { width: 1920, height: 1080, fps: 30 }).project;
     expect(agentInstructions(plain)).toContain("WORK FAST");

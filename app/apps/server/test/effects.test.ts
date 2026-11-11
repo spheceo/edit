@@ -6,7 +6,7 @@ import { agentInstructions } from "../src/agent.ts";
 import * as effects from "../src/effects.ts";
 import { registerEffectTools } from "../src/effect_tools.ts";
 import { dispatch } from "../src/mcp/index.ts";
-import { HQ_TOOLS, toolsFor, TOOLS } from "../src/mcp/registry.ts";
+import { HQ_TOOLS, NOT_IN_HQ, toolsFor, TOOLS } from "../src/mcp/registry.ts";
 import { respond } from "../src/http/server.ts";
 import { buildRouter } from "../src/routes.ts";
 import * as seams from "../src/seams.ts";
@@ -132,8 +132,9 @@ test("the agent's file tools are allowed in the effects folder and nowhere else,
     expect(made).toContain("THIS IS A BODYCAM HQ VIDEO");
     for (const tool of HQ_TOOLS) expect(made).toContain(`- ${tool}(`);
     expect(toolsFor(false).length).toBe(TOOLS.length - HQ_TOOLS.length);
-    // Every tool but the house's skills and sound effects (it has its own).
-    expect(toolsFor(true).map((tool) => tool.name)).toEqual(TOOLS.map((tool) => tool.name).filter((name) => name !== "skill" && name !== "add_sound_effect"));
+    // Every tool but the house's skills, sound effects and looks (it has its own) and other niches'.
+    expect(toolsFor(true).map((tool) => tool.name)).toEqual(TOOLS.map((tool) => tool.name).filter((name) => !NOT_IN_HQ.includes(name)));
+    for (const kept of ["cover_cut_in", "caption_speakers", "add_subtitles", "track_region", "capture_evidence", "set_keyframes", "pull_script", "add_sound_effect", "add_from_library"]) expect(NOT_IN_HQ).not.toContain(kept);
   } finally {
     cleanup();
   }

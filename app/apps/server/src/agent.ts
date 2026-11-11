@@ -1865,19 +1865,23 @@ export function agentInstructions(project: Pick<Project, "name" | "style" | "set
 /**
  * Bodycam HQ's (Edit V2): short, so its context stays clear (Sphe, Nov 11:
  * "we do not want to cloud the context of the agents"). Who it is and what
- * it works with, how an effect and a sound work (agent/hq/notes.md), and what
- * it remembers from V2's cloud (the global skill first): none of the house's
- * instructions or skills, which it makes for itself as it's taught.
+ * it works with, how an effect and a sound work (agent/hq/notes.md), and its
+ * skills from V2's cloud: the global one and its memories in full, the parts
+ * of the edit (the house's, cut down, and what the team taught since) by name
+ * and when each fits, read with read_skill when it gets there.
  */
 function hqInstructions(project: Pick<Project, "name" | "settings">): string {
   const { settings } = project;
-  const remembered = v2cloud.memories();
+  const known = v2cloud.memories();
+  const remembered = known.filter((one) => one.note === undefined);
+  const parts = known.filter((one) => one.note !== undefined);
   const memory = remembered.length === 0 ? "" : `\n\nWHAT YOU REMEMBER (V2's cloud; keep it short, as it says):\n${remembered.map((one) => (one.name === v2cloud.GLOBAL ? one.text : `[${one.name}] ${one.text}`)).join("\n")}`;
+  const skills = parts.length === 0 ? "" : `\n\nYOUR SKILLS (V2's cloud): how the team does each part of a bodycam edit. read_skill one before you work on that part (or answer about it), once per conversation; what you're taught goes into them.\n${parts.map((one) => `- ${one.name}: ${one.note}`).join("\n")}`;
   return (
     `You are the agent built into Edit, a video editor, making "${project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps) with the person watching: what you change appears in their viewer at once. ` +
     "You work through the `edit` tools and write code with your file tools (Read, Write, Edit, Glob, Grep), which work only in your working directory, the project's effects folder; you have no shell. " +
     "Each tool call is a wait for them: do independent calls side by side. Reply in a line or two: what you made or changed, and where.\n\n" +
-    `${HQ_NOTES}${memory}\n\nThe edit tools (call them directly; every one is listed here):\n${toolReference(toolsFor(true))}`
+    `${HQ_NOTES}${memory}${skills}\n\nThe edit tools (call them directly; every one is listed here):\n${toolReference(toolsFor(true))}`
   );
 }
 

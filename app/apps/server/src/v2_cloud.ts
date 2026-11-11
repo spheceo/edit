@@ -176,9 +176,9 @@ export async function save(key: string, name: string, dir: string, options: { re
   return (await cloud.mutation("edit:saveLibraryVersion", { key, name, files, ...options })) as { n: number; made: boolean };
 }
 
-/** A skill's next version (in use at once): a teacher's. */
-export async function saveSkill(name: string, text: string, reason: string): Promise<{ n: number }> {
-  return (await cloud.mutation("edit:saveLibraryVersion", { key: skillKey(name), name, text, reason })) as { n: number };
+/** A skill's next version (in use at once): a teacher's. A note (when to read it) makes it one read when needed rather than always in mind. */
+export async function saveSkill(name: string, text: string, reason: string, note?: string): Promise<{ n: number }> {
+  return (await cloud.mutation("edit:saveLibraryVersion", { key: skillKey(name), name, text, reason, ...(note !== undefined ? { note } : {}) })) as { n: number };
 }
 
 /** An item's version `n` (else the one in use) put in `dir`; null when the item has none. */
@@ -191,14 +191,30 @@ export async function fetchInto(key: string, n: number | null, dir: string): Pro
 
 // ---------------------------------------------------------------- the agent's skills: what it's been told to remember
 
+/**
+ * One of the agent's skills: a memory (no note: always in its instructions,
+ * a line or two) or a part of the edit (its note says when to read it, and
+ * read_skill brings it in then), so what's always in mind stays short.
+ */
+export interface Skill {
+  name: string;
+  text: string;
+  note?: string;
+}
+
 /** The skills in V2's cloud (the global one first), as last read. */
-let skills: { name: string; text: string }[] = [];
+let skills: Skill[] = [];
 let readAt = 0;
 const SKILLS_FRESH_MS = 30_000;
 
-/** What Bodycam HQ's agent remembers: the global skill, then the rest by name. */
-export function memories(): { name: string; text: string }[] {
+/** What Bodycam HQ's agent knows: the global skill, then the rest by name. */
+export function memories(): Skill[] {
   return skills;
+}
+
+/** One skill, as last read. */
+export function skill(name: string): Skill | undefined {
+  return skills.find((one) => one.name === name);
 }
 
 /** Reads the skills, at most every 30 s (a turn's start asks): a failure keeps what was read before. */
@@ -207,11 +223,11 @@ export async function refreshSkills(): Promise<void> {
   readAt = Date.now();
   try {
     const items = await list("skill");
-    const next: { name: string; text: string }[] = [];
-    for (const item of items) {
-      const found = await version(item.key);
-      const text = found?.version.text;
-      if (typeof text === "string" && text.trim() !== "") next.push({ name: item.name, text: text.trim() });
+    // Each skill's text at once: a turn waits on this.
+    const read = await Promise.all(items.map(async (item) => ({ item, text: (await version(item.key))?.version.text })));
+    const next: Skill[] = [];
+    for (const { item, text } of read) {
+      if (typeof text === "string" && text.trim() !== "") next.push({ name: item.name, text: text.trim(), ...(item.note ? { note: item.note } : {}) });
     }
     skills = next.sort((a, b) => Number(b.name === GLOBAL) - Number(a.name === GLOBAL) || a.name.localeCompare(b.name));
   } catch (error) {
@@ -225,7 +241,7 @@ export function forgetSkills(): void {
 }
 
 /** Tests: the skills as given, read now. */
-export function useSkillsForTests(given: { name: string; text: string }[]): void {
+export function useSkillsForTests(given: Skill[]): void {
   skills = given;
   readAt = Date.now();
 }

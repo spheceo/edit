@@ -3867,7 +3867,7 @@
     "name": "archive_in_library"
   },
   {
-    "description": "Keep something you've been told to remember, or judge worth remembering, as one of your skills in V2's cloud (a teacher's; Bodycam HQ). A line or two at most, in the person's words; the same name replaces it.",
+    "description": "Keep something you've been told to remember, or judge worth remembering, as one of your skills in V2's cloud (a teacher's; Bodycam HQ). A memory is a line or two, in the person's words (at most 400 characters). A part of the edit's skill (one with a note, read with read_skill) is changed by saving the whole of it again with the change (at most 2,400 characters). The same name replaces it.",
     "inputSchema": {
       "properties": {
         "project_id": {
@@ -3883,7 +3883,11 @@
           "type": "string"
         },
         "text": {
-          "description": "What to remember, at most 400 characters.",
+          "description": "What to remember: at most 400 characters for a memory, 2,400 for a part's skill.",
+          "type": "string"
+        },
+        "note": {
+          "description": "Only for a part of the edit's skill: when to read it (at most 160 characters). Kept from before when left out.",
           "type": "string"
         }
       },
@@ -3895,6 +3899,25 @@
       "type": "object"
     },
     "name": "remember"
+  },
+  {
+    "description": "Read one of your skills in V2's cloud: the part of the edit it covers, as the team does it (Bodycam HQ). Read it before working on that part, once per conversation; your instructions list them with when each fits.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "read_skill"
   },
   {
     "description": "Make a sound effect from its code (Bodycam HQ): the folder's sound.html is rendered to a WAV and put among the project's media, or replaces the one made before. Answers its media id and length to place as an audio clip.",

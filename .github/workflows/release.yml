@@ -211,10 +211,15 @@ jobs:
       # Linux install on the nightly channel is offered releases, update.ts
       # channelHere); a release and a test build (run by hand) have it.
       matrix:
-        include: ${{ fromJSON(startsWith(github.ref_name, 'nightly-') && '[
-          {"target":"aarch64-apple-darwin","os":"macos-latest"}]' || '[
-          {"target":"aarch64-apple-darwin","os":"macos-latest"},
-          {"target":"x86_64-unknown-linux-gnu","os":"ubuntu-22.04"}]') }}
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+        # A nightly leaves Linux out (an exclude that names nothing otherwise):
+        # a whole matrix from one fromJSON expression failed to start (startup_failure, Nov 11).
+        exclude:
+          - target: ${{ startsWith(github.ref_name, 'nightly-') && 'x86_64-unknown-linux-gnu' || 'none' }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

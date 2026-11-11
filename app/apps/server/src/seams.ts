@@ -755,6 +755,8 @@ export interface Window {
 export interface WatchOptions {
   force: boolean;
   segments: boolean | null;
+  /** Started by Edit on its own (an import, the workflow's start): never pays for Scribe, so footage with rough words only waits for its cut (kept_hearing.ts). */
+  background?: boolean;
 }
 
 export interface WatchSeam {

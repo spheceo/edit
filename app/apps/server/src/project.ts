@@ -315,6 +315,14 @@ export function clipEnd(clip: Clip): number {
   return clip.start + clip.duration;
 }
 
+/** The stretches of a media (seconds into it) the timeline's sound plays: one per audio clip of it on a track that's heard (what's kept, kept_hearing.ts). */
+export function soundUses(project: Project, mediaId: string): [number, number][] {
+  const rate = fps(project);
+  return project.clips.flatMap((clip): [number, number][] =>
+    clip.type === "audio" && clip.media === mediaId && trackOf(project, clip.track)?.muted !== true ? [[clip.source_in, clip.source_in + (clip.duration / rate) * clip.speed]] : [],
+  );
+}
+
 export function clipContains(clip: Clip, frame: number): boolean {
   return frame >= clip.start && frame < clipEnd(clip);
 }

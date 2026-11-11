@@ -18,12 +18,14 @@ import * as framing from "./framing.ts";
 import { isBug, message as crashMessage } from "./guard.ts";
 import type { MediaKind, Probe } from "./model.ts";
 import { native, type CachePaths } from "./native/index.ts";
-import { extension, join, startsWith, withExtension, canonical } from "./paths.ts";
+import { extension, join, parent, startsWith, withExtension, canonical } from "./paths.ts";
 import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
+import { FIRST_PASS_FROM_S, firstWords } from "./first_hearing.ts";
+import * as log from "./hearing_log.ts";
+import { hearJoined, merged, PAD_MS, readKept, toHear, WHOLE_SHARE } from "./kept_hearing.ts";
 import * as transcribe from "./transcribe.ts";
 import * as voices from "./voices.ts";
-import { writeCaptionTranscript } from "./youtube_words.ts";
 
 export type { Probe } from "./model.ts";
 
@@ -447,7 +449,7 @@ export class Processor {
    * finished one again (with names it wasn't given): the old transcript stays
    * until the new one is in.
    */
-  transcribe(source: string, hasAudio: boolean, keyterms: readonly string[] = [], again = false): MediaStatus {
+  transcribe(source: string, hasAudio: boolean, keyterms: readonly string[] = [], again = false, freeOnly = false): MediaStatus {
     const current = this.entry(source);
     // Shared analysis can arrive after status() first saw this file. It is
     // still completed work and must win over a new caption/paid request.
@@ -465,25 +467,32 @@ export class Processor {
     const target = this.paths(source).transcript;
     // A cloud excerpt whose whole recording was heard already (Writer shares its words) takes its words from there.
     const shared = again ? null : sharedSourceOf(this.store.cacheDir(), source);
-    const words = async (pyannote: boolean) => {
+    // Scribe's words and voices, never YouTube's captions: they have no voices (every line its own
+    // `caption_turn_N`) and JJ's notes caught their words wrong ("bit*", "slept", a "you" missing).
+    const words = async () => {
       if (shared !== null && mediaHooks.wholeTranscript !== null && (await mediaHooks.wholeTranscript(shared, target).catch(() => false))) return;
-      // Heard again: properly (Scribe), not from YouTube's captions, which
-      // are what a second hearing is usually for. With pyannote's voices, Scribe
-      // hears the words too (Sphe, Nov 8: "scribe + pyannote"; JJ's notes on the
-      // captions' words: "bit*", "slept", a "you" missing).
-      const captions = again || pyannote ? null : this.captionSource(source);
-      if (captions !== null && await writeCaptionTranscript(this.store.home, captions, target)) return;
       // A pieced proxy is heard from its original, as its other analyses are: read through the proxy, a long
       // recording made every piece at once (Killer Pastor in dev, Nov 8: its 1 h 52 min tape heard again took Edit
       // past 23 GB and Bun aborted).
-      await transcribe.run(await this.inputOf(source), target, keyterms, again, !pyannote);
+      const input = await this.inputOf(source);
+      // A long file's first words are free (first_hearing.ts): the agent cuts on them, and Scribe hears only
+      // what's kept (`refine`). Heard again on purpose (`again`): Scribe, whole.
+      if (!again && (await transcribe.seconds(input)) > FIRST_PASS_FROM_S) {
+        const work = join(parent(target) ?? ".", "first");
+        try {
+          if (await firstWords(this.store.home, this.cloudSource(source), input, target, work)) return;
+        } finally {
+          fs.rmSync(work, { recursive: true, force: true });
+        }
+      }
+      if (freeOnly) throw new NothingFree();
+      await transcribe.run(input, target, keyterms, again);
     };
-    // The words, then pyannote's voices while the relay's flag is on (voices.ts), before
-    // the transcript is ready, so speakers.ts names pyannote's voices, not Scribe's or the captions' lines.
+    // The words, then pyannote's voices while the relay's flag is on (voices.ts; off from Nov 10), before
+    // the transcript is ready, so speakers.ts names the voices that will stay.
     const hear = async () => {
-      const pyannote = await voices.on();
-      await words(pyannote);
-      if (pyannote) await voices.revoice(this.store.cacheDir(), await this.inputOf(source), target, this.cloudSource(source));
+      await words();
+      if (await voices.on()) await voices.revoice(this.store.cacheDir(), await this.inputOf(source), target, this.cloudSource(source));
     };
     void diag
       .timeOnAsync("media", "media: transcription", source, hear)
@@ -493,6 +502,13 @@ export class Processor {
             status.transcript = "ready";
           }),
         (error: unknown) => {
+          // Only free words were asked for and there are none here: nothing was done, nothing failed.
+          if (error instanceof NothingFree) {
+            this.set(source, (status) => {
+              status.transcript = "pending";
+            });
+            return;
+          }
           // Heard again for its names and failed: the transcript it had stands.
           if (again && isFile(target)) {
             diag.warn("media", `${source}: hearing it again with the case's names: ${diag.messageOf(error)}; the transcript it had stands`);
@@ -510,6 +526,75 @@ export class Processor {
         },
       );
     return this.status(source);
+  }
+
+  /** Refinements running, by file: one at a time each, so two readers never pay for the same stretch. */
+  private refining = new Map<string, Promise<unknown>>();
+
+  /**
+   * Scribe's words over every stretch of `source` in `kept` (seconds into it)
+   * that has only rough words (kept_hearing.ts): only those stretches, padded
+   * and joined, are heard, once; heard before, they're left. Footage kept
+   * almost whole is heard whole. Answers whether anything was heard.
+   */
+  refine(source: string, kept: readonly (readonly [number, number])[], keyterms: readonly string[] = [], again = false): Promise<boolean> {
+    const before = this.refining.get(source) ?? Promise.resolve();
+    const mine = before.then(() => this.refineNow(source, kept, keyterms, again));
+    const settled = mine.catch(() => undefined);
+    this.refining.set(source, settled);
+    void settled.then(() => {
+      if (this.refining.get(source) === settled) this.refining.delete(source);
+    });
+    return mine;
+  }
+
+  private async refineNow(source: string, kept: readonly (readonly [number, number])[], keyterms: readonly string[], again: boolean): Promise<boolean> {
+    const target = this.paths(source).transcript;
+    const transcript = readKept(target);
+    if (transcript === null || transcript.heard === undefined) return false;
+    const input = await this.inputOf(source);
+    const length = Math.round((await transcribe.seconds(input)) * 1000) || Math.max(0, ...kept.map(([, to]) => to * 1000), ...transcript.words.map((word) => word.end * 1000));
+    const heardMs = transcript.heard.map(([from, to]): [number, number] => [from * 1000, to * 1000]);
+    // Again (for the case's names, heard without them): everything heard so far and what's kept, heard once more.
+    const spans = again
+      ? toHear([...kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]), ...heardMs.map(([from, to]): [number, number] => [from + PAD_MS, to - PAD_MS])], [], length)
+      : toHear(kept.map(([from, to]): [number, number] => [from * 1000, to * 1000]), heardMs, length);
+    if (spans.length === 0) return false;
+    const total = spans.reduce((sum, [from, to]) => sum + to - from, 0);
+    const work = join(parent(target) ?? ".", "kept");
+    const name = this.cloudSource(source) ?? log.labelOf(source);
+    const rough = transcript.rough ?? transcript.model;
+    const heardBefore = transcript.heard.reduce((sum, [from, to]) => sum + to - from, 0);
+    const began = Date.now();
+    try {
+      if (transcript.heard.length === 0 && total >= WHOLE_SHARE * length) {
+        // Kept almost whole (a subtitled video): one request for the file.
+        log.line(`${name}: the edit keeps ${log.clock(total / 1000)} of its ${log.clock(length / 1000)}, so Scribe hears all of it, replacing ${log.said(rough)}'s words`);
+        const whole = join(work, "whole.json");
+        fs.mkdirSync(work, { recursive: true });
+        await transcribe.run(input, whole, keyterms);
+        fs.renameSync(whole, target);
+        const heard = readKept(target);
+        log.line(`${name}: now ${log.said(heard?.model ?? transcribe.MODEL)} for all ${log.clock(length / 1000)}, ${log.count(heard?.words.length ?? 0)} words, in ${log.took(Date.now() - began)}`);
+      } else {
+        log.line(
+          `${name}: Scribe to hear the ${spans.length} kept stretch${spans.length === 1 ? "" : "es"} ${again ? `again, for the case's ${keyterms.length} names` : "it hasn't yet"}, ${log.clock(total / 1000)} of its ${log.clock(length / 1000)} (${log.clock(heardBefore)} heard before); the rest stays ${log.said(rough)}`,
+        );
+        const words = await hearJoined(work, input, spans, [...keyterms]);
+        // Re-read: naming or the watch may have written meanwhile.
+        const now = readKept(target) ?? transcript;
+        const next = merged(now, spans, words, keyterms, transcribe.MODEL, again);
+        writeAtomic(target, transcribe.serialize(next));
+        const heardNow = (next.heard ?? []).reduce((sum, [from, to]) => sum + to - from, 0);
+        log.line(
+          `${name}: ${log.said(next.model)} heard the ${spans.length} kept stretch${spans.length === 1 ? "" : "es"} (${log.clock(total / 1000)}), ${log.count(words.flat().length)} words, in ${log.took(Date.now() - began)}; Scribe has now heard ${log.clock(heardNow)} of its ${log.clock(length / 1000)}, ${log.said(next.rough ?? rough)} the rest`,
+        );
+      }
+    } finally {
+      fs.rmSync(work, { recursive: true, force: true });
+    }
+    this.store.emit({ type: "transcript", path: source });
+    return true;
   }
 
   /** What a file's analyses read: a pieced proxy's original, else the file itself. */
@@ -600,6 +685,9 @@ export const mediaHooks: {
   analysisInput: ((source: string) => Promise<string | null>) | null;
 } = { keyAnswers: null, wholeTranscript: null, analysisInput: null };
 
+/** `transcribe` was asked for free words only (an import) and there are none for this file. */
+class NothingFree extends Error {}
+
 /**
  * The cloud source a proxy in this machine's cache is (`<cache>/cloud/proxies/<drive|youtube>/<id>/<start>-<end>.mp4`
  * is the excerpt `<kind>:<id>#<start>-<end>`, `…/<id>.mp4` the whole recording: cloud_media's layout), or null.
@@ -611,8 +699,8 @@ export function sharedSourceOf(cache: string, path: string): string | null {
   const rest = streamed === null ? path.slice(root.length + 1) : streamed.replace(/^edit\/proxies\//, "");
   const excerpt = /^(drive|youtube)\/([^/]+)\/(\d+)-(\d+)\.mp4$/u.exec(rest);
   if (excerpt !== null) return `${excerpt[1]}:${excerpt[2]}#${excerpt[3]}-${excerpt[4]}`;
-  const whole = /^(drive|youtube)\/([^/]+)\.mp4$/u.exec(rest);
-  return whole === null ? null : `${whole[1]}:${whole[2]}`;
+  const whole = /^(drive|youtube)\/([^/]+)\.mp4$|^(sha256)\/([a-f0-9]{64})\.mp4$/u.exec(rest);
+  return whole === null ? null : `${whole[1] ?? whole[3]}:${whole[2] ?? whole[4]}`;
 }
 
 function isFile(path: string): boolean {

@@ -902,7 +902,7 @@ describe("relay transcription by link (Nov 1)", () => {
     expect(await started.json()).toEqual({ id: "tx1abcd", request: "rq1abcd" });
     const sent = form as unknown as FormData;
     expect(sent.get("cloud_storage_url")).toMatch(/^https:\/\/account\.r2\.cloudflarestorage\.com\/bucket\/edit\/transcribe\/.*X-Amz-Signature=/);
-    expect([sent.get("webhook"), sent.get("webhook_id"), sent.get("diarize"), sent.get("model_id")]).toEqual(["true", "wh1", "true", "scribe_v2"]);
+    expect([sent.get("webhook"), sent.get("webhook_id"), sent.get("diarize"), sent.get("model_id")]).toEqual(["true", "wh1", "true", "scribe_v3"]);
     expect(sent.getAll("keyterms")).toEqual(["John Ruetten"]);
     expect(JSON.parse(String(sent.get("webhook_metadata")))).toEqual({ key });
     // Only Edit's own place for it, an upload that's there, and a set-up relay.

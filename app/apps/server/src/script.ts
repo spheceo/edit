@@ -32,8 +32,7 @@ import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
 import * as proc from "./effect/proc.ts";
 import { runPromise } from "./effect/runtime.ts";
-import type { Transcript, Word } from "./transcribe.ts";
-import { MODEL as CAPTIONS_MODEL } from "./youtube_words.ts";
+import { hearsAll, type Transcript, type Word } from "./transcribe.ts";
 import * as youtube from "./youtube.ts";
 import * as posts from "./posts.ts";
 import { LINK_PREFIX as FINISHED_LINK, reviewCode, reviewOf } from "./finished.ts";
@@ -2886,7 +2885,7 @@ async function transcripts(app: App, project: Project, within: (block: ScriptBlo
   const out = new Map<string, Heard>();
   const started = timing.now();
   /** Waits for a file's transcript and reads its words (null when it failed or took too long). */
-  const heard = async (item: Media): Promise<(Heard & { model: string }) | null> => {
+  const heard = async (item: Media): Promise<(Heard & Pick<Transcript, "model" | "heard">) | null> => {
     for (;;) {
       const stage = app.media.status(item.path).transcript;
       if (stage === "ready") {
@@ -2902,7 +2901,7 @@ async function transcripts(app: App, project: Project, within: (block: ScriptBlo
         } catch {
           peaks = null;
         }
-        return { words: transcript.words, peaks, model: transcript.model };
+        return { words: transcript.words, peaks, model: transcript.model, ...(transcript.heard !== undefined ? { heard: transcript.heard } : {}) };
       }
       if (stage === "failed") {
         const why = app.media.status(item.path).transcript_error;
@@ -2919,27 +2918,25 @@ async function transcripts(app: App, project: Project, within: (block: ScriptBlo
   for (const item of media) {
     const found = await heard(item);
     if (found === null) continue;
-    // YouTube's own captions drop and mistime words: a range whose first or
-    // last word they don't have is heard properly (Scribe) before it's cut,
-    // else it's cut at the Doc's rounded seconds, mid-sentence (card 1's
-    // teasers, Oct 29: "pregnant" missing, "vitals" nine seconds late).
-    if (found.model === CAPTIONS_MODEL) {
-      const missed = (project.script?.blocks ?? []).some((block) => {
-        if (block.kind !== "footage" || block.media !== item.id || !within(block)) return false;
-        const cue = cueOf(block);
-        if (cue === null) return false;
-        const offset = block.media_start ?? 0;
-        const [cutIn, cutOut] = align(found.words, found.peaks, cue, block.start - offset, block.end - offset);
-        return cutIn === null || cutOut === null;
-      });
-      if (missed) {
-        diag.info("script", `${item.name}: YouTube's captions miss a range's first or last word; hearing it properly`);
-        app.media.transcribe(item.path, true, names, true);
-        const again = await heard(item);
-        if (again !== null) {
-          out.set(item.id, { words: again.words, peaks: again.peaks });
-          continue;
+    // Rough words (captions or Apple's, here or from Script mode) where a range is cut: Scribe hears the ranges
+    // the script keeps, only those (media.ts `refine`), before they're cut on, else a range is cut at rough times
+    // (card 1's teasers, Oct 29: captions had "pregnant" missing, "vitals" nine seconds late).
+    const ranges = (project.script?.blocks ?? []).flatMap((block): [number, number][] =>
+      block.kind === "footage" && block.media === item.id && within(block) && cueOf(block) !== null ? [[block.start - (block.media_start ?? 0), block.end - (block.media_start ?? 0)]] : [],
+    );
+    if (found.heard !== undefined && !hearsAll(found, ranges)) {
+      try {
+        if (await app.media.refine(item.path, ranges, names)) {
+          const again = await heard(item);
+          if (again !== null) {
+            out.set(item.id, { words: again.words, peaks: again.peaks });
+            continue;
+          }
         }
+      } catch (error) {
+        const why = diag.messageOf(error);
+        if (steps.whyOf(why) === "quota") unheard.credit.push(item.name);
+        diag.warn("script", `${item.name}: the ranges it keeps weren't heard exactly (${why}); cut on its rough words`);
       }
     }
     out.set(item.id, { words: found.words, peaks: found.peaks });

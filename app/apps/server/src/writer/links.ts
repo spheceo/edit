@@ -18,7 +18,7 @@ import type { App } from "../app.ts";
 import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { bytesSaid, fetchLink, linkOf, type Link } from "../links.ts";
-import { isFile, join } from "../paths.ts";
+import { isFile, join, parent } from "../paths.ts";
 import { footageFile } from "../script.ts";
 import { keepShared, originalKey, sha256Of } from "./handoff.ts";
 import * as chat from "./chat.ts";
@@ -170,6 +170,9 @@ async function addOne(app: App, dir: string, url: string, which: string, job: Jo
     now.updatedAt = Date.now();
     store.write(dir, now);
     diag.info("writer", `${now.id}: brought in ${url} as Video ${index + 1} (${title}, ${Math.round(lengthMs / 1000)} s, ${words.length} words)`);
+    // With the cloud on, the download isn't kept here: the script plays its preview, Edit fetches the link
+    // (or its original, shared above) when the edit starts, and hours of footage never sit on this disk.
+    if (editCloud.enabled()) fs.rmSync(parent(got.path) ?? got.path, { recursive: true, force: true });
     return title;
   } finally {
     fs.rmSync(folder, { recursive: true, force: true });

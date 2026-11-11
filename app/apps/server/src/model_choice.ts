@@ -1,7 +1,9 @@
 // The person's pick in the chats' model menu (`@edit/types/models`): the
 // model a built edit's, script's or idea's revisions run on, and how hard
 // every chat thinks. One for every chat on this computer, kept in
-// `<home>/models.json`; Opus 5.5 at medium until they pick.
+// `<home>/models.json`; Opus 5.5 at medium until they pick. A Bodycam HQ chat's
+// pick (`hq_model`, `hq_effort`: Fable 5.2 at high until they pick) is kept
+// beside it, and neither changes the other.
 
 import * as fs from "node:fs";
 

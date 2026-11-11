@@ -6,7 +6,8 @@
 // attached to the chat rather than the message (queued messages, the team's
 // notes, the agent asking to reset) sits in an island on its top edge, inset
 // from its sides and the same black (after Phi's composer and queue).
-// A message sent while Claude works waits in the queue and goes when it's done.
+// A message sent while Claude works waits in the queue and goes when it's done
+// (a Bodycam HQ chat's waits on the server, which sends it: `hq`).
 // Words quoted into the chat (chatQuotes.ts) sit in the island until sent.
 
 import { AnimatePresence, motion } from "motion/react";
@@ -21,7 +22,7 @@ import { useSettled } from "../lib/settled";
 import { formatBytes } from "../lib/time";
 import { useEditor } from "../lib/store";
 import { ClaudeMark } from "./ClaudeMark";
-import { DEFAULT_EFFORT, EFFORTS, effortName, modelFor, REVISION_MODELS } from "@edit/types/models";
+import { DEFAULT_EFFORT, EFFORTS, effortName, HQ_EFFORT, HQ_MODELS, hqModel, modelFor, REVISION_MODELS } from "@edit/types/models";
 import { loadModelChoice, pickModel, useModelChoice } from "../lib/models";
 import { cx, ProgressRing } from "./ui";
 
@@ -65,6 +66,7 @@ export function ChatComposer({
   onValueChange,
   allowEmpty = false,
   hint,
+  hq = false,
 }: {
   running: boolean;
   disabled: boolean;
@@ -91,6 +93,12 @@ export function ChatComposer({
   allowEmpty?: boolean;
   /** A quiet word at the footer's right, before Send. */
   hint?: string;
+  /**
+   * A Bodycam HQ chat (Edit V2): its own model menu, every model at any time,
+   * and a message sent while it works goes to `onSend` at once, for the server
+   * to queue (shown in `tray`), rather than waiting here.
+   */
+  hq?: boolean;
 }) {
   const [own, setOwn] = useState(() => (draft === undefined ? "" : (localStorage.getItem(draft) ?? "")));
   const text = value ?? own;
@@ -163,7 +171,7 @@ export function ChatComposer({
     const said = takeQuotes(chat);
     const sent = quotedMessage(said, message);
     setText("");
-    if (running || queue.length > 0) {
+    if (!hq && (running || queue.length > 0)) {
       useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: [...(chats[chat] ?? []), { id: ++queuedId, text: sent, files: given, quotes: said }] } }));
       return;
     }
@@ -171,8 +179,9 @@ export function ChatComposer({
   };
   const hasFiles = (event: DragEvent) => files !== undefined && event.dataTransfer.types.includes("Files");
   const showStop = running && !canSend;
+  const unqueue = (id: string | number) => useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: (chats[chat] ?? []).filter((one) => one.id !== id) } }));
   const islands = [
-    queue.length > 0 && <QueueIsland key="queue" chat={chat} queue={queue} />,
+    queue.length > 0 && <QueueIsland key="queue" rows={queue.map((one) => ({ id: one.id, text: one.text, files: one.files.length, quotes: one.quotes.length }))} onRemove={unqueue} />,
     ...quotes.map((one) => (
       <div key={`quote-${one.id}`} className="flex items-start gap-2 px-3 pt-2 pb-1.5">
         <QuoteView from={one.from} text={one.text} className="max-h-24 overflow-y-auto" />
@@ -276,7 +285,7 @@ export function ChatComposer({
             </>
           )}
           {/* A grey pill, its words light enough to read (Sphe, Nov 3); a chat with the model menu opens it there. */}
-          {revising === undefined ? <ModelPill name={modelName ?? ""} /> : <ModelMenu name={modelName} revising={revising} />}
+          {hq ? <ModelMenu name={modelName} revising={false} hq /> : revising === undefined ? <ModelPill name={modelName ?? ""} /> : <ModelMenu name={modelName} revising={revising} />}
           {hint !== undefined && hint !== "" && <span className="ml-auto truncate text-[11.5px] text-faint">{hint}</span>}
           {showStop ? (
             <button
@@ -341,24 +350,45 @@ function useFileDrag(on: boolean): boolean {
   return active;
 }
 
-/** Messages waiting for the turn to end: each its words, × to take it back. */
-function QueueIsland({ chat, queue }: { chat: string; queue: Queued[] }) {
-  const remove = (id: number) => useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: (chats[chat] ?? []).filter((one) => one.id !== id) } }));
+/** A queued message as the island shows it. */
+export interface QueueRow {
+  id: string | number;
+  text: string;
+  files: number;
+  quotes: number;
+}
+
+/**
+ * Messages waiting for the turn to end: each its words, × to take it back,
+ * and, where the chat can (`onSteer`: Bodycam HQ's, queued on the server),
+ * Steer, which stops the turn and sends it now.
+ */
+export function QueueIsland({ rows, onRemove, onSteer }: { rows: QueueRow[]; onRemove: (id: QueueRow["id"]) => void; onSteer?: (id: QueueRow["id"]) => void }) {
   return (
     <div role="list" aria-label="Queued messages" className="px-3 pt-2 pb-1.5">
-      <div className="pb-1 text-[10.5px] font-medium tracking-wide text-faint uppercase">Queued · {queue.length}</div>
-      {queue.map((one) => (
+      <div className="pb-1 text-[10.5px] font-medium tracking-wide text-faint uppercase">Queued · {rows.length}</div>
+      {rows.map((one) => (
         <div key={one.id} role="listitem" className="group flex min-h-7 items-center gap-2">
           <span className="line-clamp-2 min-w-0 flex-1 text-[12.5px] leading-[18px] text-secondary" title={one.text}>
             {parseQuoted(one.text).words}
           </span>
-          {one.quotes.length > 0 && <span className="shrink-0 text-[11px] text-faint">{one.quotes.length === 1 ? "1 quote" : `${one.quotes.length} quotes`}</span>}
-          {one.files.length > 0 && <span className="shrink-0 text-[11px] text-faint">{one.files.length === 1 ? "1 file" : `${one.files.length} files`}</span>}
+          {one.quotes > 0 && <span className="shrink-0 text-[11px] text-faint">{one.quotes === 1 ? "1 quote" : `${one.quotes} quotes`}</span>}
+          {one.files > 0 && <span className="shrink-0 text-[11px] text-faint">{one.files === 1 ? "1 file" : `${one.files} files`}</span>}
+          {onSteer !== undefined && (
+            <button
+              type="button"
+              title="Stop the agent and send this now"
+              onClick={() => onSteer(one.id)}
+              className="flex h-6 shrink-0 items-center rounded-md px-1.5 text-[11.5px] font-medium text-muted transition-colors hover:bg-hover hover:text-fg"
+            >
+              Steer
+            </button>
+          )}
           <button
             type="button"
             aria-label="Remove the queued message"
             title="Remove"
-            onClick={() => remove(one.id)}
+            onClick={() => onRemove(one.id)}
             className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint opacity-60 hover:bg-hover hover:text-fg group-hover:opacity-100"
           >
             <X size={12} />
@@ -505,12 +535,17 @@ function ModelPill({ name }: { name: string }) {
  * B in a box, Sphe, Nov 7): the revisions' model with Claude's mark, then the
  * thinking levels, Medium marked as the default. While the chat is being built
  * the models aren't offered (a build is always Opus's). One pick for every
- * chat on this computer (lib/models.ts).
+ * chat on this computer (lib/models.ts). A Bodycam HQ chat's (`hq`) offers
+ * every model at any time, on its own pick (Fable 5.2 at High until picked).
  */
-function ModelMenu({ name: given, revising }: { name?: string; revising: boolean }) {
+function ModelMenu({ name: given, revising, hq = false }: { name?: string; revising: boolean; hq?: boolean }) {
   const [open, setOpen] = useState(false);
   const choice = useModelChoice();
-  const name = given || modelFor(revising, choice).name;
+  // Bodycam HQ's own pick (Edit V2): every model, at any time, apart from the other chats'.
+  const models = hq ? HQ_MODELS : revising ? REVISION_MODELS : [];
+  const model = hq ? choice.hq_model : choice.revision;
+  const effort = hq ? choice.hq_effort : choice.effort;
+  const name = given || (hq ? hqModel(choice) : modelFor(revising, choice)).name;
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => void loadModelChoice(), []);
   useEffect(() => {
@@ -549,7 +584,7 @@ function ModelMenu({ name: given, revising }: { name?: string; revising: boolean
         <ClaudeMark size={12} />
         <RollingName name={name} />
         <span className="text-[#5b5b64]">·</span>
-        <RollingName name={effortName(choice.effort)} />
+        <RollingName name={effortName(effort)} />
       </motion.button>
       <AnimatePresence>
         {open && (
@@ -562,23 +597,23 @@ function ModelMenu({ name: given, revising }: { name?: string; revising: boolean
             style={{ transformOrigin: "20% 100%" }}
             className="absolute bottom-[calc(100%+8px)] left-0 z-50 w-[216px] rounded-xl border border-line bg-raised p-[5px] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
           >
-            {revising && (
+            {models.length > 0 && (
               <>
-                {REVISION_MODELS.map((model) => (
-                  <button key={model.id} type="button" role="menuitemradio" aria-checked={choice.revision === model.id} className={row} onClick={() => void pickModel({ revision: model.id })}>
-                    {tick(choice.revision === model.id)}
+                {models.map((one) => (
+                  <button key={one.id} type="button" role="menuitemradio" aria-checked={model === one.id} className={row} onClick={() => void pickModel(hq ? { hq_model: one.id } : { revision: one.id })}>
+                    {tick(model === one.id)}
                     <ClaudeMark size={13} />
-                    {model.name}
+                    {one.name}
                   </button>
                 ))}
                 <div className="mx-0.5 my-[5px] h-px bg-line" />
               </>
             )}
-            {EFFORTS.map((effort) => (
-              <button key={effort} type="button" role="menuitemradio" aria-checked={choice.effort === effort} className={row} onClick={() => void pickModel({ effort })}>
-                {tick(choice.effort === effort)}
-                {effortName(effort)}
-                {effort === DEFAULT_EFFORT && <span className="ml-auto text-[11px] text-faint">Default</span>}
+            {EFFORTS.map((level) => (
+              <button key={level} type="button" role="menuitemradio" aria-checked={effort === level} className={row} onClick={() => void pickModel(hq ? { hq_effort: level } : { effort: level })}>
+                {tick(effort === level)}
+                {effortName(level)}
+                {level === (hq ? HQ_EFFORT : DEFAULT_EFFORT) && <span className="ml-auto text-[11px] text-faint">Default</span>}
               </button>
             ))}
           </motion.div>

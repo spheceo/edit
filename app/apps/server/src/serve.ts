@@ -29,7 +29,7 @@ import type { ExportOptions } from "./model.ts";
 import { listen } from "./http/server.ts";
 import { registerEffectTools } from "./effect_tools.ts";
 import * as effects from "./effects.ts";
-import { registerMediaTools } from "./media_tools.ts";
+import { messageContext, registerMediaTools } from "./media_tools.ts";
 import { allowedHosts } from "./http/host.ts";
 import { initNative, native } from "./native/index.ts";
 import { join } from "./paths.ts";
@@ -310,6 +310,8 @@ export function start(home: string, host: string | null, port: number): { app: A
   agentHooks.unfinished = (project) => unfinishedNote(app, project);
   // The script's comments, written on any Mac, reach the edit before each agent turn.
   agentHooks.beforeTurn = (project) => scriptSync.catchUpComments(app, project);
+  // A Bodycam HQ chat's queued message reads what's at its playhead, and takes the team's notes, as it goes.
+  agentHooks.messageContext = (project, playhead) => messageContext(app, project, playhead, true);
   seams.speakers.watch(app);
   // Cloud projects (on with the built-in token): sync, locks, and letting them go on the way out.
   // Signed in before: the access token renewed quietly, before the cloud's first call.

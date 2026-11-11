@@ -1,5 +1,4 @@
 import { explain } from "@edit/types/problems";
-import { effortName, HQ_EFFORT, HQ_MODEL } from "@edit/types/models";
 import {
   ArrowLeft,
   AudioLines,
@@ -37,10 +36,12 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import {
+  cancelQueued,
   closeSub,
   openAgent,
   openSub,
   sendToAgent,
+  steerQueued,
   stopSub,
   useClaudeSupport,
   stopAgent,
@@ -56,7 +57,8 @@ import { queued, useNotes } from "../lib/notes";
 import { playhead } from "../lib/playback";
 import { projectUploader } from "../lib/upload";
 import { useEditor } from "../lib/store";
-import { ChatComposer, SentFiles } from "./ChatComposer";
+import { parseQuoted } from "../lib/chatQuotes";
+import { ChatComposer, QueueIsland, SentFiles } from "./ChatComposer";
 import { UserWords } from "./Quotes";
 import { NoteQueue } from "./NoteQueue";
 import { ProblemView } from "./ProblemView";
@@ -794,13 +796,27 @@ function Composer({ disabled, projectId }: { disabled: boolean; projectId: strin
   const running = useAgent((state) => state.running);
   const modelName = useAgent((state) => state.chatModel ?? state.modelName);
   const revising = useAgent((state) => state.revising);
-  // Bodycam HQ (Edit V2) answers on Fable 5.2 thinking high, set for the person: said, with no menu.
+  // Bodycam HQ (Edit V2): its own model menu, every model at any time, and messages sent while it works queue on the server.
   const hq = useEditor((state) => state.project?.hq === true);
+  const waiting = useAgent((state) => state.queue);
+  const toastError = useEditor((state) => state.toastError);
   const notes = useNotes((state) => queued(state.notes).length);
   const resetAsked = useEditor((state) => state.resetAsked);
   const upload = useMemo(() => (projectId === undefined ? undefined : { upload: projectUploader(projectId) }), [projectId]);
-  // On the composer's top edge: the agent asking to reset, then the team's queued notes.
-  const tray = [projectId !== undefined && resetAsked && <ResetCard key="reset" projectId={projectId} />, notes > 0 && <NoteQueue key="notes" />].filter(Boolean);
+  const rows = useMemo(() => waiting.map((one) => ({ id: one.id, text: one.text, files: one.attachments?.length ?? 0, quotes: parseQuoted(one.text).quotes.length })), [waiting]);
+  // On the composer's top edge: the agent asking to reset, the messages queued on the server, then the team's queued notes.
+  const tray = [
+    projectId !== undefined && resetAsked && <ResetCard key="reset" projectId={projectId} />,
+    hq && rows.length > 0 && (
+      <QueueIsland
+        key="queue"
+        rows={rows}
+        onRemove={(id) => void cancelQueued(String(id)).catch((error: unknown) => toastError(error, "take the message out"))}
+        onSteer={(id) => void steerQueued(String(id)).catch((error: unknown) => toastError(error, "steer the agent"))}
+      />
+    ),
+    notes > 0 && <NoteQueue key="notes" />,
+  ].filter(Boolean);
   return (
     <ChatComposer
       chat={`project:${projectId ?? ""}`}
@@ -808,11 +824,12 @@ function Composer({ disabled, projectId }: { disabled: boolean; projectId: strin
       tray={tray.length > 0 ? tray : undefined}
       running={running}
       disabled={disabled}
-      modelName={hq ? `${HQ_MODEL.name} · ${effortName(HQ_EFFORT)}` : (modelName ?? undefined)}
-      revising={hq ? undefined : revising}
+      modelName={modelName ?? undefined}
+      revising={revising}
+      hq={hq}
       placeholder="Start the editing workflow, or ask for a change…"
       // Where the playhead is goes with it: the agent starts there (the server reads it what's under it).
-      onSend={(message, files) => void sendToAgent(message, playhead.frame, files)}
+      onSend={(message, files) => void sendToAgent(message, playhead.frame, files, hq)}
       onStop={stopAgent}
     />
   );

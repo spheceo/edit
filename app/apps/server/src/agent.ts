@@ -29,7 +29,7 @@ import { join, withExtension } from "./paths.ts";
 import { rateText } from "./project.ts";
 import { compareStrings, takeChars, charCount } from "./rust.ts";
 import { leftOver } from "./put_off.ts";
-import { HQ_EFFORT, HQ_MODEL, nameOf } from "@edit/types/models";
+import { hqModel, nameOf } from "@edit/types/models";
 
 import * as claudeUsage from "./claude_usage.ts";
 import * as modelChoice from "./model_choice.ts";
@@ -65,6 +65,57 @@ export interface Entry {
   attachments?: Attached[];
 }
 
+/**
+ * A message the person sent while a Bodycam HQ chat's turn ran (Sphe, Nov 11:
+ * "if the agent is still running… it gets queued up and you can cancel it or
+ * then be able to click steer"): kept with the chat on the server, so leaving
+ * the page or closing the editor changes nothing, and sent by the server as the
+ * next turn when this one ends (`sendQueued`), or now by Steer (`steer`).
+ */
+export interface Queued {
+  id: string;
+  text: string;
+  /** When it was sent (ms). */
+  at: number;
+  /** The editor's frame when it was written: what's there is read to the agent when it goes (`agentHooks.messageContext`). */
+  playhead: number | null;
+  attachments?: Attached[];
+  /** A caller that named them (the teaching loop); the panel names neither. */
+  model?: string;
+  effort?: string;
+}
+
+/** A queued message as it's saved and sent: its fields in order, the empty options left out. */
+function queuedJson(item: Queued): Record<string, unknown> {
+  const out: Record<string, unknown> = { id: item.id, text: item.text, at: item.at, playhead: item.playhead };
+  if (item.attachments !== undefined) out.attachments = item.attachments;
+  if (item.model !== undefined) out.model = item.model;
+  if (item.effort !== undefined) out.effort = item.effort;
+  return out;
+}
+
+/** A saved chat's queue: what can't be read is left out (it never refuses the chat). */
+function readQueue(value: unknown): Queued[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((one: unknown): Queued[] => {
+    if (typeof one !== "object" || one === null) return [];
+    const given = one as Record<string, unknown>;
+    if (typeof given.id !== "string" || typeof given.text !== "string") return [];
+    const attachments = savedAttached(given.attachments);
+    return [
+      {
+        id: given.id,
+        text: given.text,
+        at: typeof given.at === "number" ? given.at : 0,
+        playhead: typeof given.playhead === "number" && Number.isFinite(given.playhead) ? given.playhead : null,
+        ...(attachments === undefined ? {} : { attachments }),
+        ...(typeof given.model === "string" ? { model: given.model } : {}),
+        ...(typeof given.effort === "string" ? { effort: given.effort } : {}),
+      },
+    ];
+  });
+}
+
 /** A project's chat: what's saved (thread, model, effort, entries) and the running turn's state. */
 export interface Chat {
   /** The provider the conversation (`thread`) belongs to; null for one Claude Code can't resume. */
@@ -92,6 +143,8 @@ export interface Chat {
   tools: toolChanges.ToolSchema | null;
   /** When the whole edit was done (its follow-ups too): from then on its turns are revisions (`turnModel`). Kept through a new chat; synced with it. */
   built: number | null;
+  /** Bodycam HQ: the person's messages waiting for the running turn to end, in order (`Queued`). Always empty elsewhere. */
+  queue: Queued[];
 }
 
 export interface Model {
@@ -120,6 +173,7 @@ function freshChat(): Chat {
     authRecoveryUser: null,
     tools: null,
     built: null,
+    queue: [],
   };
 }
 
@@ -229,6 +283,8 @@ export const agentHooks = {
   beforeTurn: async (_project: string): Promise<void> => {},
   /** The fresh-eyes final pass after a whole edit (off on a trial server: the teaching loop runs it as its own step). */
   freshEyes: process.env.EDIT_TRIALS !== "1",
+  /** What a queued message carries when it goes (media_tools.messageContext): what's at its playhead now, and the team's queued notes. */
+  messageContext: async (_project: string, _playhead: number | null): Promise<string> => "",
 };
 
 /** Follow-ups Edit sends after one message at most, each only while the last cut the flags by a fifth or more. */
@@ -355,6 +411,10 @@ export class Agents implements seams.AgentPanel {
   private queued = new Set<string>();
   /** Chats waiting to try a turn again after a busy model (`turnEnded`). */
   private retrying = new Set<string>();
+  /** Chats whose turn is being stopped to send a queued message in its place (`steer`): the stop isn't said in the chat. */
+  private steering = new Set<string>();
+  /** Waiting for a chat's running turn to end (`untilEnded`). */
+  private ending = new Map<string, (() => void)[]>();
   /** Each project's message the person was last told about, and how it went (`settled`), so one outcome is one notice. */
   private noticed = new Map<string, string>();
   /** Projects whose chat goes when their turn ends (`new_chat`). */
@@ -618,7 +678,7 @@ export class Agents implements seams.AgentPanel {
 
   private save(project: string): void {
     const chat = this.withChat(project);
-    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, ...(chat.tools === null ? {} : { tools: chat.tools }), ...(chat.built === null ? {} : { built: chat.built }), entries: chat.entries.map(entryJson), savedAt: Date.now() };
+    const snapshot = { provider: chat.provider, thread: chat.thread, model: chat.model, effort: chat.effort, authRecoveryUser: chat.authRecoveryUser, ...(chat.tools === null ? {} : { tools: chat.tools }), ...(chat.built === null ? {} : { built: chat.built }), ...(chat.queue.length === 0 ? {} : { queue: chat.queue.map(queuedJson) }), entries: chat.entries.map(entryJson), savedAt: Date.now() };
     try {
       writeAtomic(this.store.chatPath(project), JSON.stringify(snapshot));
       this.onChatSaved?.(project);
@@ -641,7 +701,7 @@ export class Agents implements seams.AgentPanel {
 
   chat(project: string): Json {
     const chat = this.withChat(project);
-    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, model_name: this.modelName(project), revising: this.revising(project), auth_retry: this.legacyClaudeRetry(project) });
+    return sorted({ entries: chat.entries.map(entryJson), running: chat.running, model: chat.model, effort: chat.effort, model_name: this.modelName(project), revising: this.revising(project), auth_retry: this.legacyClaudeRetry(project), queue: chat.queue.map(queuedJson) });
   }
 
   /** The agent's `new_chat` (the user asked for one): this chat goes when the turn now running ends. */
@@ -690,8 +750,139 @@ export class Agents implements seams.AgentPanel {
   /** Sends a message, starting or resuming the project's conversation. */
   /** `context`: what the agent reads after the message but the chat doesn't show (where the playhead is and what's under it). */
   /** `attached`: files the person attached, already in the project (chat_attachments.ts). */
-  send(project: string, text: string, model: string | null, effort: string | null, context = "", attached: Attached[] = []): Promise<void> {
-    return this.sendTurn(project, text, model, effort, null, false, context, attached);
+  async send(project: string, text: string, model: string | null, effort: string | null, context = "", attached: Attached[] = []): Promise<void> {
+    await this.sendTurn(project, text, model, effort, null, false, context, attached);
+  }
+
+  /**
+   * The person's message from the chat (`POST /api/projects/{id}/agent`): sent
+   * as `send` sends it, or, in a Bodycam HQ chat whose turn is running, queued
+   * (and returned) to go when it ends. `playhead`: the editor's frame, for when
+   * a queued one goes (`context` is what's read with it if it goes now).
+   */
+  message(project: string, text: string, model: string | null, effort: string | null, context: string, attached: Attached[], playhead: number | null): Promise<Queued | null> {
+    const item: Queued = {
+      id: newId("queued"),
+      text,
+      at: nowMs(),
+      playhead,
+      ...(attached.length > 0 ? { attachments: attached } : {}),
+      ...(model === null ? {} : { model }),
+      ...(effort === null ? {} : { effort }),
+    };
+    return this.sendTurn(project, text, model, effort, null, false, context, attached, { front: false, item });
+  }
+
+  /** A queued message taken out (Cancel): whether it was still there. */
+  cancelQueued(project: string, id: string): boolean {
+    return this.unqueue(project, id) !== null;
+  }
+
+  /**
+   * Steer: the running turn stopped, as the chat's stop does, and once it has
+   * ended the queued message `id` sent at once, in the same conversation, so the
+   * agent carries on with it in mind; the rest of the queue waits behind it.
+   * With nothing running it's sent now.
+   */
+  async steer(project: string, id: string): Promise<void> {
+    if (!this.isHq(project)) throw new Error("only a Bodycam HQ chat queues messages");
+    if (this.steering.has(project)) throw new Error("already steering; a moment");
+    if (!this.withChat(project).queue.some((one) => one.id === id)) throw new Error("that message isn't queued any more");
+    this.steering.add(project);
+    // Counted as running from here: a restart in the gap mustn't cut the steered turn.
+    this.queued.add(project);
+    try {
+      if (this.withChat(project).running) {
+        await this.stop(project);
+        await this.untilEnded(project);
+      }
+      this.steering.delete(project);
+      const item = this.unqueue(project, id);
+      // Cancelled meanwhile (another editor), or already gone as the next turn.
+      if (item === null) throw new Error("that message isn't queued any more");
+      await this.sendQueuedNow(project, item);
+    } finally {
+      this.steering.delete(project);
+      this.queued.delete(project);
+    }
+  }
+
+  /** Takes a message out of the queue (saved and shown everywhere); null when it isn't there. */
+  private unqueue(project: string, id: string): Queued | null {
+    const chat = this.withChat(project);
+    const at = chat.queue.findIndex((one) => one.id === id);
+    if (at < 0) return null;
+    const [item] = chat.queue.splice(at, 1);
+    this.save(project);
+    this.emitQueue(project);
+    return item!;
+  }
+
+  /** Every editor open on the chat shows its queue as it is. */
+  private emitQueue(project: string): void {
+    this.emit(project, { event: "queue", queue: this.withChat(project).queue.map(queuedJson) });
+  }
+
+  /** Resolves once the chat's running turn has ended (a stop's grace ends it in 15 s at most). */
+  private async untilEnded(project: string): Promise<void> {
+    if (!this.withChat(project).running) return;
+    const ended = new Promise<void>((resolve) => {
+      const waiting = this.ending.get(project) ?? [];
+      waiting.push(resolve);
+      this.ending.set(project, waiting);
+    });
+    await Promise.race([ended, timing.sleep(STOP_GRACE_MS + 5_000)]);
+    if (this.withChat(project).running) throw new Error("the running turn didn't stop");
+  }
+
+  /**
+   * A turn that ended as it should: the queue's first message goes as the next
+   * turn (the server's own, nothing on the page needed), ahead of Edit's own
+   * follow-ups. False when nothing's queued.
+   */
+  private sendQueued(project: string): boolean {
+    const next = this.withChat(project).queue[0];
+    if (next === undefined) return false;
+    this.unqueue(project, next.id);
+    // Counted as running until it starts: no restart lands in the gap.
+    this.queued.add(project);
+    void (async () => {
+      try {
+        await this.sendQueuedNow(project, next);
+      } catch (thrown) {
+        diag.warn("agent", `sending ${project}'s queued message: ${isBug(thrown) ? crashed("sending a queued message", thrown) : diag.messageOf(thrown)}`);
+      } finally {
+        this.queued.delete(project);
+      }
+    })();
+    return true;
+  }
+
+  /**
+   * A message out of the queue, sent as a new turn: what's at its playhead read
+   * now, with the team's queued notes (as a message sent now would carry them).
+   * Back first in line when a turn started meanwhile or it never reached the chat.
+   */
+  private async sendQueuedNow(project: string, item: Queued): Promise<void> {
+    let context = "";
+    try {
+      context = await agentHooks.messageContext(projectOf(project), item.playhead);
+    } catch (error) {
+      diag.warn("agent", `${project}: reading the queued message's playhead: ${diag.messageOf(error)}`);
+    }
+    const since = nowMs();
+    try {
+      await this.sendTurn(project, item.text, item.model ?? null, item.effort ?? null, null, false, context, item.attachments ?? [], { front: true, item });
+    } catch (error) {
+      const chat = this.withChat(project);
+      const landed = chat.entries.some((one) => one.kind === "user" && one.text === item.text && one.at >= since);
+      if (!landed && !chat.queue.some((one) => one.id === item.id)) {
+        chat.queue.unshift(item);
+        this.save(project);
+        this.emitQueue(project);
+      }
+      throw error;
+    }
   }
 
   private async sendTurn(
@@ -703,7 +894,9 @@ export class Agents implements seams.AgentPanel {
     replay = false,
     context = "",
     attached: Attached[] = [],
-  ): Promise<void> {
+    /** A Bodycam HQ chat's message: queued (at the end, or first for one taken out of the queue) when a turn is running. */
+    queue: { front: boolean; item: Queued } | null = null,
+  ): Promise<Queued | null> {
     const live = this.store.get(projectOf(project));
     if (live === null) throw new Error("no such project");
     // Its cloud previews come down whole while the agent reads the project, so its frames read files here (local_previews.ts).
@@ -718,8 +911,17 @@ export class Agents implements seams.AgentPanel {
     const release = await sending.acquire();
     try {
       const chat = this.withChat(project);
-      if (generation !== null && (chat.generation !== generation || chat.halted)) return;
-      if (chat.running) throw new Error("the agent is still working; stop it or wait");
+      if (generation !== null && (chat.generation !== generation || chat.halted)) return null;
+      if (chat.running) {
+        if (queue !== null && generation === null && !replay && live.project.hq === true) {
+          if (queue.front) chat.queue.unshift(queue.item);
+          else chat.queue.push(queue.item);
+          this.save(project);
+          this.emitQueue(project);
+          return queue.item;
+        }
+        throw new Error("the agent is still working; stop it or wait");
+      }
       if (generation === null) {
         this.authPending.delete(project);
         this.saveAuthPending();
@@ -751,11 +953,12 @@ export class Agents implements seams.AgentPanel {
         await this.prepareTurn(project, text, model, effort, current, replay, context, attached);
       } catch (error) {
         const said = isBug(error) ? crashed("the agent turn", error) : diag.messageOf(error);
-        if (claude.signInProblem(said) && this.waitForClaudeLogin(project, current, text, false)) return;
+        if (claude.signInProblem(said) && this.waitForClaudeLogin(project, current, text, false)) return null;
         const now = this.withChat(project);
         if (now.generation === current && now.running) this.finish(project, said);
         throw new Error(said);
       }
+      return null;
     } finally {
       release();
     }
@@ -839,7 +1042,8 @@ export class Agents implements seams.AgentPanel {
       // driven by review notes, which nobody's watching, gets a tighter one (the audit, Oct 23).
       ...(reviewGuard.inReviewTurn(project) ? { maxTurns: REVIEW_MAX_TURNS, maxBudgetUsd: REVIEW_MAX_USD } : { maxTurns: MAX_TURNS }),
     };
-    const level = live.project.hq === true ? HQ_EFFORT : (chat.effort ?? claude.effort() ?? "medium");
+    // Bodycam HQ thinks at its own pick (Fable 5.2's high until picked), the other chats at theirs; a caller naming a level gets it.
+    const level = live.project.hq === true ? (chat.effort ?? modelChoice.current().hq_effort) : (chat.effort ?? claude.effort() ?? "medium");
     if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];
     if (chat.thread !== null) options.resume = chat.thread;
     // A resumed session keeps the tool schemas it read: tell it once what this build changed (tool_changes.ts).
@@ -949,7 +1153,8 @@ export class Agents implements seams.AgentPanel {
     if (error !== null && claude.signInProblem(error) && this.waitForClaudeLogin(project, generation, text, turn.tools > 0)) return;
     const chat = this.withChat(project);
     if (chat.generation !== generation || !chat.running) return;
-    if (chat.halted && error !== null) error = "Stopped.";
+    // Stopped to steer (`steer`): the queued message that follows says it all.
+    if (chat.halted && error !== null) error = this.steering.has(project) ? null : "Stopped.";
     if (error !== null && /no conversation found/i.test(error)) {
       // Its session is gone (Claude Code's history cleared): this turn starts a new one.
       chat.thread = null;
@@ -1320,6 +1525,9 @@ export class Agents implements seams.AgentPanel {
     if (error !== null) this.upsert(project, entry({ id: newId("error"), kind: "error", text: error }));
     const now = nowMs();
     chat.running = false;
+    const waiting = this.ending.get(project);
+    this.ending.delete(project);
+    for (const resolve of waiting ?? []) resolve();
     const last = chat.entries[chat.entries.length - 1];
     if (last !== undefined) last.updated = Math.max(last.updated, now);
     // A turn that ended mid-tool leaves it unresolved; mark it.
@@ -1418,9 +1626,19 @@ export class Agents implements seams.AgentPanel {
     this.finish(project, error);
     // The user asked for a new chat: this one ends with the turn, and the next message starts afresh.
     if (this.resetAfter.has(project)) {
+      // What they queued after asking goes to the new chat.
+      const waiting = chat.queue;
       this.reset(project);
+      if (waiting.length > 0) {
+        this.withChat(project).queue = waiting;
+        this.save(project);
+        this.emitQueue(project);
+        if (error === null && !halted) this.sendQueued(project);
+      }
       return;
     }
+    // Only a turn that ended as it should sends the queue on: after an error or a stop it waits, shown, to steer or cancel.
+    if (error === null && !halted && this.sendQueued(project)) return;
     if (error === null && !halted) this.followUp(project, generation);
   }
 
@@ -1512,18 +1730,18 @@ export class Agents implements seams.AgentPanel {
    * again from scratch is a build.
    */
   turnModel(project: string, text = ""): string {
-    if (this.isHq(project)) return HQ_MODEL.id;
+    if (this.isHq(project)) return hqModel(modelChoice.current()).id;
     return this.revising(project, text) ? claude.revisionModel() : claude.DEFAULT_MODEL;
   }
 
-  /** A Bodycam HQ project (Edit V2): every turn on Fable 5.2 at high, with no menu (`HQ_MODEL`). */
+  /** A Bodycam HQ project (Edit V2): every turn, build or revision, on its own pick in the menu (Fable 5.2 at high until picked), and messages sent while it works queue on the server. */
   isHq(project: string): boolean {
     return this.store.get(projectOf(project))?.project.hq === true;
   }
 
   /** Whether the next turn is a revision, on the person's pick (else a build, on Opus): the model menu offers the pick only then. */
   revising(project: string, text = ""): boolean {
-    // Bodycam HQ's model and thinking are set: never offered.
+    // Bodycam HQ's menu always offers its models, on its own pick: not a build or a revision.
     if (this.isHq(project)) return false;
     if (project.endsWith(`${SUB}review`) || reviewGuard.inReviewTurn(project)) return true;
     if (REBUILD.test(text)) return false;
@@ -1662,6 +1880,7 @@ export function readChat(text: string): Chat {
   chat.authRecoveryUser = option("authRecoveryUser");
   chat.tools = toolChanges.read(given.tools);
   chat.built = typeof given.built === "number" ? given.built : null;
+  chat.queue = readQueue(given.queue);
   const entries = given.entries;
   if (entries !== undefined) {
     if (!Array.isArray(entries)) throw new Error("entries: invalid type, expected a sequence");

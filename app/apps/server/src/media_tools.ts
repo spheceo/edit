@@ -432,7 +432,7 @@ async function claudeSetupRoute(context: RouteContext<App>): Promise<Response> {
   return sortedJson(panel.claudeSetup(action));
 }
 
-/** The person's pick in the chats' model menu: GET reads it, PUT saves `{revision, effort}` (model_choice.ts). */
+/** The person's pick in the chats' model menu: GET reads it, PUT saves `{revision, effort}` and Bodycam HQ's `{hq_model, hq_effort}` (model_choice.ts). */
 async function modelChoiceRoute(context: RouteContext<App>): Promise<Response> {
   modelChoice.use(context.app.store.home);
   if (context.request.method === "GET") return sortedJson(modelChoice.current());
@@ -501,25 +501,68 @@ async function agentSendRoute(context: RouteContext<App>): Promise<Response> {
   }
   // Sent from the editor: where its playhead is, read to the agent with the message.
   const frame = given.playhead === null ? Number.NaN : Number(given.playhead);
-  const live = Number.isFinite(frame) ? app.store.get(id) : null;
-  const where = live === null ? "" : playheadContext(live.project, frame, cachedTranscripts(app, live.project, false));
-  // The team's queued notes ride the next message, whatever it says (Sphe, Nov
-  // 3: "implement the feedback" isn't needed to send them); the ones the turn
-  // doesn't answer go back in the queue. Not while it still runs (send refuses).
-  const project = (live ?? app.store.get(id))?.project ?? null;
-  const notes =
-    project === null || (seams.agentPanel(app).chat(id) as { running?: boolean }).running === true
-      ? []
-      : await editNotes.take(app, id).catch((error: unknown) => {
-          diag.warn("notes", `${id}: taking queued notes for the message: ${diag.messageOf(error)}`);
-          return [] as editNotes.AppNote[];
-        });
-  const withNotes = notes.length === 0 ? where : `${where}${where === "" ? "" : "\n\n"}${editNotes.context(project!, notes)}`;
-  if (notes.length > 0) {
-    void editNotes.requeueAfterTurn(app, id, notes.map((note) => note.id)).catch((error: unknown) => diag.warn("notes", `${id}: putting unanswered notes back: ${diag.messageOf(error)}`));
+  const playhead = Number.isFinite(frame) ? frame : null;
+  // With the team's queued notes, but not while the turn still runs: send refuses, or (Bodycam HQ) the message queues and takes them as it goes.
+  const running = (seams.agentPanel(app).chat(id) as { running?: boolean }).running === true;
+  const read = await messageContext(app, id, playhead, !running);
+  const panel = seams.agentPanel(app);
+  try {
+    if (panel.message !== undefined) {
+      const queued = await panel.message(id, said, given.model ?? null, given.effort ?? null, read, attached, playhead);
+      if (queued !== null) return sortedJson({ ok: true, queued });
+    } else await panel.send(id, said, given.model ?? null, given.effort ?? null, read, attached);
+  } catch (error) {
+    failed(error);
+  }
+  return sortedJson({ ok: true });
+}
+
+/**
+ * What the agent reads after a message, unseen in the chat: what's at the
+ * editor's playhead (`playhead` its frame, null when not sent from the editor)
+ * and, with `notes`, the team's queued notes, which ride the next message
+ * whatever it says (Sphe, Nov 3: "implement the feedback" isn't needed to send
+ * them); the ones the turn doesn't answer go back in the queue. A Bodycam HQ
+ * chat's queued message reads it as it goes (agent.ts `agentHooks.messageContext`).
+ */
+export async function messageContext(app: App, id: string, playhead: number | null, notes: boolean): Promise<string> {
+  const live = app.store.get(id);
+  if (live === null) return "";
+  const where = playhead === null ? "" : playheadContext(live.project, playhead, cachedTranscripts(app, live.project, false));
+  const taken = !notes
+    ? []
+    : await editNotes.take(app, id).catch((error: unknown) => {
+        diag.warn("notes", `${id}: taking queued notes for the message: ${diag.messageOf(error)}`);
+        return [] as editNotes.AppNote[];
+      });
+  if (taken.length === 0) return where;
+  void editNotes.requeueAfterTurn(app, id, taken.map((note) => note.id)).catch((error: unknown) => diag.warn("notes", `${id}: putting unanswered notes back: ${diag.messageOf(error)}`));
+  return `${where}${where === "" ? "" : "\n\n"}${editNotes.context(live.project, taken)}`;
+}
+
+/** Takes a queued message out of a Bodycam HQ chat (its Cancel). */
+function agentQueueCancelRoute(context: RouteContext<App>): Response {
+  const panel = seams.agentPanel(context.app);
+  if (context.app.store.get(context.params.id ?? "") === null) throw notFound("no such project");
+  if (panel.cancelQueued === undefined) throw bad("this chat has no queue");
+  return sortedJson({ ok: true, cancelled: panel.cancelQueued(context.params.id ?? "", context.params.qid ?? "") });
+}
+
+/** Steer: the running turn stopped and the queued message sent in its place, in the same conversation (agent.ts `steer`). */
+async function agentQueueSteerRoute(context: RouteContext<App>): Promise<Response> {
+  const { app } = context;
+  const id = context.params.id ?? "";
+  const panel = seams.agentPanel(app);
+  if (app.store.get(id) === null) throw notFound("no such project");
+  if (panel.steer === undefined) throw bad("this chat has no queue");
+  try {
+    await app.store.mayWrite(id);
+  } catch (error) {
+    if (isBug(error)) throw error;
+    throw new ApiError(423, diag.messageOf(error));
   }
   try {
-    await seams.agentPanel(app).send(id, said, given.model ?? null, given.effort ?? null, withNotes, attached);
+    await panel.steer(id, context.params.qid ?? "");
   } catch (error) {
     failed(error);
   }
@@ -578,6 +621,8 @@ export function routes(router: Router<App>): void {
   router.post("/api/projects/{id}/agent", agentSendRoute);
   router.post("/api/projects/{id}/agent/retry-claude", agentRetryClaudeRoute);
   router.post("/api/projects/{id}/agent/stop", agentStopRoute);
+  router.post("/api/projects/{id}/agent/queue/{qid}/cancel", agentQueueCancelRoute);
+  router.post("/api/projects/{id}/agent/queue/{qid}/steer", agentQueueSteerRoute);
   router.post("/api/projects/{id}/agent/reset", agentResetRoute);
   router.get("/api/maps/{token}", mapPageRoute, { bodyLimit: MAP_LIMIT });
   router.post("/api/maps/{token}", mapShotRoute, { bodyLimit: MAP_LIMIT });

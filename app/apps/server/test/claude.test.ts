@@ -116,7 +116,7 @@ test("a Bodycam HQ project's turn runs in its effects folder with the file tools
     await home.store.update(project, "test", (made) => {
       made.hq = true;
     });
-    const { agents, asked } = agentsWith(home);
+    const { agents, asked, queries } = agentsWith(home);
     await agents.send(project, "Make the evidence board", null, null);
     const { options } = asked[0]!;
     const folder = fs.realpathSync(join(home.home, "media", project, "effects"));
@@ -126,13 +126,197 @@ test("a Bodycam HQ project's turn runs in its effects folder with the file tools
     // Still nothing asked and nothing run: a tool that isn't allowed is refused.
     expect(options.permissionMode).toBe("dontAsk");
     expect(String(options.systemPrompt)).toContain("THIS IS A BODYCAM HQ VIDEO");
-    // Fable 5.2 thinking high, every turn, whatever the menu says elsewhere (Sphe, Nov 11).
+    // Fable 5.2 thinking high until the person picks, whatever the menu says elsewhere (Sphe, Nov 11).
     expect(options.model).toBe("claude-fable-5-2");
     expect(options.effort).toBe("high");
     expect(agents.revising(project)).toBe(false);
     expect(agents.modelName(project)).toBe("Fable 5.2");
     expect(String(options.systemPrompt)).toContain("- look_at_effect(name: string, times?: array)");
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "session-hq" });
+    queries[0]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    queries[0]!.end();
+    await settle();
+
+    // Its own pick in the menu, at any time (Sphe, Nov 11): the next turn is on it, the other chats' pick untouched.
+    modelChoice.save({ ...modelChoice.current(), hq_model: "claude-sonnet-5-5", hq_effort: "medium" });
+    expect(JSON.parse(fs.readFileSync(`${home.home}/models.json`, "utf8"))).toEqual({ revision: "claude-opus-5-5", effort: "medium", hq_model: "claude-sonnet-5-5", hq_effort: "medium" });
+    expect(agents.modelName(project)).toBe("Sonnet 5.5");
+    expect(agents.revising(project)).toBe(false);
+    await agents.send(project, "Make it red", null, null);
+    expect(asked[1]!.options.model).toBe("claude-sonnet-5-5");
+    expect(asked[1]!.options.effort).toBe("medium");
+    expect(asked[1]!.options.resume).toBe("session-hq");
+    // The other chats' pick changed: HQ's stays.
+    modelChoice.save({ ...modelChoice.current(), effort: "low" });
+    expect(modelChoice.current()).toMatchObject({ hq_model: "claude-sonnet-5-5", hq_effort: "medium" });
+    // Another project is as it was: Opus to build, at the other chats' level.
+    const other = home.store.create("Not HQ", { width: 1920, height: 1080, fps: 30 }).project.id;
+    expect(agents.modelName(other)).toBe("Opus 5.5");
+    await agents.send(other, "Tighten the intro", null, null);
+    expect(asked[2]!.options.model).toBe("opus");
+    expect(asked[2]!.options.effort).toBe("low");
   } finally {
+    modelChoice.save({});
+    home.cleanup();
+  }
+});
+
+/** A Bodycam HQ project with the agent on Claude Code, for one test. */
+async function hqProject(name: string) {
+  const made = claudeProject(name);
+  await made.home.store.update(made.project, "test", (draft) => {
+    draft.hq = true;
+  });
+  return made;
+}
+
+/** A stand-in query's turn ending as it should. */
+function ends(query: ReturnType<typeof fakeQuery>): void {
+  query.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+  query.end();
+}
+
+test("a message sent while a Bodycam HQ turn runs waits on the server, kept with the chat, and goes as the next turn when it ends; cancel takes one out", async () => {
+  const { home, project, agents, asked, queries } = await hqProject("claude-hq-queue");
+  const read = agentHooks.messageContext;
+  // What's at its playhead is read as it goes.
+  agentHooks.messageContext = async (_project, playhead) => `\n\n(the playhead at ${playhead})`;
+  try {
+    await agents.send(project, "Make the evidence board", null, null);
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "session-1" });
+    await settle();
+    const first = await agents.message(project, "Make it red", null, null, "(read now)", [{ name: "ref.png", kind: "image", media: "m1" }], 120);
+    const second = await agents.message(project, "And add a stamp", null, null, "", [], null);
+    const third = await agents.message(project, "Never mind", null, null, "", [], null);
+    expect([first?.text, second?.text, third?.text]).toEqual(["Make it red", "And add a stamp", "Never mind"]);
+    // Queued, not sent.
+    expect(asked.length).toBe(1);
+    expect(agents.withChat(project).entries.filter((item) => item.kind === "user").map((item) => item.text)).toEqual(["Make the evidence board"]);
+    expect(agents.cancelQueued(project, third!.id)).toBe(true);
+    expect(agents.cancelQueued(project, third!.id)).toBe(false);
+    expect((agents.chat(project) as { queue: { text: string }[] }).queue.map((one) => one.text)).toEqual(["Make it red", "And add a stamp"]);
+    // Kept in the chat's file, read back as it was (a restart, another editor).
+    const saved = readChat(fs.readFileSync(home.store.chatPath(project), "utf8"));
+    expect(saved.queue).toEqual([
+      { id: first!.id, text: "Make it red", at: first!.at, playhead: 120, attachments: [{ name: "ref.png", kind: "image", media: "m1" }] },
+      { id: second!.id, text: "And add a stamp", at: second!.at, playhead: null },
+    ]);
+
+    // The turn ends: the first goes by itself, in the same conversation, its playhead read now; the second waits.
+    ends(queries[0]!);
+    await askedCount(asked, 2);
+    expect(asked[1]!.options.resume).toBe("session-1");
+    expect(String(asked[1]!.prompt)).toStartWith("Make it red");
+    expect(agents.withChat(project).entries.filter((item) => item.kind === "user").at(-1)).toMatchObject({ text: "Make it red", attachments: [{ name: "ref.png", kind: "image", media: "m1" }] });
+    expect(agents.withChat(project).queue.map((one) => one.text)).toEqual(["And add a stamp"]);
+    expect(agents.withChat(project).running).toBe(true);
+
+    // A turn that ends with an error doesn't send the queue on: it waits, shown.
+    queries[1]!.push({ type: "result", subtype: "error_during_execution", errors: ["The tool broke the page"], usage: {} });
+    queries[1]!.end();
+    await settle();
+    await Bun.sleep(50);
+    expect(agents.withChat(project).running).toBe(false);
+    expect(asked.length).toBe(2);
+    expect(agents.withChat(project).queue.map((one) => one.text)).toEqual(["And add a stamp"]);
+
+    // A message sent with nothing running starts its turn as ever; the queue goes on after it.
+    await agents.send(project, "Carry on", null, null);
+    expect(asked[2]!.prompt).toBe("Carry on");
+    // Stopped by the person: the queue stays, to steer or cancel.
+    await agents.stop(project);
+    await settle();
+    await Bun.sleep(50);
+    expect(agents.withChat(project).running).toBe(false);
+    expect(asked.length).toBe(3);
+    expect(agents.withChat(project).queue.map((one) => one.text)).toEqual(["And add a stamp"]);
+    // Steer with nothing running sends it now.
+    await agents.steer(project, second!.id);
+    expect(asked[3]!.prompt).toBe("And add a stamp\n\n(the playhead at null)");
+    expect(agents.withChat(project).queue).toEqual([]);
+  } finally {
+    agentHooks.messageContext = read;
+    agents.shutdown();
+    home.cleanup();
+  }
+});
+
+test("steer stops the running turn and sends the queued message in its place, in the same conversation, the rest left queued", async () => {
+  const { home, project, agents, asked, queries } = await hqProject("claude-hq-steer");
+  try {
+    await agents.send(project, "Make the evidence board", null, null);
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "session-1" });
+    await settle();
+    const wait = await agents.message(project, "Then a lower third", null, null, "", [], null);
+    const now = await agents.message(project, "Make the board blue instead", null, null, "", [], null);
+    await agents.steer(project, now!.id);
+    expect(queries[0]!.interrupted()).toBe(true);
+    expect(asked.length).toBe(2);
+    expect(asked[1]!.prompt).toBe("Make the board blue instead");
+    expect(asked[1]!.options.resume).toBe("session-1");
+    const chat = agents.withChat(project);
+    expect(chat.running).toBe(true);
+    // The stop isn't said: the steered message follows it.
+    expect(chat.entries.some((item) => item.kind === "error")).toBe(false);
+    expect(chat.queue.map((one) => one.id)).toEqual([wait!.id]);
+    // The steered turn ends: the rest of the queue goes on.
+    ends(queries[1]!);
+    await askedCount(asked, 3);
+    expect(asked[2]!.prompt).toBe("Then a lower third");
+    expect(agents.withChat(project).queue).toEqual([]);
+    // With nothing running a message isn't queued: it starts its turn.
+    ends(queries[2]!);
+    await settle();
+    expect(agents.withChat(project).running).toBe(false);
+    const idle = await agents.message(project, "One more", null, null, "", [], null);
+    expect(idle).toBeNull();
+    expect(asked[3]!.prompt).toBe("One more");
+  } finally {
+    agents.shutdown();
+    home.cleanup();
+  }
+});
+
+test("a queue left when Edit quit goes on after the turn a restart carries on", async () => {
+  const { home, project, agents, queries } = await hqProject("claude-hq-restart");
+  try {
+    await agents.send(project, "Make the evidence board", null, null);
+    queries[0]!.push({ type: "system", subtype: "init", session_id: "session-1" });
+    await settle();
+    await agents.message(project, "Make it red", null, null, "", [], null);
+    agents.shutdown();
+    await settle();
+    // Quitting doesn't send it.
+    expect(agents.withChat(project).queue.map((one) => one.text)).toEqual(["Make it red"]);
+    const after = agentsWith(home);
+    expect(after.agents.withChat(project).queue.map((one) => one.text)).toEqual(["Make it red"]);
+    await after.agents.resumeInterrupted();
+    await settle();
+    expect(after.asked[0]!.prompt).toStartWith("(Edit, automatically) Edit restarted");
+    ends(after.queries[0]!);
+    await askedCount(after.asked, 2);
+    expect(after.asked[1]!.prompt).toBe("Make it red");
+    expect(after.asked[1]!.options.resume).toBe("session-1");
+    after.agents.shutdown();
+  } finally {
+    home.cleanup();
+  }
+});
+
+test("any other project still refuses a message while its turn runs, exactly as before", async () => {
+  const { home, project, agents, asked } = claudeProject("claude-no-queue");
+  try {
+    await agents.send(project, "Go", null, null);
+    await expect(agents.message(project, "More", null, null, "", [], 10)).rejects.toThrow("the agent is still working; stop it or wait");
+    await expect(agents.send(project, "More", null, null)).rejects.toThrow("the agent is still working; stop it or wait");
+    await settle();
+    expect(asked.length).toBe(1);
+    expect(agents.withChat(project).queue).toEqual([]);
+    await expect(agents.steer(project, "queued-1")).rejects.toThrow("only a Bodycam HQ chat queues messages");
+    // Nothing queued in its file.
+    expect(JSON.parse(fs.readFileSync(home.store.chatPath(project), "utf8")).queue).toBeUndefined();
+  } finally {
+    agents.shutdown();
     home.cleanup();
   }
 });
@@ -825,7 +1009,7 @@ test("opus builds the edit; once it's built, a revision is on the model menu's p
     expect(agents.turnModel(project, "Make the intro shorter")).toBe("claude-opus-5-5");
     // Sonnet picked in the menu (kept in the home): the revisions are Sonnet's, at the picked level.
     modelChoice.save({ revision: "claude-sonnet-5-5", effort: "high" });
-    expect(JSON.parse(fs.readFileSync(`${home.home}/models.json`, "utf8"))).toEqual({ revision: "claude-sonnet-5-5", effort: "high" });
+    expect(JSON.parse(fs.readFileSync(`${home.home}/models.json`, "utf8"))).toEqual({ revision: "claude-sonnet-5-5", effort: "high", hq_model: "claude-fable-5-2", hq_effort: "high" });
     expect(agents.chat(project)).toMatchObject({ model_name: "Sonnet 5.5" });
     // A new chat on the built edit still revises it.
     agents.reset(project);

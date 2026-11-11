@@ -117,3 +117,64 @@ describe("the chat's live events", () => {
     expect(useAgent.getState().running).toBe(false);
   });
 });
+
+describe("a Bodycam HQ chat's queue, kept on the server", () => {
+  const response = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+  const waiting = { id: "queued-1", text: "make it red", at: 1, playhead: 120 };
+
+  beforeEach(() => {
+    vi.resetModules();
+    fetchRetrying.mockReset();
+  });
+
+  it("a message sent while the turn runs shows in the queue, not the conversation, and the turn goes on", async () => {
+    const { sendToAgent, useAgent } = await import("./agent");
+    const { sending } = await import("./sentNow");
+    fetchRetrying.mockImplementation(async () => response({ ok: true, queued: waiting }));
+    useAgent.setState({ project: "p1", loaded: true, running: true, entries: [{ id: "u", kind: "user", text: "make the board" }], queue: [] });
+    await sendToAgent("make it red", 120, [], true);
+    expect(JSON.parse(String(fetchRetrying.mock.calls[0]![1]!.body))).toEqual({ text: "make it red", playhead: "120" });
+    expect(sending("p1", useAgent.getState().entries)).toBe(false);
+    expect(useAgent.getState().entries.map((entry) => entry.text)).toEqual(["make the board"]);
+    expect(useAgent.getState().queue).toEqual([waiting]);
+    expect(useAgent.getState().running).toBe(true);
+  });
+
+  it("follows the server's queue events, and a new chat clears it", async () => {
+    const { applyAgentEvent, flushAgentEvents, useAgent } = await import("./agent");
+    useAgent.setState({ project: "p1", loaded: true, running: true, entries: [], queue: [] });
+    applyAgentEvent({ project: "p1", event: "queue", queue: [waiting] });
+    applyAgentEvent({ project: "other", event: "queue", queue: [] });
+    flushAgentEvents();
+    expect(useAgent.getState().queue).toEqual([waiting]);
+    applyAgentEvent({ project: "p1", event: "reset" });
+    flushAgentEvents();
+    expect(useAgent.getState().queue).toEqual([]);
+  });
+
+  it("cancel and steer take the message out at once and ask the server", async () => {
+    const { cancelQueued, steerQueued, useAgent } = await import("./agent");
+    fetchRetrying.mockImplementation(async () => response({ ok: true }));
+    const second = { ...waiting, id: "queued-2", text: "then a stamp" };
+    useAgent.setState({ project: "p1", loaded: true, running: true, entries: [], queue: [waiting, second] });
+    await cancelQueued("queued-1");
+    expect(fetchRetrying.mock.calls.at(-1)).toEqual(["/api/projects/p1/agent/queue/queued-1/cancel", { method: "POST" }]);
+    expect(useAgent.getState().queue).toEqual([second]);
+    await steerQueued("queued-2");
+    expect(fetchRetrying.mock.calls.at(-1)).toEqual(["/api/projects/p1/agent/queue/queued-2/steer", { method: "POST" }]);
+    expect(useAgent.getState().queue).toEqual([]);
+  });
+
+  it("a refused steer says why and reads the chat again", async () => {
+    const { steerQueued, useAgent } = await import("./agent");
+    fetchRetrying.mockImplementation(async (url: string) => {
+      if (url.endsWith("/steer")) return response({ error: "that message isn't queued any more" }, 400);
+      if (url === "/api/agent") return response({ ready: true, provider: "claude" });
+      if (url === "/api/agent/models") return response({ models: [] });
+      return response({ entries: [], running: true, queue: [] });
+    });
+    useAgent.setState({ project: "p1", loaded: true, running: true, entries: [], queue: [waiting] });
+    await expect(steerQueued("queued-1")).rejects.toThrow("that message isn't queued any more");
+    expect(fetchRetrying.mock.calls.some(([url]) => url === "/api/projects/p1/agent")).toBe(true);
+  });
+});

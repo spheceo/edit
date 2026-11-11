@@ -25,6 +25,15 @@ export interface AgentEntry {
   attachments?: { name: string; kind: FileKind; media?: string; file?: string; url?: string | null }[];
 }
 
+/** A message sent while a Bodycam HQ turn runs, waiting on the server for it to end (the server's agent.ts `Queued`): Steer or Cancel. */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  at: number;
+  playhead: number | null;
+  attachments?: AgentEntry["attachments"];
+}
+
 export type AgentProvider = "claude";
 
 export interface AgentStatus {
@@ -124,6 +133,8 @@ interface AgentState {
   revising: boolean;
   /** A sub-agent's chat being viewed in place of the main one (the fresh-eyes pass): Back returns. */
   sub: SubChat | null;
+  /** Bodycam HQ: the messages waiting on the server for the running turn to end, in order (empty elsewhere). */
+  queue: QueuedMessage[];
 }
 
 /** A sub-agent's chat: its key (`<project>~<name>`), title and conversation. */
@@ -147,6 +158,7 @@ export const useAgent = create<AgentState>(() => ({
   chatModel: null,
   revising: false,
   sub: null,
+  queue: [],
 }));
 
 /** Opens a sub-agent's chat from its card in the main chat. */
@@ -184,7 +196,7 @@ async function loadModelName() {
 }
 
 /** Chats already seen this session, so reopening the panel or a project is instant. */
-const chats = new Map<string, { entries: AgentEntry[]; running: boolean; chatModel?: string | null; revising?: boolean }>();
+const chats = new Map<string, { entries: AgentEntry[]; running: boolean; chatModel?: string | null; revising?: boolean; queue?: QueuedMessage[] }>();
 /** A pre-update failed message is adopted once; the server also saves a receipt. */
 const retriedAuth = new Set<string>();
 let openedSerial = 0;
@@ -202,12 +214,12 @@ export async function openAgent(project: string) {
   const state = useAgent.getState();
   if (state.project !== project) {
     const cached = chats.get(project);
-    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false, chatModel: cached?.chatModel ?? null, revising: cached?.revising ?? false, sub: null });
+    useAgent.setState({ project, loaded: Boolean(cached), entries: cached?.entries ?? [], running: cached?.running ?? false, chatModel: cached?.chatModel ?? null, revising: cached?.revising ?? false, sub: null, queue: cached?.queue ?? [] });
   }
   const [status, chat] = await Promise.all([
     fetchRetrying("/api/agent").then((response) => json<AgentStatus>(response)),
     fetchRetrying(`/api/projects/${project}/agent`).then((response) =>
-      json<{ entries: AgentEntry[]; running: boolean; model_name?: string; revising?: boolean; auth_retry?: string | null }>(response),
+      json<{ entries: AgentEntry[]; running: boolean; model_name?: string; revising?: boolean; auth_retry?: string | null; queue?: QueuedMessage[] }>(response),
     ),
   ]).catch(() => [null, null] as const);
   if (useAgent.getState().project !== project || serial !== openedSerial) return;
@@ -224,6 +236,7 @@ export async function openAgent(project: string) {
     running: chat.running || sending(project, chat.entries),
     chatModel: chat.model_name ?? null,
     revising: chat.revising === true,
+    queue: chat.queue ?? [],
   });
   if (status.ready) loadModelName().catch(() => {});
   if (status.ready && chat.auth_retry && !chat.running) {
@@ -248,22 +261,28 @@ export async function openAgent(project: string) {
 /**
  * `playhead`: the editor's frame when the message was written, so the agent
  * starts there. `files`: what's attached, already in the project (the chat's
- * uploader); pictures reach the model as pictures.
+ * uploader); pictures reach the model as pictures. `queues`: a Bodycam HQ chat,
+ * where a message sent while the turn runs waits in the server's queue (shown
+ * above the composer, not in the conversation) until it ends.
  */
-export async function sendToAgent(text: string, playhead?: number, files: ChatFile[] = []) {
+export async function sendToAgent(text: string, playhead?: number, files: ChatFile[] = [], queues = false) {
   const state = useAgent.getState();
   if (!state.project) return;
+  const project = state.project;
   const attachments = files.map((one) => {
     const landed = (one.landed ?? {}) as ProjectFile;
     return { name: one.name, kind: one.kind, ...(landed.media === undefined ? {} : { media: landed.media }), ...(landed.file === undefined ? {} : { file: landed.file }) };
   });
-  // Show the message now (sentNow.ts); the server's copy takes its place when it arrives.
   events.flush();
   const shown = files.map((one, index) => ({ ...attachments[index]!, url: one.kind === "image" ? one.preview : null }));
-  holdSent(state.project, useAgent.getState().entries, text, shown);
-  useAgent.setState({ running: true, activityAt: Date.now() });
+  const queueing = queues && useAgent.getState().running;
+  // Show the message now (sentNow.ts); the server's copy takes its place when it arrives. A queued one shows in the queue instead.
+  if (!queueing) {
+    holdSent(project, useAgent.getState().entries, text, shown);
+    useAgent.setState({ running: true, activityAt: Date.now() });
+  }
   try {
-    await fetchRetrying(`/api/projects/${state.project}/agent`, {
+    const answer = await fetchRetrying(`/api/projects/${project}/agent`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -271,13 +290,19 @@ export async function sendToAgent(text: string, playhead?: number, files: ChatFi
         ...(playhead === undefined ? {} : { playhead: String(Math.round(playhead)) }),
         ...(attachments.length === 0 ? {} : { attachments: JSON.stringify(attachments) }),
       }),
-    }).then(json);
+    }).then((response) => json<{ queued?: QueuedMessage }>(response));
+    const queued = answer.queued;
+    // Queued after all (the turn was still running), or before its event: shown in the queue, never twice.
+    if (queued !== undefined) {
+      dropSent(project);
+      useAgent.setState((current) => (current.project !== project || current.queue.some((one) => one.id === queued.id) ? {} : { queue: [...current.queue, queued], running: true }));
+    }
   } catch (error) {
-    // Refused: the message stays in the chat with why, as it was sent.
+    // Refused: the message stays in the chat with why, as it was sent (a turn still running goes on).
     const now = Date.now();
-    dropSent(state.project);
+    dropSent(project);
     useAgent.setState((current) => ({
-      running: false,
+      running: queueing && current.running,
       entries: [...current.entries, { id: `local-user-${now}`, kind: "user", text, at: now, updated: now, ...(shown.length > 0 ? { attachments: shown } : {}) }, { id: `local-${now}`, kind: "error", text: (error as Error).message }],
     }));
   }
@@ -287,6 +312,29 @@ export const stopAgent = () => {
   const project = useAgent.getState().project;
   if (project) void fetchRetrying(`/api/projects/${project}/agent/stop`, { method: "POST" });
 };
+
+/** Takes a queued message out (shown gone at once, back if the server refuses). */
+export async function cancelQueued(id: string): Promise<void> {
+  await leaveQueue(id, "cancel");
+}
+
+/** Steer: the running turn stops and this queued message goes in its place, in the same conversation; the rest wait. */
+export async function steerQueued(id: string): Promise<void> {
+  await leaveQueue(id, "steer");
+}
+
+async function leaveQueue(id: string, how: "cancel" | "steer"): Promise<void> {
+  const { project, queue } = useAgent.getState();
+  if (!project) return;
+  useAgent.setState({ queue: queue.filter((one) => one.id !== id) });
+  try {
+    await json(await fetchRetrying(`/api/projects/${project}/agent/queue/${encodeURIComponent(id)}/${how}`, { method: "POST" }));
+  } catch (error) {
+    // The server's queue as it is: the event said so already, or the chat is read again.
+    if (useAgent.getState().project === project) void openAgent(project);
+    throw error;
+  }
+}
 
 type AgentEvent = { project: string; event: string; [key: string]: unknown };
 
@@ -319,7 +367,9 @@ function reduce(state: AgentState, event: AgentEvent, now: number): AgentState {
     case "status":
       return { ...state, running: Boolean(event.running), activityAt: now };
     case "reset":
-      return { ...state, entries: [], running: false };
+      return { ...state, entries: [], running: false, queue: [] };
+    case "queue":
+      return { ...state, queue: Array.isArray(event.queue) ? (event.queue as QueuedMessage[]) : [] };
     case "model":
       return { ...state, chatModel: typeof event.model_name === "string" ? event.model_name : null, revising: event.revising === true };
   }
@@ -337,7 +387,7 @@ const events = perFrame(() => {
   const after = batch.reduce((state, event) => reduce(state, event, now), before);
   if (after === before) return;
   useAgent.setState(after, true);
-  if (after.project !== null) chats.set(after.project, { entries: after.entries, running: after.running, chatModel: after.chatModel, revising: after.revising });
+  if (after.project !== null) chats.set(after.project, { entries: after.entries, running: after.running, chatModel: after.chatModel, revising: after.revising, queue: after.queue });
 });
 
 /**
@@ -361,5 +411,5 @@ export const flushAgentEvents = () => events.flush();
 
 // Remember every loaded chat (including optimistic sends) for instant reopening.
 useAgent.subscribe((state) => {
-  if (state.project && state.loaded) chats.set(state.project, { entries: state.entries, running: state.running, chatModel: state.chatModel, revising: state.revising });
+  if (state.project && state.loaded) chats.set(state.project, { entries: state.entries, running: state.running, chatModel: state.chatModel, revising: state.revising, queue: state.queue });
 });

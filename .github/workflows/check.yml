@@ -93,6 +93,14 @@ jobs:
       - name: Check
         if: matrix.part != 'acceptance'
         run: just ${{ matrix.part == 'tests-1' && 'check-tests 1/2' || matrix.part == 'tests-2' && 'check-tests 2/2' || format('check-{0}', matrix.part) }}
+      # The Mac's engine tests stopped on SIGTRAP twice on Nov 11 (render tests, once in six runs or so), with
+      # nothing in the log: macOS's crash report says where, so it's kept when this part fails.
+      - if: failure() && runner.os == 'macOS' && matrix.part == 'rust'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: mac-crash-reports
+          path: ~/Library/Logs/DiagnosticReports
+          if-no-files-found: ignore
       - name: The addon, for acceptance
         if: matrix.part == 'acceptance'
         run: just native debug

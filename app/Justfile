@@ -334,7 +334,11 @@ check: check-rust check-app
 check-rust:
     cargo fmt --all --check
     cargo clippy {{rust_crates}} --all-targets -- -D warnings
-    cargo test {{rust_crates}}
+    cargo test {{rust_crates}} --exclude edit-engine
+    # The engine's tests uncaptured: CI's Mac stopped them four times on Nov 11 with SIGTRAP and nothing else,
+    # what an abort prints first (a panic that can't unwind, a failed unsafe check) gone with the harness's
+    # captured output. Not reproduced in 20 runs under lldb since; uncaptured, the next one says what it was.
+    cargo test -p edit-engine -- --nocapture
     cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
 
 # Everything but the server's tests: the same TypeScript anywhere, so CI runs it on Linux alone.

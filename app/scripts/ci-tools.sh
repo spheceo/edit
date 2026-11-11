@@ -36,16 +36,40 @@ ln -sf "$dir/ffmpeg/ffprobe" "$dir/bin/ffprobe"
 
 if [[ "$target" == *-linux-* ]]; then
   debs="$dir/debs"
-  # Fetched once per runner image (GitHub's ImageVersion), then installed from here; another image's are fetched again.
+  # Fetched once per runner image (GitHub's ImageVersion), then installed from here with no network.
   image="${ImageOS:-}-${ImageVersion:-}"
   if [ "$(cat "$debs/.fetched" 2>/dev/null)" != "$image" ]; then
-    rm -rf "$debs"
-    mkdir -p "$debs/partial"
-    apt=(sudo apt-get -qq -o Acquire::Retries=5 -o Acquire::http::Timeout=30)
-    "${apt[@]}" update
-    "${apt[@]}" -o Dir::Cache::archives="$debs" install -y --download-only mesa-vulkan-drivers libvulkan1
-    sudo chown -R "$(id -u)" "$debs"
-    echo "$image" > "$debs/.fetched"
+    # Each mirror in turn with short timeouts and package lists of its own (Nov 11: ubuntu.com's
+    # names stopped resolving for hours, azure.archive.ubuntu.com included; kernel.org's mirror
+    # answered). apt's default retries spent 9 minutes on one name.
+    fresh="$(mktemp -d)"
+    fetched=""
+    for mirror in https://mirrors.edge.kernel.org/ubuntu/ mirror+file:/etc/apt/apt-mirrors.txt http://archive.ubuntu.com/ubuntu/; do
+      lists="$(mktemp -d)"
+      mkdir -p "$lists/partial" "$fresh/partial"
+      for suite in noble noble-updates noble-security; do printf 'deb %s %s main universe\n' "$mirror" "$suite"; done > "$lists/sources.list"
+      apt=(sudo timeout 120 apt-get -qq -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15
+        -o Dir::Etc::sourcelist="$lists/sources.list" -o Dir::Etc::sourceparts=- -o Dir::State::Lists="$lists"
+        -o APT::Get::List-Cleanup=0)
+      if "${apt[@]}" update && "${apt[@]}" -o Dir::Cache::archives="$fresh" install -y --download-only mesa-vulkan-drivers libvulkan1; then
+        fetched="$mirror"
+        break
+      fi
+      echo "::warning::apt couldn't fetch the Vulkan packages from $mirror; trying the next mirror"
+    done
+    if [ -n "$fetched" ]; then
+      sudo chown -R "$(id -u)" "$fresh"
+      rm -rf "$debs"
+      mv "$fresh" "$debs"
+      echo "$image" > "$debs/.fetched"
+      echo "Vulkan packages for $image from $fetched"
+    elif compgen -G "$debs/*.deb" >/dev/null; then
+      # Another image's (the same Ubuntu release), restored from the cache: better than none.
+      echo "::warning::no mirror answered; installing the Vulkan packages fetched for $(cat "$debs/.fetched" 2>/dev/null) instead"
+    else
+      echo "::error::no Ubuntu mirror answered and no Vulkan packages are cached: the renderer's tests can't run"
+      exit 1
+    fi
   fi
   if compgen -G "$debs/*.deb" >/dev/null; then sudo dpkg -i "$debs"/*.deb >/dev/null; fi
 fi

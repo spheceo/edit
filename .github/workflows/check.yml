@@ -100,11 +100,6 @@ jobs:
       - name: Check
         if: matrix.part != 'acceptance'
         run: just ${{ matrix.part == 'tests-1' && 'check-tests 1/2' || matrix.part == 'tests-2' && 'check-tests 2/2' || format('check-{0}', matrix.part) }}
-      # The Mac's engine tests stop on SIGTRAP in the render tests (Nov 11, three runs running), with nothing in
-      # the log to say which and no crash report on the runner: one at a time, the last test named is the one.
-      - name: Which engine test stops (one at a time)
-        if: failure() && runner.os == 'macOS' && matrix.part == 'rust'
-        run: cargo test -p edit-engine --lib -- --test-threads=1 2>&1 | tail -40
       - name: The addon, for acceptance
         if: matrix.part == 'acceptance'
         run: just native debug

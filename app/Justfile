@@ -362,8 +362,11 @@ check-ts: types
 # another, on the debug addon as built already: in parallel on CI's runners FFmpeg- and encoder-heavy tests timed out (Nov 11:
 # two hung on the Mac's hardware encoder, three thumbnail tests at 60 s on Linux), where one after another they
 # always passed.
-check-tests shard="1/1":
-    cd apps/server && bun test --timeout=30000 --timings=test/timings.json --shard={{shard}}
+# `timings`: this platform's (CI's Mac runs its own slow tests: on Linux's timings its halves took 273 s and
+# about 130 s, Nov 11). Each run writes what it measured back to that file (this shard's tests only), which CI
+# keeps as an artifact to refresh it from.
+check-tests shard="1/1" timings="test/timings.json":
+    cd apps/server && bun test --timeout=30000 --timings={{timings}} --update-timings --shard={{shard}}
 
 # Here, on a desk with the cores for it: the server's tests in parallel (package.json's test).
 check-app: (native "debug") check-ts

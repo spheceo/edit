@@ -121,9 +121,18 @@ jobs:
             ts) just check-ts ;;
             tests-1)
               if [ "$RUNNER_OS" = macOS ]; then just native-tests; fi
-              just check-tests 1/2 ;;
-            tests-2) just check-tests 2/2 ;;
+              just check-tests 1/2 "$TIMINGS" ;;
+            tests-2) just check-tests 2/2 "$TIMINGS" ;;
           esac
+        env:
+          # Each platform's halves are balanced by its own measured times.
+          TIMINGS: ${{ runner.os == 'macOS' && 'test/timings-mac.json' || 'test/timings.json' }}
+      - if: always() && startsWith(matrix.part, 'tests-')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: timings-${{ matrix.target }}-${{ matrix.part }}
+          path: app/apps/server/test/timings*.json
+          if-no-files-found: ignore
       # Acceptance on the Mac (Nov 8 audit, item I; scripts/acceptance.ts): the
       # server from this commit (on the debug addon above) serving
       # the UI built here, a fixture project made with FFmpeg, the editor

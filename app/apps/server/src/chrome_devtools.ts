@@ -44,7 +44,8 @@ const swept = new Set<string>();
 /**
  * Chromes an Edit before this one left running on `profile` (a restart that
  * couldn't say goodbye: a crash, `bun --watch`, an update's exec): whatever
- * has nobody left to answer to is closed, its profile gone. Once a prefix.
+ * has nobody left to answer to is closed, its profile gone, and so is every
+ * profile of the prefix no Chrome uses. Once a prefix.
  */
 function sweepOrphans(profile: string): void {
   if (swept.has(profile)) return;
@@ -58,6 +59,20 @@ function sweepOrphans(profile: string): void {
       const dir = /--user-data-dir=(\S+)/.exec(match[3]!)?.[1];
       if (dir !== undefined) fs.rmSync(dir, { recursive: true, force: true });
       diag.info("chrome", `closed a Chrome an earlier Edit left running (pid ${match[1]}, ${profile})`);
+    }
+    // And the profiles no Chrome uses any more, ten minutes old or more (another Edit on this computer may have just
+    // made one): one for every Chrome started (Nov 11: 225 left here by a day's looks and renders).
+    const now = Bun.spawnSync(["ps", "-axo", "command="]).stdout.toString();
+    for (const entry of fs.readdirSync(os.tmpdir())) {
+      if (!entry.startsWith(profile)) continue;
+      const dir = join(os.tmpdir(), entry);
+      if (now.includes(`--user-data-dir=${dir}`)) continue;
+      try {
+        if (Date.now() - fs.statSync(dir).mtimeMs < 10 * 60_000) continue;
+      } catch {
+        continue;
+      }
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   } catch (error) {
     diag.warn("chrome", `looking for Chromes left running: ${diag.messageOf(error)}`);

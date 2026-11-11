@@ -36,7 +36,7 @@ afterAll(() => {
 
 afterEach(() => {
   accounts.resetForTests();
-  v2cloud.useSkillsForTests({});
+  v2cloud.useSkillsForTests([]);
 });
 
 function hq(name: string) {
@@ -99,8 +99,8 @@ test("an effect's code kept version by version, the same files never twice, and 
   }
 });
 
-test("templates: kept by a teacher, listed with when to use them, started from as a project's own effect", async () => {
-  const { app, cleanup, id } = hq("v2-templates");
+test("the library: effects and sounds kept with a category, a note and a brief, searched, put away and back, brought into a project", async () => {
+  const { app, cleanup, id } = hq("v2-library");
   try {
     await app.store.update(id, "test", (project) => {
       project.hq = true;
@@ -108,54 +108,66 @@ test("templates: kept by a teacher, listed with when to use them, started from a
     const dir = effects.folder(app.store, id, "board");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(join(dir, "scene.html"), "<p>board</p>");
+    const keep = { kind: "effect", name: "board", as: "evidence-board", category: "evidence board", note: "A paper board the camera glides across.", brief: "PHOTOS, CAM keys and TEXTS at the top." };
     // Not a teacher: refused, in words to pass on.
     accounts.signedInForTests(["edit.bodycam"]);
-    const refused = await call(app, id, "save_template", { name: "board", note: "an evidence board" });
-    expect(refused.isError).toBe(true);
-    expect(refused.content[0]!.text).toContain("a teacher's to do");
-    // A teacher (agent.teach).
+    expect((await call(app, id, "save_to_library", keep)).content[0]!.text).toContain("a teacher's to do");
     accounts.signedInForTests(["edit.bodycam", "agent.teach"]);
-    expect((await call(app, id, "save_template", { name: "board", template: "evidence-board", note: "an evidence board the camera glides across" })).content[0]!.text).toContain("Template evidence-board is version 1");
-    const listed = await call(app, id, "templates", {});
-    expect(listed.content[0]!.text).toBe("- evidence-board (version 1): an evidence board the camera glides across");
-    const used = await call(app, id, "use_template", { template: "evidence-board", name: "intro-board" });
-    expect(used.isError).toBe(false);
+    expect((await call(app, id, "save_to_library", { ...keep, brief: "x".repeat(300) })).content[0]!.text).toContain("brief is at most 240 characters");
+    expect((await call(app, id, "save_to_library", keep)).content[0]!.text).toContain("evidence-board is version 1");
+    const found = await call(app, id, "library", { kind: "effect", query: "board" });
+    expect(found.content[0]!.text).toBe("- evidence-board [evidence board]: A paper board the camera glides across. To change it: PHOTOS, CAM keys and TEXTS at the top.");
+    expect((await call(app, id, "library", { kind: "effect", query: "whoosh" })).content[0]!.text).toContain('No effects match "whoosh"');
+    expect((await call(app, id, "library", { kind: "sound" })).content[0]!.text).toContain("No sounds");
+    // Brought into a project as its own folder.
+    expect((await call(app, id, "use_from_library", { kind: "effect", name: "evidence-board", as: "intro-board" })).isError).toBe(false);
     expect(fs.readFileSync(join(effects.folder(app.store, id, "intro-board"), "scene.html"), "utf8")).toBe("<p>board</p>");
-    expect((await call(app, id, "use_template", { template: "evidence-board", name: "intro-board" })).content[0]!.text).toContain("already");
-    expect((await call(app, id, "use_template", { template: "nothing", name: "other" })).content[0]!.text).toContain("no template nothing");
+    expect((await call(app, id, "use_from_library", { kind: "effect", name: "evidence-board", as: "intro-board" })).content[0]!.text).toContain("already");
+    // Put away ("delete it"): out of the list, unless asked for; back again.
+    await call(app, id, "archive_in_library", { kind: "effect", name: "evidence-board" });
+    expect((await call(app, id, "library", { kind: "effect" })).content[0]!.text).toContain("No effects");
+    expect((await call(app, id, "library", { kind: "effect", archived: true })).content[0]!.text).toContain("evidence-board (put away)");
+    await call(app, id, "archive_in_library", { kind: "effect", name: "evidence-board", archived: false });
+    expect((await call(app, id, "library", { kind: "effect" })).content[0]!.text).toContain("- evidence-board [");
   } finally {
     cleanup();
   }
 });
 
-test("a teacher's version of the agent's text is what Bodycam HQ's agent reads from its next turn, and only there", async () => {
-  const { app, cleanup, id } = hq("v2-skills");
+test("what the agent remembers: a line or two each, the global skill first and never put away, in Bodycam HQ's instructions alone", async () => {
+  const { app, cleanup, id } = hq("v2-memory");
   try {
     await app.store.update(id, "test", (project) => {
       project.hq = true;
     });
-    const before = await call(app, id, "skill_text", { path: "hq/notes.md" });
-    expect(before.content[0]!.text).toContain("(the release's)");
-    expect((await call(app, id, "skill_text", { path: "../secrets.md" })).content[0]!.text).toContain("is a file of agent/");
     accounts.signedInForTests(["edit.bodycam"]);
-    expect((await call(app, id, "save_skill", { path: "hq/notes.md", text: "x", reason: "y" })).content[0]!.text).toContain("a teacher's to do");
+    expect((await call(app, id, "remember", { skill: "pins", text: "Pins are red.", reason: "Sphe" })).content[0]!.text).toContain("a teacher's to do");
     accounts.signedInForTests(["edit.bodycam", "agent.teach"]);
-    const saved = await call(app, id, "save_skill", { path: "hq/notes.md", text: "TAUGHT: every board has a red pin.", reason: "Sphe: pins are red" });
-    expect(saved.content[0]!.text).toContain("hq/notes.md is version 1");
-    const intro = await call(app, id, "save_skill", { path: "skills/intro.md", text: "---\ndescription: The intro.\n---\n\nTAUGHT intro: open on the board.", reason: "Sphe" });
-    expect(intro.isError).toBe(false);
+    expect((await call(app, id, "remember", { skill: "pins", text: "x".repeat(401), reason: "Sphe" })).content[0]!.text).toContain("at most 400 characters");
+    expect((await call(app, id, "remember", { skill: "global", text: "x", reason: "y" })).content[0]!.text).toContain("Edit's own");
+    expect((await call(app, id, "remember", { skill: "pins", text: "Board pins are red.", reason: "Sphe: pins are red" })).content[0]!.text).toContain("Remembered as pins (version 1)");
+    // The global skill is seeded where Edit is made (the mock stands in for accounts' setGlobalSkill).
+    mock.cloud.convex.library.set("skill:global", { key: "skill:global", kind: "skill", name: "global", current: 1, latest: 1, at: Date.now(), by: { name: "Edit" } });
+    mock.cloud.convex.libraryVersions.set("skill:global", [{ key: "skill:global", n: 1, text: "- Keep what you remember short.", at: Date.now(), by: { name: "Edit" } }]);
+    v2cloud.forgetSkills();
+    await v2cloud.refreshSkills();
+    expect(v2cloud.memories().map((one) => one.name)).toEqual(["global", "pins"]);
     const project = app.store.get(id)!.project;
-    // The HQ agent's instructions and skill read the teacher's.
-    expect(agentInstructions(project)).toContain("TAUGHT: every board has a red pin.");
-    expect(agentInstructions(project)).not.toContain("EVERYTHING ON SCREEN IS CODE YOU WRITE");
-    const skill = await call(app, id, "skill", { name: "intro" });
-    expect(skill.content[0]!.text).toBe("TAUGHT intro: open on the board.");
-    expect((await call(app, id, "skill_text", { path: "hq/notes.md" })).content[0]!.text).toContain("(a teacher's, from V2's cloud)");
-    // Every other project reads the release's.
+    const prompt = agentInstructions(project);
+    expect(prompt).toContain("WHAT YOU REMEMBER");
+    expect(prompt.indexOf("- Keep what you remember short.")).toBeLessThan(prompt.indexOf("[pins] Board pins are red."));
+    // None of the house's instructions or skills: its own, short.
+    expect(prompt).not.toContain("WORK FAST");
+    expect(prompt).not.toContain("- skill(");
+    expect(prompt).not.toContain("- add_sound_effect(");
+    expect((await call(app, id, "archive_in_library", { kind: "skill", name: "global" })).content[0]!.text).toContain("stays");
+    await call(app, id, "archive_in_library", { kind: "skill", name: "pins" });
+    await v2cloud.refreshSkills();
+    expect(v2cloud.memories().map((one) => one.name)).toEqual(["global"]);
+    // Every other project reads the house's, and none of this.
     const plain = app.store.create("Plain", { width: 1920, height: 1080, fps: 30 }).project;
-    expect(agentInstructions(plain)).not.toContain("TAUGHT");
-    const theirs = await call(app, plain.id, "skill", { name: "intro" });
-    expect(theirs.content[0]!.text).not.toContain("TAUGHT");
+    expect(agentInstructions(plain)).toContain("WORK FAST");
+    expect(agentInstructions(plain)).not.toContain("WHAT YOU REMEMBER");
   } finally {
     cleanup();
   }

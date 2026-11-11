@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { dispatch, HQ_TOOLS, INSTRUCTIONS, registerTool, targetProject, text, toolReference, TOOLS, toolsFor } from "../src/mcp/index.ts";
+import { dispatch, HQ_TOOLS, NOT_IN_HQ, INSTRUCTIONS, registerTool, targetProject, text, toolReference, TOOLS, toolsFor } from "../src/mcp/index.ts";
 import { handlerFor, unregisterTool, unregistered } from "../src/mcp/registry.ts";
 import { stableStringify } from "../src/stable.ts";
 import { fixtureHome } from "./helpers/home.ts";
@@ -30,9 +30,9 @@ test("tool_reference_is_one_short_line_per_tool", () => {
   // What every chat is shown; a Bodycam HQ project's (Edit V2) has the effects' three tools as well.
   const reference = toolReference(toolsFor(false));
   expect(reference.trimEnd().split("\n").length).toBe(TOOLS.length - HQ_TOOLS.length);
-  expect(toolReference(toolsFor(true)).trimEnd().split("\n").length).toBe(TOOLS.length);
-  // Bodycam HQ's eleven (effects, V2's cloud) in its chat alone.
-  expect(toolReference(toolsFor(true)).length).toBeLessThan(reference.length + 1_900);
+  expect(toolReference(toolsFor(true)).trimEnd().split("\n").length).toBe(TOOLS.length - NOT_IN_HQ.length);
+  // Bodycam HQ's own twelve (effects, sounds, V2's cloud), in its chat alone, whose prompt has none of the house's instructions.
+  expect(toolReference(toolsFor(true)).length).toBeLessThan(reference.length + 2_100);
   expect(reference).toContain("- apply_edit_plan(base_rev: integer, operations: array, ");
   // Commentary's posts, video references and shot checks, Edit Script and the team's effects, came in Oct 26;
   // read_upload (any file dropped in, Oct 31) one short line more, note_lesson (the lessons inbox, Nov 1) another,
@@ -45,7 +45,7 @@ test("tool_reference_is_one_short_line_per_tool", () => {
 });
 
 test("every tool takes project_id; the instructions list the skills", () => {
-  expect(TOOLS.length).toBe(113);
+  expect(TOOLS.length).toBe(114);
   for (const tool of TOOLS) {
     expect(tool.inputSchema.type).toBe("object");
     expect(tool.inputSchema.properties.project_id).toEqual({

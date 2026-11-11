@@ -726,6 +726,101 @@ function fft(re: Float64Array, im: Float64Array): void {
   }
 }
 
+// ---------------------------------------------------------------- Sounds as code
+
+/** A sound's page: `window.sound = { render(rate) }` answering its samples, a Float32Array a channel (or an AudioBuffer). */
+export const SOUND_ENTRY = "sound.html";
+const SOUND_RATE = 48_000;
+const MOST_SOUND_S = 60;
+
+/**
+ * A sound effect made from its code (Sphe, Nov 11: sound effects "stored
+ * separately as code", made by the agent rather than taken from the house's):
+ * the folder's sound.html run in the Chrome Edit drives, shut in as an effect's
+ * page is, its samples written as a WAV beside the project's media and put
+ * among them, in place of the one made before so the clips playing it play the
+ * new sound.
+ */
+export async function makeSound(app: App, projectId: string, name: string): Promise<{ media: string; duration: number }> {
+  const live = app.store.get(projectId);
+  if (live === null) throw new Error("no such project");
+  const dir = folder(app.store, projectId, name);
+  if (!fs.existsSync(join(dir, SOUND_ENTRY))) throw new Error(`effects/${name}/ has no ${SOUND_ENTRY}: write it, with window.sound = { render(rate) } answering a Float32Array a channel (or an AudioBuffer)`);
+  const token = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const url = `http://${seams.broll.pageHost(app)}${addressOf(projectId, name)}${SOUND_ENTRY}?sound=${token}`;
+  const made = await inChrome(640, 360, async (page) => {
+    await load(page, url, token, name);
+    return page.evaluate<{ rate: number; channels: string[] } | { error: string }>(
+      `(async () => {
+        const sound = window.sound;
+        if (!sound || typeof sound.render !== "function") return { error: "The page has no window.sound = { render(rate) }." };
+        let channels = await sound.render(${SOUND_RATE});
+        if (typeof AudioBuffer !== "undefined" && channels instanceof AudioBuffer) { const buffer = channels; channels = Array.from({ length: buffer.numberOfChannels }, (_, at) => buffer.getChannelData(at)); }
+        if (channels instanceof Float32Array) channels = [channels];
+        if (!Array.isArray(channels) || channels.length === 0 || !channels.every((one) => one instanceof Float32Array)) return { error: "render(rate) must answer a Float32Array a channel (or an AudioBuffer)." };
+        if (channels[0].length === 0) return { error: "render(rate) answered no samples." };
+        if (channels[0].length > ${MOST_SOUND_S * SOUND_RATE}) return { error: "A sound is at most ${MOST_SOUND_S} s." };
+        const encode = (samples) => { const bytes = new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength); let out = ""; for (let at = 0; at < bytes.length; at += 32768) out += String.fromCharCode.apply(null, bytes.subarray(at, at + 32768)); return btoa(out); };
+        return { rate: ${SOUND_RATE}, channels: channels.slice(0, 2).map(encode) };
+      })()`,
+      90_000,
+    );
+  });
+  if ("error" in made) throw new Error(`${name}: ${made.error}`);
+  const channels = made.channels.map((one) => {
+    const bytes = Buffer.from(one, "base64");
+    return new Float32Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 4));
+  });
+  const left = channels[0]!;
+  const right = channels[1] ?? left;
+  const frames = left.length;
+  // 16-bit PCM, stereo, at the rate it was made.
+  const wav = Buffer.alloc(44 + frames * 4);
+  wav.write("RIFF", 0);
+  wav.writeUInt32LE(36 + frames * 4, 4);
+  wav.write("WAVEfmt ", 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(2, 22);
+  wav.writeUInt32LE(made.rate, 24);
+  wav.writeUInt32LE(made.rate * 4, 28);
+  wav.writeUInt16LE(4, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write("data", 36);
+  wav.writeUInt32LE(frames * 4, 40);
+  const clamp = (value: number) => Math.max(-32768, Math.min(32767, Math.round((Number.isFinite(value) ? value : 0) * 32767)));
+  for (let at = 0; at < frames; at++) {
+    wav.writeInt16LE(clamp(left[at]!), 44 + at * 4);
+    wav.writeInt16LE(clamp(right[at] ?? 0), 46 + at * 4);
+  }
+  const out = join(app.store.uploadsDir(projectId), "effect-sounds", `${name}-${fingerprint([wav.toString("base64")])}.wav`);
+  fs.mkdirSync(join(app.store.uploadsDir(projectId), "effect-sounds"), { recursive: true });
+  writeAtomic(out, wav);
+  const probe = await probeFile(out);
+  // The sound made before: the same media plays the new one.
+  const before = live.project.media.find((media) => media.kind === "audio" && media.name === name && media.path.includes("effect-sounds"));
+  if (before !== undefined) {
+    await app.store.update(projectId, "agent", (project) => {
+      const media = project.media.find((one) => one.id === before.id);
+      if (media === undefined) return;
+      media.path = out;
+      media.duration = probe.duration;
+      media.has_audio = true;
+      delete media.cloud;
+    });
+    app.media.ensure(out, probe);
+    return { media: before.id, duration: probe.duration };
+  }
+  const [, added, errors] = await importPaths(app, projectId, [out], false, "agent");
+  const id = added[0];
+  if (id === undefined) throw new Error(errors.join("; "));
+  await app.store.update(projectId, "agent", (project) => {
+    const media = project.media.find((one) => one.id === id);
+    if (media !== undefined) media.name = name;
+  });
+  return { media: id, duration: probe.duration };
+}
+
 /** The effects a project's timeline shows, by the clips of their media. */
 export function onTimeline(project: Project): string[] {
   const names: string[] = [];

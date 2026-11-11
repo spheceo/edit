@@ -516,7 +516,7 @@ async function convex(body: Record<string, unknown>, env: CloudEnv, found: Calle
     body.args = actor === null ? args : { ...args, actor };
   }
   // Who set something aside on Home, noted or closed a lesson, or left a note on an edit, comes from the token too.
-  if (body.path === "edit:setLater" || body.path === "edit:noteLesson" || body.path === "edit:closeLesson" || body.path === "edit:addNote" || body.path === "edit:saveLibraryVersion" || body.path === "edit:setLibraryCurrent") {
+  if (body.path === "edit:setLater" || body.path === "edit:noteLesson" || body.path === "edit:closeLesson" || body.path === "edit:addNote" || body.path === "edit:saveLibraryVersion" || body.path === "edit:setLibraryCurrent" || body.path === "edit:archiveLibrary") {
     const { actor: _sent, ...args } = (body.args ?? {}) as Record<string, unknown>;
     const actor = actorOf(found);
     body.args = actor === null ? args : { ...args, actor };

@@ -319,7 +319,7 @@ export class ConvexMock {
   /** Home's Later (mamagi's editLater), by key. */
   readonly later = new Map<string, { key: string; until?: number; done?: boolean; at: number; by: { sub: string; name: string; picture?: string } }>();
   /** Edit V2's cloud (mamagi's editLibrary and editLibraryVersions), as accounts' convex/edit.ts keeps them. */
-  readonly library = new Map<string, { key: string; kind: string; projectId?: string; name: string; current: number; latest: number; note?: string; at: number; by: { name: string } }>();
+  readonly library = new Map<string, { key: string; kind: string; projectId?: string; name: string; current: number; latest: number; note?: string; brief?: string; category?: string; archived?: boolean; at: number; by: { name: string } }>();
   readonly libraryVersions = new Map<string, { key: string; n: number; files?: unknown[]; text?: string; reason?: string; from?: unknown; source?: string; at: number; by: { name: string } }[]>();
   /** The lessons inbox (mamagi's editLessons), by id, in the order noted. */
   readonly lessons = new Map<string, Record<string, unknown>>();
@@ -419,8 +419,8 @@ export class ConvexMock {
       case "listProjects":
         return [...this.projects.values()].sort((a, b) => b.updatedAt - a.updatedAt).map((row) => this.card(row));
       case "listLibrary": {
-        const rows = [...this.library.values()].filter((row) => (args.projectId !== undefined ? row.projectId === args.projectId : row.kind === args.kind));
-        return rows.map((row) => ({ ...row, projectId: row.projectId ?? null, note: row.note ?? null }));
+        const rows = [...this.library.values()].filter((row) => (args.projectId !== undefined ? row.projectId === args.projectId : row.kind === args.kind) && (args.archived === true || row.archived !== true));
+        return rows.map((row) => ({ ...row, projectId: row.projectId ?? null, note: row.note ?? null, brief: row.brief ?? null, category: row.category ?? null, archived: row.archived === true }));
       }
       case "libraryVersions":
         return [...(this.libraryVersions.get(String(args.key)) ?? [])].reverse().map((row) => this.shownVersion(row, args.text === true));
@@ -443,9 +443,16 @@ export class ConvexMock {
         this.libraryVersions.set(key, all);
         const current = args.keep === true && item !== undefined ? item.current : n;
         const projectId = kind === "effect" ? key.slice("effect:".length, key.indexOf("/")) : undefined;
-        const note = typeof args.note === "string" ? args.note : item?.note;
-        this.library.set(key, { key, kind, ...(projectId !== undefined ? { projectId } : {}), name: String(args.name), current, latest: n, ...(note !== undefined ? { note } : {}), at: this.now(), by });
+        const kept = (field: "note" | "brief" | "category") => (typeof args[field] === "string" ? { [field]: args[field] as string } : item?.[field] !== undefined ? { [field]: item[field] } : {});
+        this.library.set(key, { key, kind, ...(projectId !== undefined ? { projectId } : {}), name: String(args.name), current, latest: n, ...kept("note"), ...kept("brief"), ...kept("category"), at: this.now(), by });
         return { key, n, current, made: true };
+      }
+      case "archiveLibrary": {
+        const item = this.library.get(String(args.key));
+        if (item === undefined) throw new Fail("invalid", `no ${String(args.key)}.`);
+        if (args.archived === true) item.archived = true;
+        else delete item.archived;
+        return { key: item.key, archived: args.archived === true };
       }
       case "setLibraryCurrent": {
         const item = this.library.get(String(args.key));

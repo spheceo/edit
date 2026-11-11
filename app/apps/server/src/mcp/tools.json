@@ -3713,54 +3713,104 @@
     "name": "restore_effect"
   },
   {
-    "description": "The effect templates in V2's cloud (Bodycam HQ). Ready effects every project can start from, each with when to use it: look here before writing a kind of graphic from nothing.",
+    "description": "Search V2's cloud for an effect or a sound to start from (Bodycam HQ). Each comes with its category, when to use it and a brief on how to change it; only what's in use, unless you ask for what was put away. Look here before writing one from nothing.",
     "inputSchema": {
       "properties": {
-        "project_id": {
-          "description": "Defaults to the project open in the UI.",
-          "type": "string"
-        }
-      },
-      "required": [],
-      "type": "object"
-    },
-    "name": "templates"
-  },
-  {
-    "description": "Start an effect from a template (Bodycam HQ). The template's files become the new effect's folder, and you change them from there (its pictures, words and timing are the template's own until you do).",
-    "inputSchema": {
-      "properties": {
-        "name": {
-          "description": "The new effect's folder name under effects/ (lower-case letters, digits and hyphens).",
+        "archived": {
+          "description": "true: what was put away too.",
+          "type": "boolean"
+        },
+        "kind": {
+          "description": "effect (a graphic) or sound.",
+          "enum": [
+            "effect",
+            "sound"
+          ],
           "type": "string"
         },
         "project_id": {
           "description": "Defaults to the project open in the UI.",
           "type": "string"
         },
-        "template": {
-          "description": "The template's name (templates lists them).",
+        "query": {
+          "description": "Words to find (name, category, note); none lists them all.",
           "type": "string"
         }
       },
       "required": [
-        "template",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "name": "library"
+  },
+  {
+    "description": "Bring an effect or a sound from V2's cloud into this project (Bodycam HQ). Its files become a folder of yours (effects/<as>/) to place or change; a sound then needs make_sound.",
+    "inputSchema": {
+      "properties": {
+        "as": {
+          "description": "The folder's name here (default: its name).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "effect (a graphic) or sound.",
+          "enum": [
+            "effect",
+            "sound"
+          ],
+          "type": "string"
+        },
+        "name": {
+          "description": "Its name in the library.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        },
+        "version": {
+          "description": "An older version (default the one in use).",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
         "name"
       ],
       "type": "object"
     },
-    "name": "use_template"
+    "name": "use_from_library"
   },
   {
-    "description": "Keep an effect as a template for every project (a teacher's; Bodycam HQ). Or as a template's next version; only when the person asks for it.",
+    "description": "Keep an effect or a sound of this project's in V2's cloud for every project, or as its next version (a teacher's; Bodycam HQ). Only when the person says to keep it or use it from now on.",
     "inputSchema": {
       "properties": {
+        "as": {
+          "description": "Its name in the library (default: the folder's).",
+          "type": "string"
+        },
+        "brief": {
+          "description": "How to change it without making it again (its settings at the top), in a line or two.",
+          "type": "string"
+        },
+        "category": {
+          "description": "What kind of thing it is, a word or two (evidence board, whoosh).",
+          "type": "string"
+        },
+        "kind": {
+          "description": "effect (a graphic) or sound.",
+          "enum": [
+            "effect",
+            "sound"
+          ],
+          "type": "string"
+        },
         "name": {
-          "description": "The effect: its folder's name under effects/.",
+          "description": "Its folder here (effects/<name>/).",
           "type": "string"
         },
         "note": {
-          "description": "When to use it, in a sentence.",
+          "description": "When to use it, in a line.",
           "type": "string"
         },
         "project_id": {
@@ -3768,27 +3818,39 @@
           "type": "string"
         },
         "reason": {
-          "description": "Why, in the person's words.",
-          "type": "string"
-        },
-        "template": {
-          "description": "The template's name (default: the effect's).",
+          "description": "What the person said, in their words.",
           "type": "string"
         }
       },
       "required": [
+        "kind",
         "name",
-        "note"
+        "category",
+        "note",
+        "brief"
       ],
       "type": "object"
     },
-    "name": "save_template"
+    "name": "save_to_library"
   },
   {
-    "description": "A file of what you're taught, whole, as it is now (Bodycam HQ). agent/'s path (instructions.md, hq/notes.md, skills/<name>.md, styles/bodycam/walkthrough.md…), frontmatter and all: a teacher's newest version from V2's cloud, else the release's.",
+    "description": "Put an effect, a sound or a skill away in V2's cloud, or back (a teacher's; Bodycam HQ). What the person means by deleting one: it leaves every list, its versions kept.",
     "inputSchema": {
       "properties": {
-        "path": {
+        "archived": {
+          "description": "false brings it back (default true).",
+          "type": "boolean"
+        },
+        "kind": {
+          "description": "effect, sound or skill.",
+          "enum": [
+            "effect",
+            "sound",
+            "skill"
+          ],
+          "type": "string"
+        },
+        "name": {
           "type": "string"
         },
         "project_id": {
@@ -3797,39 +3859,61 @@
         }
       },
       "required": [
-        "path"
+        "kind",
+        "name"
       ],
       "type": "object"
     },
-    "name": "skill_text"
+    "name": "archive_in_library"
   },
   {
-    "description": "Save a new version of a file of what you're taught (a teacher's; Bodycam HQ). The whole file, as skill_text gave it with the change made, kept in V2's cloud: every Bodycam HQ agent reads it from its next turn.",
+    "description": "Keep something you've been told to remember, or judge worth remembering, as one of your skills in V2's cloud (a teacher's; Bodycam HQ). A line or two at most, in the person's words; the same name replaces it.",
     "inputSchema": {
       "properties": {
-        "path": {
-          "type": "string"
-        },
         "project_id": {
           "description": "Defaults to the project open in the UI.",
           "type": "string"
         },
         "reason": {
-          "description": "What the teacher asked, in their words.",
+          "description": "What the person said.",
+          "type": "string"
+        },
+        "skill": {
+          "description": "Its name: lower-case words with hyphens (pins-are-red).",
           "type": "string"
         },
         "text": {
-          "description": "The whole file.",
+          "description": "What to remember, at most 400 characters.",
           "type": "string"
         }
       },
       "required": [
-        "path",
+        "skill",
         "text",
         "reason"
       ],
       "type": "object"
     },
-    "name": "save_skill"
+    "name": "remember"
+  },
+  {
+    "description": "Make a sound effect from its code (Bodycam HQ): the folder's sound.html is rendered to a WAV and put among the project's media, or replaces the one made before. Answers its media id and length to place as an audio clip.",
+    "inputSchema": {
+      "properties": {
+        "name": {
+          "description": "Its folder under effects/.",
+          "type": "string"
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "make_sound"
   }
 ]

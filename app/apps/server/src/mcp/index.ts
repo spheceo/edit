@@ -19,7 +19,7 @@ import { handlerFor, registerTool, text, TOOLS, toolsFor, type Content } from ".
 
 export { INSTRUCTIONS } from "./instructions.ts";
 export { toolReference } from "./reference.ts";
-export { HQ_TOOLS, image, registerTool, text, TOOLS, toolsFor, type Content, type ToolCall, type ToolHandler } from "./registry.ts";
+export { HQ_TOOLS, image, NOT_IN_HQ, registerTool, text, TOOLS, toolsFor, type Content, type ToolCall, type ToolHandler } from "./registry.ts";
 export { stableStringify } from "../stable.ts";
 
 /** Who agent edits come from (clients skip their own echo by it). */

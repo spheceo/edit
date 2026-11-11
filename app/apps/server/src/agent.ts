@@ -22,14 +22,8 @@ import * as jobs from "./jobs.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
-import { HQ_NOTES, instructionsOf, parse } from "./agent_text.ts";
+import { HQ_NOTES } from "./agent_text.ts";
 import * as v2cloud from "./v2_cloud.ts";
-
-/** Bodycam HQ's text from V2's cloud, where a teacher has saved a version of agent/`path` (else null, the release's). */
-function taught(path: string, read: (text: string) => string): string | null {
-  const text = v2cloud.skillText(path);
-  return text === null ? null : read(text);
-}
 import * as effects from "./effects.ts";
 import { INSTRUCTIONS, toolReference, toolsFor } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
@@ -1850,12 +1844,10 @@ class ClaudeTurn {
 
 /** The developer instructions every turn carries: who the agent is, how to work fast, the house style, every tool on one line. */
 export function agentInstructions(project: Pick<Project, "name" | "style" | "settings" | "hq">): string {
+  if (project.hq === true) return hqInstructions(project);
   const { settings } = project;
-  const hq = project.hq === true;
   // A video made the new way (effects.ts): its agent also writes code, in the project's effects folder and nowhere else.
-  const hands = hq
-    ? "Edit through the `edit` tools, and write this video's graphics as code with your file tools (Read, Write, Edit, Glob, Grep), which work only in your working directory, the project's effects folder; you have no shell. "
-    : "Edit only through the `edit` tools; you have no shell or files. ";
+  const hands = "Edit only through the `edit` tools; you have no shell or files. ";
   const waiting = "Slow tools (watch_footage, caption_speakers, map_view, export) answer when they're done: start them as early as their inputs allow and never call one again to check on it. ";
   const tools = "The edit tools (call them directly; every one is listed here)";
   return (
@@ -1865,7 +1857,27 @@ export function agentInstructions(project: Pick<Project, "name" | "style" | "set
     "Independent tool calls (lookups, renders) can go in one step, side by side. " +
     waiting +
     "When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. When asked to resume, recover or finish a partially edited/imported project, load resume-edit first and preserve completed work. For other requests, load the skill for the part you're working on (see SKILLS). " +
-    `Keep replies short: say what you changed and where (timecodes).\n\n${hq ? taught("instructions.md", instructionsOf) ?? INSTRUCTIONS : INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}${hq ? `\n\n${taught("hq/notes.md", (text) => parse(text).body) ?? HQ_NOTES}` : ""}\n\n${tools}:\n${toolReference(toolsFor(hq))}`
+    `Keep replies short: say what you changed and where (timecodes).\n\n${INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}\n\n${tools}:\n${toolReference(toolsFor(false))}`
+
+  );
+}
+
+/**
+ * Bodycam HQ's (Edit V2): short, so its context stays clear (Sphe, Nov 11:
+ * "we do not want to cloud the context of the agents"). Who it is and what
+ * it works with, how an effect and a sound work (agent/hq/notes.md), and what
+ * it remembers from V2's cloud (the global skill first): none of the house's
+ * instructions or skills, which it makes for itself as it's taught.
+ */
+function hqInstructions(project: Pick<Project, "name" | "settings">): string {
+  const { settings } = project;
+  const remembered = v2cloud.memories();
+  const memory = remembered.length === 0 ? "" : `\n\nWHAT YOU REMEMBER (V2's cloud; keep it short, as it says):\n${remembered.map((one) => (one.name === v2cloud.GLOBAL ? one.text : `[${one.name}] ${one.text}`)).join("\n")}`;
+  return (
+    `You are the agent built into Edit, a video editor, making "${project.name}" (${settings.width}x${settings.height} at ${rateText(settings)} fps) with the person watching: what you change appears in their viewer at once. ` +
+    "You work through the `edit` tools and write code with your file tools (Read, Write, Edit, Glob, Grep), which work only in your working directory, the project's effects folder; you have no shell. " +
+    "Each tool call is a wait for them: do independent calls side by side. Reply in a line or two: what you made or changed, and where.\n\n" +
+    `${HQ_NOTES}${memory}\n\nThe edit tools (call them directly; every one is listed here):\n${toolReference(toolsFor(true))}`
   );
 }
 

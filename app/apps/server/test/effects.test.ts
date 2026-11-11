@@ -132,7 +132,8 @@ test("the agent's file tools are allowed in the effects folder and nowhere else,
     expect(made).toContain("THIS IS A BODYCAM HQ VIDEO");
     for (const tool of HQ_TOOLS) expect(made).toContain(`- ${tool}(`);
     expect(toolsFor(false).length).toBe(TOOLS.length - HQ_TOOLS.length);
-    expect(toolsFor(true)).toEqual(TOOLS);
+    // Every tool but the house's skills and sound effects (it has its own).
+    expect(toolsFor(true).map((tool) => tool.name)).toEqual(TOOLS.map((tool) => tool.name).filter((name) => name !== "skill" && name !== "add_sound_effect"));
   } finally {
     cleanup();
   }
@@ -395,3 +396,40 @@ test.skipIf(chrome === null)("an effect plays footage it's given: seeked to each
     cleanup();
   }
 }, 240_000);
+
+test.skipIf(chrome === null)("a sound made from its code: rendered in the page, a WAV among the project's media, made again in its place", async () => {
+  const { app, cleanup, id } = hq("effects-sound");
+  const router = buildRouter();
+  const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: async (request) => (await respond(app, router, request, null)) ?? new Response(null, { status: 404 }) });
+  try {
+    app.port = server.port!;
+    await app.store.update(id, "test", (project) => {
+      project.hq = true;
+    });
+    // Plain samples: half a second of 440 Hz.
+    write(app, id, "beep", {
+      "sound.html": `<script>window.sound = { render: (rate) => { const out = new Float32Array(rate / 2); for (let at = 0; at < out.length; at++) out[at] = 0.5 * Math.sin(2 * Math.PI * 440 * at / rate); return [out]; } };</script>`,
+    });
+    const first = await effects.makeSound(app, id, "beep");
+    expect(Math.abs(first.duration - 0.5)).toBeLessThan(0.02);
+    let media = app.store.get(id)!.project.media.find((one) => one.id === first.media)!;
+    expect(media).toMatchObject({ kind: "audio", name: "beep" });
+    const peak = Bun.spawnSync(["ffmpeg", "-hide_banner", "-i", media.path, "-af", "volumedetect", "-f", "null", "-"], { stderr: "pipe" }).stderr.toString();
+    expect(peak).toContain("max_volume: -6.0 dB");
+    // An OfflineAudioContext's buffer, a second long: the same media, the new sound.
+    write(app, id, "beep", {
+      "sound.html": `<script>window.sound = { render: async (rate) => { const context = new OfflineAudioContext(2, rate, rate); const tone = context.createOscillator(); tone.connect(context.destination); tone.start(); return context.startRendering(); } };</script>`,
+    });
+    const again = await effects.makeSound(app, id, "beep");
+    expect(again.media).toBe(first.media);
+    media = app.store.get(id)!.project.media.find((one) => one.id === first.media)!;
+    expect(Math.abs(media.duration - 1)).toBeLessThan(0.02);
+    // A page with no sound says so.
+    write(app, id, "silent", { "sound.html": `<p>nothing</p>` });
+    await expect(effects.makeSound(app, id, "silent")).rejects.toThrow("no window.sound");
+    await expect(effects.makeSound(app, id, "nothing-here")).rejects.toThrow("has no sound.html");
+  } finally {
+    await server.stop(true);
+    cleanup();
+  }
+}, 120_000);

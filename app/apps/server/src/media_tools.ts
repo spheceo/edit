@@ -53,11 +53,16 @@ function live(app: App, id: string) {
   return found;
 }
 
-async function listLibrary({ app, args }: ToolCall): Promise<Content[]> {
+/** Bodycam HQ (Edit V2) makes its own sound effects as code (Sphe, Nov 11): the house's are its music alone. */
+const hqOf = (app: ToolCall["app"], projectId: string) => app.store.get(projectId)?.project.hq === true;
+
+async function listLibrary({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const listing = await (app.library as library.Library).list(bool(args.refresh) ?? false);
-  let out = "The team's sound library (Google Drive). Place one with add_from_library {id}.\n";
+  const hq = hqOf(app, projectId);
+  let out = hq ? "The team's music (Google Drive); sound effects you make yourself as code (make_sound). Place one with add_from_library {id}.\n" : "The team's sound library (Google Drive). Place one with add_from_library {id}.\n";
   let heading: [string, string] | null = null;
   for (const sound of listing.sounds) {
+    if (hq && sound.kind !== "music") continue;
     if (heading === null || heading[0] !== sound.kind || heading[1] !== sound.category) {
       heading = [sound.kind, sound.category];
       out += `\n${sound.kind === "music" ? "Music" : "Sound effects"} / ${sound.category}:\n`;
@@ -74,6 +79,9 @@ const SHARP = /shutter|camera|click|impact|\bhit\b|boom|thud|slam|stinger/iu;
 async function addFromLibrary({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const soundId = typeof args.id === "string" ? args.id : null;
   if (soundId === null) throw new Error("id is required");
+  if (hqOf(app, projectId) && (await (app.library as library.Library).list(false)).sounds.find((one) => one.id === soundId)?.kind !== "music") {
+    throw new Error("A Bodycam HQ video makes its sound effects itself, as code: write one (sound.html) and make_sound it, or bring one from V2's cloud (library kind sound). The library here is its music.");
+  }
   const times = seams.editing.soundTimes(app.store, projectId, args);
   const [mediaId, sound] = await library.importSound(app, projectId, soundId, ORIGIN);
   const given = num(args.seconds);

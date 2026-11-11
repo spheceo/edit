@@ -5,7 +5,15 @@
 //
 //     effect:<project>/<name>   a project's coded effect: its folder's files at each settled version
 //     template:<name>           an effect every project can start from (a teacher's to change)
-//     skill:<path>              the agent's text at agent/<path>, read over the release's (a teacher's)
+//     sound:<name>              a sound effect as code every project can start from (a teacher's)
+//     skill:<name>              something the agent was told to remember, a line or two (a teacher's);
+//                               skill:global, the one every agent has, is Edit's own (accounts' setGlobalSkill)
+//
+// Each template and sound carries a category to search by, a note (when to
+// use it) and a brief (how to change it without making it again). Put away
+// ("delete" it), an item leaves every list unless asked for, its versions
+// kept: what the agent sees stays short (Sphe, Nov 11: with many projects
+// over time the agents "are going to get quite clouded").
 //
 // The versions and pointers are mamagi's (edit:listLibrary, libraryVersions,
 // libraryVersion, saveLibraryVersion, setLibraryCurrent; accounts'
@@ -24,7 +32,7 @@ import * as diag from "./diag.ts";
 import { granted } from "./kinds.ts";
 import * as relay from "./relay.ts";
 
-export type Kind = "effect" | "template" | "skill";
+export type Kind = "effect" | "template" | "sound" | "skill";
 
 export interface File {
   /** Inside the effect's folder ("scene.html", "img/top.jpg"). */
@@ -41,6 +49,9 @@ export interface Item {
   current: number;
   latest: number;
   note: string | null;
+  brief: string | null;
+  category: string | null;
+  archived: boolean;
   at: number;
   by: { name: string } | null;
 }
@@ -70,12 +81,21 @@ export function teacher(): boolean {
 
 export const effectKey = (project: string, name: string) => `effect:${project}/${name}`;
 export const templateKey = (name: string) => `template:${name}`;
-export const skillKey = (path: string) => `skill:${path}`;
+export const soundKey = (name: string) => `sound:${name}`;
+export const skillKey = (name: string) => `skill:${name}`;
+/** The one skill every agent has: Edit's own, never put away. */
+export const GLOBAL = "global";
 
 const fileKey = (sha256: string) => `edit/library/sha256/${sha256}`;
 
-export async function list(kind: Exclude<Kind, "effect">): Promise<Item[]> {
-  return (await cloud.query("edit:listLibrary", { kind })) as Item[];
+/** One kind's items; those put away only with `archived`. */
+export async function list(kind: Exclude<Kind, "effect">, archived = false): Promise<Item[]> {
+  return (await cloud.query("edit:listLibrary", { kind, ...(archived ? { archived: true } : {}) })) as Item[];
+}
+
+/** Puts an item away (out of every list unless asked for, its versions kept), or back. */
+export async function archive(key: string, archived: boolean): Promise<void> {
+  await cloud.mutation("edit:archiveLibrary", { key, archived });
 }
 
 export async function projectEffects(project: string): Promise<Item[]> {
@@ -147,7 +167,7 @@ async function getFiles(files: File[], dir: string): Promise<void> {
  * up first, those already there not again. `source` names the code's version
  * (an effect's key): the same as the newest makes no new version.
  */
-export async function save(key: string, name: string, dir: string, options: { reason?: string; from?: { key: string; n: number }; source?: string; note?: string } = {}): Promise<{ n: number; made: boolean }> {
+export async function save(key: string, name: string, dir: string, options: { reason?: string; from?: { key: string; n: number }; source?: string; note?: string; brief?: string; category?: string } = {}): Promise<{ n: number; made: boolean }> {
   const files = await putFiles(dir);
   // The same files as the version in use (a version just brought back, saved again as it renders): not a new one.
   const now = await version(key).catch(() => null);
@@ -157,8 +177,8 @@ export async function save(key: string, name: string, dir: string, options: { re
 }
 
 /** A skill's next version (in use at once): a teacher's. */
-export async function saveSkill(path: string, text: string, reason: string): Promise<{ n: number }> {
-  return (await cloud.mutation("edit:saveLibraryVersion", { key: skillKey(path), name: path, text, reason })) as { n: number };
+export async function saveSkill(name: string, text: string, reason: string): Promise<{ n: number }> {
+  return (await cloud.mutation("edit:saveLibraryVersion", { key: skillKey(name), name, text, reason })) as { n: number };
 }
 
 /** An item's version `n` (else the one in use) put in `dir`; null when the item has none. */
@@ -169,44 +189,44 @@ export async function fetchInto(key: string, n: number | null, dir: string): Pro
   return found.version;
 }
 
-// ---------------------------------------------------------------- the agent's skills, over the release's
+// ---------------------------------------------------------------- the agent's skills: what it's been told to remember
 
-/** The skills a teacher has saved, by agent/ path, as last read; the release's text stands for the rest. */
-let skills = new Map<string, string>();
+/** The skills in V2's cloud (the global one first), as last read. */
+let skills: { name: string; text: string }[] = [];
 let readAt = 0;
 const SKILLS_FRESH_MS = 30_000;
 
-/** The cloud's text for agent/`path`, or null to read the release's. */
-export function skillText(path: string): string | null {
-  return skills.get(path) ?? null;
+/** What Bodycam HQ's agent remembers: the global skill, then the rest by name. */
+export function memories(): { name: string; text: string }[] {
+  return skills;
 }
 
-/** Reads the skills a teacher has saved, at most every 30 s (a turn's start asks): a failure keeps what was read before. */
+/** Reads the skills, at most every 30 s (a turn's start asks): a failure keeps what was read before. */
 export async function refreshSkills(): Promise<void> {
   if (!enabled() || Date.now() - readAt < SKILLS_FRESH_MS) return;
   readAt = Date.now();
   try {
     const items = await list("skill");
-    const next = new Map<string, string>();
+    const next: { name: string; text: string }[] = [];
     for (const item of items) {
       const found = await version(item.key);
       const text = found?.version.text;
-      if (typeof text === "string") next.set(item.name, text);
+      if (typeof text === "string" && text.trim() !== "") next.push({ name: item.name, text: text.trim() });
     }
-    skills = next;
+    skills = next.sort((a, b) => Number(b.name === GLOBAL) - Number(a.name === GLOBAL) || a.name.localeCompare(b.name));
   } catch (error) {
     diag.warn("library", `the agent's skills from the cloud: ${diag.messageOf(error)}`);
   }
 }
 
-/** The skills read again at the next ask (a teacher just saved one). */
+/** The skills read again at the next ask (one was just saved or put away). */
 export function forgetSkills(): void {
   readAt = 0;
 }
 
 /** Tests: the skills as given, read now. */
-export function useSkillsForTests(given: Record<string, string>): void {
-  skills = new Map(Object.entries(given));
+export function useSkillsForTests(given: { name: string; text: string }[]): void {
+  skills = given;
   readAt = Date.now();
 }
 

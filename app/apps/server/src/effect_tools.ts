@@ -6,7 +6,7 @@
 
 import type { App } from "./app.ts";
 import fs from "node:fs";
-import { releaseText } from "./agent_text.ts";
+import { join } from "node:path";
 import * as effects from "./effects.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import { fixed } from "./rust.ts";
@@ -112,72 +112,110 @@ async function restoreEffect({ app, args, projectId }: ToolCall): Promise<Conten
   return text(`${name} is version ${n} again (${when(restored.at)}${restored.reason ? `, ${restored.reason}` : ""}): the viewer plays it now and it renders by itself. The newer versions are kept; effect_versions lists them.`);
 }
 
-async function templates({ app, projectId }: ToolCall): Promise<Content[]> {
+/** A library kind as the agent names it: effect (a template) or sound. */
+function kindArg(value: unknown): "template" | "sound" {
+  if (value === "effect") return "template";
+  if (value === "sound") return "sound";
+  throw new Error('kind is effect or sound');
+}
+
+const keyOf = (kind: "template" | "sound", name: string) => (kind === "template" ? v2cloud.templateKey(name) : v2cloud.soundKey(name));
+
+/** A name the library takes: lower-case letters, digits and hyphens. */
+function libraryName(value: unknown, what: string): string {
+  if (typeof value !== "string" || !/^[a-z0-9][a-z0-9-]{0,59}$/.test(value)) throw new Error(`${what} is lower-case letters, digits and hyphens: "${String(value)}" isn't`);
+  return value;
+}
+
+async function library({ app, args, projectId }: ToolCall): Promise<Content[]> {
   named(app, projectId, { name: "-" });
   cloudOn();
-  const listed = await v2cloud.list("template");
-  if (listed.length === 0) return text("No templates yet: every effect is written from nothing until a teacher keeps one (save_template).");
-  return text(listed.map((one) => `- ${one.name} (version ${one.current}): ${one.note ?? "no note"}`).join("\n"));
+  const kind = kindArg(args.kind);
+  const words = typeof args.query === "string" ? args.query.toLowerCase().split(/\s+/).filter(Boolean) : [];
+  const listed = (await v2cloud.list(kind, args.archived === true)).filter((one) => {
+    const said = `${one.name} ${one.category ?? ""} ${one.note ?? ""}`.toLowerCase();
+    return words.every((word) => said.includes(word));
+  });
+  const what = kind === "template" ? "effects" : "sounds";
+  if (listed.length === 0) return text(words.length === 0 ? `No ${what} in V2's cloud yet: write one, and it's kept when the person says to.` : `No ${what} match "${String(args.query)}".`);
+  return text(listed.map((one) => `- ${one.name}${one.archived ? " (put away)" : ""} [${one.category ?? "no category"}]: ${one.note ?? ""}${one.brief ? ` To change it: ${one.brief}` : ""}`).join("\n"));
 }
 
-async function useTemplate({ app, args, projectId }: ToolCall): Promise<Content[]> {
-  const name = named(app, projectId, args);
+async function useFromLibrary({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  named(app, projectId, { name: "-" });
   cloudOn();
-  if (typeof args.template !== "string" || args.template === "") throw new Error("template is required: templates lists them");
-  const into = effects.folder(app.store, projectId, name);
-  if (fs.existsSync(into)) throw new Error(`there's an effect called ${name} already: name the new one something else`);
-  const from = await v2cloud.fetchInto(v2cloud.templateKey(args.template), null, into);
-  if (from === null) throw new Error(`no template ${args.template}: templates lists them`);
-  return text(`effects/${name}/ is template ${args.template} version ${from.n} (${from.files?.length ?? 0} files): change it from there, as any effect of yours, and look at it.`);
+  const kind = kindArg(args.kind);
+  const name = libraryName(args.name, "name");
+  const as = args.as === undefined ? name : libraryName(args.as, "as");
+  const into = effects.folder(app.store, projectId, as);
+  if (fs.existsSync(into)) throw new Error(`there's a folder called ${as} already: give another with as`);
+  const n = typeof args.version === "number" && Number.isInteger(args.version) ? args.version : null;
+  const from = await v2cloud.fetchInto(keyOf(kind, name), n, into);
+  if (from === null) throw new Error(`no ${kind === "template" ? "effect" : "sound"} ${name}${n === null ? "" : ` version ${n}`} in the library`);
+  return text(`effects/${as}/ is ${name} (version ${from.n}, ${from.files?.length ?? 0} files): yours to change.${kind === "sound" ? " make_sound renders it." : " Look at it, then add_effect."}`);
 }
 
-async function saveTemplate({ app, args, projectId }: ToolCall): Promise<Content[]> {
-  const name = named(app, projectId, args);
+async function saveToLibrary({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  named(app, projectId, { name: "-" });
   cloudOn();
-  teacherOnly("Keeping a template");
-  if (typeof args.note !== "string" || args.note.trim() === "") throw new Error("note is required: when to use it, in a sentence");
-  const template = typeof args.template === "string" && args.template !== "" ? args.template : name;
+  teacherOnly("Keeping it in the library");
+  const kind = kindArg(args.kind);
+  const name = libraryName(args.name, "name");
+  const as = args.as === undefined ? name : libraryName(args.as, "as");
+  const line = (field: string, most: number) => {
+    const value = args[field];
+    if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} is required`);
+    if (value.length > most) throw new Error(`${field} is at most ${most} characters: keep it short`);
+    return value.trim();
+  };
   const dir = effects.folder(app.store, projectId, name);
-  if (!fs.existsSync(dir)) throw new Error(`no effect ${name} here`);
-  const kept = await v2cloud.save(v2cloud.templateKey(template), template, dir, { note: args.note.trim(), ...(typeof args.reason === "string" && args.reason !== "" ? { reason: args.reason } : {}) });
-  return text(kept.made ? `Template ${template} is version ${kept.n} now, for every project.` : `Template ${template} is already exactly this (version ${kept.n}).`);
+  if (!fs.existsSync(join(dir, kind === "template" ? effects.ENTRY : effects.SOUND_ENTRY))) throw new Error(`effects/${name}/ has no ${kind === "template" ? effects.ENTRY : effects.SOUND_ENTRY}`);
+  const kept = await v2cloud.save(keyOf(kind, as), as, dir, { category: line("category", 40), note: line("note", 160), brief: line("brief", 240), ...(typeof args.reason === "string" && args.reason !== "" ? { reason: args.reason } : {}) });
+  return text(kept.made ? `${as} is version ${kept.n} in the library: what every project starts from.` : `${as} is already exactly this (version ${kept.n}).`);
 }
 
-/** agent/'s paths a teacher's version may replace: what the release has. */
-function knownPath(path: unknown): string {
-  if (typeof path !== "string" || releaseText(path) === null) throw new Error(`path is a file of agent/ the release has (instructions.md, hq/notes.md, skills/<name>.md, styles/<style>/walkthrough.md…): "${String(path)}" isn't`);
-  return path;
-}
-
-async function skillTextTool({ app, args, projectId }: ToolCall): Promise<Content[]> {
-  named(app, projectId, { name: "-" });
-  const path = knownPath(args.path);
-  if (v2cloud.enabled()) await v2cloud.refreshSkills();
-  const taught = v2cloud.skillText(path);
-  return text(`${taught === null ? "(the release's)" : "(a teacher's, from V2's cloud)"}\n${taught ?? releaseText(path)}`);
-}
-
-async function saveSkill({ app, args, projectId }: ToolCall): Promise<Content[]> {
+async function archiveInLibrary({ app, args, projectId }: ToolCall): Promise<Content[]> {
   named(app, projectId, { name: "-" });
   cloudOn();
-  teacherOnly("Changing what the agent is taught");
-  const path = knownPath(args.path);
-  if (typeof args.text !== "string" || args.text.trim() === "") throw new Error("text is required: the whole file");
-  if (typeof args.reason !== "string" || args.reason.trim() === "") throw new Error("reason is required: what the teacher asked, in their words");
-  const saved = await v2cloud.saveSkill(path, args.text, args.reason.trim());
+  teacherOnly("Putting it away");
+  const name = libraryName(args.name, "name");
+  if (args.kind === "skill" && name === v2cloud.GLOBAL) throw new Error("the global skill stays: it's Edit's own");
+  const key = args.kind === "skill" ? v2cloud.skillKey(name) : keyOf(kindArg(args.kind), name);
+  const archived = args.archived !== false;
+  await v2cloud.archive(key, archived);
+  if (args.kind === "skill") v2cloud.forgetSkills();
+  return text(archived ? `${name} is put away: out of every list, its versions kept (archived: false brings it back).` : `${name} is back.`);
+}
+
+async function remember({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  named(app, projectId, { name: "-" });
+  cloudOn();
+  teacherOnly("Remembering it for every Bodycam HQ agent");
+  const skill = libraryName(args.skill, "skill");
+  if (skill === v2cloud.GLOBAL) throw new Error("the global skill is Edit's own: give your own a name");
+  if (typeof args.text !== "string" || args.text.trim() === "") throw new Error("text is required");
+  if (args.text.length > 400) throw new Error(`at most 400 characters (this is ${args.text.length}): a line or two, in the person's words`);
+  if (typeof args.reason !== "string" || args.reason.trim() === "") throw new Error("reason is required: what the person said");
+  const saved = await v2cloud.saveSkill(skill, args.text.trim(), args.reason.trim());
   v2cloud.forgetSkills();
-  await v2cloud.refreshSkills().catch(() => {});
-  return text(`${path} is version ${saved.n} in V2's cloud: every Bodycam HQ agent reads it from its next turn.`);
+  return text(`Remembered as ${skill} (version ${saved.n}): every Bodycam HQ agent has it from its next turn.`);
+}
+
+async function makeSound({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  const name = named(app, projectId, args);
+  const made = await effects.makeSound(app, projectId, name);
+  return text(`${name} is media ${made.media}: ${fixed(made.duration, 2)} s. Place it as an audio clip; make_sound again after changing its code (the same media plays the new sound).`);
 }
 
 const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
   ["effect_versions", effectVersions],
   ["restore_effect", restoreEffect],
-  ["templates", templates],
-  ["use_template", useTemplate],
-  ["save_template", saveTemplate],
-  ["skill_text", skillTextTool],
-  ["save_skill", saveSkill],
+  ["library", library],
+  ["use_from_library", useFromLibrary],
+  ["save_to_library", saveToLibrary],
+  ["archive_in_library", archiveInLibrary],
+  ["remember", remember],
+  ["make_sound", makeSound],
   ["effect_footage", effectFootage],
   ["look_at_effect", lookAtEffect],
   ["add_effect", addEffect],

@@ -41,16 +41,20 @@ export const HQ_TOOLS: readonly string[] = [
   "effect_footage",
   "effect_versions",
   "restore_effect",
-  "templates",
-  "use_template",
-  "save_template",
-  "skill_text",
-  "save_skill",
+  "library",
+  "use_from_library",
+  "save_to_library",
+  "archive_in_library",
+  "remember",
+  "make_sound",
 ];
+
+/** What a Bodycam HQ chat isn't offered: the house's skills (it has its own) and its sound effects (it makes them as code). */
+export const NOT_IN_HQ: readonly string[] = ["skill", "add_sound_effect"];
 
 /** The tools a chat in a project is offered. */
 export function toolsFor(hq: boolean): Tool[] {
-  return hq ? TOOLS : TOOLS.filter((tool) => !HQ_TOOLS.includes(tool.name));
+  return hq ? TOOLS.filter((tool) => !NOT_IN_HQ.includes(tool.name)) : TOOLS.filter((tool) => !HQ_TOOLS.includes(tool.name));
 }
 
 // The skill tool's choices are the skills in agent/ (agent_text.ts), so a new

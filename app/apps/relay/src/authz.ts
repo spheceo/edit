@@ -74,7 +74,7 @@ export const EDIT_CALLS = new Map<string, string>([
   // versions with one in use (who saved one comes from the token; mamagi refuses a project's to who can't open it,
   // and a template's or a skill's to who isn't a teacher).
   ["edit:listLibrary", "query"], ["edit:libraryVersions", "query"], ["edit:libraryVersion", "query"],
-  ["edit:saveLibraryVersion", "mutation"], ["edit:setLibraryCurrent", "mutation"],
+  ["edit:saveLibraryVersion", "mutation"], ["edit:setLibraryCurrent", "mutation"], ["edit:archiveLibrary", "mutation"],
 ]);
 
 /** Calls that change a project, or read its notes (refused outside the caller's kinds). */

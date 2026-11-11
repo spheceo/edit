@@ -50,6 +50,11 @@ export const IDEA_CAPABILITIES = [
   { id: "ideas.bodycam", label: "Bodycam ideas", description: "Repackage bodycam cases (YouTube videos, articles) into titles and a thumbnail guide, send them to the Raw Channels board's Ideas - Sphe list, and make the changes reviewers ask for there.", group: "Ideas" },
 ];
 
+/** Edit V2 (Nov 11, Sphe: a "teacher" permission, admins have it by default): who teaches the agent, by changing its skills and the shared templates in V2's cloud. */
+export const TEACH_CAPABILITIES = [
+  { id: "agent.teach", label: "Teach the agent", description: "Change the in-app agent's skills and the shared effect templates in Edit V2's cloud. What a teacher saves is what every Mac's agent reads next.", group: "Teaching" },
+];
+
 /** Whether a capability id is one of the edit styles (voice-overs come with any of them). */
 export function isEditing(id: string): boolean {
   return id.startsWith("edit.");
@@ -71,13 +76,14 @@ export function manifest() {
       { id: CAPABILITIES.shorts, label: "Shorts", description: "9:16 YouTube Shorts: a video's highlights cut to 45–60 seconds, reframed, subtitled and scored.", group: "Kinds of video" },
       ...SCRIPT_CAPABILITIES,
       ...IDEA_CAPABILITIES,
+      ...TEACH_CAPABILITIES,
     ],
     presets: [
       { id: "subtitles", label: "Subtitles only", capabilities: [CAPABILITIES.subtitles] },
       { id: "editor", label: "Editor", capabilities: [CAPABILITIES.bodycam, CAPABILITIES.interrogation, CAPABILITIES.courtroom, CAPABILITIES.commentary, CAPABILITIES.horror, CAPABILITIES.shorts, CAPABILITIES.subtitles] },
       { id: "writer", label: "Script writer", capabilities: ["scripts.interrogation", "scripts.interrogation-compilation"] },
       { id: "ideas", label: "Repackager", capabilities: IDEA_CAPABILITIES.map((one) => one.id) },
-      { id: "full", label: "Everything", capabilities: [...Object.values(CAPABILITIES), ...SCRIPT_CAPABILITIES.map((one) => one.id), ...IDEA_CAPABILITIES.map((one) => one.id)] },
+      { id: "full", label: "Everything", capabilities: [...Object.values(CAPABILITIES), ...SCRIPT_CAPABILITIES.map((one) => one.id), ...IDEA_CAPABILITIES.map((one) => one.id), ...TEACH_CAPABILITIES.map((one) => one.id)] },
     ],
   };
 }

@@ -64,6 +64,8 @@ import * as relay from "./relay.ts";
 import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
+import * as v2cloud from "./v2_cloud.ts";
+import * as accounts from "./accounts.ts";
 
 import font0 from "../../../crates/edit-render/fonts/Geist-Regular.ttf" with { type: "file" };
 import font1 from "../../../crates/edit-render/fonts/Geist-Medium.ttf" with { type: "file" };
@@ -364,6 +366,8 @@ export function routes(router: Router<App>): void {
       const why = app.store.unavailable(project);
       if (why !== null) throw new ApiError(403, why);
       watch(app.store, project);
+      // An editor opening a project made on another computer: its effects' code comes down (the list follows by the watch).
+      void bringDown(app, project);
       return json({ effects: list(app.store, project) });
     })
     .get("/api/effects/{key}/{id}/{name}/{a}", file)
@@ -930,6 +934,41 @@ async function draw(app: App, render: Render): Promise<void> {
   }
   diag.record("effects", "render", Date.now() - started);
   diag.info("effects", `${project}: ${name} rendered (${render.frames} frames in ${((Date.now() - started) / 1000).toFixed(1)} s)`);
+  keepVersion(app, project, name, key);
+}
+
+/**
+ * Each settled version of an effect's code (the one just rendered) kept in
+ * V2's cloud as the effect's next version: its history, to go back through
+ * (`restore`), and its code for another computer's agent to carry on with.
+ * In the background; signed out, there's no cloud and nothing is kept.
+ */
+function keepVersion(app: App, project: string, name: string, key: string): void {
+  if (!v2cloud.enabled()) return;
+  void v2cloud
+    .save(v2cloud.effectKey(project, name), name, folder(app.store, project, name), { source: key, reason: "rendered" })
+    .catch((error: unknown) => diag.warn("effects", `${project}: ${name} wasn't kept in V2's cloud: ${diag.messageOf(error)}`));
+}
+
+/**
+ * The effects of a project's timeline whose code isn't on this computer (made
+ * on another), brought down from V2's cloud at the version in use, so its
+ * agent can see and change them, and the viewer play them live.
+ */
+export async function bringDown(app: App, project: string): Promise<string[]> {
+  const live = app.store.get(project);
+  if (live === null || live.project.hq !== true || !v2cloud.enabled()) return [];
+  const brought: string[] = [];
+  for (const media of live.project.media) {
+    const name = media.effect;
+    if (name === undefined || name === null || !NAME.test(name) || fs.existsSync(folder(app.store, project, name))) continue;
+    try {
+      if ((await v2cloud.fetchInto(v2cloud.effectKey(project, name), null, folder(app.store, project, name))) !== null) brought.push(name);
+    } catch (error) {
+      diag.warn("effects", `${project}: ${name} couldn't come down from V2's cloud: ${diag.messageOf(error)}`);
+    }
+  }
+  return brought;
 }
 
 /**
@@ -1040,5 +1079,23 @@ export function start(app: App): void {
     if (summary.hq !== true) continue;
     watch(app.store, summary.id);
     renderSoon(app, summary.id);
+  }
+  // Once the kept sign-in is back (a second or so in: before it, there's no cloud), what V2's cloud and this computer each lack.
+  void accounts
+    .tokenWhenReady()
+    .catch(() => null)
+    .then(async () => {
+      for (const summary of app.store.list()) {
+        if (summary.hq !== true) continue;
+        await bringDown(app, summary.id);
+        keepRendered(app, summary.id);
+      }
+    });
+}
+
+/** The effects already rendered from their code as it is kept in V2's cloud too, those from before it was (Nov 11) among them: what's there already isn't sent again. */
+function keepRendered(app: App, project: string): void {
+  for (const effect of needed(app.store, project)) {
+    if (effect.fresh && effect.current !== null) keepVersion(app, project, effect.name, effect.current.key);
   }
 }

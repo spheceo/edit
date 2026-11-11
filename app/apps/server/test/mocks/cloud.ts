@@ -318,6 +318,9 @@ export class ConvexMock {
   readonly files = new Map<string, { data: Uint8Array; contentType: string }>();
   /** Home's Later (mamagi's editLater), by key. */
   readonly later = new Map<string, { key: string; until?: number; done?: boolean; at: number; by: { sub: string; name: string; picture?: string } }>();
+  /** Edit V2's cloud (mamagi's editLibrary and editLibraryVersions), as accounts' convex/edit.ts keeps them. */
+  readonly library = new Map<string, { key: string; kind: string; projectId?: string; name: string; current: number; latest: number; note?: string; at: number; by: { name: string } }>();
+  readonly libraryVersions = new Map<string, { key: string; n: number; files?: unknown[]; text?: string; reason?: string; from?: unknown; source?: string; at: number; by: { name: string } }[]>();
   /** The lessons inbox (mamagi's editLessons), by id, in the order noted. */
   readonly lessons = new Map<string, Record<string, unknown>>();
   /** Convex's clock (leases), changeable by tests. */
@@ -406,11 +409,51 @@ export class ConvexMock {
     };
   }
 
+  private shownVersion(row: { key: string; n: number; files?: unknown[]; text?: string; reason?: string; from?: unknown; source?: string; at: number; by: { name: string } }, withText: boolean) {
+    return { key: row.key, n: row.n, files: row.files ?? null, ...(withText ? { text: row.text ?? null } : {}), reason: row.reason ?? null, from: row.from ?? null, source: row.source ?? null, at: row.at, by: row.by };
+  }
+
   private run(name: string, args: Record<string, unknown>, base: string): unknown {
     const projectId = String(args.projectId ?? "");
     switch (name) {
       case "listProjects":
         return [...this.projects.values()].sort((a, b) => b.updatedAt - a.updatedAt).map((row) => this.card(row));
+      case "listLibrary": {
+        const rows = [...this.library.values()].filter((row) => (args.projectId !== undefined ? row.projectId === args.projectId : row.kind === args.kind));
+        return rows.map((row) => ({ ...row, projectId: row.projectId ?? null, note: row.note ?? null }));
+      }
+      case "libraryVersions":
+        return [...(this.libraryVersions.get(String(args.key)) ?? [])].reverse().map((row) => this.shownVersion(row, args.text === true));
+      case "libraryVersion": {
+        const item = this.library.get(String(args.key));
+        if (item === undefined) return null;
+        const row = (this.libraryVersions.get(item.key) ?? []).find((one) => one.n === (typeof args.n === "number" ? args.n : item.current));
+        return row === undefined ? null : { item: { ...item, projectId: item.projectId ?? null, note: item.note ?? null }, version: this.shownVersion(row, true) };
+      }
+      case "saveLibraryVersion": {
+        const key = String(args.key);
+        const kind = key.slice(0, key.indexOf(":"));
+        const item = this.library.get(key);
+        if (item !== undefined && typeof args.latest === "number" && args.latest !== item.latest) throw new Fail("conflict", `${key} has a newer version (${item.latest}) than ${args.latest}.`);
+        const all = this.libraryVersions.get(key) ?? [];
+        if (item !== undefined && typeof args.source === "string" && all.at(-1)?.source === args.source) return { key, n: item.latest, current: item.current, made: false };
+        const n = (item?.latest ?? 0) + 1;
+        const by = { name: String((args.actor as { name?: string } | undefined)?.name ?? "Edit") };
+        all.push({ key, n, ...(args.files !== undefined ? { files: args.files as unknown[] } : {}), ...(typeof args.text === "string" ? { text: args.text } : {}), ...(typeof args.reason === "string" ? { reason: args.reason } : {}), ...(args.from !== undefined ? { from: args.from } : {}), ...(typeof args.source === "string" ? { source: args.source } : {}), at: this.now(), by });
+        this.libraryVersions.set(key, all);
+        const current = args.keep === true && item !== undefined ? item.current : n;
+        const projectId = kind === "effect" ? key.slice("effect:".length, key.indexOf("/")) : undefined;
+        const note = typeof args.note === "string" ? args.note : item?.note;
+        this.library.set(key, { key, kind, ...(projectId !== undefined ? { projectId } : {}), name: String(args.name), current, latest: n, ...(note !== undefined ? { note } : {}), at: this.now(), by });
+        return { key, n, current, made: true };
+      }
+      case "setLibraryCurrent": {
+        const item = this.library.get(String(args.key));
+        if (item === undefined) throw new Fail("invalid", `no ${String(args.key)}.`);
+        if (!(this.libraryVersions.get(item.key) ?? []).some((one) => one.n === args.n)) throw new Fail("invalid", `${item.key} has no version ${String(args.n)}.`);
+        item.current = Number(args.n);
+        return { key: item.key, current: item.current };
+      }
       case "listLater":
         return [...this.later.values()].map((row) => ({ key: row.key, until: row.until ?? null, done: row.done === true, at: row.at, by: { sub: row.by.sub, name: row.by.name, picture: row.by.picture ?? null } }));
       case "setLater": {

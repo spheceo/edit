@@ -79,11 +79,13 @@ export const SKILLS: readonly Skill[] = skillsIn("skills/").sort(
   (a, b) => Number(b.name === "edit-workflow") - Number(a.name === "edit-workflow") || a.name.localeCompare(b.name),
 );
 
+/** The core house style from instructions.md's text; `{{skills}}` is the SKILLS list. */
+export function instructionsOf(file: string): string {
+  return parse(file).body.replace("{{skills}}", SKILLS.map((skill) => `- ${skill.name}: ${skill.description}`).join("\n"));
+}
+
 /** The core house style; `{{skills}}` is the SKILLS list. */
-export const INSTRUCTIONS = parse(FILES["instructions.md"] ?? "").body.replace(
-  "{{skills}}",
-  SKILLS.map((skill) => `- ${skill.name}: ${skill.description}`).join("\n"),
-);
+export const INSTRUCTIONS = instructionsOf(FILES["instructions.md"] ?? "");
 
 /** Each style's own rules and skills, by the style's folder name. */
 export const STYLES: Record<string, { notes: string; skills: Skill[]; voice?: string }> = {};
@@ -131,6 +133,11 @@ export function thumbnailsGuide(name: string): string {
 
 /** What a video made the new way adds to the agent's instructions (agent/hq/notes.md): its graphics are effects it writes as code. */
 export const HQ_NOTES: string = parse(FILES["hq/notes.md"] ?? "").body;
+
+/** A file of agent/ as the release has it, whole (frontmatter and all), or null. */
+export function releaseText(path: string): string | null {
+  return FILES[path] ?? null;
+}
 
 /** Every file's path under agent/ (the test checks each one is used). */
 export const PATHS: readonly string[] = Object.keys(FILES);

@@ -76,6 +76,8 @@ import * as patches from "./patch.ts";
 import * as framePicks from "./frame_picks.ts";
 import * as progress from "./progress.ts";
 import * as styles from "./styles.ts";
+import { parse } from "./agent_text.ts";
+import * as v2cloud from "./v2_cloud.ts";
 import { asKept } from "./kept_hearing.ts";
 import type { Transcript } from "./transcribe.ts";
 
@@ -271,11 +273,21 @@ export const EDITING_TOOLS = TOOLS.map(([name]) => name);
 // ---------------------------------------------------------------------------
 // The tools
 
+/** A skill as a teacher saved it in V2's cloud (v2_cloud.ts), by its agent/ path: the style's own, its walkthrough, else the house's. */
+function taughtSkill(style: string, name: string): { name: string; body: string } | undefined {
+  for (const path of [`styles/${style}/skills/${name}.md`, ...(name === "walkthrough" ? [`styles/${style}/walkthrough.md`] : []), `skills/${name}.md`]) {
+    const taught = v2cloud.skillText(path);
+    if (taught !== null) return { name, body: parse(taught).body };
+  }
+  return undefined;
+}
+
 function skill({ app, args, projectId }: ToolCall): Content[] {
   const name = str(args.name);
   if (name === null) throw new Error("name is required");
-  const style = live(app, projectId).project.style;
-  const found = styles.skill(style, name);
+  const { style, hq } = live(app, projectId).project;
+  // Bodycam HQ (Edit V2) reads its skills from V2's cloud where a teacher has saved one, over the release's.
+  const found = (hq === true ? taughtSkill(style, name) : undefined) ?? styles.skill(style, name);
   if (found === undefined) throw new Error(`no skill ${name}; there are ${styles.skillNames(style).join(", ")}`);
   if (found.name === "edit-workflow") {
     // Who says each line takes the watcher a minute or two: by the subtitles stage it's cached.

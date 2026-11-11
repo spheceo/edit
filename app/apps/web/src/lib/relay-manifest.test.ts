@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import relay, { type Env } from "../../../relay/src/index";
-import { CAPABILITIES, ICON_SVG, IDEA_CAPABILITIES, manifest, SCRIPT_CAPABILITIES } from "../../../relay/src/manifest";
+import { CAPABILITIES, ICON_SVG, IDEA_CAPABILITIES, TEACH_CAPABILITIES, manifest, SCRIPT_CAPABILITIES } from "../../../relay/src/manifest";
 
 const ID = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;
 
@@ -33,7 +33,8 @@ describe("Edit's manifest", () => {
     expect(Object.values(CAPABILITIES).sort()).toEqual(["edit.bodycam", "edit.commentary", "edit.courtroom", "edit.horror", "edit.interrogation", "edit.shorts", "video.subtitles"]);
     expect(SCRIPT_CAPABILITIES.map((one) => one.id).sort()).toEqual(["review.lessons", "scripts.commentary", "scripts.courtroom", "scripts.courtroom-compilation", "scripts.foia", "scripts.foia-compilation", "scripts.interrogation", "scripts.interrogation-compilation"]);
     expect(IDEA_CAPABILITIES.map((one) => one.id)).toEqual(["ideas.interrogation", "ideas.bodycam"]);
-    expect(manifest().presets.map((one) => [one.id, one.capabilities.length])).toEqual([["subtitles", 1], ["editor", 7], ["writer", 2], ["ideas", 2], ["full", 17]]);
+    expect(TEACH_CAPABILITIES.map((one) => one.id)).toEqual(["agent.teach"]);
+    expect(manifest().presets.map((one) => [one.id, one.capabilities.length])).toEqual([["subtitles", 1], ["editor", 7], ["writer", 2], ["ideas", 2], ["full", 18]]);
     expect(ICON_SVG).toBe(fs.readFileSync(new URL("../../../../assets/brand/edit-icon.svg", import.meta.url), "utf8"));
   });
 

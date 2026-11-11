@@ -22,7 +22,14 @@ import * as jobs from "./jobs.ts";
 import * as reviewGuard from "./review_guard.ts";
 import { nowMs, writeAtomic } from "./files.ts";
 import { crashed, isBug } from "./guard.ts";
-import { HQ_NOTES } from "./agent_text.ts";
+import { HQ_NOTES, instructionsOf, parse } from "./agent_text.ts";
+import * as v2cloud from "./v2_cloud.ts";
+
+/** Bodycam HQ's text from V2's cloud, where a teacher has saved a version of agent/`path` (else null, the release's). */
+function taught(path: string, read: (text: string) => string): string | null {
+  const text = v2cloud.skillText(path);
+  return text === null ? null : read(text);
+}
 import * as effects from "./effects.ts";
 import { INSTRUCTIONS, toolReference, toolsFor } from "./mcp/index.ts";
 import { join, withExtension } from "./paths.ts";
@@ -1028,6 +1035,8 @@ export class Agents implements seams.AgentPanel {
     // with the file tools, each allowed there and nowhere else (checked against Claude Code 2.1.319, Nov 10: a write
     // or a read outside the folder is refused, with nothing asked), and what it writes is on screen as it's saved.
     const code = live.project.hq === true ? effects.workshop(this.store, projectOf(project)) : null;
+    // What a teacher has saved since, read before the turn's instructions are made.
+    if (code !== null) await v2cloud.refreshSkills();
     const options: claude.Options = {
       ...claude.baseOptions(binary, code ?? workspace),
       model: chat.model ?? this.turnModel(project, text),
@@ -1856,7 +1865,7 @@ export function agentInstructions(project: Pick<Project, "name" | "style" | "set
     "Independent tool calls (lookups, renders) can go in one step, side by side. " +
     waiting +
     "When the user asks you to start the edit or the editing workflow (in whatever words), load the edit-workflow skill and do the whole edit in that one turn, stage after stage, without stopping to ask; anything else in their message steers it. When asked to resume, recover or finish a partially edited/imported project, load resume-edit first and preserve completed work. For other requests, load the skill for the part you're working on (see SKILLS). " +
-    `Keep replies short: say what you changed and where (timecodes).\n\n${INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}${hq ? `\n\n${HQ_NOTES}` : ""}\n\n${tools}:\n${toolReference(toolsFor(hq))}`
+    `Keep replies short: say what you changed and where (timecodes).\n\n${hq ? taught("instructions.md", instructionsOf) ?? INSTRUCTIONS : INSTRUCTIONS}\n\n${seams.styles.instructions(project.style)}${hq ? `\n\n${taught("hq/notes.md", (text) => parse(text).body) ?? HQ_NOTES}` : ""}\n\n${tools}:\n${toolReference(toolsFor(hq))}`
   );
 }
 

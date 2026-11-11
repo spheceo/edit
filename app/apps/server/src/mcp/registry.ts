@@ -34,7 +34,19 @@ export interface Tool {
 export const TOOLS: Tool[] = declared as unknown as Tool[];
 
 /** The tools of coded effects (effects.ts): offered only in a project made the new way (`Project::hq`), so every other chat's list is what it was. */
-export const HQ_TOOLS: readonly string[] = ["look_at_effect", "add_effect", "effect_picture", "effect_footage"];
+export const HQ_TOOLS: readonly string[] = [
+  "look_at_effect",
+  "add_effect",
+  "effect_picture",
+  "effect_footage",
+  "effect_versions",
+  "restore_effect",
+  "templates",
+  "use_template",
+  "save_template",
+  "skill_text",
+  "save_skill",
+];
 
 /** The tools a chat in a project is offered. */
 export function toolsFor(hq: boolean): Tool[] {

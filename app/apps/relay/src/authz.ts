@@ -70,6 +70,11 @@ export const EDIT_CALLS = new Map<string, string>([
   // The team's own notes on an edit, left in Edit at the playhead for the agent (who left one comes from the token).
   ["edit:listNotes", "query"], ["edit:addNote", "mutation"], ["edit:editNote", "mutation"], ["edit:removeNote", "mutation"],
   ["edit:sendNotes", "mutation"], ["edit:resolveNote", "mutation"],
+  // Edit V2's cloud (the library): a project's coded effects, the templates and the agent's skills, each a list of
+  // versions with one in use (who saved one comes from the token; mamagi refuses a project's to who can't open it,
+  // and a template's or a skill's to who isn't a teacher).
+  ["edit:listLibrary", "query"], ["edit:libraryVersions", "query"], ["edit:libraryVersion", "query"],
+  ["edit:saveLibraryVersion", "mutation"], ["edit:setLibraryCurrent", "mutation"],
 ]);
 
 /** Calls that change a project, or read its notes (refused outside the caller's kinds). */
@@ -114,6 +119,8 @@ export const WRITABLE = [
   "edit/covers/", "edit/reviews/",
   // A long recording to be heard by link (transcribe_jobs.ts); the relay deletes it once heard.
   "edit/transcribe/",
+  // Edit V2's cloud: the library's files (effects' and templates'), each by its content (library.ts).
+  "edit/library/",
   REPORTS, IDEAS, THUMBNAILS,
 ];
 

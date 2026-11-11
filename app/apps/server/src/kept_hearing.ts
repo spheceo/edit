@@ -35,6 +35,8 @@ export const JOIN_MS = 6_000;
 export const LEFTOVER_MS = 2_000;
 /** Kept footage this much of its file is heard whole, as one request: joining it would save nothing. */
 export const WHOLE_SHARE = 0.85;
+/** A heard word this close to its stretch's cut (ms) may be cut off: the words heard before stand there. */
+const EDGE_MS = 80;
 /** Quiet between stretches joined into one recording, so no word runs from one into the next. */
 const GAP_S = 1;
 /** The joined recording's sound: 16 kHz mono 16-bit, 32,000 bytes a second. */
@@ -244,11 +246,21 @@ export function split(words: readonly Word[], spans: readonly Span[], lengths: r
  * two hearings, and naming (speakers.ts) and the watch give each its person.
  */
 export function merged(transcript: Transcript, spans: readonly Span[], words: readonly Word[][], keyterms: readonly string[], model: string): Transcript {
-  const inside = (at: number) => spans.some(([from, to]) => at * 1000 >= from && at * 1000 < to);
+  // A word the cut runs through ("there-" at a stretch's last instant) is half a word: the earlier words stand
+  // there, and Scribe's take over only between its first and last whole words (the Mac's check, Nov 11).
+  const whole = spans.map(([from, to], index) => (words[index] ?? []).filter((word) => word.start > from + EDGE_MS && word.end < to - EDGE_MS));
+  // Scribe's over the stretch, less the time of a word cut off at either end.
+  const inner = spans.map(([from, to], index): Span => {
+    const heard = words[index] ?? [];
+    const first = heard.find((word) => word.start <= from + EDGE_MS);
+    const last = [...heard].reverse().find((word) => word.end >= to - EDGE_MS);
+    return [first === undefined ? from : first.end, last === undefined ? to : last.start];
+  });
+  const inside = (at: number) => inner.some(([from, to]) => at * 1000 >= from && at * 1000 < to);
   const voices = transcript.words.map((word) => word.speaker).filter((voice): voice is string => typeof voice === "string");
   const rounds = voices.length === 0 ? 0 : Math.max(1, ...voices.map((voice) => Number(/^h(\d+):/u.exec(voice)?.[1] ?? 1)));
   const tag = rounds === 0 ? "" : `h${rounds + 1}:`;
-  const fresh = words.flatMap((list) =>
+  const fresh = whole.flatMap((list) =>
     list.map((word): Word => ({ text: word.text, start: word.start / 1000, end: word.end / 1000, ...(typeof word.speaker === "string" ? { speaker: `${tag}${word.speaker}` } : {}) })),
   );
   const kept = transcript.words.filter((word) => !inside((word.start + word.end) / 2));

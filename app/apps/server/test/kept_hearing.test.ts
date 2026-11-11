@@ -74,6 +74,14 @@ test("Scribe's words replace the rough ones over what was heard, a later round's
   expect(second.words.map((word) => [word.text, word.speaker])).toEqual([["rough", undefined], ["Where", "speaker_0"], ["Home.", "h2:speaker_0"]]);
   // The names every stretch was heard with.
   expect([second.heard, second.keyterms]).toEqual([[[7, 63]], ["Kimberly"]]);
+  // A word the cut runs through is half a word: the rough one there stands (the Mac's check: "there-" beside "there is.").
+  const edges = { model: realSpeech.MODEL, words: [{ text: "20,000,", start: 6.6, end: 7.4 }, { text: "there", start: 32.7, end: 33.2 }], heard: [] as [number, number][] };
+  const cut = kept.merged(edges, [[7_000, 33_000]], [[
+    { text: "thousand,", start: 7_000, end: 7_300, speaker: "speaker_0" },
+    { text: "Where", start: 12_000, end: 12_300, speaker: "speaker_0" },
+    { text: "there-", start: 32_700, end: 33_000, speaker: "speaker_1" },
+  ]], [], "scribe_v3");
+  expect(cut.words.map((word) => [word.text, word.speaker])).toEqual([["20,000,", undefined], ["Where", "speaker_0"], ["there", undefined]]);
   // Captions kept before Nov 11 are rough words like any first pass.
   expect(kept.asKept({ model: "youtube-captions", words: [{ text: "hi", start: 0, end: 1, speaker: "caption_turn_3" }] })).toMatchObject({ words: [{ text: "hi", start: 0, end: 1 }], heard: [] });
 });
@@ -131,7 +139,7 @@ test.skipIf(ffmpeg === null)("a long import is given free words, Scribe hears on
     // The agent keeps 100–130 s: Scribe hears that stretch with 3 s either side, once.
     const base = structuredClone(app.store.create("Kimberly", { width: 1920, height: 1080, fps: 30 }).project) as Project;
     const cut = (from: number, seconds: number): Project => ({ ...base, media: [media], clips: [clip({ id: "a", type: "audio", track: "a4", start: 0, duration: seconds * 30, media: media.id, source_in: from, speed: 1 })] });
-    relay.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Where", "were", "you?"])), 1);
+    relay.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["(cut)", "Where", "were", "you?"])), 1);
     const heard = await transcriptOf(app, media, cut(100, 30));
     expect(paid() - before).toBe(1);
     expect(heard.heard).toEqual([[97, 133]]);
@@ -142,11 +150,11 @@ test.skipIf(ffmpeg === null)("a long import is given free words, Scribe hears on
     await transcriptOf(app, media, cut(100, 30));
     expect(paid() - before).toBe(1);
     // The cut grows to 100–160 s: only 133–163 s is heard, its voices its own.
-    relay.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["Home."])), 1);
+    relay.on("POST", "/v1/transcribe", () => Response.json(scribeAnswer(["(cut)", "Home."])), 1);
     const grown = await transcriptOf(app, media, cut(100, 60));
     expect(paid() - before).toBe(2);
     expect(grown.heard).toEqual([[97, 163]]);
-    expect(grown.words.find((word) => word.text === "Home.")).toMatchObject({ start: 133, speaker: "h2:speaker_0" });
+    expect(grown.words.find((word) => word.text === "Home.")).toMatchObject({ start: 133.5, speaker: "h2:speaker_0" });
     expect(grown.words.filter((word) => word.text === "Where").length).toBe(1);
   } finally {
     apple.on = false;

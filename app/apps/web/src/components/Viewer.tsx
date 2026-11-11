@@ -223,7 +223,6 @@ export function Viewer() {
         <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
         {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
         <EffectLayer wrap={wrap} />
-        {hq && !fullscreen && <HqWorking />}
         {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
         {!fullscreen && <NoteBoxLayer wrap={wrap} />}
         {!fullscreen && <NoteDraft />}
@@ -286,6 +285,8 @@ export function Viewer() {
           <Transport fullscreen={fullscreen} />
         </div>
       )}
+      {/* On the viewer's own frame, over everything in it: its corners and edge are the ring's. */}
+      {hq && !fullscreen && <HqWorking />}
     </section>
   );
 }
@@ -421,9 +422,10 @@ function HqWorking() {
   return (
     <AnimatePresence>
       {running && (
-        <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-[inherit]">
+        <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-xl">
           <div className="working-sheen" />
-          <div className="working-ring" />
+          {/* Inside the frame's edge (the thumbnail's ring sits 2 px outside its canvas, which the viewer's frame would cut). */}
+          <div className="working-ring" style={{ inset: 0 }} />
           <div className="absolute inset-x-0 top-3 flex justify-center">
             <motion.div layout transition={{ type: "spring", stiffness: 420, damping: 34 }} className="flex h-7 items-center gap-2 rounded-full bg-[#0b0b0b] pr-3.5 pl-2 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_8px_24px_#000c]">
               <span className="working-orb" />

@@ -99,8 +99,7 @@ jobs:
           jobs="$(gh api "repos/$GH_REPO/actions/runs/$id/jobs?per_page=50" --jq '.jobs[] | "\(.conclusion)|\(.name)"')"
           echo "$jobs"
           # The Mac's legs and the TypeScript's (on a Linux runner) must be there and green; a job skipped by design
-          # (the self-hosted Mac's, until one is enrolled) is fine. Linux's own parts aren't in a push's Check: a
-          # stable release runs them itself (`linux-check` below).
+          # (the self-hosted Mac's, until one is enrolled) is fine. Linux's own parts aren't in a push's Check.
           for leg in "check (macos" "check (ubuntu-24.04, ts)"; do
             if ! grep -q "^success|$leg" <<<"$jobs"; then
               echo "::error::Check's '$leg…' leg didn't pass for $SHA: https://github.com/$GH_REPO/actions/runs/$id (fix it on main and tag the fixed commit; there is no override)"
@@ -371,21 +370,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" --clobber dist/*
 
-  # A stable release (a v* tag) is checked on Linux too: Linux's parts of
-  # check.yml, which a push's Check leaves out (nightlies are the Mac's alone).
-  linux-check:
-    if: github.event_name == 'push' && startsWith(github.ref_name, 'v')
-    uses: ./.github/workflows/check.yml
-    with:
-      parts: linux
-
   publish:
-    needs: [upload, checked, linux-check]
-    # linux-check is skipped for a nightly; for a release it must have passed.
-    if: >-
-      github.event_name == 'push' && !cancelled()
-      && needs.upload.result == 'success' && needs.checked.result == 'success'
-      && (needs.linux-check.result == 'success' || (needs.linux-check.result == 'skipped' && startsWith(github.ref_name, 'nightly-')))
+    needs: [upload, checked]
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write

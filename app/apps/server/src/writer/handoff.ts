@@ -17,7 +17,7 @@ import * as editCloud from "../cloud.ts";
 import * as diag from "../diag.ts";
 import { writeAtomic } from "../files.ts";
 import { isFile, join } from "../paths.ts";
-import { MODEL as SCRIBE, serialize, type Transcript } from "../transcribe.ts";
+import { hearsAll, MODEL as SCRIBE, serialize, type Transcript } from "../transcribe.ts";
 import * as drive from "./drive.ts";
 import * as hearing from "./hearing.ts";
 import { named } from "./jobs.ts";
@@ -49,7 +49,7 @@ export async function sha256Of(path: string): Promise<string> {
 }
 
 /** One recording to share: its own file, its source and name, where it sits on the script's clock, its voices' mark ("2:" in a joined case) and its hearing's key. */
-interface Shared {
+export interface Shared {
   /** Null: streamed to Edit's originals when imported (writer/streamed.ts), never on this Mac. */
   file: string | null;
   source: string;
@@ -81,21 +81,36 @@ async function shared(dir: string, script: Script): Promise<Shared[]> {
   return out;
 }
 
-/** A recording's words in Edit's format: as the script has them, with the voices settled and named, unless a hearing made after them says otherwise. */
-function transcriptOf(dir: string, script: Script, recording: Shared): Transcript {
-  const heard = hearing.cached(join(dir, "transcript", recording.key));
+/**
+ * A recording's words in Edit's format: as the script has them, with the
+ * voices settled and named, unless a hearing made after them says otherwise.
+ * A recording whose words are rough (captions or Apple's) gives only the
+ * stretches Scribe heard exactly (exact.ts, `Script.exact`), with `heard`
+ * saying which: Edit hears the rest of a file itself if its edit plays it.
+ */
+export function transcriptOf(dir: string, script: Script, recording: Shared): Transcript {
+  const work = join(dir, "transcript", recording.key);
+  const whole = hearing.cached(work);
+  const rough = roughOnly(work);
   const strip = (speaker: string): string | null => (recording.tag === null ? speaker : speaker.startsWith(`${recording.tag}:`) ? speaker.slice(recording.tag.length + 1) : null);
   const end = recording.offsetMs + recording.lengthMs;
+  const exact = (script.exact ?? []).flatMap(([from, to]): [number, number][] => (to <= recording.offsetMs || from >= end ? [] : [[Math.max(from, recording.offsetMs), Math.min(to, end)]]));
   const words = script.words
     .filter((word) => word.startMs >= recording.offsetMs && word.startMs < end)
+    .filter((word) => !rough || exact.some(([from, to]) => (word.startMs + word.endMs) / 2 >= from && (word.startMs + word.endMs) / 2 < to))
     .map((word) => {
       const speaker = word.speaker == null ? null : strip(word.speaker);
       return { text: word.text, start: (word.startMs - recording.offsetMs) / 1000, end: Math.max(word.endMs - recording.offsetMs, 0) / 1000, ...(speaker !== null ? { speaker } : {}) };
     });
-  const derived = heard !== null && heard.words.length === words.length && heard.words.every((word, at) => word.text === words[at]!.text);
-  if (heard !== null && heard.words.length > 0 && !derived) return heard;
+  const derived = whole !== null && whole.words.length === words.length && whole.words.every((word, at) => word.text === words[at]!.text);
+  if (whole !== null && whole.words.length > 0 && !derived) return whole;
   const speakers = Object.fromEntries(Object.entries(script.speakers ?? {}).flatMap(([label, name]) => (strip(label) === null ? [] : [[strip(label)!, name]])));
-  return { model: heard?.model || SCRIBE, language: heard?.language ?? null, words, speakers, ...(heard?.keyterms ? { keyterms: heard.keyterms } : {}) };
+  if (rough) {
+    const heard = exact.map(([from, to]): [number, number] => [(from - recording.offsetMs) / 1000, (to - recording.offsetMs) / 1000]);
+    const keyterms = script.exactKeyterms ?? [];
+    return { model: SCRIBE, language: null, words, speakers, ...(keyterms.length > 0 ? { keyterms } : {}), heard };
+  }
+  return { model: whole?.model || SCRIBE, language: whole?.language ?? null, words, speakers, ...(whole?.keyterms ? { keyterms: whole.keyterms } : {}) };
 }
 
 /** The parts of a script `folderPart` reads: Script mode's own, or Writer's as the handoff has it. */
@@ -211,14 +226,39 @@ export async function share(data: string, id: string): Promise<string> {
   return list.length === 0 ? `no footage on ${THIS_MACHINE} to share` : done.length === 0 ? "Edit has every recording and transcript already." : done.join("; ");
 }
 
-/** A recording's words to Edit's analysis: only where the script has them, and never rough words alone (YouTube's captions, which Edit reads itself, or Apple's): Edit's subtitles want heard words. */
+/**
+ * A recording's words to Edit's analysis, where the script has them: heard
+ * whole, or rough with stretches heard exactly since (only those go, never
+ * rough words alone: Edit's subtitles want heard words). A whole hearing
+ * there stays; stretches shared before are replaced when more were heard.
+ */
 async function shareWords(dir: string, script: Script, recording: Shared, done: string[]): Promise<void> {
+  if (script.words.length === 0) return;
   const at = transcriptKey(recording.source);
-  const captioned = roughOnly(join(dir, "transcript", recording.key));
-  if (script.words.length > 0 && !captioned && !(await editCloud.has(at))) {
-    const text = serialize(transcriptOf(dir, script, recording));
-    await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
-    done.push(`shared the words of ${recording.name}`);
+  const words = transcriptOf(dir, script, recording);
+  if (words.heard !== undefined && words.heard.length === 0) return;
+  if (await editCloud.has(at)) {
+    if (words.heard === undefined) return;
+    const there = await sharedThere(dir, at);
+    if (there === null || hearsAll(there, words.heard)) return;
+  }
+  const text = serialize(words);
+  await editCloud.uploadStream(editCloud.bytesSource(new TextEncoder().encode(text)), at, text.length);
+  done.push(words.heard === undefined ? `shared the words of ${recording.name}` : `shared the words of ${recording.name}'s chosen stretches`);
+}
+
+/** What Edit's analysis has at `key`: its stretches heard (none: heard whole), or null when it can't be read (it's left as it is). */
+async function sharedThere(dir: string, key: string): Promise<Pick<Transcript, "heard"> | null> {
+  const copy = join(dir, `.shared-words-${process.pid}.json`);
+  try {
+    await editCloud.download(key, copy);
+    const found = JSON.parse(fs.readFileSync(copy, "utf8")) as { heard?: unknown };
+    return Array.isArray(found.heard) ? { heard: found.heard as [number, number][] } : {};
+  } catch {
+    return null;
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(editCloud.partialPath(copy), { force: true });
   }
 }
 

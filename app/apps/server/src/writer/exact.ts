@@ -132,7 +132,11 @@ export async function run(script: Script, dir: string, footage: string, clips: C
   report.relabelled = await speakers(script, dir, spans, heardVoices, signal);
   // Words that spilled across a change of speaker there go back to who said them.
   report.relabelled += await spills.fix(script, dir, spans);
-  script.exact = [...(script.exact ?? []), ...spans].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const before = script.exact ?? [];
+  // The names they were all heard with: Edit hears a stretch again only for names it wasn't given (names.covers).
+  const had = new Set((script.exactKeyterms ?? []).map((name) => name.toLowerCase()));
+  script.exactKeyterms = before.length === 0 ? [...keyterms] : keyterms.filter((name) => had.has(name.toLowerCase()));
+  script.exact = [...before, ...spans].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return report;
 }
 

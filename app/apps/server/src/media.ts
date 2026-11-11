@@ -605,8 +605,8 @@ export function sharedSourceOf(cache: string, path: string): string | null {
   const rest = streamed === null ? path.slice(root.length + 1) : streamed.replace(/^edit\/proxies\//, "");
   const excerpt = /^(drive|youtube)\/([^/]+)\/(\d+)-(\d+)\.mp4$/u.exec(rest);
   if (excerpt !== null) return `${excerpt[1]}:${excerpt[2]}#${excerpt[3]}-${excerpt[4]}`;
-  const whole = /^(drive|youtube)\/([^/]+)\.mp4$/u.exec(rest);
-  return whole === null ? null : `${whole[1]}:${whole[2]}`;
+  const whole = /^(drive|youtube)\/([^/]+)\.mp4$|^(sha256)\/([a-f0-9]{64})\.mp4$/u.exec(rest);
+  return whole === null ? null : `${whole[1] ?? whole[3]}:${whole[2] ?? whole[4]}`;
 }
 
 function isFile(path: string): boolean {

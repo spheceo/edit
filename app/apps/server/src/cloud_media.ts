@@ -2746,10 +2746,12 @@ export async function shareAnalysis(app: App, id: string): Promise<number> {
  */
 export async function wholeTranscript(source: string, target: string, scratch: string): Promise<boolean> {
   if (!cloud.enabled() || fs.existsSync(target)) return false;
-  // An excerpt, or the whole recording (its words as they are).
-  const found = /^(drive|youtube):([^#]+)(?:#(\d+)-(\d+))?$/u.exec(source);
+  // An excerpt, or the whole recording (its words as they are; a file from disk is only ever whole).
+  const found = /^(drive|youtube):([^#]+)(?:#(\d+)-(\d+))?$|^(sha256):([a-f0-9]{64})$/u.exec(source);
   if (found === null) return false;
-  const [, kind, id, from = "0", to] = found;
+  const kind = found[1] ?? found[5]!;
+  const id = found[2] ?? found[6]!;
+  const [from = "0", to] = [found[3], found[4]];
   const prefix = analysisPrefix(`${kind}:${id}`);
   if (prefix === null) return false;
   const copy = join(scratch, `whole-${kind}-${id}-${process.pid}.json`);
@@ -2767,11 +2769,17 @@ export async function wholeTranscript(source: string, target: string, scratch: s
   }
   if (!Array.isArray(whole.words)) return false;
   const [start, end] = [Number(from) / 1000, to === undefined ? Number.POSITIVE_INFINITY : Number(to) / 1000];
+  // A script's chosen stretches only (writer/handoff.ts): the excerpt takes those inside it, `heard` on its own
+  // clock, and Edit hears it itself if its edit plays past them (captions_core.transcriptOf). None inside: heard now.
+  const stretches = Array.isArray(whole.heard)
+    ? whole.heard.flatMap(([a, b]): [number, number][] => (b <= start || a >= end ? [] : [[Math.max(a, start) - start, Math.min(b, end) - start]]))
+    : null;
+  if (stretches !== null && stretches.length === 0) return false;
   // A shared transcript that stops before the excerpt does isn't its words: the excerpt is heard itself (Killer
   // Pastor in dev, Nov 8: its recording's shared transcript stopped at 3 minutes, and three excerpts later in it
   // were given none).
   const last = whole.words.at(-1)?.end ?? 0;
-  if (Number.isFinite(end) ? last < Math.min(end, start + 30) : last < start) {
+  if (stretches === null && (Number.isFinite(end) ? last < Math.min(end, start + 30) : last < start)) {
     diag.warn("cloud", `${source}: its recording's shared transcript stops at ${Math.round(last)} s, before this excerpt: heard on its own`);
     return false;
   }
@@ -2779,8 +2787,9 @@ export async function wholeTranscript(source: string, target: string, scratch: s
     .filter((word) => word.end > start && word.start < end)
     .map((word) => ({ ...word, start: Math.max(word.start - start, 0), end: Math.max(word.end - start, 0) }));
   fs.mkdirSync(parent(target) ?? ".", { recursive: true });
-  writeAtomic(target, serialize({ ...whole, words }));
-  diag.info("cloud", `${source}: ${words.length} words from its recording's shared transcript (not heard again)`);
+  const { heard: _whole, ...rest } = whole;
+  writeAtomic(target, serialize({ ...rest, words, ...(stretches !== null ? { heard: stretches } : {}) }));
+  diag.info("cloud", `${source}: ${words.length} words from its recording's shared transcript (not heard again)${stretches !== null ? `, the script's ${stretches.length} stretches heard` : ""}`);
   return true;
 }
 

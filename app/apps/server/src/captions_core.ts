@@ -13,7 +13,8 @@ import type { Media, Project, Rgba, TextStyle } from "./model.ts";
 import { covers, joined } from "./names.ts";
 import * as seams from "./seams.ts";
 import { charCount, f32, F32_MAX, parseHex, serdeParse, splitWhitespace, trim } from "./rust.ts";
-import type { Transcript } from "./transcribe.ts";
+import { soundUses } from "./project.ts";
+import { hearsAll, type Transcript } from "./transcribe.ts";
 import * as voices from "./voices.ts";
 
 /** How long a transcript wait pauses between looks (tests make it instant). */
@@ -58,6 +59,15 @@ export async function transcriptOf(app: App, media: Media, project?: Project): P
         if (transcript.model === "youtube-captions" && !reheard.has(captionsAgain)) {
           reheard.add(captionsAgain);
           diag.info("media", `${media.name}: heard by Scribe rather than YouTube's captions`);
+          app.media.transcribe(path, true, names, true);
+          continue;
+        }
+        // Only a script's chosen stretches were heard (writer/handoff.ts) and the timeline plays more of the file
+        // now (a clip lengthened or added): heard itself, whole, once, as footage with no script's words is.
+        const wholeAgain = `${path}\nwhole`;
+        if (project !== undefined && !hearsAll(transcript, soundUses(project, media.id)) && !reheard.has(wholeAgain)) {
+          reheard.add(wholeAgain);
+          diag.info("media", `${media.name}: the timeline plays more than the script's stretches Scribe heard; hearing it whole`);
           app.media.transcribe(path, true, names, true);
           continue;
         }
@@ -114,6 +124,7 @@ export function parseTranscript(text: string): Transcript {
     if (object[field] === undefined || object[field] === null) object[field] = {};
   }
   if (!Array.isArray(object.keyterms)) delete object.keyterms;
+  if (!Array.isArray(object.heard) || !(object.heard as unknown[]).every((range) => Array.isArray(range) && range.length === 2 && range.every((at) => typeof at === "number"))) delete object.heard;
   return object as unknown as Transcript;
 }
 

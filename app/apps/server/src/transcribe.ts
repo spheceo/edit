@@ -98,6 +98,33 @@ export interface Transcript {
    * (voices.ts), so a transcript is given pyannote's voices once.
    */
   voices?: string;
+  /**
+   * The stretches (seconds) Scribe heard, when it heard only those: a
+   * script's chosen footage, heard in Script mode (writer/exact.ts) and
+   * handed to Edit (writer/handoff.ts), the rest of the file unheard and
+   * without words. Absent: the whole file was heard.
+   */
+  heard?: [number, number][];
+}
+
+/** How far a use may reach past what was heard (seconds) and still be taken as heard: a cut's word boundary moved. */
+const HEARD_SLACK = 0.25;
+
+/**
+ * Whether `transcript` has Scribe's words for every range (seconds) in
+ * `uses`: always for a file heard whole; a script's stretches only where
+ * the uses stay inside them.
+ */
+export function hearsAll(transcript: Pick<Transcript, "heard">, uses: readonly (readonly [number, number])[]): boolean {
+  if (transcript.heard === undefined) return true;
+  // Stretches that touch are one: a use may run across both.
+  const heard: [number, number][] = [];
+  for (const [a, b] of [...transcript.heard].sort((x, y) => x[0] - y[0])) {
+    const last = heard.at(-1);
+    if (last !== undefined && a <= last[1] + HEARD_SLACK) last[1] = Math.max(last[1], b);
+    else heard.push([a, b]);
+  }
+  return uses.every(([from, to]) => to - from <= 2 * HEARD_SLACK || heard.some(([a, b]) => from >= a - HEARD_SLACK && to <= b + HEARD_SLACK));
 }
 
 /**
@@ -128,6 +155,7 @@ export function serialize(transcript: Transcript): string {
   }
   if (transcript.keyterms !== undefined && transcript.keyterms.length > 0) text += `,"keyterms":${JSON.stringify(transcript.keyterms)}`;
   if (typeof transcript.voices === "string" && transcript.voices !== "") text += `,"voices":${JSON.stringify(transcript.voices)}`;
+  if (Array.isArray(transcript.heard)) text += `,"heard":${JSON.stringify(transcript.heard)}`;
   return `${text}}`;
 }
 

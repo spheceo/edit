@@ -32,7 +32,7 @@ import type { DriveHead, Excerpt, Parsed } from "./seams.ts";
 import * as tools from "./tools.ts";
 import * as proc from "./effect/proc.ts";
 import { runPromise } from "./effect/runtime.ts";
-import type { Transcript, Word } from "./transcribe.ts";
+import { hearsAll, type Transcript, type Word } from "./transcribe.ts";
 import { MODEL as CAPTIONS_MODEL } from "./youtube_words.ts";
 import * as youtube from "./youtube.ts";
 import * as posts from "./posts.ts";
@@ -2886,7 +2886,7 @@ async function transcripts(app: App, project: Project, within: (block: ScriptBlo
   const out = new Map<string, Heard>();
   const started = timing.now();
   /** Waits for a file's transcript and reads its words (null when it failed or took too long). */
-  const heard = async (item: Media): Promise<(Heard & { model: string }) | null> => {
+  const heard = async (item: Media): Promise<(Heard & Pick<Transcript, "model" | "heard">) | null> => {
     for (;;) {
       const stage = app.media.status(item.path).transcript;
       if (stage === "ready") {
@@ -2902,7 +2902,7 @@ async function transcripts(app: App, project: Project, within: (block: ScriptBlo
         } catch {
           peaks = null;
         }
-        return { words: transcript.words, peaks, model: transcript.model };
+        return { words: transcript.words, peaks, model: transcript.model, ...(transcript.heard !== undefined ? { heard: transcript.heard } : {}) };
       }
       if (stage === "failed") {
         const why = app.media.status(item.path).transcript_error;
@@ -2919,6 +2919,20 @@ async function transcripts(app: App, project: Project, within: (block: ScriptBlo
   for (const item of media) {
     const found = await heard(item);
     if (found === null) continue;
+    // Only the script's stretches were heard (writer/handoff.ts) and a range runs past them: the file is heard
+    // itself, whole, before it's cut, as footage without the script's words is.
+    const ranges = (project.script?.blocks ?? []).flatMap((block): [number, number][] =>
+      block.kind === "footage" && block.media === item.id && within(block) && cueOf(block) !== null ? [[block.start - (block.media_start ?? 0), block.end - (block.media_start ?? 0)]] : [],
+    );
+    if (!hearsAll(found, ranges)) {
+      diag.info("script", `${item.name}: a range runs past the stretches Script mode heard; hearing it whole`);
+      app.media.transcribe(item.path, true, names, true);
+      const again = await heard(item);
+      if (again !== null) {
+        out.set(item.id, { words: again.words, peaks: again.peaks });
+        continue;
+      }
+    }
     // YouTube's own captions drop and mistime words: a range whose first or
     // last word they don't have is heard properly (Scribe) before it's cut,
     // else it's cut at the Doc's rounded seconds, mid-sentence (card 1's

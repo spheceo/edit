@@ -753,7 +753,11 @@ async function draw(app: App, render: Render): Promise<void> {
       // At most twice the bitrate of Edit's best export (export.rs: 0.14 bits a pixel), which is what the render goes into:
       // uncapped, the agent's first board (grain on every frame) was 204 MB for 12 s, too much to send up for the cloud.
       const cap = Math.round(frame.width * frame.height * frame.fps * 0.14 * 2);
-      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "scale=in_range=pc:out_range=tv,format=yuv420p", "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-maxrate", String(cap), "-bufsize", String(cap * 2), "-an", "-movflags", "+faststart", partial]);
+      // On the video hardware where there is some (the encoder Edit's export uses: tools.hardwareH264), at the cap: on a
+      // busy M1, libx264 took 75 s to join a 12 s board's frames (Nov 11, kenobi). Else libx264, by quality, under the cap.
+      const hardware = tools.hardwareH264();
+      const encode = hardware === null ? ["-c:v", "libx264", "-preset", "medium", "-crf", "17", "-maxrate", String(cap), "-bufsize", String(cap * 2)] : [...hardware, "-b:v", String(cap), "-maxrate", String(cap), "-bufsize", String(cap * 2)];
+      await tools.run([tools.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-framerate", rateArg(live.project), "-i", join(frames, "frame-%05d.jpg"), "-vf", "scale=in_range=pc:out_range=tv,format=yuv420p", ...encode, "-an", "-movflags", "+faststart", partial]);
       fs.renameSync(partial, out);
     } catch (error) {
       fs.rmSync(partial, { force: true });

@@ -245,6 +245,9 @@ test.skipIf(chrome === null)("look draws the page in Chrome: its length, the sti
     expect(wrong.problems.join("\n")).toContain("requestAnimationFrame was called");
     expect(wrong.problems.join("\n")).toContain("no window.duration");
     expect(wrong.errors.join("\n")).toContain("no second 1.5");
+    // What its walls refused is said, not just a blank page: the picture off the network, the call to the app.
+    expect(wrong.errors.join("\n")).toContain("refused to load a.png (img-src)");
+    expect(wrong.errors.join("\n")).toContain("(connect-src)");
     const tool = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "wrong", times: [0.5] } } }, id)) as { result: { content: { type: string; text?: string }[]; isError: boolean } }).result;
     expect(tool.isError).toBe(false);
     expect(tool.content.filter((part) => part.type === "image").length).toBe(1);

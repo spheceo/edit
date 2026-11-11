@@ -23,14 +23,21 @@ jobs:
     # On each platform releases are built for: a Mac, and Linux since Nov 7
     # (its engine runs FFmpeg where a Mac runs AVFoundation, so each checks
     # its own).
+    # Each in two halves side by side (Sphe, Nov 11: Check took ~15 minutes):
+    # the Rust (`just check-rust`) and the app (`just check-app`: the types,
+    # the addon, the TypeScript, the server's tests in parallel, and on the
+    # Mac the acceptance run).
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-latest, ubuntu-24.04]
+        part: [rust, app]
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
+    name: check (${{ matrix.os }}, ${{ matrix.part }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -41,14 +48,17 @@ jobs:
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: app
+          # Each half builds different things (tests and clippy; the addon and the types): a cache of its own.
+          key: ${{ matrix.part }}
       # The web typecheck needs the WASM preview engine (gitignored, built
       # from Rust): engine-cache.yml's copy when there is one, else built.
       - id: wasm
+        if: matrix.part == 'app'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: app/apps/web/src/engine/pkg
           key: wasm-${{ hashFiles('app/Cargo.toml', 'app/Cargo.lock', 'app/.cargo/**', 'app/crates/**', '!app/crates/**/node_modules/**', 'app/scripts/build-wasm.sh') }}
-      - if: steps.wasm.outputs.cache-hit != 'true'
+      - if: matrix.part == 'app' && steps.wasm.outputs.cache-hit != 'true'
         run: scripts/build-wasm.sh
       # Pinned, as in release.yml: what Edit is built and checked with.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -73,9 +83,10 @@ jobs:
           scripts/ffmpeg.sh ${{ matrix.target }} ffmpeg
           echo "$PWD/ffmpeg" >> "$GITHUB_PATH"
       - name: Dependencies
+        if: matrix.part == 'app'
         run: bun install --frozen-lockfile
       - name: Check
-        run: just check
+        run: just check-${{ matrix.part }}
       # Acceptance on the Mac (Nov 8 audit, item I; scripts/acceptance.ts): the
       # server from this commit (just check left its addon built) serving the
       # UI built here, a fixture project made with FFmpeg, the editor opened
@@ -84,15 +95,15 @@ jobs:
       # the debug addon it runs on is 590 MB, built a step ago. What a virtual
       # Mac can't do is skipped and said in the run's summary.
       - name: The UI, for acceptance
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.part == 'app'
         run: bun run --cwd apps/web build
       - name: Acceptance
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && matrix.part == 'app'
         timeout-minutes: 8
         env:
           OUT: ${{ runner.temp }}/acceptance
         run: bun scripts/acceptance.ts
-      - if: failure() && runner.os == 'macOS'
+      - if: failure() && runner.os == 'macOS' && matrix.part == 'app'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: acceptance

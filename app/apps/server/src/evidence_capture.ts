@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { join } from "./paths.ts";
+import { devToolsPort } from "./chrome_devtools.ts";
 import * as seams from "./seams.ts";
 
 export interface Rect { x: number; y: number; width: number; height: number; }
@@ -334,11 +335,8 @@ export async function capture(url: string, path: string, phrase = "", selector =
   let pageLoaded: (() => void) | null = null;
   const pending = new Map<number, { resolve: (r: Record<string, unknown>) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   try {
-    const until = Date.now() + 15_000;
-    const portFile = join(profile, "DevToolsActivePort");
-    while (!fs.existsSync(portFile) && Date.now() < until) await Bun.sleep(100);
-    const port = Number(fs.readFileSync(portFile, "utf8").split("\n")[0]);
-    if (!Number.isInteger(port) || port <= 0) throw new Error("Chrome did not start its capture endpoint");
+    const port = await devToolsPort(profile);
+    if (port === null) throw new Error("Chrome did not start its capture endpoint");
     const tabs = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) })).json() as { type: string; webSocketDebuggerUrl: string }[];
     const target = tabs.find((t) => t.type === "page"); if (target === undefined) throw new Error("Chrome has no capture page");
     socket = new WebSocket(target.webSocketDebuggerUrl);

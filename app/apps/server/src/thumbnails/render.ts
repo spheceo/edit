@@ -12,6 +12,7 @@ import { rendererSource } from "./renderer_source.ts" with { type: "macro" };
 
 import * as diag from "../diag.ts";
 import { join } from "../paths.ts";
+import { devToolsPort } from "../chrome_devtools.ts";
 import * as seams from "../seams.ts";
 
 let transpiled: string | null = null;
@@ -166,11 +167,8 @@ async function launch(origin: string): Promise<Browser> {
 }
 
 async function connect(child: Browser["child"], profile: string, origin: string): Promise<Browser> {
-  const until = Date.now() + 15_000;
-  const portFile = join(profile, "DevToolsActivePort");
-  while (!fs.existsSync(portFile) && Date.now() < until) await Bun.sleep(100);
-  const port = Number(fs.existsSync(portFile) ? fs.readFileSync(portFile, "utf8").split("\n")[0] : 0);
-  if (!Number.isInteger(port) || port <= 0) throw new Error("Chrome didn't start for the thumbnail.");
+  const port = await devToolsPort(profile);
+  if (port === null) throw new Error("Chrome didn't start for the thumbnail.");
   const tabs = (await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) })).json()) as { type: string; webSocketDebuggerUrl: string }[];
   const target = tabs.find((one) => one.type === "page");
   if (target === undefined) throw new Error("Chrome has no page for the thumbnail.");

@@ -38,7 +38,8 @@ jobs:
   # and Linux's, in the run its push to main started. `just nightly` used to
   # run `just check` only on the machine that tagged, lately Linux, which never
   # touches the Mac's window or AVFoundation. This waits for that run rather
-  # than checking again (ten minutes, and the Mac runner is scarce). There is
+  # than checking again (the Mac runner is scarce), and only the publish waits
+  # for this: the build runs beside it. There is
   # no override: fix Check, then tag again. A test build (run by hand) isn't
   # gated.
   checked:
@@ -93,8 +94,10 @@ jobs:
           fi
           echo "Check passed for $SHA on both platforms."
 
+  # Everything up to publishing runs beside Check, not after it (Sphe, Nov 11:
+  # a nightly took ~35 minutes): the draft and its archives are made while
+  # Check runs, and only the publish waits for it. A draft no install sees.
   prepare:
-    needs: checked
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -349,7 +352,7 @@ jobs:
         run: gh release upload "$TAG" --clobber dist/*
 
   publish:
-    needs: upload
+    needs: [upload, checked]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

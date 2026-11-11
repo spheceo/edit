@@ -265,7 +265,9 @@ nightly *args:
             exit 1
         fi
     fi
-    just check
+    # No `just check` here: Check runs on the tagged commit in CI (the Mac and
+    # Linux) and the release publishes only once it passes, building beside it
+    # (Sphe, Nov 11: ten minutes here, then Check again, was too long).
     tag="nightly-$(( ${last:-0} + 1 ))"
     previous="$(git tag --list 'nightly-*' 'v*' --sort=-creatordate --merged HEAD | head -1)"
     echo
@@ -326,17 +328,22 @@ lint:
 # (Linux's window is Chrome's, apps/server/src/linux_desktop.ts).
 rust_crates := if os() == "macos" { "--workspace" } else { "--workspace --exclude edit-window" }
 
-check: types
+check: check-rust check-app
+
+# Check's two halves, which CI runs as jobs side by side on each platform.
+check-rust:
     cargo fmt --all --check
     cargo clippy {{rust_crates}} --all-targets -- -D warnings
     cargo test {{rust_crates}}
+    cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
+
+check-app: types
     # The generated TS types are committed: they must match the Rust.
     git diff --exit-code -- packages/edit-types
     test -z "$(git status --porcelain -- packages/edit-types)"
     just native-test
     # So is the addon's index.d.ts (napi writes it as it builds).
     git diff --exit-code -- crates/edit-native/index.d.ts
-    cargo clippy -p edit-wasm --target wasm32-unknown-unknown -- -D warnings
     bun run --cwd apps/web typecheck
     bun run --cwd apps/web test
     bun run --cwd apps/server typecheck

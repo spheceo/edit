@@ -105,12 +105,32 @@ export async function open(opening: Opening): Promise<Page> {
   }
 }
 
-async function connect(profile: string, opening: Opening, stop: () => void): Promise<Page> {
+/**
+ * The DevTools port a Chrome started with `--remote-debugging-port=0` and this
+ * profile writes, once it has written it; null if it hasn't in 15 s. Chrome
+ * makes the file before it writes the port in it, so it's the port that's
+ * waited for, not the file (Check, Nov 11: an empty file read 180 ms in
+ * failed a run as "Chrome didn't start").
+ */
+export async function devToolsPort(profile: string): Promise<number | null> {
   const until = Date.now() + 15_000;
   const portFile = join(profile, "DevToolsActivePort");
-  while (!fs.existsSync(portFile) && Date.now() < until) await Bun.sleep(50);
-  const port = Number(fs.existsSync(portFile) ? fs.readFileSync(portFile, "utf8").split("\n")[0] : 0);
-  if (!Number.isInteger(port) || port <= 0) throw new Error(`${opening.what}: Chrome didn't start.`);
+  for (;;) {
+    let port = 0;
+    try {
+      port = Number(fs.readFileSync(portFile, "utf8").split("\n")[0]);
+    } catch {
+      port = 0;
+    }
+    if (Number.isInteger(port) && port > 0) return port;
+    if (Date.now() >= until) return null;
+    await Bun.sleep(50);
+  }
+}
+
+async function connect(profile: string, opening: Opening, stop: () => void): Promise<Page> {
+  const port = await devToolsPort(profile);
+  if (port === null) throw new Error(`${opening.what}: Chrome didn't start.`);
   const tabs = (await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(5000) })).json()) as { type: string; webSocketDebuggerUrl: string }[];
   const target = tabs.find((one) => one.type === "page");
   if (target === undefined) throw new Error(`${opening.what}: Chrome has no page.`);

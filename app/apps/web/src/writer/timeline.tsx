@@ -432,10 +432,10 @@ export function Timeline({
               </div>
               {drag?.mode === "move" && drag.moved && drag.to !== null && <span className="drop-mark" style={{ left: x(starts[drag.to]) }} />}
               {drag?.mode === "trim" && (
-                <span className="trim-tip" style={{ left: x(starts[clips.findIndex((clip) => clip.id === drag.id)]) + (drag.ms - drag.clip.startMs) * ppms }}>
+                <TrimTip left={x(starts[clips.findIndex((clip) => clip.id === drag.id)]) + (drag.ms - drag.clip.startMs) * ppms} within={scroller}>
                   {drag.edge === "in" ? "In" : "Out"} {clock(drag.ms)}
                   {drag.snapped ? " · word" : ""}
-                </span>
+                </TrimTip>
               )}
               <span ref={line} className="playhead" />
             </div>
@@ -480,5 +480,30 @@ export function Timeline({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * The time on an edge being dragged, over the edge, kept whole inside the
+ * timeline's visible part (Sphe, Nov 12: at the very start, centred on the
+ * first clip's in-point, half of it ran off the screen).
+ */
+function TrimTip({ left, within, children }: { left: number; within: React.RefObject<HTMLDivElement | null>; children: React.ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const tip = ref.current;
+    const box = within.current;
+    if (!tip || !box) return;
+    tip.style.marginLeft = "0px";
+    const shown = tip.getBoundingClientRect();
+    const view = box.getBoundingClientRect();
+    const PAD = 4;
+    const shift = shown.left < view.left + PAD ? view.left + PAD - shown.left : shown.right > view.right - PAD ? view.right - PAD - shown.right : 0;
+    tip.style.marginLeft = `${shift}px`;
+  });
+  return (
+    <span ref={ref} className="trim-tip" style={{ left }}>
+      {children}
+    </span>
   );
 }

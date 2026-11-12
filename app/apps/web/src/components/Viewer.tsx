@@ -24,6 +24,7 @@ import { hqActivity } from "../lib/agentTurns";
 import { useEffects } from "../lib/effects";
 import { useNow } from "../lib/now";
 import { useSeekFlash } from "../lib/seekFlash";
+import { cutsAfter, mapFrame, useWatching } from "../lib/watching";
 import { EffectLayer } from "./EffectLayer";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { VideoComments } from "./VideoComments";
@@ -31,6 +32,10 @@ import { ProblemView } from "./ProblemView";
 import { WaitingFiles } from "./ScriptPanel";
 import { cx, IconButton, Pulse } from "./ui";
 import { rate } from "../lib/types";
+
+// The stores the viewer reads, beside the player on the page's test handle (lib/playback.ts): a browser check plays a
+// turn's watching through without an agent (a turn begins, the edit moves on, the new version's render lands).
+Object.assign(((window as unknown as { __edit?: Record<string, unknown> }).__edit ??= {}), { useEditor, useAgent, useWatching });
 
 const useFrame = () => useSyncExternalStore(playhead.subscribe, () => Math.floor(playhead.frame));
 const usePlaying = () => useSyncExternalStore(playhead.subscribe, () => playhead.playing);
@@ -105,9 +110,21 @@ export function Viewer() {
   // Smooth playback: the rendered edit plays when it shows what's on screen (its
   // revision, nothing waiting to save); else the canvas draws live.
   const projectId = project?.id ?? null;
+  // Bodycam HQ while the agent works: the version on screen as the turn began, its render played, the agent's saves
+  // out of view until the turn's over and the new version's render is in (lib/watching.ts).
+  const agentBusy = useAgent((state) => state.project === projectId && state.running);
+  const pinned = useWatching((state) => state.pinned);
+  useEffect(() => {
+    if (pinned !== null && pinned.project.id !== projectId) useWatching.setState({ pinned: null });
+    if (!hq || !agentBusy || pinned !== null || project === null || dirty) return;
+    if (playback?.state !== "ready" || playback.rev !== rev || !playback.url) return;
+    useWatching.setState({ pinned: { project, rev: rev ?? 0, playback } });
+  }, [hq, agentBusy, pinned, project, projectId, rev, dirty, playback]);
   // Rendered here, it plays a chunk at a time as each lands, while it renders too.
   const streamed = playback?.stream === true && (playback.state === "ready" || playback.state === "rendering") && playback.rev === rev && !dirty;
-  const smooth = streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? mediaHost(playback.url) : null;
+  const smooth = pinned !== null
+    ? pinned.playback.stream ? `stream:${projectId}:${pinned.rev}` : mediaHost(pinned.playback.url!)
+    : streamed ? `stream:${projectId}:${rev}` : playback?.url && playback.state === "ready" && playback.rev === rev && !dirty ? mediaHost(playback.url) : null;
   useEffect(() => { preview.setSmooth(smooth); }, [smooth]);
   // Edit.app's window draws the edit live: no render to wait for, also while full screen hands the
   // picture to the page for a while (a render took a place in the export line and the encoder, Nov 8 audit).
@@ -131,7 +148,6 @@ export function Viewer() {
   // Asked for once the edits settle, unless it's rendering (or failed on) this revision; never mid-turn
   // (the agent changes the edit many times a turn: each render would be stale before it landed).
   const hasClips = (project?.clips.length ?? 0) > 0;
-  const agentBusy = useAgent((state) => state.project === projectId && state.running);
   useEffect(() => {
     if (projectId === null || dirty || !hasClips || agentBusy || drawnByWindow) return;
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;
@@ -141,9 +157,53 @@ export function Viewer() {
     return () => clearTimeout(timer);
   }, [projectId, rev, dirty, hasClips, agentBusy, playback, drawnByWindow]);
 
+  // The turn's over: to the new version once its render's in (or the edit came back unchanged, or its render failed),
+  // where the picture cuts anyway, or at once while it rests, on the same moment of the same shot.
+  const moveTo = useRef<{ frame: number; play: boolean } | null>(null);
+  const settled = pinned !== null && !agentBusy && !dirty && project !== null;
+  const newIn = settled && (rev === pinned.rev || (playback?.rev === rev && (playback.state === "ready" || playback.state === "failed")));
   useEffect(() => {
-    if (project) preview.setProject(project, versions);
-  }, [project, versions]);
+    if (!newIn || pinned === null || project === null) return;
+    const move = () => {
+      const play = playhead.playing;
+      if (play) preview.pause();
+      moveTo.current = { frame: mapFrame(pinned.project, project, playhead.frame), play };
+      useWatching.setState({ pinned: null });
+    };
+    if (!playhead.playing) {
+      move();
+      return;
+    }
+    const cuts = cutsAfter(pinned.project, playhead.frame);
+    if (cuts.length === 0) {
+      move();
+      return;
+    }
+    let before = playhead.frame;
+    const off = playhead.subscribe(() => {
+      const now = playhead.frame;
+      if (!playhead.playing || now < before || cuts.some((cut) => before < cut && now >= cut)) {
+        off();
+        move();
+        return;
+      }
+      before = now;
+    });
+    return () => {
+      off();
+    };
+  }, [newIn, pinned, project]);
+
+  useEffect(() => {
+    const viewed = pinned?.project ?? project;
+    if (viewed) preview.setProject(viewed, versions);
+    const then = moveTo.current;
+    if (then !== null && pinned === null) {
+      moveTo.current = null;
+      preview.seek(then.frame);
+      if (then.play) preview.play();
+    }
+  }, [project, versions, pinned]);
 
   useEffect(() => {
     const wrap = wrapRef.current!;
@@ -228,7 +288,8 @@ export function Viewer() {
           {/* Smooth playback over the canvas; clicks go through to it. */}
           <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
           {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
-          <EffectLayer wrap={wrap} />
+          {/* Not while a version is pinned: its render has its effects in, and the agent's newest stays out of view. */}
+          {pinned === null && <EffectLayer wrap={wrap} />}
           <SeekFlash />
           {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
           {/* Bodycam HQ: the team's comments pinned on the picture (the thumbnail page's), left while paused. */}
@@ -340,6 +401,13 @@ function SeekFlash() {
       </motion.div>
     </div>
   );
+}
+
+/** The edit on screen: a version pinned while the agent works (lib/watching.ts), else the edit as it is. */
+function useViewedProject() {
+  const pinned = useWatching((state) => state.pinned?.project ?? null);
+  const live = useEditor((state) => state.project);
+  return pinned ?? live;
 }
 
 /** The viewer's waiting ring, a video player's. */
@@ -549,8 +617,9 @@ function clock(frame: number, fps: number): string {
 function VideoControls({ fullscreen }: { fullscreen: boolean }) {
   const frame = useFrame();
   const playing = usePlaying();
-  const fps = useEditor((state) => (state.project ? rate(state.project.settings) : 30));
-  const duration = useEditor((state) => (state.project ? projectDuration(state.project) : 0));
+  const viewed = useViewedProject();
+  const fps = viewed ? rate(viewed.settings) : 30;
+  const duration = viewed ? projectDuration(viewed) : 0;
   const noting = useNotes((state) => state.commenting);
   const notes = useNotes((state) => state.notes);
   const speed = useSpeed();
@@ -741,14 +810,17 @@ function useBuffered(): [number, number][] {
 
 /** The frame under the pointer over the progress bar: the nearest of the board at once, the exact one when the pointer rests. */
 function ScrubPreview({ at, duration, chapter }: { at: { x: number; width: number; frame: number }; duration: number; chapter: string | null }) {
-  const project = useEditor((state) => state.project);
-  const rev = useEditor((state) => state.rev) ?? 0;
+  const project = useViewedProject();
+  const pinned = useWatching((state) => state.pinned);
+  const liveRev = useEditor((state) => state.rev) ?? 0;
+  const rev = pinned?.rev ?? liveRev;
   // The smooth render of what's on screen, when it's made: its sheets give a frame every 2 s (lib/storyboard.ts).
-  const stamp = useEditor((state) => {
+  const liveStamp = useEditor((state) => {
     const playback = state.playback;
     if (playback?.state !== "ready" || playback.rev !== state.rev || state.dirty || !playback.url) return null;
     return new URL(playback.url, location.href).searchParams.get("v");
   });
+  const stamp = pinned !== null && pinned.playback.url ? new URL(pinned.playback.url, location.href).searchParams.get("v") : liveStamp;
   const fps = project ? rate(project.settings) : 30;
   const look = () => {
     if (!project) return null;

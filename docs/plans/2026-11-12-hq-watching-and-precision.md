@@ -2,17 +2,19 @@
 
 Two things from the bodycam HQ test. Part 1 is agreed but not built yet ("we still have a lot of work to get done"). Part 2 is the fixes that came out of comparing the agent's graphics with the references, frame by frame.
 
-## Part 1: watch normally while the agent works (not built)
+## Part 1: watch normally while the agent works (built Nov 12, items 1–3)
 
 The team will have several things going on and queued at once, and playback while the agent builds is "horrible".
 
 **Why it is bad today.** The player plays the finished smooth render only when it matches the edit's current version exactly. The agent saves many times a turn, and Edit never asks for a render mid-turn (each would be stale before it landed). So for the whole turn the player draws the edit live from the raw footage, the slow path. Meanwhile the server is also rendering graphics, the agent is looking at frames, and every agent save is pushed into the viewer.
 
-**The plan, in the order to build it:**
+**Built, in this order:**
 
 1. **Watch a fixed version while a turn runs.** The player keeps playing the last finished render. The agent's changes build up out of view.
 2. **Swap the changes in without interrupting.** When the turn ends, only the changed parts are rendered (the render's chunks are named by their content, so untouched stretches are reused). They replace the old ones chunk by chunk, ahead of the playhead and never under it, so a change is simply there when you reach it. If the agent added or cut time before the playhead, the playhead keeps the same moment, not the same timecode.
-3. **A quieter screen while it works.** The working glow much dimmer, or a small status line ("Agent working · 2 changes ready"); the flash sweeping across the picture removed.
+3. **A quieter screen while it works.** The working glow at 30% and its ring at half; the flash sweeping across the picture removed.
+
+How: the viewer pins the version on screen as a turn begins (lib/watching.ts), plays its render, and keeps the graphics layer out of view. The server keeps that render playable after a new one replaces it, by hard-linking it with its chunk list (playback_stream.ts `keepPrevious`). When the turn's over and the new render is in, the viewer moves to it at the next cut, or at once while paused. Checked in Chrome with a turn played through in the page's state: it pinned revision 970, played on smoothly while the edit changed, and moved at the cut (frame 1297 to the new version's 1388, the same moment after a 90-frame cut-in).
 
 Later:
 - Several graphics built at once (a subagent per graphic: effects are separate folders). Timeline edits stay one at a time through one agent so they never conflict.

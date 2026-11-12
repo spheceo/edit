@@ -390,6 +390,37 @@ test("claude is the default provider and a turn streams text and edit tools onto
   }
 });
 
+test("a compaction shows in the chat as it happens, then how much it took off", async () => {
+  // Sphe, Nov 12: "show when there is compaction occurring, as it occurs ... then it shows how much was compacted".
+  const home = fixtureHome("claude-compact");
+  try {
+    const project = home.store.create("Compact", { width: 1920, height: 1080, fps: 30 }).project.id;
+    const { agents, queries } = agentsWith(home);
+    await agents.send(project, "Carry on", null, null);
+    const q = queries[0]!;
+    q.push({ type: "system", subtype: "init", session_id: "session-1" });
+    q.push({ type: "system", subtype: "status", status: "compacting" });
+    await settle();
+    const line = () => agents.withChat(project).entries.find((item) => item.kind === "compact");
+    expect(line()?.status).toBe("running");
+    // Its size after isn't said: the next call's reading is it.
+    q.push({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 967_000 } });
+    q.push({ type: "system", subtype: "status", status: null, compact_result: "success" });
+    await settle();
+    expect(line()?.status).toBe("done");
+    expect(JSON.parse(line()!.detail!)).toEqual({ pre: 967_000, post: null });
+    q.push(stream({ type: "message_start", message: { usage: { input_tokens: 700, cache_creation_input_tokens: 22_000, cache_read_input_tokens: 0 } } }));
+    await settle();
+    expect(JSON.parse(line()!.detail!)).toEqual({ pre: 967_000, post: 22_700 });
+    expect(agents.withChat(project).entries.filter((item) => item.kind === "compact")).toHaveLength(1);
+    q.push({ type: "result", subtype: "success", is_error: false, usage: {} });
+    q.end();
+    await settle();
+  } finally {
+    home.cleanup();
+  }
+});
+
 test("a turn's footage comes down at its start and, with what it added, at its end, before the edit is opened to be watched", async () => {
   const home = fixtureHome("claude-footage");
   const asked: string[][] = [];

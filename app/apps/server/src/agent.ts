@@ -1189,8 +1189,24 @@ export class Agents implements seams.AgentPanel {
         if (message.subtype === "init" && typeof message.session_id === "string" && chat.thread !== message.session_id) {
           chat.thread = message.session_id;
           this.save(project);
+        } else if (message.subtype === "status" && message.status === "compacting") {
+          // Shown as it happens (Sphe, Nov 12: "show when there is compaction occurring, as it occurs"), then how much it took off.
+          if (turn.compaction?.open !== true) turn.compaction = { id: `claude-compact-${turn.started}-${++turn.compactions}`, pre: null, post: null, open: true };
+          this.upsert(project, entry({ id: turn.compaction.id, kind: "compact", status: "running" }));
+        } else if (message.subtype === "status" && turn.compaction?.open === true && message.compact_result === "failed") {
+          turn.compaction.open = false;
+          this.upsert(project, entry({ id: turn.compaction.id, kind: "compact", status: "failed", text: typeof message.compact_error === "string" ? takeChars(message.compact_error, 300) : "" }));
         } else if (message.subtype === "compact_boundary") {
-          diag.info("agent", `${project}: Claude Code compacted the conversation`);
+          const meta = (message.compact_metadata ?? {}) as { pre_tokens?: unknown; post_tokens?: unknown };
+          const pre = typeof meta.pre_tokens === "number" ? meta.pre_tokens : null;
+          const post = typeof meta.post_tokens === "number" ? meta.post_tokens : null;
+          diag.info("agent", `${project}: Claude Code compacted the conversation (${pre ?? "?"} → ${post ?? "?"} tokens)`);
+          if (turn.compaction?.open !== true) turn.compaction = { id: `claude-compact-${turn.started}-${++turn.compactions}`, pre: null, post: null, open: true };
+          turn.compaction.open = false;
+          turn.compaction.pre = pre;
+          turn.compaction.post = post;
+          this.upsert(project, compactEntry(turn.compaction));
+          this.save(project);
         } else if (message.subtype === "api_retry") {
           diag.warn("agent", `${project}: Claude's API asked for a retry: ${stableStringify(message.error ?? message.error_status ?? null)}`);
         }
@@ -1200,10 +1216,21 @@ export class Agents implements seams.AgentPanel {
         const event = (message.event ?? {}) as Record<string, unknown>;
         const index = typeof event.index === "number" ? event.index : -1;
         switch (event.type) {
-          case "message_start":
+          case "message_start": {
             turn.calls += 1;
             turn.blocks.clear();
+            // A compaction that didn't say its size after: the first call after it reads that much.
+            const compaction = turn.compaction;
+            if (compaction !== null && !compaction.open && compaction.post === null) {
+              const usage = ((event.message ?? {}) as { usage?: Record<string, unknown> }).usage ?? {};
+              const read = ["input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"].reduce((sum, key) => sum + (typeof usage[key] === "number" ? (usage[key] as number) : 0), 0);
+              if (read > 0) {
+                compaction.post = read;
+                this.upsert(project, compactEntry(compaction));
+              }
+            }
             break;
+          }
           case "content_block_start": {
             const block = (event.content_block ?? {}) as Record<string, unknown>;
             if (block.type === "text") {
@@ -1831,6 +1858,11 @@ export class Agents implements seams.AgentPanel {
   }
 }
 
+/** A compaction's chat line: done, with its sizes ({pre, post} tokens) for the line to say. */
+function compactEntry(compaction: { id: string; pre: number | null; post: number | null }): Entry {
+  return entry({ id: compaction.id, kind: "compact", status: "done", detail: JSON.stringify({ pre: compaction.pre, post: compaction.post }) });
+}
+
 /** A Claude turn's state as its messages come in. */
 class ClaudeTurn {
   /** The current model call's content blocks, by index: their kind and chat entry. */
@@ -1839,6 +1871,9 @@ class ClaudeTurn {
   tools = 0;
   /** Tool calls by their tool_use id, for their results. */
   byUseId = new Map<string, { id: string; tool: string; args: unknown }>();
+  /** Claude Code compacting the conversation: its chat line, and its size before, until the size after is known. */
+  compaction: { id: string; pre: number | null; post: number | null; open: boolean } | null = null;
+  compactions = 0;
   constructor(readonly started: number) {}
 }
 

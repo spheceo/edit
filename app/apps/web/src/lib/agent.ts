@@ -13,7 +13,8 @@ export interface AgentEntry {
   id: string;
   /** "subagent": a sub-agent's card (its chat key in `detail`), opened to view its own chat. */
   /** "thinking": a reasoning block. `status` "running" while it is still being written. */
-  kind: "user" | "assistant" | "tool" | "error" | "subagent" | "thinking";
+  /** "compact": Claude Code compacting the conversation; `detail` its sizes, {pre, post} tokens, once done. */
+  kind: "user" | "assistant" | "tool" | "error" | "subagent" | "thinking" | "compact";
   text: string;
   tool?: string;
   status?: "running" | "done" | "failed" | "stopped";

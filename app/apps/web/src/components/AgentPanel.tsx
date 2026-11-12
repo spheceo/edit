@@ -1,5 +1,5 @@
 import { explain } from "@edit/types/problems";
-import { ArrowLeft, AudioLines, Check, ChevronRight, CircleSlash, Eye, FileInput, Image, FileText, FolderOpen, LayoutGrid, ListChecks, MousePointerClick, Music, RotateCcw, ScrollText, Scissors, Share, SlidersHorizontal, Spline, Square, SquarePlus, Star, Trash2, Type, Wrench, ScanEye, Pencil, type LucideIcon, Copy, Quote } from "lucide-react";
+import { ArrowLeft, AudioLines, Check, ChevronRight, CircleSlash, Eye, FileInput, Image, FileText, FolderOpen, LayoutGrid, ListChecks, MousePointerClick, Music, RotateCcw, ScrollText, Scissors, Share, SlidersHorizontal, Spline, Square, SquarePlus, Star, Trash2, Type, Wrench, ScanEye, Pencil, type LucideIcon, Copy, Quote, SquareTerminal, FilePen, Search, Globe, BookOpen, ImagePlus, Hourglass, Shrink, Clapperboard } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -21,6 +21,7 @@ import {
   type AgentEntry,
 } from "../lib/agent";
 import { buildTurns, callTitle, formatWorked, groupSummary, isWorking, keepUnchanged, shortSpan, thinkingWord, type Turn, type TurnPart } from "../lib/agentTurns";
+import { argsOf, groupKind, shortTokens, stepKind, type StepKind } from "../lib/steps";
 import { useSentNow } from "../lib/sentNow";
 import { useNow } from "../lib/now";
 import { api, mediaUrl } from "../lib/api";
@@ -508,7 +509,38 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   transcribe: AudioLines,
 };
 
-const toolIcon = (tool?: string) => TOOL_ICONS[tool ?? ""] ?? Wrench;
+/** A step's kind's icon (lib/steps.ts), for tools of no icon of their own. */
+const KIND_ICONS: Record<StepKind, LucideIcon> = {
+  command: SquareTerminal,
+  read: FileText,
+  search: Search,
+  change: FilePen,
+  reference: Clapperboard,
+  graphic: ScanEye,
+  web: Globe,
+  edit: Scissors,
+  notes: BookOpen,
+  picture: ImagePlus,
+  wait: Hourglass,
+  other: Wrench,
+};
+
+const toolIcon = (tool?: string) => TOOL_ICONS[tool ?? ""] ?? KIND_ICONS[stepKind(tool)];
+
+/** A call's icon: Read is a picture looked at to the thumbnail agent, a file read to Bodycam HQ's. */
+const callIcon = (call: AgentEntry) => {
+  const path = argsOf(call).file_path;
+  return call.tool === "Read" && typeof path === "string" && !/\.(png|jpe?g|webp|gif|avif)$/iu.test(path) ? FileText : toolIcon(call.tool);
+};
+
+/** A group's icon: what most of its steps are; a mix of the house's own, a list. */
+const groupIcon = (calls: AgentEntry[]) => {
+  const kind = groupKind(calls);
+  return kind === "other" ? ListChecks : KIND_ICONS[kind];
+};
+
+/** "19:33": when a step began. */
+const clock = (at?: number) => (at ? new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "");
 
 /** A reasoning block. While it is being written the words stay open; afterwards it folds to the label (as in phi). */
 /** A thinking word that moves on every few seconds from when it appeared. */
@@ -556,50 +588,133 @@ function ToolGroup({ calls, live }: { calls: AgentEntry[]; live: boolean }) {
   const current = live ? ([...calls].reverse().find((call) => call.status === "running") ?? calls.at(-1)) : undefined;
   // A step that didn't work is the agent's to work around (a site's bot check, a plan it fixes and sends
   // again): never red here. Only what stops the turn is a problem for the person (the error entries).
-  const Icon = current ? toolIcon(current.tool) : calls.length === 1 ? toolIcon(calls[0].tool) : ListChecks;
+  const Icon = current ? callIcon(current) : calls.length === 1 ? callIcon(calls[0]) : groupIcon(calls);
   const title = current ? callTitle(current) : calls.length === 1 ? callTitle(calls[0]) : groupSummary(calls);
   return (
     <div>
       <button
         onClick={() => setOpen((value) => !value)}
-        className="flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
+        className="group/row flex h-7 w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
       >
         <Icon size={13} className="shrink-0 text-faint" />
         <span className={cx("min-w-0 flex-1 truncate", current && "shimmer")}>{title}</span>
-        {calls.length > 1 && !current && <span className="text-[11px] text-faint tabular">{calls.length}</span>}
+        <ChevronRight size={12} className={cx("shrink-0 text-faint transition-[transform,opacity] duration-150", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/row:opacity-100")} />
       </button>
-      {open && (
-        <div className="mt-0.5 ml-[13px] flex flex-col border-l border-line pl-2">
-          {calls.map((call) => (
-            <ToolCall key={call.id} call={call} />
-          ))}
-        </div>
-      )}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className="mt-0.5 ml-[13px] flex flex-col overflow-hidden border-l border-line pl-2"
+          >
+            {calls.map((call) => (
+              <ToolCall key={call.id} call={call} />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 function ToolCall({ call }: { call: AgentEntry }) {
   const [open, setOpen] = useState(false);
-  const Icon = toolIcon(call.tool);
+  const Icon = callIcon(call);
   const failed = call.status === "failed";
+  const command = call.tool === "Bash";
   return (
     <div>
       <button
         onClick={() => setOpen((value) => !value)}
-        className="flex h-[26px] w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
+        className="group/row flex h-[26px] w-full items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-muted transition-colors hover:bg-hover hover:text-fg/85"
       >
         <Icon size={13} className="shrink-0 text-faint" />
-        <span className={cx("min-w-0 flex-1 truncate", call.status === "running" && "shimmer")}>{callTitle(call)}</span>
-        {failed && <span className="text-[11px] text-faint">didn’t work</span>}
-        {call.status === "stopped" && <span className="text-[11px] text-faint">stopped</span>}
+        <span className={cx("min-w-0 flex-1 truncate", command && "font-mono text-[11.5px]", call.status === "running" && "shimmer")}>{callTitle(call)}</span>
+        {failed && <span className="shrink-0 text-[11px] text-faint">didn’t work</span>}
+        {call.status === "stopped" && <span className="shrink-0 text-[11px] text-faint">stopped</span>}
+        <span className={cx("shrink-0 text-[11px] text-faint tabular transition-opacity", open ? "opacity-100" : "opacity-0 group-hover/row:opacity-100")}>{clock(call.at)}</span>
+        <ChevronRight size={12} className={cx("shrink-0 text-faint transition-[transform,opacity] duration-150", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/row:opacity-100")} />
       </button>
-      {open && (
-        <pre className="mx-1.5 mt-0.5 mb-1.5 max-h-48 overflow-auto rounded-md bg-black px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted ring-1 ring-line">
-          {failed ? `${call.text}\n\n` : ""}
-          {call.detail ?? call.text}
-        </pre>
-      )}
+      {open && <StepDetail call={call} />}
+    </div>
+  );
+}
+
+/** A step opened: a command as code, an edit to a file as its lines out and in, a file written as it was written, else what it was asked. */
+function StepDetail({ call }: { call: AgentEntry }) {
+  const a = argsOf(call);
+  const text = (value: unknown) => (typeof value === "string" ? value : "");
+  const box = "mx-1.5 mt-0.5 mb-1.5 max-h-64 overflow-auto rounded-md bg-black px-2.5 py-2 font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted ring-1 ring-line [overflow-wrap:anywhere]";
+  const failed = call.status === "failed" && call.text ? <div className="mb-1.5 text-danger">{call.text}</div> : null;
+  const path = text(a.file_path);
+  if (call.tool === "Bash") {
+    return (
+      <pre className={box}>
+        {failed}
+        <span className="text-fg/85">{text(a.command)}</span>
+      </pre>
+    );
+  }
+  if ((call.tool === "Edit" || call.tool === "MultiEdit") && path !== "") {
+    const edits = call.tool === "MultiEdit" && Array.isArray(a.edits) ? (a.edits as Record<string, unknown>[]) : [a];
+    return (
+      <div className={box}>
+        {failed}
+        <div className="mb-1 truncate text-faint" title={path}>{path}</div>
+        {edits.map((one, index) => (
+          <div key={index} className={index > 0 ? "mt-1.5 border-t border-line pt-1.5" : undefined}>
+            {text(one.old_string).split("\n").map((line, at) => (
+              <div key={`o${at}`} className="bg-danger/10 text-danger/90">- {line}</div>
+            ))}
+            {text(one.new_string).split("\n").map((line, at) => (
+              <div key={`n${at}`} className="bg-success/10 text-success/90">+ {line}</div>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (call.tool === "Write" && path !== "") {
+    const lines = text(a.content).split("\n");
+    return (
+      <div className={box}>
+        {failed}
+        <div className="mb-1 truncate text-faint" title={path}>{path}</div>
+        <div className="text-fg/80">{lines.slice(0, 80).join("\n")}</div>
+        {lines.length > 80 && <div className="mt-1 text-faint">{lines.length - 80} more lines</div>}
+      </div>
+    );
+  }
+  const { project_id: _project, ...asked } = a;
+  return (
+    <pre className={box}>
+      {failed}
+      {Object.keys(asked).length > 0 ? JSON.stringify(asked, null, 2) : call.text}
+    </pre>
+  );
+}
+
+/**
+ * Claude Code compacting the conversation (Sphe, Nov 12): a line across the
+ * chat as it happens, "Compacting context", then how much it took off.
+ */
+function CompactLine({ entry }: { entry: AgentEntry }) {
+  const running = entry.status === "running";
+  let label = "Context compacted";
+  if (entry.status === "failed") label = "The context couldn’t be compacted";
+  else if (!running) {
+    const sizes = argsOf(entry) as { pre?: unknown; post?: unknown };
+    if (typeof sizes.pre === "number" && typeof sizes.post === "number") label = `Context compacted ${shortTokens(sizes.pre)} → ${shortTokens(sizes.post)} tokens`;
+    else if (typeof sizes.pre === "number") label = `Context compacted from ${shortTokens(sizes.pre)} tokens`;
+  }
+  return (
+    <div className="my-1 flex items-center gap-2.5 px-1.5 text-[12px] text-muted" title={entry.status === "failed" ? entry.text : undefined}>
+      <span className="h-px flex-1 bg-line" />
+      <Shrink size={12} className={cx("shrink-0 text-faint", running && "animate-pulse")} />
+      <span className={cx("shrink-0 tabular", running && "shimmer")}>{running ? "Compacting context" : label}</span>
+      <span className="h-px flex-1 bg-line" />
     </div>
   );
 }
@@ -671,6 +786,7 @@ function quoteMenu(event: React.MouseEvent<HTMLElement>, from: string, whole: st
 
 function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean; fresh?: boolean }) {
   if (entry.kind === "subagent") return <SubAgentCard entry={entry} />;
+  if (entry.kind === "compact") return <CompactLine entry={entry} />;
   // A turn stopped (by the person, or a message steered in its place) isn't a problem to show (Sphe, Nov 12).
   if (entry.kind === "error" && entry.text.trim() === "Stopped.") return null;
   if (entry.kind === "error") {

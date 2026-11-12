@@ -4,6 +4,7 @@
 import type { ThumbRun } from "@edit/types/thumbnails";
 
 import type { AgentEntry } from "./agent";
+import { argsOf, joinPhrases, kindPhrase, stepKind, stepTitle, type StepKind } from "./steps";
 
 export type TurnPart =
   | { kind: "group"; id: string; calls: AgentEntry[] }
@@ -48,8 +49,8 @@ export function buildTurns(entries: AgentEntry[], running: boolean): Turn[] {
     const work: TurnPart[] = [];
     const answer: AgentEntry[] = [];
     parts.forEach((part, index) => {
-      // A sub-agent's card (the fresh-eyes pass) stays in view with the answer, never folded into the work.
-      if (part.kind === "entry" && (index === lastAssistant || part.entry.kind === "error" || part.entry.kind === "subagent")) answer.push(part.entry);
+      // A sub-agent's card (the fresh-eyes pass) and a compaction's line stay in view with the answer, never folded into the work.
+      if (part.kind === "entry" && (index === lastAssistant || part.entry.kind === "error" || part.entry.kind === "subagent" || part.entry.kind === "compact")) answer.push(part.entry);
       else work.push(part);
     });
     const all = [current.user, ...parts.flatMap((part) => (part.kind === "group" ? part.calls : part.kind === "entry" ? [part.entry] : []))].filter(Boolean) as AgentEntry[];
@@ -241,7 +242,8 @@ export function hqActivity(entries: readonly AgentEntry[], now = Date.now()): st
 /** A short, human title for one call. */
 export function callTitle(entry: AgentEntry): string {
   if (entry.tool !== undefined && SCRIPT_TOOLS.has(entry.tool) && entry.text) return entry.text;
-  const thumb = entry.tool !== undefined ? THUMB_TOOLS[entry.tool] : undefined;
+  // Claude Code's Read is a picture to the thumbnail agent; a file of code to Bodycam HQ's.
+  const thumb = entry.tool !== undefined && !(entry.tool === "Read" && readsCode(entry)) ? THUMB_TOOLS[entry.tool] : undefined;
   if (thumb !== undefined) return entry.status === "running" ? thumb[0] : thumb[1];
   const a = args(entry);
   switch (entry.tool) {
@@ -288,9 +290,14 @@ export function callTitle(entry: AgentEntry): string {
     case "transcribe":
       return "Started transcribing";
     default:
-      return entry.tool ?? "Tool";
+      return stepTitle(entry);
   }
 }
+
+const readsCode = (entry: AgentEntry) => {
+  const path = argsOf(entry).file_path;
+  return typeof path === "string" && path !== "" && !/\.(png|jpe?g|webp|gif|avif)$/iu.test(path);
+};
 
 /** "Read the project, added 2 titles, looked at a frame". */
 export function groupSummary(calls: AgentEntry[]): string {
@@ -333,11 +340,23 @@ export function groupSummary(calls: AgentEntry[]): string {
       redo: "redid a change",
       look: "looked at the thumbnail",
       rename: "renamed the thumbnail",
-    })[tool ?? ""] ?? "step";
+    })[tool ?? ""];
+  // Steps of no house bucket: by their kind (steps.ts), "edited 2 files".
+  const kinds = new Map<StepKind, AgentEntry[]>();
+  // Calls under each phrase, to keep the biggest when there are many.
+  const steps = new Map<string, number>();
   for (const call of calls) {
-    const key = bucket(call.tool);
+    const key = call.tool === "Read" && readsCode(call) ? undefined : bucket(call.tool);
+    if (key === undefined) {
+      const kind = stepKind(call.tool);
+      if (!kinds.has(kind)) order.push(`kind:${kind}`);
+      kinds.set(kind, [...(kinds.get(kind) ?? []), call]);
+      steps.set(`kind:${kind}`, (steps.get(`kind:${kind}`) ?? 0) + 1);
+      continue;
+    }
     if (!counts.has(key)) order.push(key);
-    counts.set(key, (counts.get(key) ?? 0) + (call.tool === "contact_sheet" ? Number(args(call).count ?? 12) : 1));
+    steps.set(key, (steps.get(key) ?? 0) + 1);
+    counts.set(key, (counts.get(key) ?? 0) + (call.tool === "contact_sheet" ? Number(args(call).count ?? (Array.isArray(args(call).times) ? (args(call).times as unknown[]).length : 12)) : 1));
   }
   const phrase = (key: string, count: number) => {
     switch (key) {
@@ -361,13 +380,20 @@ export function groupSummary(calls: AgentEntry[]): string {
         return `looked at ${plural(count, "picture")}`;
       case "made":
         return `made ${plural(count, "picture")}`;
-      case "step":
-        return `ran ${plural(count, "step")}`;
       default:
-        return key;
+        return key.startsWith("kind:") ? kindPhrase(key.slice(5) as StepKind, kinds.get(key.slice(5) as StepKind) ?? []) : key;
     }
   };
-  const text = order.map((key) => phrase(key, counts.get(key) ?? 1)).join(", ");
+  // Past three kinds: the two with the most steps (in order), the rest as a count of steps.
+  let keys = order;
+  let rest = 0;
+  if (order.length > 3) {
+    const kept = new Set([...order].sort((a, b) => (steps.get(b) ?? 0) - (steps.get(a) ?? 0)).slice(0, 2));
+    keys = order.filter((key) => kept.has(key));
+    rest = order.filter((key) => !kept.has(key)).reduce((sum, key) => sum + (steps.get(key) ?? 0), 0);
+  }
+  const phrases = keys.map((key) => phrase(key, counts.get(key) ?? 1));
+  const text = joinPhrases(rest > 0 ? [...phrases, rest === 1 ? "one more step" : `${rest} more steps`] : phrases);
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 

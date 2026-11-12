@@ -37,7 +37,25 @@ test("a live thumbnail turn shows reasoning between the words and the tool still
     { id: "b", kind: "tool", tool: "Read", text: "" },
     { id: "c", kind: "tool", tool: "Read", text: "" },
     { id: "d", kind: "tool", tool: "make_picture", text: "" },
-  ])).toBe("Looked at 3 pictures, made a picture");
+  ])).toBe("Looked at 3 pictures and made a picture");
+});
+
+test("Bodycam HQ's steps say what they did, a group by its kinds", () => {
+  // Sphe, Nov 12: "Ran 1 command and changed 1 file", not "Ran 7 steps" and look_at_media seven times.
+  const step = (tool: string, args: object) => ({ id: tool, kind: "tool", tool, text: "", status: "done", detail: JSON.stringify(args) }) as const;
+  expect(callTitle(step("look_at_media", { media_id: "m1892", start: 18, end: 38, count: 24 }))).toBe("Studied the reference 18–38s");
+  expect(callTitle(step("look_at_effect", { name: "paper-board-2", times: [5.6] }))).toBe("Looked at paper-board-2 at 5.6s");
+  expect(callTitle(step("Read", { file_path: "/x/effects/paper-board/scene.html", offset: 47 }))).toBe("Read paper-board/scene.html");
+  expect(callTitle(step("Read", { file_path: "/x/frame.png" }))).toBe("Looked at a picture");
+  expect(callTitle(step("look_at_found", {}))).toBe("Look at found");
+  expect(groupSummary([
+    step("Edit", { file_path: "/a/scene.html" }),
+    step("Edit", { file_path: "/a/scene.html" }),
+    step("look_at_effect", { name: "b" }),
+    step("look_at_effect", { name: "b" }),
+  ])).toBe("Edited a file and looked at the graphic 2 times");
+  expect(groupSummary([step("Bash", { command: "ls" }), step("Write", { file_path: "/a/b.ts" })])).toBe("Ran a command and edited a file");
+  expect(groupSummary([step("read_skill", {}), step("look_at_media", {}), step("look_at_media", {}), step("wait", {}), step("Edit", { file_path: "/a" }), step("Edit", { file_path: "/a" }), step("Edit", { file_path: "/a" })])).toBe("Studied the reference 2 times, edited a file and 2 more steps");
 });
 
 test("working reads to the second", () => {

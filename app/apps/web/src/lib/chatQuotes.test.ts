@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addQuote, parseQuoted, quotedMessage, quoteLabel, takeQuotes } from "./chatQuotes";
+import { addQuote, inlineQuote, parseQuoted, piecesOf, quotedMessage, quoteLabel, takeQuotes } from "./chatQuotes";
 
 describe("words quoted into a chat", () => {
   it("sends the script's quote as Claude has always read it, and reads it back", () => {
@@ -22,6 +22,18 @@ describe("words quoted into a chat", () => {
     expect(read.quotes.map((one) => one.from)).toEqual(["title 2", "the thumbnail guide"]);
     expect(read.quotes[1]!.text).toBe("Judge on the left, badge in hand\nred arrow to the cruiser");
     expect(read.words).toBe("punchier, like the guide");
+  });
+
+  it("reads a quote back where it was put among the words, its where for Claude only (Nov 12)", () => {
+    const quote = { from: "narration 3", where: "clip c4, characters 10–24", text: "he said “stop” twice" };
+    const message = `make ${inlineQuote(quote)} calmer`;
+    expect(message).toBe('make [Quoted from narration 3 (clip c4, characters 10–24): “he said “stop" twice”] calmer');
+    expect(piecesOf(message)).toEqual([
+      { kind: "words", text: "make " },
+      { kind: "quote", from: "narration 3", text: 'he said “stop" twice' },
+      { kind: "words", text: " calmer" },
+    ]);
+    expect(parseQuoted(message)).toEqual({ quotes: [{ from: "narration 3", text: 'he said “stop" twice' }], words: "make calmer" });
   });
 
   it("leaves a message with no quotes as it is", () => {

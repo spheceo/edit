@@ -2,10 +2,13 @@
 // quote titles or thumbnail guide lines and include them in chat for ideas,
 // and scripts we need a sort of shared system"). Kept per chat, as its files
 // are (chatFiles.ts): a page adds a quote (the script's selection pill, or
-// QuoteSelection over any text marked `data-quote`), the composer shows it
-// above the words and sends it in front of them, and the chat shows it back
-// as a quote. The words Claude reads are the script's own since Oct:
-// "Quoted from narration 3 (clip …, characters a–b):\n“…”\n\nrequest".
+// QuoteSelection over any text marked `data-quote`), the composer holds it
+// as a chip among the words, where it was put, and the chat shows it back as
+// the same chip in the sent message (Sphe, Nov 12: a quote "in between some
+// other text", not a block that clouds the message). Claude reads each in
+// place: "[Quoted from narration 3 (clip …, characters a–b): “…”]". A
+// message from before reads back too: its quotes in front of the words,
+// "Quoted from …:\n“…”\n\nrequest".
 
 import { create } from "zustand";
 
@@ -63,14 +66,39 @@ export function quoteLabel(from: string): string {
 }
 
 const BLOCK = /^Quoted from ([^\n]+?)(?: \(([^)\n]*)\))?:\n“([\s\S]*?)”(?:\n\n|$)/u;
+const INLINE = /\[Quoted from ([^\n:\]]+?)(?: \(([^)\n]*)\))?: “([\s\S]*?)”\]/gu;
+
+/** A quote as it sits among a message's words: its own words never close it early (a ” inside is a straight one). */
+export function inlineQuote(quote: Pick<ChatQuote, "from" | "where" | "text">): string {
+  return `[Quoted from ${quote.from}${quote.where ? ` (${quote.where})` : ""}: “${quote.text.replace(/”/gu, '"')}”]`;
+}
+
+/** A sent message's pieces in order: its words and its quotes, where they were put. */
+export type Piece = { kind: "words"; text: string } | { kind: "quote"; from: string; text: string };
+
+export function piecesOf(message: string): Piece[] {
+  const pieces: Piece[] = [];
+  let rest = message;
+  // A message from before: its quotes in front of the words.
+  for (let match = BLOCK.exec(rest); match !== null; match = BLOCK.exec(rest)) {
+    pieces.push({ kind: "quote", from: match[1]!, text: match[3]! });
+    rest = rest.slice(match[0].length);
+  }
+  let at = 0;
+  for (const match of rest.matchAll(INLINE)) {
+    if (match.index > at) pieces.push({ kind: "words", text: rest.slice(at, match.index) });
+    pieces.push({ kind: "quote", from: match[1]!, text: match[3]! });
+    at = match.index + match[0].length;
+  }
+  if (at < rest.length) pieces.push({ kind: "words", text: rest.slice(at) });
+  return pieces;
+}
 
 /** A sent message read back into its quotes and what was asked; a message with none is all words. */
 export function parseQuoted(message: string): { quotes: { from: string; text: string }[]; words: string } {
-  const quotes: { from: string; text: string }[] = [];
-  let rest = message;
-  for (let match = BLOCK.exec(rest); match !== null; match = BLOCK.exec(rest)) {
-    quotes.push({ from: match[1]!, text: match[3]! });
-    rest = rest.slice(match[0].length);
-  }
-  return { quotes, words: rest };
+  const pieces = piecesOf(message);
+  return {
+    quotes: pieces.flatMap((piece) => (piece.kind === "quote" ? [{ from: piece.from, text: piece.text }] : [])),
+    words: pieces.flatMap((piece) => (piece.kind === "words" ? [piece.text] : [])).join("").replace(/ {2,}/gu, " ").trim(),
+  };
 }

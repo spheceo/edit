@@ -1,3 +1,4 @@
+import { UserWords } from "../components/Quotes";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ClaudeMark } from "../components/ClaudeMark";
 import { openPage } from "./api";
@@ -66,10 +67,10 @@ export function Working({ stage, since, hint }: { stage: string; since: number |
 export function Asked({ text, at, onRetry }: { text: string; at?: number; onRetry?: () => void }) {
   const shown = shownText(text);
   if (shown === "") return null;
-  const quoted = /^Quoted from narration (\d+) \(clip [^\n]+\):\n“([\s\S]*?)”\n\n([\s\S]*)$/.exec(shown);
   return (
     <div className="user">
-      <div className="bubble">{quoted ? <><span className="bubble-quote"><span>Quoted from narration {quoted[1]}</span><span>{quoted[2]}</span></span>{quoted[3]}</> : shown}</div>
+      {/* Its quotes as chips among the words, where they were put (components/Quotes.tsx; Nov 12). */}
+      <div className="bubble"><UserWords text={shown} /></div>
       <MessageActions text={text} at={at} onRetry={onRetry} />
     </div>
   );

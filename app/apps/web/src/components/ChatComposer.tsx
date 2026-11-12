@@ -15,8 +15,8 @@ import { AlertCircle, ArrowUp, Check, FileText, Film, Image as ImageIcon, Music,
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { create } from "zustand";
 
-import { parseQuoted, quotedMessage, removeQuote, takeQuotes, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
-import { QuoteView } from "./Quotes";
+import { inlineQuote, parseQuoted, quoteLabel, quotedMessage, removeQuote, takeQuotes, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
+import { CHIP, MARK } from "./Quotes";
 import { attachFiles, detachFile, takeFiles, uploading, useFilesOf, type Accept, type ChatFile, type FileKind, type Uploader } from "../lib/chatFiles";
 import { useSettled } from "../lib/settled";
 import { formatBytes } from "../lib/time";
@@ -50,6 +50,56 @@ let queuedId = 0;
 const NO_QUEUE: Queued[] = [];
 
 /** The chat's composer: a message and its files, the model it runs on, Send, Queue or Stop. */
+/**
+ * The box's words as typed, each chip as its quote (`full`: as Claude reads
+ * it, in place; else a mark of it, for telling the words changed): text and
+ * line breaks in order, a block the browser made for a new line its break.
+ */
+function read(box: HTMLElement, quotes: readonly ChatQuote[], full = false): string {
+  let out = "";
+  const walk = (node: Node) => {
+    for (const child of node.childNodes) {
+      if (child instanceof HTMLElement && child.dataset.quoteId !== undefined) {
+        const quote = quotes.find((one) => one.id === Number(child.dataset.quoteId));
+        if (quote !== undefined) out += full ? inlineQuote(quote) : `\u2063${quote.id}\u2063`;
+      } else if (child.nodeType === Node.TEXT_NODE) {
+        out += (child.textContent ?? "").replace(/\u00a0/gu, " ");
+      } else if (child.nodeName === "BR") {
+        out += "\n";
+      } else {
+        if ((child.nodeName === "DIV" || child.nodeName === "P") && out !== "" && !out.endsWith("\n")) out += "\n";
+        walk(child);
+      }
+    }
+  };
+  walk(box);
+  return full ? out : out.replace(/\u2063\d+\u2063/gu, "").trim() === "" ? "" : out;
+}
+
+/** A quote's chip in the editable box: built as DOM (React doesn't own what's typed there), the look of QuoteChip's. */
+function chipOf(quote: ChatQuote, onRemove: () => void): HTMLElement {
+  const chip = document.createElement("span");
+  chip.contentEditable = "false";
+  chip.dataset.quoteId = String(quote.id);
+  chip.className = `${CHIP} group/chip`;
+  chip.title = `${quoteLabel(quote.from)}: ${quote.text}`;
+  const mark = document.createElement("span");
+  mark.className = MARK;
+  mark.textContent = "\u201c";
+  const words = document.createElement("span");
+  words.className = "truncate";
+  words.textContent = quote.text.replace(/\s+/gu, " ");
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.ariaLabel = "Remove the quote";
+  remove.className = "-mr-0.5 hidden size-4 shrink-0 items-center justify-center rounded text-[#8fb0ff]/70 group-hover/chip:flex hover:text-white";
+  remove.textContent = "\u00d7";
+  remove.addEventListener("mousedown", (event) => event.preventDefault());
+  remove.addEventListener("click", onRemove);
+  chip.append(mark, words, remove);
+  return chip;
+}
+
 export function ChatComposer({
   running,
   disabled,
@@ -111,22 +161,61 @@ export function ChatComposer({
   const queue = useQueue((state) => state.chats[chat] ?? NO_QUEUE);
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
   const stoppable = useSettled(running);
-  const input = useRef<HTMLTextAreaElement>(null);
+  const input = useRef<HTMLDivElement>(null);
+  // The box's words as last read from it (chips as their quotes), so a change from outside (`value`) is told apart from typing.
+  const shown = useRef("");
+  const [empty, setEmpty] = useState(text === "");
   const picker = useRef<HTMLInputElement>(null);
   const armed = useFileDrag(files !== undefined);
   const [over, setOver] = useState(false);
   const toast = useEditor((state) => state.toast);
   useEffect(() => {
     if (draft === undefined) return;
-    if (text) localStorage.setItem(draft, text);
+    // The words alone: a chip's quote lives in the chat's quotes, not the draft.
+    const words = text.replace(/\u2063\d+\u2063/gu, "");
+    if (words.trim()) localStorage.setItem(draft, words);
     else localStorage.removeItem(draft);
   }, [draft, text]);
-  // Something quoted in: the words about it go here next.
-  const quoted = useRef(quotes.length);
+  // The words put in from outside (a draft brought back, a chat that sets them, a send that clears them): into the box.
   useEffect(() => {
-    if (quotes.length > quoted.current) input.current?.focus();
-    quoted.current = quotes.length;
-  }, [quotes.length]);
+    const box = input.current;
+    if (box === null || text === shown.current) return;
+    for (const node of [...box.childNodes]) if (!(node instanceof HTMLElement && node.dataset.quoteId !== undefined)) node.remove();
+    if (text !== "") box.append(document.createTextNode(text));
+    shown.current = read(box, quotes);
+    setEmpty(shown.current === "");
+  }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Something quoted in: a chip where the caret is (or at the end), the words about it typed next to it; one taken out
+  // of the store (sent, removed) leaves the box.
+  useEffect(() => {
+    const box = input.current;
+    if (box === null) return;
+    const inBox = new Set([...box.querySelectorAll<HTMLElement>("[data-quote-id]")].map((chip) => Number(chip.dataset.quoteId)));
+    for (const chip of box.querySelectorAll<HTMLElement>("[data-quote-id]")) if (!quotes.some((one) => one.id === Number(chip.dataset.quoteId))) chip.remove();
+    const fresh = quotes.filter((one) => !inBox.has(one.id));
+    if (fresh.length > 0) {
+      const selection = window.getSelection();
+      let range = selection !== null && selection.rangeCount > 0 && box.contains(selection.getRangeAt(0).startContainer) ? selection.getRangeAt(0) : null;
+      if (range === null) {
+        range = document.createRange();
+        range.selectNodeContents(box);
+        range.collapse(false);
+      }
+      for (const quote of fresh) {
+        const chip = chipOf(quote, () => removeQuote(chat, quote.id));
+        const space = document.createTextNode("\u00a0");
+        range.insertNode(space);
+        range.insertNode(chip);
+        range.setStartAfter(space);
+        range.collapse(true);
+      }
+      box.focus();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+    }
+    shown.current = read(box, quotes);
+    setEmpty(shown.current === "" && quotes.length === 0);
+  }, [quotes, chat]);
 
   // The queue goes one message at a time, each once the turn before it has
   // ended and nothing of Edit's own follows it (AFTER_TURN_MS). Sent from a
@@ -163,13 +252,20 @@ export function ChatComposer({
   };
   const waiting = uploading(attached);
   const ready = attached.some((one) => one.state === "done");
-  const canSend = (allowEmpty || text.trim() !== "" || ready) && !waiting && !disabled;
+  const canSend = (allowEmpty || text.trim() !== "" || quotes.length > 0 || ready) && !waiting && !disabled;
   const send = () => {
     if (!canSend) return;
-    const message = text.trim() || (ready ? "Here are the files I've attached." : "");
+    // The words with each quote where it was put (a quote whose chip is gone from the box goes in front, as before).
+    const box = input.current;
+    const placed = box === null ? "" : read(box, quotes, true).trim();
+    const loose = quotes.filter((one) => box === null || box.querySelector(`[data-quote-id="${one.id}"]`) === null);
     const given = takeFiles(chat);
     const said = takeQuotes(chat);
-    const sent = quotedMessage(said, message);
+    const words = placed || (ready && said.length === 0 ? "Here are the files I've attached." : "");
+    const sent = quotedMessage(loose, words);
+    shown.current = "";
+    if (box !== null) box.replaceChildren();
+    setEmpty(true);
     setText("");
     if (!hq && (running || queue.length > 0)) {
       useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: [...(chats[chat] ?? []), { id: ++queuedId, text: sent, files: given, quotes: said }] } }));
@@ -182,14 +278,6 @@ export function ChatComposer({
   const unqueue = (id: string | number) => useQueue.setState(({ chats }) => ({ chats: { ...chats, [chat]: (chats[chat] ?? []).filter((one) => one.id !== id) } }));
   const islands = [
     queue.length > 0 && <QueueIsland key="queue" rows={queue.map((one) => ({ id: one.id, text: one.text, files: one.files.length, quotes: one.quotes.length }))} onRemove={unqueue} />,
-    ...quotes.map((one) => (
-      <div key={`quote-${one.id}`} className="flex items-start gap-2 px-3 pt-2 pb-1.5">
-        <QuoteView from={one.from} text={one.text} className="max-h-24 overflow-y-auto" />
-        <button type="button" aria-label="Remove quoted text" title="Remove quoted text" onClick={() => removeQuote(chat, one.id)} className="flex size-6 shrink-0 items-center justify-center rounded-md text-faint hover:bg-hover hover:text-fg">
-          <X size={12} />
-        </button>
-      </div>
-    )),
     tray,
   ].filter((one) => one !== false && one !== null && one !== undefined);
 
@@ -228,36 +316,47 @@ export function ChatComposer({
         }}
       >
         {attached.length > 0 && <FileRow chat={chat} files={attached} />}
-        <textarea
-          ref={input}
-          name="message"
-          aria-label="Message the agent"
-          autoComplete="off"
-          value={text}
-          disabled={disabled}
-          rows={3}
-          placeholder={armed ? "Drop to attach" : placeholder}
-          onChange={(event) => setText(event.target.value)}
-          // A pasted screenshot is attached. Stopped here, so a page's own
-          // paste listener (a thumbnail's, an idea's) doesn't attach it again.
-          onPaste={(event) => {
-            const pasted = [...event.clipboardData.files];
-            if (files === undefined || pasted.length === 0) return;
-            event.preventDefault();
-            event.stopPropagation();
-            attach(pasted);
-          }}
-          onKeyDown={(event) => {
-            event.stopPropagation();
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+        {/* An editable box of plain text with the quotes as chips among the words (Sphe, Nov 12), labelled as a text box
+            for dictation (Wispr Flow) to type into. */}
+        <div className="relative">
+          {empty && <div className="pointer-events-none absolute inset-x-1 top-0 text-[13px] leading-[19px] text-[#5b5b64]">{armed ? "Drop to attach" : placeholder}</div>}
+          <div
+            ref={input}
+            role="textbox"
+            aria-multiline="true"
+            aria-label="Message the agent"
+            aria-disabled={disabled}
+            contentEditable={disabled ? false : "plaintext-only"}
+            suppressContentEditableWarning
+            onInput={() => {
+              const box = input.current;
+              if (box === null) return;
+              // A chip deleted by Backspace takes its quote with it.
+              const left = new Set([...box.querySelectorAll<HTMLElement>("[data-quote-id]")].map((chip) => Number(chip.dataset.quoteId)));
+              for (const one of quotes) if (!left.has(one.id)) removeQuote(chat, one.id);
+              shown.current = read(box, quotes);
+              setEmpty(shown.current === "" && left.size === 0);
+              setText(shown.current);
+            }}
+            // A pasted screenshot is attached. Stopped here, so a page's own
+            // paste listener (a thumbnail's, an idea's) doesn't attach it again.
+            onPaste={(event) => {
+              const pasted = [...event.clipboardData.files];
+              if (files === undefined || pasted.length === 0) return;
               event.preventDefault();
-              send();
-            }
-          }}
-          // Dim grey, the same ink phi uses for its composer placeholder.
-          className="max-h-48 min-h-[60px] w-full resize-none bg-transparent px-1 text-[13px] leading-[19px] text-fg outline-none placeholder:text-[#5b5b64]"
-          style={{ height: Math.min(192, 60 + Math.max(0, text.split("\n").length - 3) * 19) }}
-        />
+              event.stopPropagation();
+              attach(pasted);
+            }}
+            onKeyDown={(event) => {
+              event.stopPropagation();
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                send();
+              }
+            }}
+            className="max-h-48 min-h-[60px] w-full overflow-y-auto px-1 text-[13px] leading-[19px] break-words whitespace-pre-wrap text-fg outline-none aria-disabled:opacity-50"
+          />
+        </div>
         <div className="mt-1.5 flex items-center gap-1.5">
           {files !== undefined && (
             <>

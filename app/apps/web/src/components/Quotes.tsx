@@ -7,7 +7,7 @@ import { X } from "lucide-react";
 import { piecesOf, quoteLabel } from "../lib/chatQuotes";
 
 /** The chip's look, shared with the composer's own (built there as DOM, inside its editable box). */
-export const CHIP = "mx-0.5 inline-flex max-w-[11rem] items-center gap-1 rounded-md bg-[#5b8cff]/12 px-1.5 align-bottom text-[12.5px] leading-[19px] text-[#8fb0ff]";
+export const CHIP = "mx-0.5 inline-flex max-w-[min(11rem,100%)] items-center gap-1 rounded-md bg-[#5b8cff]/12 px-1.5 align-bottom text-[12.5px] leading-[19px] text-[#8fb0ff]";
 /** Its quote mark, the same in the composer's chip (built as DOM there). */
 export const MARK = "shrink-0 font-serif text-[15px] leading-none opacity-80";
 
@@ -36,13 +36,30 @@ export function QuoteView({ from, text, className }: { from: string; text: strin
   );
 }
 
-/** What was sent: its words, with each quote a chip where it was put. */
+/**
+ * What was sent: its words, each quote a chip where it was put. Quotes before
+ * any words sit together in a row on top, the words under them: chips one
+ * after another ran into the words a line at a time (Sphe, Nov 12: "it looks
+ * so weird").
+ */
 export function UserWords({ text }: { text: string }) {
   const pieces = piecesOf(text);
   if (!pieces.some((piece) => piece.kind === "quote")) return text;
+  let lead = 0;
+  while (lead < pieces.length && (pieces[lead]!.kind === "quote" || pieces[lead]!.text.trim() === "")) lead++;
+  const leading = pieces.slice(0, lead).filter((piece): piece is Extract<typeof piece, { kind: "quote" }> => piece.kind === "quote");
+  const rest = pieces.slice(lead);
+  if (rest[0]?.kind === "words") rest[0] = { kind: "words", text: rest[0].text.replace(/^\s+/u, "") };
   return (
     <>
-      {pieces.map((piece, index) =>
+      {leading.length > 0 && (
+        <span className={`flex flex-wrap gap-1 ${rest.length > 0 ? "mb-1.5" : ""}`}>
+          {leading.map((piece, index) => (
+            <QuoteChip key={index} from={piece.from} text={piece.text} />
+          ))}
+        </span>
+      )}
+      {rest.map((piece, index) =>
         piece.kind === "quote" ? <QuoteChip key={index} from={piece.from} text={piece.text} /> : <span key={index}>{piece.text}</span>,
       )}
     </>

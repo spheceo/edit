@@ -20,6 +20,8 @@ describe("a sent message in the chat", () => {
     expect(html).toContain("Cops Surprise Husband");
     expect(html).not.toContain("Quoted from");
     expect(html.endsWith("<span>punchier</span>")).toBe(true);
+    // In a row of their own on top, the words under them.
+    expect(html.startsWith('<span class="flex flex-wrap gap-1 mb-1.5">')).toBe(true);
   });
 
   it("shows a message with no quotes as it was written", () => {

@@ -178,10 +178,12 @@ function filesIn(dir: string, under = ""): [string, number, number][] {
 /**
  * The version of an effect's code: its files (each by name, size and when it
  * last changed), Edit's runtime and the frame it's drawn at. A save makes a new
- * one, and so does a new build whose runtime draws differently.
+ * one, and so does a new build whose runtime draws differently. The fonts it
+ * names beyond Edit's own count only when there are some, so an effect without
+ * any keeps the key it had before fonts were fetched (and its render).
  */
 function sourceKey(files: [string, number, number][], frame: { width: number; height: number; fps: number }, used = ""): string {
-  return fingerprint([RUNTIME, FACES, used, `${frame.width}x${frame.height}@${frame.fps}`, ...files.map(([path, size, changed]) => `${path} ${size} ${changed}`)]);
+  return fingerprint([RUNTIME, FACES, ...(used === "" ? [] : [used]), `${frame.width}x${frame.height}@${frame.fps}`, ...files.map(([path, size, changed]) => `${path} ${size} ${changed}`)]);
 }
 
 /** The fonts beyond Edit's own an effect's page names (fonts.ts), for its key: one changed or added re-renders only what uses it. */

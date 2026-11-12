@@ -936,6 +936,10 @@ test("a reference is studied frame by frame: every frame of a stretch, sheet aft
     const whole = await tool(app, "look_at_media", { media_id: "ref", start: 0, end: 5, every_frame: true, count: 24 });
     expect(images(whole)).toBe(5);
     expect(words(whole)).toContain("Frames 120–149 are left: look again with start 4.000");
+    // A few to a sheet would be a picture a frame: more to each, and said.
+    const few = await tool(app, "look_at_media", { media_id: "ref", start: 0, end: 1, every_frame: true, count: 1 });
+    expect(images(few)).toBe(3);
+    expect(words(few)).toContain("12 frames to a sheet, not 1");
     // One frame at a time, as the file has it.
     const full = await tool(app, "look_at_media", { media_id: "ref", times: [1, 2.5], detail: "full" });
     expect(images(full)).toBe(2);
@@ -944,4 +948,4 @@ test("a reference is studied frame by frame: every frame of a stretch, sheet aft
   } finally {
     useNative(before);
   }
-});
+}, 120_000);

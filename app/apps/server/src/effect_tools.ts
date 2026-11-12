@@ -62,7 +62,7 @@ async function lookAtStretch(app: ToolCall["app"], projectId: string, name: stri
       const part = look.stills.slice(at, at + PER_SHEET);
       part.forEach((still, index) => fs.writeFileSync(join(dir, `f${String(index).padStart(3, "0")}.jpg`), still.picture));
       const sheet = join(dir, `sheet-${at}.jpg`);
-      const label = `drawtext=text='%{eif\\:n+${first + at}\\:d}':x=8:y=8:fontsize=22:fontcolor=yellow:box=1:boxcolor=black@0.7`;
+      const label = `drawtext=${frameCompare.labelFont(app.store.cacheDir())}:text='%{eif\\:n+${first + at}\\:d}':x=8:y=8:fontsize=22:fontcolor=yellow:box=1:boxcolor=black@0.7`;
       await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-framerate", "1", "-i", join(dir, "f%03d.jpg"), "-frames:v", "1", "-vf", `${label},tile=4x${Math.ceil(part.length / 4)}:padding=4`, "-q:v", "3", sheet]);
       const from = first + at;
       out.push(...image(new Uint8Array(fs.readFileSync(sheet)), `${name}: every frame, ${from}–${from + part.length - 1} (${fixed(from / fps, 2)}–${fixed((from + part.length - 1) / fps, 2)} s), left-to-right then down, numbered by frame`, "image/jpeg"));
@@ -98,11 +98,14 @@ async function lookCompared(app: ToolCall["app"], projectId: string, name: strin
   const refStart = typeof beside?.start === "number" && Number.isFinite(beside.start) ? beside.start : 0;
   const most = reference ? BESIDE_MOST : EFFECT_FRAMES_MOST;
   let times: number[];
+  let rest = "";
   if (args.every_frame === true) {
     const start = typeof args.start === "number" && Number.isFinite(args.start) && args.start >= 0 ? args.start : 0;
     const end = typeof args.end === "number" && Number.isFinite(args.end) && args.end > start ? args.end : start + 1;
     const first = Math.round(start * fps);
-    times = Array.from({ length: Math.min(Math.max(1, Math.round(end * fps) - first), most) }, (_, index) => (first + index) / fps);
+    const total = Math.max(1, Math.round(end * fps) - first);
+    times = Array.from({ length: Math.min(total, most) }, (_, index) => (first + index) / fps);
+    if (times.length < total) rest = `Frames ${first + times.length}–${first + total - 1} are left: look again with start ${fixed((first + times.length) / fps, 3)}.`;
   } else {
     const given = Array.isArray(args.times) ? (args.times as unknown[]).filter((one): one is number => typeof one === "number" && Number.isFinite(one) && one >= 0) : [];
     if (given.length === 0) throw new Error("times (moments, seconds into the effect) or every_frame with start and end");
@@ -118,24 +121,34 @@ async function lookCompared(app: ToolCall["app"], projectId: string, name: strin
       return file;
     });
     let refs: string[] = [];
+    const still = reference?.kind === "image";
     if (reference) {
-      if (args.every_frame === true) refs = await frameCompare.framesOf(reference.path, refStart, times.length, fps, width, height, dir, "ref");
-      else for (const [index, time] of times.entries()) refs.push(...(await frameCompare.framesOf(reference.path, refStart + time - times[0]!, 1, fps, width, height, dir, `ref${index}-`)));
+      // A still is the same picture at every moment.
+      if (still) {
+        const one = (await frameCompare.framesOf(reference.path, 0, 1, fps, width, height, dir, "ref"))[0] ?? "";
+        refs = times.map(() => one);
+      } else if (args.every_frame === true) refs = await frameCompare.framesOf(reference.path, refStart, times.length, fps, width, height, dir, "ref");
+      else for (const [index, time] of times.entries()) refs[index] = (await frameCompare.framesOf(reference.path, refStart + time - times[0]!, 1, fps, width, height, dir, `ref${index}-`))[0] ?? "";
     }
+    // Past the reference's end, black of the same size: every pair is as wide as the others on a sheet.
+    const black = join(dir, "black.png");
+    if (reference && ours.some((_, index) => (refs[index] ?? "") === "")) await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", `color=black:s=${width}x${height}`, "-frames:v", "1", black]);
     const cells = ours.map((file, index) => {
       const frame = Math.round(times[index]! * fps);
       const said = `yours ${fixed(times[index]!, 2)}s f${frame}`;
-      const ref = refs[index];
-      return ref === undefined ? { files: [file], labels: [said] } : { files: [ref, file], labels: [`reference ${fixed(refStart + times[index]! - times[0]!, 2)}s`, said] };
+      if (!reference) return { files: [file], labels: [said] };
+      const ref = refs[index] ?? "";
+      const at = `${fixed(refStart + times[index]! - times[0]!, 2)}s`;
+      return { files: [ref === "" ? black : ref, file], labels: [ref === "" ? `reference ended before ${at}` : still ? "reference (a still)" : `reference ${at}`, said] };
     });
     const few = cells.length <= 2;
     const size = few ? 960 : 480;
     const across = reference ? (few ? 1 : 2) : few ? 2 : 4;
-    const pictures = await frameCompare.sheets(cells, zoom, size, across, reference ? 4 : 4, dir);
+    const pictures = await frameCompare.sheets(cells, zoom, size, across, 4, dir, frameCompare.labelFont(app.store.cacheDir()));
     const what = `${reference ? `beside ${reference.id} (reference left, yours right)` : "each frame"}${zoom === null ? "" : `, zoomed to ${zoom.width}×${zoom.height} at ${zoom.x},${zoom.y}`}`;
     const out: Content[] = [];
     pictures.forEach((picture, index) => out.push(...image(picture, `${name} ${what}: sheet ${index + 1} of ${pictures.length}, left-to-right then down`, "image/jpeg")));
-    const lines: string[] = [];
+    const lines: string[] = rest === "" ? [] : [rest];
     if (look.errors.length > 0) lines.push(`ERRORS its page threw (fix these first):\n${look.errors.map((error) => `- ${error}`).join("\n")}`);
     if (look.problems.length > 0) lines.push(`BREAKS THE EFFECT CONTRACT:\n${look.problems.map((problem) => `- ${problem}`).join("\n")}`);
     if (lines.length > 0) out.push(...text(lines.join("\n")));
@@ -325,6 +338,8 @@ async function saveToLibrary({ app, args, projectId }: ToolCall): Promise<Conten
   }
   const dir = effects.folder(app.store, projectId, name);
   if (!fs.existsSync(join(dir, kind === "template" ? effects.ENTRY : effects.SOUND_ENTRY))) throw new Error(`effects/${name}/ has no ${kind === "template" ? effects.ENTRY : effects.SOUND_ENTRY}`);
+  // Optional in the schema only because a font has none.
+  if (typeof args.brief !== "string" || args.brief.trim() === "") throw new Error(`brief is required for ${kind === "sound" ? "a sound" : "an effect"}: how to change it without making it again, in a line or two`);
   const kept = await v2cloud.save(keyOf(kind, as), as, dir, { category: line("category", 40), note: line("note", 160), brief: line("brief", 240), ...(typeof args.reason === "string" && args.reason !== "" ? { reason: args.reason } : {}) });
   return text(kept.made ? `${as} is version ${kept.n} in the library: what every project starts from.` : `${as} is already exactly this (version ${kept.n}).`);
 }

@@ -150,10 +150,11 @@ export async function refreshCloud(store: Store, now = false): Promise<Font[]> {
         if (font !== null) next.push(font);
       }
       cloudFonts = next;
-      readAt = Date.now();
     } catch (error) {
       diag.warn("effects", `V2's cloud's fonts weren't read: ${diag.messageOf(error)}`);
     } finally {
+      // A refusal too waits the while before it's asked again, not once a page served.
+      readAt = Date.now();
       reading = null;
     }
   })();

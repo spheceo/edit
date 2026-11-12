@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { agentInstructions } from "../src/agent.ts";
 import * as effects from "../src/effects.ts";
 import * as fonts from "../src/fonts.ts";
+import runtimeText from "../src/effect_runtime.html" with { type: "text" };
+import { fingerprint } from "../src/hash.ts";
 import { registerEffectTools } from "../src/effect_tools.ts";
 import { registerEditingTools } from "../src/edit_tools.ts";
 import { findAddon, useNative, wrap, type Native } from "../src/native/index.ts";
@@ -138,6 +140,19 @@ test("a font the project fetched is there in its effects by name: declared ahead
     expect(file.status).toBe(200);
     expect(await file.text()).toBe("font");
     expect((await get(app, `${address.slice(0, -"scene.html".length)}edit-fonts/caveat/nope.ttf`)).status).toBe(404);
+  } finally {
+    cleanup();
+  }
+});
+
+test("an effect that names no fetched font keeps the key it had before fonts could be fetched, so an update doesn't re-render it", () => {
+  const { app, cleanup, id } = hq("effects-key");
+  try {
+    const dir = write(app, id, "bar", { "scene.html": GOOD });
+    const stat = fs.statSync(join(dir, "scene.html"));
+    const faces = effects.FONTS.map((font) => `@font-face { font-family: "${font.family}"; font-weight: ${font.weight}; src: url(edit-fonts/${font.file}); }`).join("\n");
+    const before = fingerprint([runtimeText as unknown as string, faces, "1920x1080@30", `scene.html ${stat.size} ${Math.floor(stat.mtimeMs)}`]);
+    expect(effects.list(app.store, id)[0]!.key).toBe(before);
   } finally {
     cleanup();
   }
@@ -322,6 +337,14 @@ test.skipIf(chrome === null)("look draws the page in Chrome: its length, the sti
     const zoomed = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_media", arguments: { media_id: "ref", times: [0.5, 2], zoom: { x: 900, y: 400, width: 640, height: 360 } } } }, id)) as { result: { content: { type: string; text?: string }[]; isError: boolean } }).result;
     expect(zoomed.isError, zoomed.content.map((part) => part.text).join(" ")).toBe(false);
     expect(zoomed.content.filter((part) => part.type === "image").length).toBe(1);
+    // Past the reference's end a pair is still a pair (black on its side), and frames over a look's most are said, not dropped.
+    const past = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "counter", every_frame: true, start: 0, end: 1, beside: { media_id: "ref", start: 2.5 }, zoom: { x: 0, y: 0, width: 960, height: 540 } } } }, id)) as { result: { content: { type: string; text?: string }[]; isError: boolean } }).result;
+    expect(past.isError, past.content.map((part) => part.text).join(" ")).toBe(false);
+    expect(past.content.filter((part) => part.type === "image").length).toBe(3);
+    expect(past.content.at(-1)!.text).toContain("Frames 24–29 are left: look again with start 0.800");
+    const stretch = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_media", arguments: { media_id: "ref", every_frame: true, start: 0, end: 1, zoom: { x: 900, y: 400, width: 640, height: 360 } } } }, id)) as { result: { content: { type: string; text?: string }[]; isError: boolean } }).result;
+    expect(stretch.isError, stretch.content.map((part) => part.text).join(" ")).toBe(false);
+    expect(stretch.content.at(-1)!.text).toContain("Frames 24–29 are left: look again with start 0.800");
     await expect(effects.add(app, id, "wrong")).rejects.toThrow("isn't ready for the timeline");
     await expect(effects.look(app, id, "nowhere", [0])).rejects.toThrow('no effect "nowhere"');
   } finally {

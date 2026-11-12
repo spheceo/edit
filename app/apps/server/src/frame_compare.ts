@@ -9,6 +9,9 @@
 
 import * as fs from "node:fs";
 
+import labelFace from "../../../crates/edit-render/fonts/GeistMono-SemiBold.ttf" with { type: "file" };
+
+import { writeAtomic } from "./files.ts";
 import { join } from "./paths.ts";
 import * as tools from "./tools.ts";
 
@@ -44,20 +47,38 @@ export interface Cell {
   labels: string[];
 }
 
+/**
+ * drawtext's `fontfile=…` for the labels, one of Edit's own faces: without one
+ * FFmpeg asks the computer's fontconfig, which a static FFmpeg (a Mac's) may
+ * not have. Written into `cacheDir` once, since the compiled binary's copy is
+ * inside it where FFmpeg can't read; escaped for a filtergraph.
+ */
+export function labelFont(cacheDir: string): string {
+  const file = join(cacheDir, "label-font", "GeistMono-SemiBold.ttf");
+  const data = fs.readFileSync(labelFace);
+  if (!fs.existsSync(file) || fs.statSync(file).size !== data.length) {
+    fs.mkdirSync(join(cacheDir, "label-font"), { recursive: true });
+    writeAtomic(file, data);
+  }
+  // Once for the option's value, once for the graph it's in.
+  const value = file.replace(/[\\':]/gu, (one) => `\\${one}`);
+  return `fontfile=${value.replace(/[\\'[\],;]/gu, (one) => `\\${one}`)}`;
+}
+
 const drawn = (text: string) => text.replace(/[\\':]/gu, (one) => `\\${one}`);
 
 /**
  * Sheets of `cells`, `across` to a row and `rows` to a sheet, each picture
  * cropped to `zoom` (the whole frame without) and `size` px wide, labelled in
- * its corner. Answers each sheet's JPEG bytes.
+ * its corner in `font` (`labelFont`). Answers each sheet's JPEG bytes.
  */
-export async function sheets(cells: Cell[], zoom: Region | null, size: number, across: number, rows: number, dir: string): Promise<Uint8Array[]> {
+export async function sheets(cells: Cell[], zoom: Region | null, size: number, across: number, rows: number, dir: string, font: string): Promise<Uint8Array[]> {
   const out: Uint8Array[] = [];
   const pieces: string[] = [];
   for (const [index, cell] of cells.entries()) {
     const piece = join(dir, `cell${String(index).padStart(3, "0")}.jpg`);
     const inputs = cell.files.flatMap((file) => ["-i", file]);
-    const each = cell.files.map((_, n) => `[${n}]${zoom === null ? "" : `crop=${zoom.width}:${zoom.height}:${zoom.x}:${zoom.y},`}scale=${size}:-2,drawtext=text='${drawn(cell.labels[n] ?? "")}':x=6:y=6:fontsize=${Math.max(14, Math.round(size / 24))}:fontcolor=yellow:box=1:boxcolor=black@0.75[p${n}]`);
+    const each = cell.files.map((_, n) => `[${n}]${zoom === null ? "" : `crop=${zoom.width}:${zoom.height}:${zoom.x}:${zoom.y},`}scale=${size}:-2,drawtext=${font}:text='${drawn(cell.labels[n] ?? "")}':x=6:y=6:fontsize=${Math.max(14, Math.round(size / 24))}:fontcolor=yellow:box=1:boxcolor=black@0.75[p${n}]`);
     const joined = cell.files.length > 1 ? `${each.join(";")};${cell.files.map((_, n) => `[p${n}]`).join("")}hstack=inputs=${cell.files.length}:shortest=1,pad=iw+6:ih:0:0:black` : each[0]!.replace(/\[p0\]$/u, "");
     await tools.run([tools.ffmpeg(), "-v", "error", "-y", ...inputs, "-filter_complex", joined, "-frames:v", "1", "-q:v", "3", piece]);
     pieces.push(piece);

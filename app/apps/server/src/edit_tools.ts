@@ -1212,6 +1212,8 @@ async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[
 
 /** Every frame a look shows at most (4 s of 30 fps footage); the rest is the next look's, from where it stopped. */
 export const EVERY_FRAME_MOST = 120;
+/** Sheets a look at every frame answers at most (`count` is raised to keep to it). */
+const EVERY_FRAME_SHEETS = 10;
 /** Frames a look shows at full size, each a picture of its own. */
 export const FULL_MOST = 8;
 /** A full-size frame's tokens: the most a picture is read at (sheet.rs `MAX_TOKENS`), 1,988 px wide (`SHEET_EDGE`). */
@@ -1258,10 +1260,13 @@ async function studyMedia(media: Media, args: Args, start: number, end: number, 
       out.push(...imageContent(picture, `${media.id}: ${said(time)}, at full size`));
     }
   } else {
-    const { budget, columns } = sheetSpec(args, [], Math.min(count, times.length));
     const steady = args.every_frame === true;
-    for (let at = 0; at < times.length; at += count) {
-      const part = times.slice(at, at + count);
+    // A stretch at a few frames a sheet would be more pictures than one answer can carry: more to each.
+    const per = steady && Math.ceil(times.length / count) > EVERY_FRAME_SHEETS ? Math.max(12, Math.ceil(times.length / EVERY_FRAME_SHEETS)) : count;
+    if (per !== count) rest = ` ${per} frames to a sheet, not ${count}, so the look fits in ${Math.ceil(times.length / per)} sheets.${rest}`;
+    const { budget, columns } = sheetSpec(args, [], Math.min(per, times.length));
+    for (let at = 0; at < times.length; at += per) {
+      const part = times.slice(at, at + per);
       const { image: sheet } = await native().mediaFrames({
         media: structuredClone(media),
         // Every frame of a stretch is a run of evenly spaced ones: read in one pass.
@@ -1292,19 +1297,24 @@ async function zoomMedia(app: App, media: Media, args: Args, start: number, end:
   try {
     let files: string[] = [];
     let times: number[] = [];
+    let rest = "";
     if (args.every_frame === true) {
-      const count = Math.min(Math.max(1, Math.round((end - start) * fps)), 24);
+      const total = Math.max(1, Math.round((end - start) * fps));
+      const count = Math.min(total, 24);
       files = await frameCompare.framesOf(media.path, start, count, fps, width, height, dir, "z");
       times = files.map((_, index) => start + index / fps);
+      const first = Math.floor(start * fps + 1e-6);
+      if (count < total) rest = `Frames ${first + count}–${first + total - 1} are left: look again with start ${fixed(start + count / fps, 3)}.`;
     } else {
       times = (Array.isArray(args.times) ? (args.times as unknown[]) : [start]).filter((one): one is number => typeof one === "number" && Number.isFinite(one) && one >= 0).slice(0, 8);
       for (const [index, time] of times.entries()) files.push(...(await frameCompare.framesOf(media.path, time, 1, fps, width, height, dir, `z${index}-`)));
     }
     const few = files.length <= 2;
     const cells = files.map((file, index) => ({ files: [file], labels: [`${fixed(times[index] ?? start, 2)}s`] }));
-    const pictures = await frameCompare.sheets(cells, zoom, few ? 960 : 480, few ? 2 : 4, 4, dir);
+    const pictures = await frameCompare.sheets(cells, zoom, few ? 960 : 480, few ? 2 : 4, 4, dir, frameCompare.labelFont(app.store.cacheDir()));
     const out: Content[] = [];
     pictures.forEach((picture, index) => out.push(...image(picture, `${media.id} zoomed to ${zoom.width}×${zoom.height} at ${zoom.x},${zoom.y}: sheet ${index + 1} of ${pictures.length}, left-to-right then down`, "image/jpeg")));
+    if (rest !== "") out.push(...text(rest));
     return out;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });

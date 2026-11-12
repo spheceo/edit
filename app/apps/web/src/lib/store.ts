@@ -108,7 +108,8 @@ interface EditorState {
   scriptJob: ScriptJob | null;
   timelineHeight: number;
   /** The chat's width, set by dragging its edge. */
-  agentWidth: number;
+  /** The chat's width as dragged; null: its screen's default (ChatDock). */
+  agentWidth: number | null;
   toasts: Toast[];
   /** The agent asked to reset the edit (`reset_edit`) and waits for the user's Accept / Reject in the chat. */
   resetAsked: boolean;
@@ -134,7 +135,7 @@ interface EditorState {
   setSideTab(tab: SideTab): void;
   setMediaTab(tab: MediaTab): void;
   setTimelineHeight(height: number): void;
-  setAgentWidth(width: number): void;
+  setAgentWidth(width: number | null): void;
   /** Back to the default height (the divider's double-click). */
   resetTimelineHeight(): void;
   toast(text: string, tone?: Toast["tone"], action?: Toast["action"]): void;
@@ -391,7 +392,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   mediaTab: readSetting("edit.mediaTab") === "script" ? "script" : "media",
   scriptJob: null,
   timelineHeight: Number(readSetting("edit.timelineHeight")) || defaultTimelineHeight(),
-  agentWidth: Number(readSetting("edit.agentWidth")) || 340,
+  agentWidth: Number(readSetting("edit.agentWidth")) || null,
   toasts: [],
   resetAsked: false,
   cloud: null,
@@ -507,7 +508,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ mediaTab, showMedia: true });
   },
   setAgentWidth: (width) => {
-    writeSetting("edit.agentWidth", String(Math.round(width)));
+    writeSetting("edit.agentWidth", width === null ? "" : String(Math.round(width)));
     set({ agentWidth: width });
   },
   setTimelineHeight: (height) => {

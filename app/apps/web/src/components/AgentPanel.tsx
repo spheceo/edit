@@ -671,6 +671,8 @@ function quoteMenu(event: React.MouseEvent<HTMLElement>, from: string, whole: st
 
 function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean; fresh?: boolean }) {
   if (entry.kind === "subagent") return <SubAgentCard entry={entry} />;
+  // A turn stopped (by the person, or a message steered in its place) isn't a problem to show (Sphe, Nov 12).
+  if (entry.kind === "error" && entry.text.trim() === "Stopped.") return null;
   if (entry.kind === "error") {
     const resolved = entry.status === "done";
     return (

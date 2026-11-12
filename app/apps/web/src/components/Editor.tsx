@@ -141,7 +141,8 @@ export function Editor({ id }: { id: string }) {
             </>
           )}
         </div>
-        <ChatDock working={agentWorking}>
+        {/* Bodycam HQ's chat is wider until it's dragged (Sphe, Nov 12): its graphics talk takes room. */}
+        <ChatDock working={agentWorking} defaultWidth={project?.hq === true ? 440 : 340}>
           <AgentPanel />
         </ChatDock>
       </div>

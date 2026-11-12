@@ -479,8 +479,9 @@ function HqWorking() {
   return (
     <AnimatePresence>
       {running && (
+        // No light sweeping across the picture while it works: the team keeps watching (Sphe, Nov 12: "the flash that
+        // goes from one end of the screen to the other… that's going to be annoying while we work").
         <motion.div key="working" {...fade} className="pointer-events-none absolute inset-0 rounded-xl">
-          <div className="working-sheen" />
           <div className="absolute inset-x-0 top-3 flex justify-center">
             <motion.div layout transition={{ type: "spring", stiffness: 420, damping: 34 }} className="flex h-7 items-center gap-2 rounded-full bg-[#0b0b0b] pr-3.5 pl-2 shadow-[0_0_0_1px_rgb(255_255_255/0.1),0_8px_24px_#000c]">
               <span className="working-orb" />
@@ -512,14 +513,16 @@ function WorkingFrame({ native }: { native: boolean }) {
     <AnimatePresence>
       {running && !native && (
         // Behind the viewer (the frame is its own stacking context): seen only round its edge.
-        <motion.div key="glow" {...fade} className="pointer-events-none absolute inset-0 -z-10 rounded-[inherit]">
+        // Far softer than the thumbnail page's: the edit is watched beside it (Sphe, Nov 12: "the current glow… might be too
+        // bright if we're still going to be working on the video in the meantime").
+        <motion.div key="glow" {...fade} animate={{ opacity: 0.3 }} className="pointer-events-none absolute inset-0 -z-10 rounded-[inherit]">
           <div className="absolute -inset-x-4 -inset-y-2"><div className="working-aura" /></div>
           <div className="working-glow" />
         </motion.div>
       )}
       {running && (
         // On its edge, over it.
-        <motion.div key="ring" {...fade} className="pointer-events-none absolute inset-0 z-10 rounded-[inherit]">
+        <motion.div key="ring" {...fade} animate={{ opacity: 0.5 }} className="pointer-events-none absolute inset-0 z-10 rounded-[inherit]">
           <div className="working-ring" />
         </motion.div>
       )}

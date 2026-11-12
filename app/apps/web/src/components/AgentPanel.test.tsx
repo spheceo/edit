@@ -49,7 +49,7 @@ describe("the editor's chat as a turn ends", () => {
     const { useAgent, applyAgentEvent } = await import("../lib/agent");
     const { useEditor } = await import("../lib/store");
     const { AgentPanel } = await import("./AgentPanel");
-    useEditor.setState({ project: { id: "p1", clips: [], media: [], tracks: [] } as never });
+    useEditor.setState({ project: { id: "p1", clips: [], media: [], tracks: [], settings: { fps: 30 } } as never });
     useAgent.setState({ project: "p1", loaded: true, running: true, entries: chat(12) as never, status: { ready: true }, activityAt: Date.now() - 5_000 });
     const container = document.createElement("div");
     document.body.append(container);
@@ -80,5 +80,51 @@ describe("the editor's chat as a turn ends", () => {
     expect(errors.map(String)).toEqual([]);
     expect(container.textContent).toContain("word79");
     expect(useAgent.getState().running).toBe(false);
+  });
+});
+
+describe("times in a chat", () => {
+  let root: Root;
+  beforeEach(() => {
+    vi.resetModules();
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal("fetch", async () => response({}));
+  });
+  afterEach(() => {
+    act(() => root?.unmount());
+    vi.unstubAllGlobals();
+  });
+
+  const reply = [
+    { id: "u", kind: "user", text: "Where?", at: 1, updated: 1 },
+    { id: "a", kind: "assistant", text: "At 1:44:00 in the source, 4:25 in the edit, and 9:50 to 12:00.", at: 2, updated: 2 },
+  ];
+
+  async function render(node: () => Promise<React.ReactNode>) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    const element = await node();
+    act(() => root.render(element));
+    return container;
+  }
+
+  it("are links in the editor's chat only while they're in the edit", async () => {
+    const { useAgent } = await import("../lib/agent");
+    const { useEditor } = await import("../lib/store");
+    const { AgentPanel } = await import("./AgentPanel");
+    // Ten minutes at 30 fps.
+    useEditor.setState({ project: { id: "p1", clips: [{ start: 0, duration: 18_000 }], media: [], tracks: [], settings: { fps: 30 } } as never });
+    useAgent.setState({ project: "p1", loaded: true, running: false, entries: reply as never, status: { ready: true } });
+    const container = await render(async () => <AgentPanel />);
+    expect([...container.querySelectorAll("button")].map((button) => button.textContent).filter((text) => /\d:\d/.test(text ?? ""))).toEqual(["4:25", "9:50 - 12:00"]);
+  });
+
+  it("stay text in a chat with no edit to jump in (a script's, an idea's, a thumbnail's)", async () => {
+    const { ChatTurns } = await import("./AgentPanel");
+    const { buildTurns } = await import("../lib/agentTurns");
+    const container = await render(async () => <ChatTurns turns={buildTurns(reply as never, false)} known={new Set()} />);
+    expect(container.textContent).toContain("4:25 in the edit");
+    expect([...container.querySelectorAll("button")].some((button) => /\d:\d/.test(button.textContent ?? ""))).toBe(false);
   });
 });

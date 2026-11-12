@@ -46,16 +46,26 @@ export function timeOf(href: string | undefined): { start: number; end: number |
   return match === null ? null : { start: Number(match[1]), end: match[2] === undefined ? null : Number(match[2]) };
 }
 
+/**
+ * A time as it goes in an edit `edit` seconds long: none at or past its end
+ * (a time in the raw footage, or a clock's, isn't one in the edit), a range's
+ * end held to it.
+ */
+export function inEdit<Time extends { start: number; end: number | null }>(time: Time, edit: number): Time | null {
+  if (!(time.start < edit)) return null;
+  return time.end !== null && time.end > edit ? { ...time, end: edit } : time;
+}
+
 type Parent = { children: RootContent[] };
 
-/** A remark plugin: each time in the message's text becomes a link to it (not inside code or another link). */
-export function remarkTimes() {
+/** A remark plugin: each time in the message's text that's in the edit (`edit` seconds long) becomes a link to it (not inside code or another link). */
+export function remarkTimes({ edit }: { edit: number }) {
   return (tree: Root) => {
     const walk = (node: Parent) => {
       const out: RootContent[] = [];
       for (const child of node.children) {
         if (child.type === "text") {
-          out.push(...split(child));
+          out.push(...split(child, edit));
           continue;
         }
         if (child.type !== "link" && child.type !== "inlineCode" && child.type !== "code" && "children" in child) walk(child as Parent);
@@ -67,8 +77,8 @@ export function remarkTimes() {
   };
 }
 
-function split(node: Text): (Text | Link)[] {
-  const found = timesIn(node.value);
+function split(node: Text, edit: number): (Text | Link)[] {
+  const found = timesIn(node.value).filter((one) => inEdit(one, edit) !== null);
   if (found.length === 0) return [node];
   const out: (Text | Link)[] = [];
   let at = 0;

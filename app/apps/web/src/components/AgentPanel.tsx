@@ -1,9 +1,9 @@
 import { explain } from "@edit/types/problems";
 import { ArrowLeft, AudioLines, Check, ChevronRight, CircleSlash, Eye, FileInput, Image, FileText, FolderOpen, LayoutGrid, ListChecks, MousePointerClick, Music, RotateCcw, ScrollText, Scissors, Share, SlidersHorizontal, Spline, Square, SquarePlus, Star, Trash2, Type, Wrench, ScanEye, Pencil, type LucideIcon, Copy, Quote } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
-import { remarkTimes, timeOf } from "../lib/chatTimes";
+import { inEdit, remarkTimes, timeOf } from "../lib/chatTimes";
 import remarkGfm from "remark-gfm";
 
 import {
@@ -28,7 +28,9 @@ import { queued, useNotes } from "../lib/notes";
 import { playhead, preview } from "../lib/playback";
 import { projectUploader } from "../lib/upload";
 import { useEditor } from "../lib/store";
-import { rate } from "../lib/types";
+import { projectDuration } from "../lib/edit";
+import { rate, type Project } from "../lib/types";
+import { useWatching } from "../lib/watching";
 import { addQuote, parseQuoted } from "../lib/chatQuotes";
 import { QuoteSelection } from "./QuoteSelection";
 import { openMenu } from "./ContextMenu";
@@ -146,7 +148,13 @@ function SubAgentPanel() {
         </div>
       }
     >
-      {sub.entries.length === 0 ? <Empty title="Starting" detail="A new agent is opening the edit to watch it through." /> : <ChatTurns turns={turns} known={known} />}
+      {sub.entries.length === 0 ? (
+        <Empty title="Starting" detail="A new agent is opening the edit to watch it through." />
+      ) : (
+        <EditTimes>
+          <ChatTurns turns={turns} known={known} />
+        </EditTimes>
+      )}
     </ChatShell>
   );
 }
@@ -215,10 +223,39 @@ function MainAgentPanel() {
       ) : !entries.length ? (
         <Empty title="Ask for an edit" detail={`Ask for captions, cuts, B-roll, grades. Changes land on your timeline live and undo with ${MOD}Z.`} />
       ) : (
-        <ChatTurns turns={turns} known={known} />
+        <EditTimes>
+          <ChatTurns turns={turns} known={known} />
+        </EditTimes>
       )}
     </ChatShell>
   );
+}
+
+/**
+ * How long the edit on screen is (s): the version pinned while the agent works
+ * (lib/watching.ts), else the edit. Only the editor's chat gives it, so times
+ * are links only where there's an edit to jump in (a script's, an idea's or a
+ * thumbnail's chat leaves them text).
+ */
+const EditLength = createContext<number | null>(null);
+
+const lengthOf = (project: Project | null | undefined) => (project ? projectDuration(project) / rate(project.settings) : null);
+
+/** The edit on screen: a version of this project pinned (not one left from another), else the edit as it is. */
+function viewed(): Project | null {
+  const live = useEditor.getState().project;
+  const pinned = useWatching.getState().pinned?.project;
+  return live !== null && pinned?.id === live.id ? pinned : live;
+}
+
+function EditTimes({ children }: { children: ReactNode }) {
+  const pinned = useWatching((state) => state.pinned?.project);
+  const live = useEditor((state) => lengthOf(state.project));
+  const id = useEditor((state) => state.project?.id);
+  const length = live !== null && pinned?.id === id ? lengthOf(pinned) : live;
+  // To the minute above: every message is read again when this changes, and an agent's cuts change the length many
+  // times a turn. A click checks the length itself (goToTime).
+  return <EditLength.Provider value={length === null ? null : Math.ceil(length / 60) * 60}>{children}</EditLength.Provider>;
 }
 
 /** Why the composer is waiting, above it: the sign-in card when someone has to act, otherwise one line while Edit finishes checking. */
@@ -285,6 +322,7 @@ const TurnView = memo(function TurnView({ turn, known, thinking: said }: { turn:
           {...appear(fresh(turn.user.id) && !turn.user.id.startsWith("user-"))}
           className="mb-1 ml-8 max-w-[calc(100%-2rem)] self-end rounded-2xl bg-raised px-3 py-2 text-[13px] whitespace-pre-wrap text-fg ring-1 ring-line [overflow-wrap:anywhere]"
           data-quote="my earlier message"
+          onPointerDown={pressMenu}
           onContextMenu={(event) => quoteMenu(event, "my earlier message", parseQuoted(turn.user!.text).words)}
         >
           <UserWords text={turn.user.text} />
@@ -590,6 +628,18 @@ export function Empty({ title, detail, children }: { title: string; detail: stri
   );
 }
 
+let pressed: { on: EventTarget; selected: boolean } | null = null;
+
+const selectedIn = (node: Node) => {
+  const selection = window.getSelection();
+  return selection !== null && !selection.isCollapsed && selection.rangeCount > 0 && node.contains(selection.getRangeAt(0).commonAncestorContainer);
+};
+
+/** A context click going down on a message (the right button, or ctrl and a click on a Mac): whether something in it was selected before the browser changed that. */
+function pressMenu(event: React.PointerEvent<HTMLElement>) {
+  pressed = event.button === 2 || (event.button === 0 && event.ctrlKey) ? { on: event.currentTarget, selected: selectedIn(event.currentTarget) } : null;
+}
+
 /**
  * Right-click on a message (Sphe, Nov 12: "select text almost like it's a web
  * page and have the context menu to copy it or quote it"): what's selected in
@@ -597,8 +647,13 @@ export function Empty({ title, detail, children }: { title: string; detail: stri
  */
 function quoteMenu(event: React.MouseEvent<HTMLElement>, from: string, whole: string) {
   const selection = window.getSelection();
-  const inside = selection !== null && !selection.isCollapsed && selection.rangeCount > 0 && event.currentTarget.contains(selection.getRangeAt(0).commonAncestorContainer);
-  const text = (inside ? selection.toString() : whole).trim();
+  // What was selected as the button went down: a Mac's WebKit (and Chrome) selects the word under the pointer just before the menu.
+  const held = pressed?.on === event.currentTarget ? pressed.selected : null;
+  pressed = null;
+  const inside = held ?? selectedIn(event.currentTarget);
+  // The whole message: the word the browser just selected goes, so no "Add to chat" shows over it.
+  if (!inside && held === false) selection?.removeAllRanges();
+  const text = (inside && selection !== null ? selection.toString() : whole).trim();
   const projectId = useEditor.getState().project?.id;
   if (text === "" || projectId === undefined) return;
   openMenu(event, [
@@ -639,6 +694,7 @@ function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean
       transition={{ duration: 0.18 }}
       className={cx("px-1.5 leading-relaxed", muted ? "text-[12px] text-muted" : "text-[13px] text-fg/90")}
       data-quote="your earlier reply"
+      onPointerDown={pressMenu}
       onContextMenu={(event) => quoteMenu(event, "your earlier reply", entry.text)}
     >
       <Markdown text={entry.text} />
@@ -806,21 +862,25 @@ function ResetCard({ projectId }: { projectId: string }) {
 
 /** A time clicked in the chat: the player there; a range, played from its start to its end. */
 function goToTime(start: number, end: number | null) {
-  const project = useEditor.getState().project;
+  const project = viewed();
   if (!project) return;
+  // Past the edit's end it isn't a time in it (the edit may have got shorter since the link was made).
+  const time = inEdit({ start, end }, lengthOf(project)!);
+  if (time === null) return;
   const fps = rate(project.settings);
   // Clicked, it plays (Sphe, Nov 12).
-  if (end === null) {
-    preview.seek(start * fps);
+  if (time.end === null) {
+    preview.seek(time.start * fps);
     preview.play();
   } else {
-    preview.playRange(start * fps, end * fps);
+    preview.playRange(time.start * fps, time.end * fps);
   }
 }
 
 function Markdown({ text }: { text: string }) {
+  const edit = useContext(EditLength);
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkTimes]} components={MARKDOWN} skipHtml>
+    <ReactMarkdown remarkPlugins={edit === null ? [remarkGfm] : [remarkGfm, [remarkTimes, { edit }]]} components={MARKDOWN} skipHtml>
       {text}
     </ReactMarkdown>
   );

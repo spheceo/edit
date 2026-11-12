@@ -20,6 +20,8 @@ const MOST = 100;
 const AT_ONCE = 3;
 /** Exact frames kept, newest last. */
 const EXACT_KEPT = 40;
+/** The sheets asked for again this many times when there's no answer (4 s, 8 s, 16 s, 32 s apart). */
+const FAILED_TRIES = 4;
 
 interface Board {
   key: string;
@@ -95,7 +97,8 @@ function exactBoard(project: string, rev: number): Board {
   const key = `${project}:${rev}`;
   if (board?.key !== key) {
     if (board !== null) forget(board);
-    board = { key, spread: new Map(), exact: new Map(), started: true };
+    // Not started: if the sheets stop standing in (an unsaved change), pictureAt fetches the spread for it.
+    board = { key, spread: new Map(), exact: new Map(), started: false };
   }
   return board;
 }
@@ -172,9 +175,15 @@ function ensureSprites(project: string, stamp: string): Sprites {
     mine.asked = true;
     const base = `/api/projects/${project}/storyboard`;
     const ask = async (): Promise<void> => {
+      let failed = 0;
       for (let tries = 0; tries < 300 && sprites === mine; tries++) {
         const answer = await fetch(`${base}?v=${encodeURIComponent(stamp)}`).then((response) => (response.ok ? response.json() : null), () => null) as (Sprites["board"] & { state: string }) | null;
-        if (answer === null) return;
+        // No answer (the render not here yet, the server restarting, the network): asked again a few times, further apart each.
+        if (answer === null) {
+          if (++failed > FAILED_TRIES) return;
+          await new Promise((resolve) => setTimeout(resolve, 2000 * 2 ** failed));
+          continue;
+        }
         if (answer.state === "ready") {
           mine.board = answer;
           changed();

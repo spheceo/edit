@@ -58,6 +58,16 @@ test("Bodycam HQ's steps say what they did, a group by its kinds", () => {
   expect(groupSummary([step("read_skill", {}), step("look_at_media", {}), step("look_at_media", {}), step("wait", {}), step("Edit", { file_path: "/a" }), step("Edit", { file_path: "/a" }), step("Edit", { file_path: "/a" })])).toBe("Studied the reference 2 times, edited a file and 2 more steps");
 });
 
+test("a compaction's line folds away with the turn's work", () => {
+  const turn = buildTurns([
+    { id: "u", kind: "user", text: "go", at: 0 },
+    { id: "c", kind: "compact", text: "", status: "done", at: 1 },
+    { id: "a", kind: "assistant", text: "Done.", at: 2 },
+  ], false)[0]!;
+  expect(turn.answer.map((entry) => entry.id)).toEqual(["a"]);
+  expect(turn.work.map((part) => (part.kind === "entry" ? part.entry.id : part.kind))).toEqual(["c"]);
+});
+
 test("while Claude Code compacts, the viewer's indicator says so", () => {
   const now = 10_000;
   const entries = [

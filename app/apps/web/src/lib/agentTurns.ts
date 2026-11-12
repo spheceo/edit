@@ -49,8 +49,8 @@ export function buildTurns(entries: AgentEntry[], running: boolean): Turn[] {
     const work: TurnPart[] = [];
     const answer: AgentEntry[] = [];
     parts.forEach((part, index) => {
-      // A sub-agent's card (the fresh-eyes pass) and a compaction's line stay in view with the answer, never folded into the work.
-      if (part.kind === "entry" && (index === lastAssistant || part.entry.kind === "error" || part.entry.kind === "subagent" || part.entry.kind === "compact")) answer.push(part.entry);
+      // A sub-agent's card (the fresh-eyes pass) stays in view with the answer, never folded into the work; a compaction's line folds with the work (Sphe, Nov 12).
+      if (part.kind === "entry" && (index === lastAssistant || part.entry.kind === "error" || part.entry.kind === "subagent")) answer.push(part.entry);
       else work.push(part);
     });
     const all = [current.user, ...parts.flatMap((part) => (part.kind === "group" ? part.calls : part.kind === "entry" ? [part.entry] : []))].filter(Boolean) as AgentEntry[];

@@ -244,7 +244,9 @@ nightly *args:
     done
     [ "$(git branch --show-current)" = "main" ] || { echo "publish from main"; exit 1; }
     [ -z "$(git status --porcelain)" ] || { echo "commit your changes first"; exit 1; }
-    git fetch -q --tags origin
+    # --force: a tag moved on GitHub since it was fetched here (nightly-74, tagged again after Nov 11's outage) is
+    # taken as GitHub has it; without it the fetch refused, and -q hid why the recipe stopped.
+    git fetch -q --tags --force origin
     last="$(git tag --list 'nightly-*' | sed 's/^nightly-//' | sort -n | tail -1)"
     if [ -n "$last" ]; then
         # When it was tagged (an annotated tag), else when GitHub published it, else its commit.

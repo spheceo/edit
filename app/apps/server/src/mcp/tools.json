@@ -3971,7 +3971,7 @@
     "name": "save_to_library"
   },
   {
-    "description": "Put an effect, a sound or a skill away in V2's cloud, or back (a teacher's; Bodycam HQ). What the person means by deleting one: it leaves every list, its versions kept.",
+    "description": "Put an effect, a sound or a skill away in V2's cloud, or back (a teacher's; Bodycam HQ). What the person means by deleting one, or by telling you to forget something you were told to remember (a memory is a skill): it leaves every list and every agent's mind, its versions kept. To forget one line of a longer skill, remember the skill again without it.",
     "inputSchema": {
       "properties": {
         "archived": {
@@ -4004,7 +4004,7 @@
     "name": "archive_in_library"
   },
   {
-    "description": "Keep something you've been told to remember, or judge worth remembering, as one of your skills in V2's cloud (a teacher's; Bodycam HQ). A memory is a line or two, in the person's words (at most 400 characters). A part of the edit's skill (one with a note, read with read_skill) is changed by saving the whole of it again with the change (at most 2,400 characters). The same name replaces it.",
+    "description": "Keep something you've been told to remember, or judge worth remembering, as one of your skills in V2's cloud (a teacher's; Bodycam HQ). A memory is a line or two, in the person's words (at most 400 characters). A part of the edit's skill (one with a note, read with read_skill) is changed by saving the whole of it again with the change (at most 2,400 characters). The same name replaces it, so a line is forgotten by saving the skill again without it (a whole memory: archive_in_library).",
     "inputSchema": {
       "properties": {
         "project_id": {

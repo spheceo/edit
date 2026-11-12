@@ -76,6 +76,7 @@ import * as seams from "./seams.ts";
 import type { Store } from "./store.ts";
 import * as tools from "./tools.ts";
 import * as v2cloud from "./v2_cloud.ts";
+import * as fonts from "./fonts.ts";
 import * as accounts from "./accounts.ts";
 
 import font0 from "../../../crates/edit-render/fonts/Geist-Regular.ttf" with { type: "file" };
@@ -179,8 +180,19 @@ function filesIn(dir: string, under = ""): [string, number, number][] {
  * last changed), Edit's runtime and the frame it's drawn at. A save makes a new
  * one, and so does a new build whose runtime draws differently.
  */
-function sourceKey(files: [string, number, number][], frame: { width: number; height: number; fps: number }): string {
-  return fingerprint([RUNTIME, FACES, `${frame.width}x${frame.height}@${frame.fps}`, ...files.map(([path, size, changed]) => `${path} ${size} ${changed}`)]);
+function sourceKey(files: [string, number, number][], frame: { width: number; height: number; fps: number }, used = ""): string {
+  return fingerprint([RUNTIME, FACES, used, `${frame.width}x${frame.height}@${frame.fps}`, ...files.map(([path, size, changed]) => `${path} ${size} ${changed}`)]);
+}
+
+/** The fonts beyond Edit's own an effect's page names (fonts.ts), for its key: one changed or added re-renders only what uses it. */
+function fontsUsed(store: Store, project: string, dir: string): string {
+  let code = "";
+  try {
+    code = fs.readFileSync(join(dir, ENTRY), "utf8");
+  } catch {
+    return "";
+  }
+  return fonts.usedBy(fonts.fontsFor(store, project), code);
 }
 
 /** The project's effects: every folder with a page in it, by name. */
@@ -200,7 +212,7 @@ export function list(store: Store, project: string): Effect[] {
     try {
       if (!fs.statSync(join(dir, ENTRY)).isFile()) continue;
       const files = filesIn(dir);
-      found.push({ name, changed: Math.max(0, ...files.map((one) => one[2])), page: `${addressOf(project, name)}${ENTRY}`, key: sourceKey(files, frame) });
+      found.push({ name, changed: Math.max(0, ...files.map((one) => one[2])), page: `${addressOf(project, name)}${ENTRY}`, key: sourceKey(files, frame, fontsUsed(store, project, join(root(store, project), name))) });
     } catch {
       // A folder with no page yet: the agent is still writing it.
     }
@@ -313,8 +325,8 @@ function ownSource(request: Request, project: string, name: string): string {
 }
 
 /** The page with Edit's runtime and faces ahead of its own code. */
-function withRuntime(page: string): string {
-  const ahead = `<style>\n${FACES}\n</style>\n${RUNTIME}`;
+function withRuntime(page: string, more = ""): string {
+  const ahead = `<style>\n${FACES}${more === "" ? "" : `\n${more}`}\n</style>\n${RUNTIME}`;
   const doctype = /^\s*<!doctype[^>]*>/i.exec(page);
   return doctype === null ? `${ahead}${page}` : `${doctype[0]}\n${ahead}${page.slice(doctype[0].length)}`;
 }
@@ -342,6 +354,13 @@ function file(context: RouteContext<App>): Response {
     response.headers.set("cache-control", "max-age=86400");
     return response;
   }
+  // A font of the project's or V2's cloud's (fonts.ts), as if it were in the folder too.
+  const more = parts.length === 3 && parts[0] === "edit-fonts" && !fs.existsSync(join(dir, ...parts)) ? fonts.fileOf(app.store, project, parts[1]!, parts[2]!) : null;
+  if (more !== null) {
+    const response = new Response(Bun.file(more), { headers: { ...headers, "content-type": more.endsWith(".woff2") ? "font/woff2" : more.endsWith(".woff") ? "font/woff" : more.endsWith(".otf") ? "font/otf" : "font/ttf", "access-control-allow-origin": "null" } });
+    response.headers.set("cache-control", "max-age=86400");
+    return response;
+  }
   // The file itself, wherever a link in the folder points: nothing outside the folder is served.
   let path: string;
   try {
@@ -357,7 +376,9 @@ function file(context: RouteContext<App>): Response {
     } catch {
       throw notFound("no such file");
     }
-    return new Response(withRuntime(page), { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
+    // Fonts beyond Edit's own: the project's (fetch_font) and V2's cloud's, read again when it's been a while.
+    void fonts.refreshCloud(app.store);
+    return new Response(withRuntime(page, fonts.facesOf(fonts.fontsFor(app.store, project))), { headers: { ...headers, "content-type": "text/html; charset=utf-8" } });
   }
   const response = serveFile(request, path);
   for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
@@ -938,7 +959,7 @@ async function settled(app: App, project: string, name: string): Promise<void> {
   while (Date.now() < until) {
     const live = app.store.get(project);
     if (live === null) return;
-    const now = sourceKey(filesIn(folder(app.store, project, name)), frameOf(live.project));
+    const now = sourceKey(filesIn(folder(app.store, project, name)), frameOf(live.project), fontsUsed(app.store, project, folder(app.store, project, name)));
     if (now === before) return;
     before = now;
     await Bun.sleep(SETTLE_MS);
@@ -989,7 +1010,7 @@ export function renderNow(app: App, project: string, name: string): Promise<void
   const dir = folder(app.store, project, name);
   const live = app.store.get(project);
   if (live === null) return Promise.reject(new Error("no such project"));
-  const key = sourceKey(filesIn(dir), frameOf(live.project));
+  const key = sourceKey(filesIn(dir), frameOf(live.project), fontsUsed(app.store, project, dir));
   const running = renders.get(id(project, name, key));
   if (running !== undefined) return running.done;
   const failure = failed.get(id(project, name, key));
@@ -1045,7 +1066,7 @@ async function draw(app: App, render: Render): Promise<void> {
             const index = wanted[next++];
             if (index === undefined) return;
             // The code changed while it rendered: these frames are an older version's.
-            if (index % 60 === 0 && sourceKey(filesIn(folder(app.store, project, name)), frame) !== key) throw new Outdated();
+            if (index % 60 === 0 && sourceKey(filesIn(folder(app.store, project, name)), frame, fontsUsed(app.store, project, folder(app.store, project, name))) !== key) throw new Outdated();
             const time = index / frame.fps;
             const drawn = await page.evaluate<{ error?: string }>(`window.__edit.seek(${time})`, 15_000);
             if (drawn.error !== undefined) throw new Error(`its page threw at ${time.toFixed(2)} s: ${drawn.error.split("\n")[0]}`);
@@ -1098,7 +1119,7 @@ async function draw(app: App, render: Render): Promise<void> {
   // A stacked render is twice as tall as the frame is for its width (whatever size it was kept at).
   const stacked = probe.width > 0 && Math.abs(probe.height / probe.width - (2 * frame.height) / frame.width) < 0.01;
   // Code changed while the video was made: the next render takes over.
-  if (sourceKey(filesIn(folder(app.store, project, name)), frame) !== key) throw new Outdated();
+  if (sourceKey(filesIn(folder(app.store, project, name)), frame, fontsUsed(app.store, project, folder(app.store, project, name))) !== key) throw new Outdated();
   let placed = false;
   await app.store.update(project, "effects", (edited) => {
     for (const media of edited.media) {

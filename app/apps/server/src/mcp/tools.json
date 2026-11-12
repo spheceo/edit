@@ -3682,6 +3682,33 @@
     "name": "look_at_effect"
   },
   {
+    "name": "fetch_font",
+    "description": "Bring a Google Fonts family into this project (Bodycam HQ), for any of its effects to use by name at once: when a reference's lettering (a handwriting, a typewriter, a brand's type) is closer to a font Edit doesn't have. Find candidates first (search_web; fonts.google.com lists every family by style), fetch two or three, and set each beside the reference (look_at_effect beside, zoomed on the letters) before settling. Every Google Fonts family is open-licensed, free to use in videos. Kept for every agent with save_to_library kind font, when the person says to.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "family": {
+          "description": "Its name on Google Fonts, as spelled there (\"Reenie Beanie\", \"Caveat\").",
+          "type": "string"
+        },
+        "weights": {
+          "description": "The weights to bring (e.g. [400, 700]); default the family's regular.",
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "family"
+      ]
+    }
+  },
+  {
     "description": "Put a coded effect among the project's media (a Bodycam HQ project), so it's placed, moved and cut like footage: answers its media id and length. Place it with add_clip or apply_edit_plan as any video; the viewer plays its page live wherever its clip is. Call it again after changing the effect's length. Refused while the page has an error or breaks the effect contract (look_at_effect says which).",
     "inputSchema": {
       "properties": {
@@ -3918,7 +3945,7 @@
     "name": "restore_effect"
   },
   {
-    "description": "Search V2's cloud for an effect or a sound to start from (Bodycam HQ). Each comes with its category, when to use it and a brief on how to change it; only what's in use, unless you ask for what was put away. Look here before writing one from nothing.",
+    "description": "Search V2's cloud for an effect or a sound to start from (Bodycam HQ). Each comes with its category, when to use it and a brief on how to change it; only what's in use, unless you ask for what was put away. Look here before writing one from nothing. kind font lists the team's fonts, each there in every effect by its family name.",
     "inputSchema": {
       "properties": {
         "archived": {
@@ -3926,10 +3953,11 @@
           "type": "boolean"
         },
         "kind": {
-          "description": "effect (a graphic) or sound.",
+          "description": "effect (a graphic), sound or font.",
           "enum": [
             "effect",
-            "sound"
+            "sound",
+            "font"
           ],
           "type": "string"
         },
@@ -3958,10 +3986,11 @@
           "type": "string"
         },
         "kind": {
-          "description": "effect (a graphic) or sound.",
+          "description": "effect (a graphic), sound or font.",
           "enum": [
             "effect",
-            "sound"
+            "sound",
+            "font"
           ],
           "type": "string"
         },
@@ -3987,7 +4016,7 @@
     "name": "use_from_library"
   },
   {
-    "description": "Keep an effect or a sound of this project's in V2's cloud for every project, or as its next version (a teacher's; Bodycam HQ). Only when the person says to keep it or use it from now on.",
+    "description": "Keep an effect or a sound of this project's in V2's cloud for every project, or as its next version (a teacher's; Bodycam HQ). Only when the person says to keep it or use it from now on. A font (kind font, name: its folder from fetch_font) is kept the same way, with a note on when it's the one to use; every agent's effects then have it by its family name.",
     "inputSchema": {
       "properties": {
         "as": {
@@ -3995,7 +4024,7 @@
           "type": "string"
         },
         "brief": {
-          "description": "How to change it without making it again (its settings at the top), in a line or two.",
+          "description": "How to change it without making it again (its settings at the top), in a line or two. (An effect's or a sound's; a font has none.)",
           "type": "string"
         },
         "category": {
@@ -4003,10 +4032,11 @@
           "type": "string"
         },
         "kind": {
-          "description": "effect (a graphic) or sound.",
+          "description": "effect (a graphic), sound or font.",
           "enum": [
             "effect",
-            "sound"
+            "sound",
+            "font"
           ],
           "type": "string"
         },
@@ -4031,8 +4061,7 @@
         "kind",
         "name",
         "category",
-        "note",
-        "brief"
+        "note"
       ],
       "type": "object"
     },
@@ -4047,11 +4076,12 @@
           "type": "boolean"
         },
         "kind": {
-          "description": "effect, sound or skill.",
+          "description": "effect, sound, skill or font.",
           "enum": [
             "effect",
             "sound",
-            "skill"
+            "skill",
+            "font"
           ],
           "type": "string"
         },

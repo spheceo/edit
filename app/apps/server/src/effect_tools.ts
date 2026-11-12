@@ -10,6 +10,7 @@ import { join } from "node:path";
 import * as effectInputs from "./effect_inputs.ts";
 import * as effects from "./effects.ts";
 import * as frameCompare from "./frame_compare.ts";
+import * as fonts from "./fonts.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import { fixed } from "./rust.ts";
 import * as tools from "./tools.ts";
@@ -173,6 +174,21 @@ async function lookAtEffect({ app, args, projectId }: ToolCall): Promise<Content
   return out;
 }
 
+/**
+ * A Google Fonts family into the project's fonts (fonts.ts), for its effects
+ * to use by name at once: closer to a reference's handwriting or a brand's
+ * type than Edit's own faces (Sphe, Nov 12). Google Fonts' are all open
+ * licences, free to use in videos; a font from elsewhere is the person's to add.
+ */
+async function fetchFont({ app, args, projectId }: ToolCall): Promise<Content[]> {
+  named(app, projectId, { name: "-" });
+  if (typeof args.family !== "string" || args.family.trim() === "") throw new Error("family is required: its name on Google Fonts (\"Reenie Beanie\", \"Caveat\")");
+  const weights = Array.isArray(args.weights) ? (args.weights as unknown[]).filter((one): one is number => typeof one === "number") : [];
+  const font = await fonts.fetchGoogle(app.store, projectId, args.family, weights);
+  const faces = font.faces.map((face) => `${face.weight}${face.style === "italic" ? " italic" : ""}`).join(", ");
+  return text(`"${font.family}" (${faces}) is this project's (${font.slug}): use it in any effect by that name, as font-family "${font.family}" (await document.fonts.load in ready). ${font.source}. Compare it with the reference (look_at_effect beside, zoomed) before settling on it; save_to_library kind font name ${font.slug} keeps it for every agent when the person says to.`);
+}
+
 async function addEffect({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const name = named(app, projectId, args);
   const added = await effects.add(app, projectId, name);
@@ -234,13 +250,14 @@ async function restoreEffect({ app, args, projectId }: ToolCall): Promise<Conten
 }
 
 /** A library kind as the agent names it: effect (a template) or sound. */
-function kindArg(value: unknown): "template" | "sound" {
+function kindArg(value: unknown): "template" | "sound" | "font" {
   if (value === "effect") return "template";
   if (value === "sound") return "sound";
-  throw new Error('kind is effect or sound');
+  if (value === "font") return "font";
+  throw new Error('kind is effect, sound or font');
 }
 
-const keyOf = (kind: "template" | "sound", name: string) => (kind === "template" ? v2cloud.templateKey(name) : v2cloud.soundKey(name));
+const keyOf = (kind: "template" | "sound" | "font", name: string) => (kind === "template" ? v2cloud.templateKey(name) : kind === "font" ? v2cloud.fontKey(name) : v2cloud.soundKey(name));
 
 /** A name the library takes: lower-case letters, digits and hyphens. */
 function libraryName(value: unknown, what: string): string {
@@ -257,7 +274,15 @@ async function library({ app, args, projectId }: ToolCall): Promise<Content[]> {
     const said = `${one.name} ${one.category ?? ""} ${one.note ?? ""}`.toLowerCase();
     return words.every((word) => said.includes(word));
   });
-  const what = kind === "template" ? "effects" : "sounds";
+  const what = kind === "template" ? "effects" : kind === "font" ? "fonts" : "sounds";
+  if (kind === "font") {
+    const here = await fonts.refreshCloud(app.store, true);
+    if (listed.length === 0) return text(words.length === 0 ? "No fonts in V2's cloud yet: fetch_font one, and it's kept (save_to_library kind font) when the person says to." : `No fonts match "${String(args.query)}".`);
+    return text(listed.map((one) => {
+      const font = here.find((mine) => mine.slug === one.name);
+      return `- ${one.name}${one.archived ? " (put away)" : ""}: "${font?.family ?? one.name}" (${font?.faces.map((face) => `${face.weight}${face.style === "italic" ? " italic" : ""}`).join(", ") ?? "?"}) [${one.category ?? "no category"}]: ${one.note ?? ""}`;
+    }).join("\n") + "\nEach is there in every effect by its family name, as Edit's own faces are.");
+  }
   if (listed.length === 0) return text(words.length === 0 ? `No ${what} in V2's cloud yet: write one, and it's kept when the person says to.` : `No ${what} match "${String(args.query)}".`);
   return text(listed.map((one) => `- ${one.name}${one.archived ? " (put away)" : ""} [${one.category ?? "no category"}]: ${one.note ?? ""}${one.brief ? ` To change it: ${one.brief}` : ""}`).join("\n"));
 }
@@ -266,6 +291,7 @@ async function useFromLibrary({ app, args, projectId }: ToolCall): Promise<Conte
   named(app, projectId, { name: "-" });
   cloudOn();
   const kind = kindArg(args.kind);
+  if (kind === "font") throw new Error("a font in the library is there in every effect already, by its family name (library kind font lists them): nothing to bring in");
   const name = libraryName(args.name, "name");
   const as = args.as === undefined ? name : libraryName(args.as, "as");
   const into = effects.folder(app.store, projectId, as);
@@ -289,6 +315,14 @@ async function saveToLibrary({ app, args, projectId }: ToolCall): Promise<Conten
     if (value.length > most) throw new Error(`${field} is at most ${most} characters: keep it short`);
     return value.trim();
   };
+  if (kind === "font") {
+    // A font the project fetched (fetch_font), kept for every agent: its note says when it's the one to use.
+    const font = fonts.projectFonts(app.store, projectId).find((one) => one.slug === name);
+    if (font === undefined) throw new Error(`no font ${name} in this project: fetch_font it first (the project's are ${fonts.projectFonts(app.store, projectId).map((one) => one.slug).join(", ") || "none"})`);
+    const kept = await v2cloud.save(keyOf(kind, as), as, font.dir, { category: line("category", 40), note: line("note", 160), ...(typeof args.reason === "string" && args.reason !== "" ? { reason: args.reason } : {}) });
+    await fonts.refreshCloud(app.store, true);
+    return text(kept.made ? `${as} ("${font.family}") is version ${kept.n} in the library: every Bodycam HQ agent's effects have it by that name now. If the person said when to use it ("on evidence boards from now on"), remember that too.` : `${as} is already exactly this (version ${kept.n}).`);
+  }
   const dir = effects.folder(app.store, projectId, name);
   if (!fs.existsSync(join(dir, kind === "template" ? effects.ENTRY : effects.SOUND_ENTRY))) throw new Error(`effects/${name}/ has no ${kind === "template" ? effects.ENTRY : effects.SOUND_ENTRY}`);
   const kept = await v2cloud.save(keyOf(kind, as), as, dir, { category: line("category", 40), note: line("note", 160), brief: line("brief", 240), ...(typeof args.reason === "string" && args.reason !== "" ? { reason: args.reason } : {}) });
@@ -305,6 +339,7 @@ async function archiveInLibrary({ app, args, projectId }: ToolCall): Promise<Con
   const archived = args.archived !== false;
   await v2cloud.archive(key, archived);
   if (args.kind === "skill") v2cloud.forgetSkills();
+  if (args.kind === "font") await fonts.refreshCloud(app.store, true);
   return text(archived ? `${name} is put away: out of every list, its versions kept (archived: false brings it back).` : `${name} is back.`);
 }
 
@@ -397,6 +432,7 @@ const TOOLS: [string, (call: ToolCall) => Promise<Content[]>][] = [
   ["make_sound", makeSound],
   ["effect_footage", effectFootage],
   ["look_at_effect", lookAtEffect],
+  ["fetch_font", fetchFont],
   ["add_effect", addEffect],
   ["effect_picture", effectPicture],
 ];

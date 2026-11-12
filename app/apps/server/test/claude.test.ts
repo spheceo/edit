@@ -131,7 +131,8 @@ test("a Bodycam HQ project's turn runs in its effects folder with the file tools
     expect(options.effort).toBe("high");
     expect(agents.revising(project)).toBe(false);
     expect(agents.modelName(project)).toBe("Fable 5.2");
-    expect(String(options.systemPrompt)).toContain("- look_at_effect(name: string, times?: array)");
+    expect(String(options.systemPrompt)).toContain("- look_at_effect(name: string, beside?: object, detail?: normal|full, end?: number, every_frame?: boolean, start?: number, times?: array, zoom?: object)");
+    expect(String(options.systemPrompt)).toContain("- fetch_font(family: string, weights?: array)");
     queries[0]!.push({ type: "system", subtype: "init", session_id: "session-hq" });
     queries[0]!.push({ type: "result", subtype: "success", is_error: false, usage: {} });
     queries[0]!.end();

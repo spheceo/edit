@@ -32,7 +32,7 @@ import * as diag from "./diag.ts";
 import { granted } from "./kinds.ts";
 import * as relay from "./relay.ts";
 
-export type Kind = "effect" | "template" | "sound" | "skill";
+export type Kind = "effect" | "template" | "sound" | "skill" | "font";
 
 export interface File {
   /** Inside the effect's folder ("scene.html", "img/top.jpg"). */
@@ -83,6 +83,7 @@ export const effectKey = (project: string, name: string) => `effect:${project}/$
 export const templateKey = (name: string) => `template:${name}`;
 export const soundKey = (name: string) => `sound:${name}`;
 export const skillKey = (name: string) => `skill:${name}`;
+export const fontKey = (name: string) => `font:${name}`;
 /** The one skill every agent has: Edit's own, never put away. */
 export const GLOBAL = "global";
 

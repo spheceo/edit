@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { agentInstructions } from "../src/agent.ts";
 import * as effects from "../src/effects.ts";
+import * as fonts from "../src/fonts.ts";
 import { registerEffectTools } from "../src/effect_tools.ts";
 import { registerEditingTools } from "../src/edit_tools.ts";
 import { findAddon, useNative, wrap, type Native } from "../src/native/index.ts";
@@ -116,6 +117,27 @@ test("an effect's page is served shut in: no origin, no network, only its own fo
     expect((await get(app, `${base}link.txt`)).status).toBe(404);
     expect((await get(app, base.replace("/bar/", "/Bad Name/") + "scene.html")).status).toBe(404);
     expect((await get(app, base.replace(id, "nope") + "scene.html")).status).toBe(404);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a font the project fetched is there in its effects by name: declared ahead of the page's code, its file served as if in the folder", async () => {
+  // Sphe, Nov 12: fonts the agent pulls, beyond Edit's own faces (fonts.ts).
+  const { app, cleanup, id } = hq("effects-fonts");
+  try {
+    write(app, id, "bar", { "scene.html": GOOD });
+    const dir = join(fonts.projectDir(app.store, id), "caveat");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(join(dir, "Caveat-400.ttf"), "font");
+    fs.writeFileSync(join(dir, "font.json"), JSON.stringify({ family: "Caveat", faces: [{ weight: 400, style: "normal", file: "Caveat-400.ttf" }], source: "Google Fonts" }));
+    const address = ((await (await get(app, `/api/projects/${id}/effects`)).json()) as { effects: effects.Effect[] }).effects[0]!.page;
+    const text = await (await get(app, address)).text();
+    expect(text).toContain('@font-face { font-family: "Caveat"; font-weight: 400; font-style: normal; src: url(edit-fonts/caveat/Caveat-400.ttf); }');
+    const file = await get(app, `${address.slice(0, -"scene.html".length)}edit-fonts/caveat/Caveat-400.ttf`);
+    expect(file.status).toBe(200);
+    expect(await file.text()).toBe("font");
+    expect((await get(app, `${address.slice(0, -"scene.html".length)}edit-fonts/caveat/nope.ttf`)).status).toBe(404);
   } finally {
     cleanup();
   }

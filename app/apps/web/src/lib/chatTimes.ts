@@ -74,9 +74,14 @@ function split(node: Text): (Text | Link)[] {
   let at = 0;
   for (const one of found) {
     if (one.index > at) out.push({ type: "text", value: node.value.slice(at, one.index) });
-    out.push({ type: "link", url: timeHref(one), children: [{ type: "text", value: node.value.slice(one.index, one.index + one.length) }] });
+    out.push({ type: "link", url: timeHref(one), children: [{ type: "text", value: shown(node.value.slice(one.index, one.index + one.length)) }] });
     at = one.index + one.length;
   }
   if (at < node.value.length) out.push({ type: "text", value: node.value.slice(at) });
   return out;
+}
+
+/** A range as it's shown, whichever way the agent wrote it: "29:19.8 to 29:52.9" → "29:19.8 - 29:52.9" (Sphe, Nov 12). */
+export function shown(written: string): string {
+  return written.replace(/\s*(?:–|—|-|to)\s*/u, " - ");
 }

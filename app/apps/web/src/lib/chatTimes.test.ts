@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { seconds, timeOf, timeHref, timesIn } from "./chatTimes";
+import { seconds, shown, timeOf, timeHref, timesIn } from "./chatTimes";
 
 describe("times in the agent's messages", () => {
   test("a time, an hour's, and a range in either dash or words", () => {
@@ -14,6 +14,12 @@ describe("times in the agent's messages", () => {
   test("what isn't a time stays text: a ratio, a version, a clock with one digit after the colon", () => {
     expect(timesIn("16:9 frame, v1.2:30x, ratio 4:3")).toEqual([]);
     expect(timesIn("frame 35398:12")).toEqual([]);
+  });
+
+  test("a range is shown with a dash, however it was written", () => {
+    expect(shown("29:19.8 to 29:52.9")).toBe("29:19.8 - 29:52.9");
+    expect(shown("22:00–23:40")).toBe("22:00 - 23:40");
+    expect(shown("4:25")).toBe("4:25");
   });
 
   test("a range backwards is two times", () => {

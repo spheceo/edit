@@ -807,8 +807,13 @@ function goToTime(start: number, end: number | null) {
   const project = useEditor.getState().project;
   if (!project) return;
   const fps = rate(project.settings);
-  if (end === null) preview.seek(start * fps);
-  else preview.playRange(start * fps, end * fps);
+  // Clicked, it plays (Sphe, Nov 12).
+  if (end === null) {
+    preview.seek(start * fps);
+    preview.play();
+  } else {
+    preview.playRange(start * fps, end * fps);
+  }
 }
 
 function Markdown({ text }: { text: string }) {

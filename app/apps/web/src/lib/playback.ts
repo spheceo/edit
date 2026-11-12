@@ -1211,6 +1211,11 @@ class Preview {
     // The scrub tier is the page player's; the window reads its whole copies.
     if (this.dragging && !this.native) this.keepScrubbing(frame);
     this.lastSeekAt = now;
+    // A jump while playing plays on from where it lands, in whichever way can play there: the render's chunk
+    // there, or live. Only moved, a render left for a stretch it hadn't loaded stopped, and nothing played on
+    // (Sphe, Nov 12: a time clicked at the other end of the edit "just paused"). A drag keeps its own way.
+    const resume = playhead.playing && !this.native && !this.dragging;
+    if (resume) this.pause();
     this.direction = frame < playhead.frame ? -1 : 1;
     this.seekSerial++;
     playhead.frame = Math.max(0, Math.round(frame));
@@ -1225,6 +1230,7 @@ class Preview {
     if (this.native && playhead.playing) { this.playNative(); return; }
     playhead.emit();
     this.invalidate();
+    if (resume) this.play();
   }
 
   seekEnd() { this.seek(this.project ? projectDuration(this.project) : 0); }

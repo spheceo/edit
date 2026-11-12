@@ -49,14 +49,18 @@ export async function compressed(request: Request, response: Response, asset: st
   const gzip = !brotli && accepts(request, "gzip");
   if (!brotli && !gzip) return response;
   const encoding = brotli ? "br" : "gzip";
-  let bytes: Uint8Array | undefined = asset === null ? undefined : kept.get(`${encoding}:${asset}`);
+  // Only a file named by its content is kept compressed: the page's shell answers every route (/p/<project>…) and is
+  // rebuilt under the same names, and a shell kept from before a rebuild asked for scripts the rebuild had deleted, so
+  // the page never started (Sphe, Nov 12, the V2 server: stuck on the opening logo after a reload).
+  const keep = asset !== null && (response.headers.get("cache-control") ?? "").includes("immutable");
+  let bytes: Uint8Array | undefined = keep ? kept.get(`${encoding}:${asset}`) : undefined;
   if (bytes === undefined) {
     const plain = new Uint8Array(await response.arrayBuffer());
     if (plain.byteLength < SMALLEST) return copy(response, plain);
     bytes = brotli
       ? new Uint8Array(zlib.brotliCompressSync(plain, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: plain.byteLength } }))
       : Bun.gzipSync(plain, { level: 4 });
-    if (asset !== null) kept.set(`${encoding}:${asset}`, bytes);
+    if (keep) kept.set(`${encoding}:${asset}`, bytes);
   } else {
     await response.body.cancel();
   }

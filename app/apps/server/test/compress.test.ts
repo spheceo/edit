@@ -16,7 +16,7 @@ test("JSON is gzipped for a browser that takes it, and comes back the same", asy
 });
 
 test("the UI's files are brotli, kept; small, streamed, ranged, HEAD and media answers pass as they are", async () => {
-  const js = () => new Response(big.repeat(4), { headers: { "content-type": "application/javascript" } });
+  const js = () => new Response(big.repeat(4), { headers: { "content-type": "application/javascript", "cache-control": "public, max-age=31536000, immutable" } });
   const first = await compressed(ask("br, gzip"), js(), "/assets/index.js");
   expect(first.headers.get("content-encoding")).toBe("br");
   const again = await compressed(ask("br"), js(), "/assets/index.js");
@@ -31,3 +31,17 @@ test("the UI's files are brotli, kept; small, streamed, ranged, HEAD and media a
   const part = new Response(big, { status: 206, headers: { "content-type": "application/json", "content-range": "bytes 0-9/99" } });
   expect((await compressed(ask("gzip"), part)).headers.get("content-encoding")).toBeNull();
 });
+
+test("the page's shell is never kept compressed: rebuilt under the same name, a kept one asked for scripts gone", async () => {
+  // Sphe, Nov 12: /p/<project> kept answering the shell from before a rebuild, and the page never started.
+  const shell = (script: string) => new Response(`<!doctype html><script src="/assets/${script}"></script>${" ".repeat(2000)}`, { headers: { "content-type": "text/html", "cache-control": "no-store" } });
+  const read = async (response: Response) => new TextDecoder().decode(zlibBrotli(new Uint8Array(await response.arrayBuffer())));
+  const before = await compressed(ask("br"), shell("index-old.js"), "/p/p1");
+  expect(await read(before)).toContain("index-old.js");
+  const after = await compressed(ask("br"), shell("index-new.js"), "/p/p1");
+  expect(await read(after)).toContain("index-new.js");
+});
+
+function zlibBrotli(bytes: Uint8Array): Uint8Array {
+  return new Uint8Array(require("node:zlib").brotliDecompressSync(bytes));
+}

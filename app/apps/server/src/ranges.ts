@@ -111,6 +111,24 @@ export interface Batch {
 
 const batches = new Map<string, Batch>();
 
+/** Where a project's last batch is kept, so a restart doesn't take its Download away (Sphe, Nov 12: on another computer, the file can't be fetched any other way). */
+const keptAt = (app: App, id: string) => join(app.store.cacheDir(), "range-exports", `${safe(id)}.json`);
+
+/** The project's batch: the one running or last run, else the one kept from before a restart. */
+export function batchOf(app: App, id: string): Batch | null {
+  const known = batches.get(id);
+  if (known !== undefined) return known;
+  try {
+    const kept = JSON.parse(fs.readFileSync(keptAt(app, id), "utf8")) as Batch;
+    return kept.finished ? kept : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Seams for tests: what's held in memory goes, as after a restart. */
+export const forgetBatches = () => batches.clear();
+
 /** Seams for tests. */
 export const timing = { poll: 500, sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) };
 
@@ -188,6 +206,12 @@ export function exportRanges(app: App, project: Project, options: ExportOptions,
     } finally {
       batch.current = null;
       batch.finished = true;
+      try {
+        fs.mkdirSync(join(app.store.cacheDir(), "range-exports"), { recursive: true });
+        fs.writeFileSync(keptAt(app, project.id), JSON.stringify(batch));
+      } catch (error) {
+        diag.warn("export", `${project.name}: its marked stretches' export wasn't kept: ${diag.messageOf(error)}`);
+      }
       if (mode === "joined") fs.rmSync(parts, { recursive: true, force: true });
     }
   })();
@@ -205,7 +229,7 @@ export function cancel(app: App, id: string): boolean {
 
 export function routes(router: Router<App>): void {
   router
-    .get("/api/projects/{id}/export-ranges", ({ params }) => json(batches.get(params.id ?? "") ?? null))
+    .get("/api/projects/{id}/export-ranges", ({ app, params }) => json(batchOf(app, params.id ?? "")))
     .post("/api/projects/{id}/export-ranges", async (context: RouteContext<App>) => {
       const { app, params } = context;
       const live = app.store.get(params.id ?? "");

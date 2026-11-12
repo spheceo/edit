@@ -5,7 +5,7 @@ import { dispatch } from "../src/mcp/index.ts";
 import { saveExportFolder } from "../src/export_folder.ts";
 import { listExports } from "../src/exports.ts";
 import { join } from "../src/paths.ts";
-import { exportRanges, tidy, timing } from "../src/ranges.ts";
+import { batchOf, exportRanges, forgetBatches, tidy, timing } from "../src/ranges.ts";
 import * as tools from "../src/tools.ts";
 import { fixtureHome, type Fixture } from "./helpers/home.ts";
 
@@ -82,4 +82,7 @@ test("marked stretches export one after another, and joined they're one video of
   expect(batch.outputs[0]!.startsWith(folder)).toBe(true);
   // Listed, so its Download hands it out; its parts, gone, aren't.
   expect(listExports(fixture.home, project.id).map((one) => one.path)).toEqual(batch.outputs);
+  // A restart keeps it, for its Download.
+  forgetBatches();
+  expect(batchOf(app, project.id)?.outputs).toEqual(batch.outputs);
 });

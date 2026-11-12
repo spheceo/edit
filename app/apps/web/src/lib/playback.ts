@@ -71,6 +71,25 @@ const BUFFERING_BADGE_MS = 600;
 const STUCK_MS = 10_000;
 /** After a decoding failure, the preview tries again this soon. */
 const DECODE_RETRY_MS = 4_000;
+/** The same decoding failure this many tries in a row (the first and three retries, ~12 s) is what stops the preview: said. */
+const LASTING_FAILURES = 4;
+export interface FailureStreak { message: string; count: number; at: number }
+/** The run of one decoding failure with another at `now`: the same one again within two retries' time carries it on. */
+export function failedAgain(streak: FailureStreak | null, message: string, now: number): FailureStreak {
+  const on = streak !== null && streak.message === message && now - streak.at <= DECODE_RETRY_MS * 2;
+  return { message, count: on ? streak.count + 1 : 1, at: now };
+}
+/** Where a seek to `frame` lands: a whole frame, and with a `duration` given, just after the last clip at most (where "Go to end" puts it). */
+export function seekTarget(frame: number, duration: number): number {
+  const at = Math.max(0, Math.round(frame));
+  return duration > 0 ? Math.min(at, duration) : at;
+}
+/** The playhead is on the edit's last frame, where a play starts it over. */
+export const atEnd = (frame: number, duration: number) => frame >= duration - 1;
+/** The failure to say over the picture: only one that hasn't gone away by itself. */
+export function lastingFailure(streak: FailureStreak | null): string | null {
+  return streak !== null && streak.count >= LASTING_FAILURES ? streak.message : null;
+}
 const LOOK_AHEAD = 1;
 /** How far (s) a scrub-tier frame already decoded stands in for the dragged playhead's. */
 const SCRUB_STAND_IN = 0.25;
@@ -271,6 +290,8 @@ class Preview {
       note("warn", "preview", `${message} (behind the smooth render, which plays on)`);
       return;
     }
+    if (this.error !== message) this.failures = failedAgain(this.failures, message, performance.now());
+    clearTimeout(this.recoveredTimer);
     this.error = message; note("error", "preview", this.error);
     this.pause();
     this.setBuffering(false);
@@ -283,9 +304,15 @@ class Preview {
       this.error = null;
       this.notify();
       this.invalidate();
+      // Not failed again by the next retry's time: it read, and what was said of it goes.
+      this.recoveredTimer = setTimeout(() => { if (this.failures !== null) { this.failures = null; this.notify(); } }, DECODE_RETRY_MS);
     }, DECODE_RETRY_MS);
   });
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveredTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The decoding failure tried again in a row; once it's lasted (`lastingFailure`) the viewer says it, retries going on under it. */
+  private failures: FailureStreak | null = null;
+  get lastingError(): string | null { return lastingFailure(this.failures); }
 
   /**
    * The frame on screen: the canvas's, or the rendered video's own while that
@@ -1077,6 +1104,7 @@ class Preview {
       this.pause();
       this.setSmooth(null);
       this.decoder.dispose();
+      this.failures = null;
       this.sources.clear();
       this.sounds.clear();
       this.copied.clear();
@@ -1236,7 +1264,8 @@ class Preview {
     if (resume) this.pause();
     this.direction = frame < playhead.frame ? -1 : 1;
     this.seekSerial++;
-    playhead.frame = Math.max(0, Math.round(frame));
+    // Held to the edit only where there's no timeline (Bodycam HQ): on one, a click past the last clip puts the playhead there.
+    playhead.frame = seekTarget(frame, this.project?.hq === true ? this.duration : 0);
     if (this.range !== null && (playhead.frame < this.range.start || playhead.frame > this.range.end)) this.clearRange();
     clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => this.remember(), 200);
@@ -1248,7 +1277,8 @@ class Preview {
     if (this.native && playhead.playing) { this.playNative(); return; }
     playhead.emit();
     this.invalidate();
-    if (resume) this.play();
+    // Landed on the end (End, "Go to end"): it rests there, rather than a play starting the edit over.
+    if (resume && !atEnd(playhead.frame, this.duration)) this.play();
   }
 
   seekEnd() { this.seek(this.project ? projectDuration(this.project) : 0); }
@@ -1284,11 +1314,13 @@ class Preview {
     if (!this.project || playhead.playing || this.duration <= 0) return;
     // Stopped at a range's end: Space carries on with the rest, the range gone.
     if (this.range !== null && playhead.frame >= this.range.end) this.clearRange();
-    if (playhead.frame >= this.duration - 1) playhead.frame = 0;
+    if (atEnd(playhead.frame, this.duration)) playhead.frame = 0;
     const second = Math.round(rate(this.project.settings));
     // A failure stops a play only where it's what would play: the footage's decoder failing (often the network's)
     // doesn't stop the render from playing what it has (Nov 12: every jump refused to play after one such failure).
-    const rendered = this.smooth !== null && this.video !== null && (this.smoothAt(playhead.frame, second) || this.stream?.made(playhead.frame, second) === true);
+    // A stream just opened hasn't heard what's made yet (a version moved to at a cut, mid-play): worth the wait too.
+    const coming = this.stream !== null && (!this.stream.described || this.stream.made(playhead.frame, second));
+    const rendered = this.smooth !== null && this.video !== null && (this.smoothAt(playhead.frame, second) || coming);
     if (this.error !== null && !(rendered && this.decodingError())) return;
     if (this.smooth && this.video && this.smoothAt(playhead.frame, second)) {
       recordTiming("preview: play (smooth)", 0);
@@ -1296,7 +1328,7 @@ class Preview {
       return;
     }
     // The render has it, just not loaded here yet: waited for, a moment, rather than drawn live.
-    if (this.smooth && this.video && this.stream?.made(playhead.frame, second) === true) {
+    if (this.smooth && this.video && coming) {
       this.awaitSmooth(this.video);
       return;
     }
@@ -1319,17 +1351,21 @@ class Preview {
     cancelAnimationFrame(this.loop);
     const wait = () => {
       this.loop = 0;
-      if (!playhead.playing || this.smooth === null) return;
-      if (this.smoothAt(playhead.frame, second)) {
+      if (!playhead.playing) return;
+      if (this.smooth !== null && this.smoothAt(playhead.frame, second)) {
         recordTiming("preview: waited for the render", performance.now() - began);
         playhead.playing = false;
         this.setBuffering(false);
         this.playSmooth(video);
         return;
       }
-      if (performance.now() - began > SMOOTH_WAIT_MS) {
-        recordTiming("preview: render didn't come, live", performance.now() - began);
+      // Live, never left "playing" on a spinner: past the wait, the render gone (an edit saved meanwhile), or a
+      // stream that's said what it has and hasn't this.
+      const gone = this.smooth === null || (this.stream !== null && this.stream.described && !this.stream.made(playhead.frame, second));
+      if (gone || performance.now() - began > SMOOTH_WAIT_MS) {
+        recordTiming(gone ? "preview: render gone, live" : "preview: render didn't come, live", performance.now() - began);
         playhead.playing = false;
+        this.setBuffering(false);
         if (this.native) this.playNative();
         else this.playLive();
         return;

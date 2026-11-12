@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { cutsAfter, mapFrame } from "./watching";
+import { cutsAfter, mapFrame, pinFor, type Pinned } from "./watching";
 import type { Project } from "./types";
 
 const project = (clips: { id: string; start: number; duration: number; source_in: number; track?: string }[]): Project =>
@@ -20,6 +20,13 @@ describe("moving to the agent's new version", () => {
     const after = project([{ id: "c", start: 0, duration: 200, source_in: 0 }]);
     expect(mapFrame(before, after, 500)).toBe(199);
     expect(mapFrame(before, after, 100)).toBe(100);
+  });
+
+  test("a pin counts only for the project it was made in", () => {
+    const pin = { project: { ...project([]), id: "p1" }, rev: 3, playback: {} } as unknown as Pinned;
+    expect(pinFor(pin, "p1")).toBe(pin);
+    expect(pinFor(pin, "p2")).toBeNull();
+    expect(pinFor(null, "p1")).toBeNull();
   });
 
   test("the cuts ahead, where a swap shows least", () => {

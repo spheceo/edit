@@ -78,6 +78,8 @@ export class SmoothStream {
   /** The chunks kept on disk (their keys), and whether the background fetch runs. */
   private stored = new Set<string>();
   private stocking = false;
+  /** The store said it's full: no more is kept for this stream (each look fetched the same chunk again for nothing). */
+  private full = false;
 
   constructor(
     private project: string,
@@ -119,6 +121,11 @@ export class SmoothStream {
       at = holding.end;
     }
     return true;
+  }
+
+  /** The server has said what's made (until then `made` and `covers` know nothing). */
+  get described(): boolean {
+    return this.info !== null;
   }
 
   /** The stretches (frames) that play without waiting: appended, or kept on disk. */
@@ -243,8 +250,10 @@ export class SmoothStream {
     if (kept !== undefined) return await kept.arrayBuffer();
     const answer = await fetch(url);
     if (!answer.ok) return null;
-    if (store !== null) {
-      await store.put(url, answer.clone()).then(() => this.stored.add(key), () => {});
+    if (store !== null && !this.full) {
+      await store.put(url, answer.clone()).then(() => this.stored.add(key), (error: unknown) => {
+        if (error instanceof DOMException && error.name === "QuotaExceededError") this.full = true;
+      });
     }
     return await answer.arrayBuffer();
   }
@@ -255,7 +264,7 @@ export class SmoothStream {
    * this project's chunks the render no longer has.
    */
   private async stock() {
-    if (this.stocking) return;
+    if (this.stocking || this.full) return;
     const store = await openStore();
     if (store === null) return;
     this.stocking = true;
@@ -287,8 +296,9 @@ export class SmoothStream {
           this.stored.delete(key);
         }
       }
-    } catch {
-      // Out of room or the network went: what's kept is still used; the next look carries on.
+    } catch (error) {
+      // Out of room: what's kept is still used, and nothing more fetched to keep. The network gone: the next look carries on.
+      if (error instanceof DOMException && error.name === "QuotaExceededError") this.full = true;
     } finally {
       this.stocking = false;
     }

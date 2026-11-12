@@ -24,6 +24,11 @@ export interface Pinned {
 
 export const useWatching = create<{ pinned: Pinned | null }>(() => ({ pinned: null }));
 
+/** The pin that holds for the project open: one left from another counts for nothing (its revision isn't this one's). */
+export function pinFor(pinned: Pinned | null, project: string | null): Pinned | null {
+  return pinned !== null && pinned.project.id === project ? pinned : null;
+}
+
 const end = (clip: Clip) => clip.start + clip.duration;
 
 type Shot = Extract<Clip, { type: "video" }>;

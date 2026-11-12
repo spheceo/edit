@@ -86,6 +86,18 @@ describe("preview seeks and lifetime", () => {
   });
   afterEach(() => { preview.detach(); vi.unstubAllGlobals(); });
 
+  it("says a decoding failure once it's the same through the first try and three retries in a row, and starts over after a gap", async () => {
+    const { failedAgain, lastingFailure } = await import("./playback");
+    let streak = null as ReturnType<typeof failedAgain> | null;
+    for (const at of [0, 4_100, 8_200]) streak = failedAgain(streak, "Preview decoding failed in A: 404", at);
+    expect(lastingFailure(streak)).toBeNull();
+    streak = failedAgain(streak, "Preview decoding failed in A: 404", 12_300);
+    expect(lastingFailure(streak)).toBe("Preview decoding failed in A: 404");
+    // Another failure, or the same after it read for a while: a new run, not said.
+    expect(lastingFailure(failedAgain(streak, "Preview decoding failed in B: 404", 12_400))).toBeNull();
+    expect(failedAgain(streak, "Preview decoding failed in A: 404", 60_000).count).toBe(1);
+  });
+
   it("shows a project whose people's colours the page's own rule doubts (the server and engine police them)", () => {
     // Judge EXPLODES: the page's copy of the rule lacked the courtroom's white subtitles and showed nothing.
     const white = { ...fixture(), people: [{ id: "x1", name: "Mother", label: "Mother:", role: "suspect", color: "#ffffff", names: [] }] } as unknown as Project;
@@ -779,6 +791,27 @@ describe("preview seeks and lifetime", () => {
     expect(preview.diagnostics.nativeFrames.off).toBe("full screen");
     preview.setNativeAllowed(true); await settle();
     expect(preview.native).toBe(true);
+  });
+
+  it("a jump to the end while playing rests there, never starting the edit over", () => {
+    preview.setProject(fixture(), {}); draw(); preview.play();
+    expect(playhead.playing).toBe(true);
+    preview.seekEnd();
+    expect(playhead.frame).toBe(90);
+    expect(playhead.playing).toBe(false);
+    // On a timeline, a click past the last clip still puts the playhead there.
+    preview.seek(500);
+    expect(playhead.frame).toBe(500);
+    // Away from the end, a jump while playing plays on.
+    preview.play(); expect(playhead.frame).toBe(0);
+    preview.seek(30);
+    expect(playhead.playing).toBe(true);
+  });
+
+  it("holds a jump to the edit where there's no timeline (Bodycam HQ)", () => {
+    preview.setProject({ ...fixture(), hq: true }, {}); draw();
+    preview.seek(500);
+    expect(playhead.frame).toBe(90);
   });
 
   it("keeps scrubbing responsive after playback reaches the end", () => {

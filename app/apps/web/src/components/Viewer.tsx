@@ -13,7 +13,7 @@ import { nativePreview } from "../lib/nativePreview";
 import { mediaVersions } from "../lib/mediaVersions";
 import { wantsLight } from "../lib/previewQuality";
 import { goToEnd, goToStart, SECTION_COLORS } from "../lib/timelineView";
-import type { Section } from "../lib/types";
+import type { Project, Section } from "../lib/types";
 import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
 import { numbers, openComment, openComments, setScrubbing, toggleNote, useNotes } from "../lib/notes";
@@ -24,7 +24,7 @@ import { hqActivity } from "../lib/agentTurns";
 import { useEffects } from "../lib/effects";
 import { useNow } from "../lib/now";
 import { useSeekFlash } from "../lib/seekFlash";
-import { cutsAfter, mapFrame, useWatching } from "../lib/watching";
+import { cutsAfter, mapFrame, pinFor, useWatching, type Pinned } from "../lib/watching";
 import { EffectLayer } from "./EffectLayer";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { VideoComments } from "./VideoComments";
@@ -63,6 +63,8 @@ const selectVersions = mediaVersions(wantsLight);
 
 /** Edits settle this long before smooth playback is rendered again (the agent changes things many times a turn). */
 const SMOOTH_SETTLE_MS = 2500;
+/** A pinned version's next render asked for this many times (~30 s) before the pin's let go without it. */
+const RENDER_TRIES = 6;
 
 export function Viewer() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -82,9 +84,11 @@ export function Viewer() {
   const fullscreen = useFullscreen();
   // A frame the footage's decoder couldn't read (most often the network's) is tried again by itself: waited on like any
   // frame, never a message over the picture (Sphe, Nov 12: "kinda don't think it's important for me to see it at all").
-  // What stops the preview itself (no WebGPU, the engine gone) is still said.
-  const retrying = error?.startsWith("Preview decoding failed") === true;
-  const shownError = retrying ? null : error;
+  // What stops the preview itself (no WebGPU, the engine gone) is still said, and so is a failure that hasn't gone
+  // away after a few tries (`lasting`), the tries going on under it.
+  const [lasting, setLasting] = useState<string | null>(null);
+  const retrying = lasting === null && error?.startsWith("Preview decoding failed") === true;
+  const shownError = lasting ?? (retrying ? null : error);
   // Bodycam HQ (Edit V2) watches like a video: its controls float over the picture, as a video site's do.
   const hq = useEditor((state) => state.project?.hq === true);
   const playing = usePlaying();
@@ -102,7 +106,7 @@ export function Viewer() {
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); setSmoothShown(preview.smoothShown); setNative(preview.native); });
+    const off = preview.onStatus(() => { setError(preview.error); setLasting(preview.lastingError); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); setSmoothShown(preview.smoothShown); setNative(preview.native); });
     void preview.attach(canvas);
     preview.attachVideo(videoRef.current);
     return () => {
@@ -118,13 +122,14 @@ export function Viewer() {
   // Bodycam HQ while the agent works: the version on screen as the turn began, its render played, the agent's saves
   // out of view until the turn's over and the new version's render is in (lib/watching.ts).
   const agentBusy = useAgent((state) => state.project === projectId && state.running);
-  const pinned = useWatching((state) => state.pinned);
+  const held = useWatching((state) => state.pinned);
+  const pinned = pinFor(held, projectId);
   useEffect(() => {
-    if (pinned !== null && pinned.project.id !== projectId) useWatching.setState({ pinned: null });
+    if (held !== null && pinned === null) useWatching.setState({ pinned: null });
     if (!hq || !agentBusy || pinned !== null || project === null || dirty) return;
     if (playback?.state !== "ready" || playback.rev !== rev || !playback.url) return;
     useWatching.setState({ pinned: { project, rev: rev ?? 0, playback } });
-  }, [hq, agentBusy, pinned, project, projectId, rev, dirty, playback]);
+  }, [hq, agentBusy, held, pinned, project, projectId, rev, dirty, playback]);
   // Rendered here, it plays a chunk at a time as each lands, while it renders too.
   const streamed = playback?.stream === true && (playback.state === "ready" || playback.state === "rendering") && playback.rev === rev && !dirty;
   const smooth = pinned !== null
@@ -153,26 +158,42 @@ export function Viewer() {
   // Asked for once the edits settle, unless it's rendering (or failed on) this revision; never mid-turn
   // (the agent changes the edit many times a turn: each render would be stale before it landed).
   const hasClips = (project?.clips.length ?? 0) > 0;
+  // A version pinned whose next render can't be asked for (the server unreachable) is let go after a while, not held till a reload.
+  const [unrendered, setUnrendered] = useState<Pinned | null>(null);
+  const pinnedNow = pinned !== null;
   useEffect(() => {
-    if (projectId === null || dirty || !hasClips || agentBusy || drawnByWindow) return;
+    if (projectId === null || dirty || agentBusy || drawnByWindow) return;
+    // The turn left nothing to render: nothing to wait for.
+    if (!hasClips) { if (useWatching.getState().pinned !== null) useWatching.setState({ pinned: null }); return; }
     if (playback !== null && playback.rev === rev && playback.state !== "none") return;
-    const timer = setTimeout(() => {
-      api.renderPlayback(projectId, Math.floor(playhead.frame)).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {});
-    }, SMOOTH_SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [projectId, rev, dirty, hasClips, agentBusy, playback, drawnByWindow]);
+    let live = true;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const ask = () => {
+      api.renderPlayback(projectId, Math.floor(playhead.frame)).then((status) => { if (useEditor.getState().project?.id === projectId) useEditor.setState({ playback: status }); }).catch(() => {
+        // Asked again only while a version waits on it; the live edit draws without one.
+        const held = useWatching.getState().pinned;
+        if (!live || held === null) return;
+        if (++tries >= RENDER_TRIES) setUnrendered(held);
+        else timer = setTimeout(ask, SMOOTH_SETTLE_MS * 2);
+      });
+    };
+    timer = setTimeout(ask, SMOOTH_SETTLE_MS);
+    return () => { live = false; clearTimeout(timer); };
+  }, [projectId, rev, dirty, hasClips, agentBusy, playback, drawnByWindow, pinnedNow]);
 
-  // The turn's over: to the new version once its render's in (or the edit came back unchanged, or its render failed),
-  // where the picture cuts anyway, or at once while it rests, on the same moment of the same shot.
-  const moveTo = useRef<{ frame: number; play: boolean } | null>(null);
+  // The turn's over: to the new version once its render's in (or the edit came back unchanged, or its render failed or
+  // couldn't be asked for), where the picture cuts anyway, or at once while it rests, on the same moment of the same shot.
+  const moveTo = useRef<{ from: Project; play: boolean } | null>(null);
   const settled = pinned !== null && !agentBusy && !dirty && project !== null;
-  const newIn = settled && (rev === pinned.rev || (playback?.rev === rev && (playback.state === "ready" || playback.state === "failed")));
+  const newIn = settled && (rev === pinned.rev || unrendered === pinned || (playback?.rev === rev && (playback.state === "ready" || playback.state === "failed")));
   useEffect(() => {
     if (!newIn || pinned === null || project === null) return;
     const move = () => {
       const play = playhead.playing;
       if (play) preview.pause();
-      moveTo.current = { frame: mapFrame(pinned.project, project, playhead.frame), play };
+      // Where it lands is worked out as it's applied: a jump made meanwhile is where the viewer goes on from.
+      moveTo.current = { from: pinned.project, play };
       useWatching.setState({ pinned: null });
     };
     if (!playhead.playing) {
@@ -205,7 +226,7 @@ export function Viewer() {
     const then = moveTo.current;
     if (then !== null && pinned === null) {
       moveTo.current = null;
-      preview.seek(then.frame);
+      if (project !== null) preview.seek(mapFrame(then.from, project, playhead.frame));
       if (then.play) preview.play();
     }
   }, [project, versions, pinned]);
@@ -410,9 +431,9 @@ function SeekFlash() {
 
 /** The edit on screen: a version pinned while the agent works (lib/watching.ts), else the edit as it is. */
 function useViewedProject() {
-  const pinned = useWatching((state) => state.pinned?.project ?? null);
   const live = useEditor((state) => state.project);
-  return pinned ?? live;
+  const pinned = pinFor(useWatching((state) => state.pinned), live?.id ?? null);
+  return pinned?.project ?? live;
 }
 
 /** The viewer's waiting ring, a video player's. */
@@ -816,7 +837,8 @@ function useBuffered(): [number, number][] {
 /** The frame under the pointer over the progress bar: the nearest of the board at once, the exact one when the pointer rests. */
 function ScrubPreview({ at, duration, chapter }: { at: { x: number; width: number; frame: number }; duration: number; chapter: string | null }) {
   const project = useViewedProject();
-  const pinned = useWatching((state) => state.pinned);
+  const liveId = useEditor((state) => state.project?.id ?? null);
+  const pinned = pinFor(useWatching((state) => state.pinned), liveId);
   const liveRev = useEditor((state) => state.rev) ?? 0;
   const rev = pinned?.rev ?? liveRev;
   // The smooth render of what's on screen, when it's made: its sheets give a frame every 2 s (lib/storyboard.ts).
@@ -832,7 +854,8 @@ function ScrubPreview({ at, duration, chapter }: { at: { x: number; width: numbe
     const exact = storyboard.exactAt(project.id, rev, at.frame);
     if (exact !== null) return exact;
     const cell = stamp === null ? null : storyboard.cellAt(project.id, stamp, at.frame / fps);
-    return cell ?? (stamp === null ? storyboard.pictureAt(project.id, rev, duration, at.frame) : null);
+    // No sheet to read (none made, still on the way, or its request failed): the older spread, never a blank box.
+    return cell ?? storyboard.pictureAt(project.id, rev, duration, at.frame);
   };
   // A string, so the snapshot is the same value until the picture changes (a sheet's cell is a new object each look).
   useSyncExternalStore(storyboard.subscribe, () => { const one = look(); return one === null || typeof one === "string" ? one : `${one.sheet}#${one.x},${one.y}`; });

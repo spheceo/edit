@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { chunkDir, segment, stream } from "../src/playback_stream.ts";
+import { chunkDir, keepPrevious, segment, stream } from "../src/playback_stream.ts";
 import * as tools from "../src/tools.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -72,6 +72,40 @@ test("a chunk goes to the viewer as a fragmented MP4 of its own frames, from its
     }
     expect(() => segment(app, id, "three", 30)).toThrow();
     expect(() => segment(app, id, "../x", 30)).toThrow();
+  } finally {
+    cleanup();
+  }
+});
+
+test("the render before a new one stays playable for a viewer still on it: its chunks, its manifest, its sound, after its file is replaced", async () => {
+  // Sphe, Nov 12: watching on while the agent works, its changes swapped in when they're ready.
+  const { app, store, cleanup } = fixtureHome("playback-previous");
+  try {
+    const id = "p3";
+    const dir = chunkDir(app, id);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(`${store.cacheDir()}/playback`, { recursive: true });
+    const output = `${store.cacheDir()}/playback/${id}.mp4`;
+    const previous = `${store.cacheDir()}/playback/${id}.previous.mp4`;
+    await chunk(output, 4);
+    fs.writeFileSync(`${dir}/manifest-v1.json`, JSON.stringify({ version: 1, output, size: fs.statSync(output).size, modified_ns: 0, fps: 30, chunks: [{ key: "old1", at: 0, frames: 60 }, { key: "same", at: 60, frames: 60 }], sound: "aac" }));
+    expect(keepPrevious(app, id, output, previous)).toBe(true);
+    const before = await stream(app, id, previous, true, null, true);
+    // The new render: a changed first chunk, the same second one, its own joined file renamed over the old.
+    fs.writeFileSync(`${dir}/plan-v1.json`, JSON.stringify({ version: 1, extension: "mp4", chunks: [{ start: 0, end: 60, key: "new1" }, { start: 60, end: 120, key: "same" }] }));
+    const next = `${output}.partial.mp4`;
+    await chunk(next, 6);
+    fs.renameSync(next, output);
+    fs.writeFileSync(`${dir}/manifest-v1.json`, JSON.stringify({ version: 1, output, size: fs.statSync(output).size, modified_ns: 0, fps: 30, chunks: [{ key: "new1", at: 0, frames: 60 }, { key: "same", at: 60, frames: 60 }], sound: "aac" }));
+    // The previous render's stream is still its own, and its chunk that the new render dropped is still served.
+    const still = await stream(app, id, previous, true, null, true);
+    expect(still.segments.map((one) => [one.key, one.ready])).toEqual([["old1", true], ["same", true]]);
+    expect(still.soundUrl).toBe(before.soundUrl);
+    expect((await segment(app, id, "old1", 30)).status).toBe(200);
+    // The old sound address keeps the old sound; the new one's is a new address.
+    const now = await stream(app, id, output, true, null);
+    expect(now.soundUrl).not.toBe(before.soundUrl);
+    expect(fs.statSync(previous).size).toBeLessThan(fs.statSync(output).size);
   } finally {
     cleanup();
   }

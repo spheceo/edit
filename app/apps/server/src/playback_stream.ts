@@ -71,9 +71,12 @@ function readJson<T>(path: string): T | null {
   }
 }
 
-/** The last joined render, when its file is still as it was written. */
-function manifestOf(dir: string): Manifest | null {
-  const manifest = readJson<Manifest>(join(dir, "manifest-v1.json"));
+/** The previous render's manifest (keepPrevious): its file hard-linked beside the new one's, played until the viewer moves on. */
+const PREVIOUS = "manifest-previous.json";
+
+/** The last joined render (or the one before it, `previous`), when its file is still as it was written. */
+function manifestOf(dir: string, previous = false): Manifest | null {
+  const manifest = readJson<Manifest>(join(dir, previous ? PREVIOUS : "manifest-v1.json"));
   if (manifest === null) return null;
   try {
     return fs.statSync(manifest.output).size === manifest.size ? manifest : null;
@@ -142,9 +145,9 @@ function soundOf(id: string, output: string, manifest: Manifest | null): string 
  * or one stopped part-way), and its chunks are never served as this one's
  * (JJ, Nov 2: "on the screen, it still shows the paper thing").
  */
-export async function stream(app: App, id: string, output: string, heard: boolean, since: number | null): Promise<Stream> {
+export async function stream(app: App, id: string, output: string, heard: boolean, since: number | null, previous = false): Promise<Stream> {
   const dir = chunkDir(app, id);
-  const manifest = manifestOf(dir);
+  const manifest = manifestOf(dir, previous);
   let planned: Planned | null = null;
   if (since !== null) {
     try {
@@ -160,7 +163,7 @@ export async function stream(app: App, id: string, output: string, heard: boolea
   const first = segments.find((one) => one.ready);
   const source = first === undefined ? null : sourceOf(dir, planned, manifest, first.key);
   const codec = source === null ? null : await codecOf(source.path);
-  const url = heard ? soundUrl(app, id, output) : null;
+  const url = !heard ? null : previous ? addressOf(id, manifest?.output ?? null) : soundUrl(app, id, output);
   return { segments, codec, sound: !heard ? "none" : url !== null ? "ready" : "pending", soundUrl: url };
 }
 
@@ -173,9 +176,11 @@ export function segment(app: App, id: string, key: string, fps: number): Respons
   if (!/^[A-Za-z0-9_-]+$/.test(key)) throw new ApiError(400, "not a chunk");
   const dir = chunkDir(app, id);
   const manifest = manifestOf(dir);
-  // The render under way's plan, else the finished one's manifest (a render from before plans were written has only that).
-  const plans = [readJson<Planned>(join(dir, "plan-v1.json")), manifest === null ? null : plannedBy(manifest)];
-  const source = plans.map((planned) => (planned === null ? null : sourceOf(dir, planned, manifest, key))).find((one) => one !== null) ?? null;
+  // The render under way's plan, else the finished one's manifest (a render from before plans were written has only that),
+  // else the previous render's, still played by a viewer that hasn't moved to the new one.
+  const previous = manifestOf(dir, true);
+  const plans: [Planned | null, Manifest | null][] = [[readJson<Planned>(join(dir, "plan-v1.json")), manifest], [manifest === null ? null : plannedBy(manifest), manifest], [previous === null ? null : plannedBy(previous), previous]];
+  const source = plans.map(([planned, from]) => (planned === null ? null : sourceOf(dir, planned, from, key))).find((one) => one !== null) ?? null;
   if (source === null) throw notFound("that chunk isn't made yet");
   // A stretch of the joined file starts on its chunk's keyframe: half a frame in keeps the seek on it.
   const seek = source.at > 0 ? ["-ss", ((source.at + 0.5) / fps).toFixed(6)] : [];
@@ -189,18 +194,48 @@ export function segment(app: App, id: string, key: string, fps: number): Respons
 
 /** The sound's address now, versioned by the file it reads (the mix, then the joined render): a new one is a new address. */
 export function soundUrl(app: App, id: string, output: string): string | null {
-  const path = soundOf(id, output, manifestOf(chunkDir(app, id)));
-  if (path === null) return null;
+  return addressOf(id, soundOf(id, output, manifestOf(chunkDir(app, id))));
+}
+
+/** A sound file's version: its size and when it was written (a hard link keeps both). */
+function versionOf(path: string): string | null {
   try {
     const stat = fs.statSync(path);
-    return `/api/projects/${encodeURIComponent(id)}/playback/sound?v=${stat.size}-${Math.floor(stat.mtimeMs)}`;
+    return `${stat.size}-${Math.floor(stat.mtimeMs)}`;
   } catch {
     return null;
   }
 }
 
+function addressOf(id: string, path: string | null): string | null {
+  const version = path === null ? null : versionOf(path);
+  return version === null ? null : `/api/projects/${encodeURIComponent(id)}/playback/sound?v=${version}`;
+}
+
+/**
+ * Keeps the render about to be replaced playable until the viewer moves to
+ * the new one (Sphe, Nov 12: watching on while the agent works, its changes
+ * swapped in ahead of the playhead): its joined file is hard-linked to
+ * `previous` (no copy: the new render's rename leaves it the old file) and its
+ * manifest kept pointing there. One render back is all that's kept.
+ */
+export function keepPrevious(app: App, id: string, output: string, previous: string): boolean {
+  const dir = chunkDir(app, id);
+  const manifest = manifestOf(dir);
+  fs.rmSync(previous, { force: true });
+  fs.rmSync(join(dir, PREVIOUS), { force: true });
+  if (manifest === null || manifest.output !== output) return false;
+  try {
+    fs.linkSync(output, previous);
+  } catch {
+    return false;
+  }
+  fs.writeFileSync(join(dir, PREVIOUS), JSON.stringify({ ...manifest, output: previous }));
+  return true;
+}
+
 /** What playback_render.ts knows of a project's render of revision `rev`: its file, whether it's heard, its rate, and when it started if it's under way; null when there's none of that revision here. */
-export type Lookup = (app: App, id: string, rev: number) => { output: string; heard: boolean; fps: number; since: number | null } | null;
+export type Lookup = (app: App, id: string, rev: number) => { output: string; heard: boolean; fps: number; since: number | null; previous?: boolean } | null;
 
 export function routes(router: Router<App>, lookup: Lookup, fpsOf: (app: App, id: string) => number, output: (app: App, id: string) => string): void {
   router
@@ -208,12 +243,16 @@ export function routes(router: Router<App>, lookup: Lookup, fpsOf: (app: App, id
       const id = params.id ?? "";
       const found = lookup(app, id, Number(url.searchParams.get("rev")));
       if (found === null) return json({ segments: [], codec: null, sound: "pending", soundUrl: null } satisfies Stream);
-      return json(await stream(app, id, found.output, found.heard, found.since));
+      return json(await stream(app, id, found.output, found.heard, found.since, found.previous === true));
     })
     .get("/api/projects/{id}/playback/segment/{key}", ({ app, params }) => segment(app, params.id ?? "", params.key ?? "", fpsOf(app, params.id ?? "")))
-    .get("/api/projects/{id}/playback/sound", ({ app, params, request }) => {
+    .get("/api/projects/{id}/playback/sound", ({ app, params, request, url }) => {
       const id = params.id ?? "";
-      const path = soundOf(id, output(app, id), manifestOf(chunkDir(app, id)));
+      // The version asked for: the previous render's when that's the one it names (a viewer still on it).
+      const asked = url.searchParams.get("v");
+      const now = soundOf(id, output(app, id), manifestOf(chunkDir(app, id)));
+      const before = manifestOf(chunkDir(app, id), true)?.output ?? null;
+      const path = asked !== null && now !== null && versionOf(now) !== asked && before !== null && versionOf(before) === asked ? before : now;
       if (path === null) throw notFound("the sound isn't mixed yet");
       const response = serveFile(request, path);
       // Each file is its own address (`soundUrl`'s `v`).

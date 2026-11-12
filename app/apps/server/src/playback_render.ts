@@ -124,6 +124,16 @@ export function file(app: App, id: string): string {
   return join(app.store.cacheDir(), "playback", `${id.replace(/[^A-Za-z0-9_-]/g, "_")}.mp4`);
 }
 
+/** The render before this one, kept playable until the viewer moves on (playback_stream.ts `keepPrevious`), and what it shows. */
+function previousFile(app: App, id: string): string {
+  return file(app, id).replace(/\.mp4$/u, ".previous.mp4");
+}
+
+function previousRecord(app: App, id: string): Made | undefined {
+  const saved = readState(previousFile(app, id).replace(/\.mp4$/u, ".json")) as Partial<Made> | null | undefined;
+  return typeof saved?.rev === "number" && typeof saved.hash === "string" && typeof saved.stamp === "string" ? (saved as Made) : undefined;
+}
+
 /** What a project's file shows, kept beside it so a restart still knows (`<project>.json`). */
 function record(app: App, id: string): Made | undefined {
   const known = made.get(id);
@@ -357,6 +367,11 @@ async function next(app: App): Promise<void> {
       const release = await turn(app, current);
       if (release !== null) {
         try {
+          // The render this one replaces stays playable for a viewer still on it (a turn's changes swap in when they're ready).
+          const before = record(app, id);
+          if (before !== undefined && before.key === undefined && before.rev !== current.rev && playbackStream.keepPrevious(app, id, file(app, id), previousFile(app, id))) {
+            writeAtomic(previousFile(app, id).replace(/\.mp4$/u, ".json"), JSON.stringify(before));
+          }
           await render(app, project, current);
         } finally {
           release();
@@ -478,7 +493,8 @@ function keepRecent(app: App): void {
   const dir = join(app.store.cacheDir(), "playback");
   let names: string[] = [];
   try {
-    names = fs.readdirSync(dir).filter((name) => name.endsWith(".mp4") && !name.includes(".partial"));
+    // A kept previous render (keepPrevious) isn't one of the renders kept: it goes with its project's.
+    names = fs.readdirSync(dir).filter((name) => name.endsWith(".mp4") && !name.includes(".partial") && !name.endsWith(".previous.mp4"));
   } catch {
     return;
   }
@@ -486,7 +502,7 @@ function keepRecent(app: App): void {
     try { return { name, at: fs.statSync(join(dir, name)).mtimeMs }; } catch { return { name, at: 0 }; }
   }).sort((a, b) => b.at - a.at);
   for (const { name } of dated.slice(KEEP)) {
-    for (const gone of [name, name.replace(/\.mp4$/u, ".json")]) fs.rmSync(join(dir, gone), { force: true });
+    for (const gone of [name, name.replace(/\.mp4$/u, ".json"), name.replace(/\.mp4$/u, ".previous.mp4"), name.replace(/\.mp4$/u, ".previous.json")]) fs.rmSync(join(dir, gone), { force: true });
     for (const [id] of made) if (file(app, id).endsWith(`/${name}`)) made.delete(id);
   }
 }
@@ -546,13 +562,18 @@ export function start(app: App): void {
 /** What playback_stream.ts serves for revision `rev` of `id`: the render under way, or the one made, when it's that revision's and made here. */
 const lookup: playbackStream.Lookup = (app, id, rev) => {
   const fps = app.store.get(id)?.project.settings.fps ?? 30;
-  if (running?.project === id && running.waiting === undefined) return running.rev === rev ? { output: file(app, id), heard: running.heard ?? true, fps, since: running.started } : null;
+  if (running?.project === id && running.waiting === undefined && running.rev === rev) return { output: file(app, id), heard: running.heard ?? true, fps, since: running.started };
   const done = record(app, id);
-  if (!present(app, id, done) || done.key !== undefined) return null;
-  // A save that changed nothing seen keeps the render (status's rule).
-  const live = app.store.get(id);
-  const current = done.rev === rev || (live !== null && live.rev === rev && done.hash === pictureHash(live.project));
-  return current ? { output: file(app, id), heard: done.heard ?? true, fps, since: null } : null;
+  // The finished render, also while the next renders (a viewer still on it plays on), or the one before it.
+  if (present(app, id, done) && done.key === undefined) {
+    // A save that changed nothing seen keeps the render (status's rule).
+    const live = app.store.get(id);
+    const current = done.rev === rev || (live !== null && live.rev === rev && done.hash === pictureHash(live.project));
+    if (current) return { output: file(app, id), heard: done.heard ?? true, fps, since: null };
+  }
+  const previous = previousRecord(app, id);
+  if (previous !== undefined && previous.rev === rev && isFile(previousFile(app, id))) return { output: previousFile(app, id), heard: previous.heard ?? true, fps, since: null, previous: true };
+  return null;
 };
 
 export function routes(router: Router<App>): void {

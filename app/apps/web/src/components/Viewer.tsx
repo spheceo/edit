@@ -80,6 +80,11 @@ export function Viewer() {
   const [framed, setFramed] = useState(preview.framed);
   const [native, setNative] = useState(preview.native);
   const fullscreen = useFullscreen();
+  // A frame the footage's decoder couldn't read (most often the network's) is tried again by itself: waited on like any
+  // frame, never a message over the picture (Sphe, Nov 12: "kinda don't think it's important for me to see it at all").
+  // What stops the preview itself (no WebGPU, the engine gone) is still said.
+  const retrying = error?.startsWith("Preview decoding failed") === true;
+  const shownError = retrying ? null : error;
   // Bodycam HQ (Edit V2) watches like a video: its controls float over the picture, as a video site's do.
   const hq = useEditor((state) => state.project?.hq === true);
   const playing = usePlaying();
@@ -296,19 +301,19 @@ export function Viewer() {
           {!fullscreen && hq && <VideoComments wrap={wrap} />}
           {!fullscreen && !hq && <NoteBoxLayer wrap={wrap} />}
           {!fullscreen && !hq && <NoteDraft />}
-          {error && (
+          {shownError && (
             <div className="absolute inset-0 flex items-center justify-center p-8">
-              <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />
+              <ProblemView error={shownError} doing="show the preview" className="max-w-[380px]" />
             </div>
           )}
           {/* Its first frame on the way: a video player's ring in the middle, no words (Sphe, Nov 12: not the logo's loader). */}
-          {!error && !framed && !empty && (
+          {!shownError && !framed && !empty && (
             <div role="status" aria-label="Loading the preview" className="appear-late pointer-events-none absolute inset-0 flex items-center justify-center">
               <Spinner />
             </div>
           )}
           {/* Bodycam HQ: a spinner in the middle of the picture, as a video player's, the way to report it under it only once it's stuck (Sphe, Nov 11: the corner pill sat behind the controls). */}
-          {hq && !error && framed && buffering && (
+          {hq && !shownError && framed && (buffering || retrying) && (
             <div role="status" aria-label="Loading the frame" className="appear-late pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3">
               <Spinner />
               {stuck && (
@@ -321,12 +326,12 @@ export function Viewer() {
               )}
             </div>
           )}
-          {!hq && !error && framed && buffering && (
+          {!hq && !shownError && framed && (buffering || retrying) && (
             <div role="status" className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2 rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted">
               <Pulse size={12} /> Loading frame…
             </div>
           )}
-          {!hq && !error && buffering && stuck && (
+          {!hq && !shownError && buffering && stuck && (
             <button
               className={cx("absolute rounded-md bg-black/70 px-2.5 py-1.5 text-[11px] text-muted underline underline-offset-2 hover:text-fg", framed ? "right-3 bottom-11" : "bottom-[calc(50%-64px)] left-1/2 -translate-x-1/2")}
               onClick={() => openReport(`The preview has been stuck on "Loading frame…" at frame ${Math.floor(playhead.frame)}`)}

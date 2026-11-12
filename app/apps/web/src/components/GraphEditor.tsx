@@ -345,7 +345,7 @@ function Curves({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
       const { clip, selected } = state.current;
       if (!clip || !selected.size) return;
       if (event.key === "Backspace" || event.key === "Delete") {

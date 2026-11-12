@@ -281,7 +281,7 @@ export function Timeline() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || document.querySelector("[role=dialog]")) return;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || document.querySelector("[role=dialog]")) return;
       if (event.key === "=" || event.key === "+") zoomAround(playheadX(), 1.25);
       else if (event.key === "-") zoomAround(playheadX(), 0.8);
       else if (event.key === "\\") fit();

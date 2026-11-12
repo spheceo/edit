@@ -323,7 +323,7 @@ export function Editor({ script, onChange, onBack }: { script: Script; onChange:
   const keys = useRef<(event: KeyboardEvent) => void>(() => {});
   keys.current = (event) => {
     const target = event.target as HTMLElement | null;
-    const typing = !!target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.tagName === "SELECT");
+    const typing = !!target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.tagName === "SELECT" || target.isContentEditable);
     if ((event.metaKey || event.ctrlKey) && /^[zZy]$/.test(event.key)) {
       if (typing) return;
       event.preventDefault();

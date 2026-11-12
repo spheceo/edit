@@ -70,7 +70,7 @@ export function Shortcuts({ groups, open: shown, onOpenChange }: { groups: { tit
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (event.key !== "?" || (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA"))) return;
+      if (event.key !== "?" || (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable))) return;
       event.preventDefault();
       setOpen((now) => !now);
     };

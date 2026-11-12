@@ -164,7 +164,7 @@ export function Research({ open, onClose }: { open: boolean; onClose: () => void
     };
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
       const move = (by: number) => {
         event.preventDefault();
         setFocus((index) => Math.max(0, Math.min(shown.length - 1, index + by)));

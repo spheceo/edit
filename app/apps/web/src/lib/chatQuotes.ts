@@ -45,6 +45,14 @@ export function removeQuote(chat: string, id: number): void {
   useChatQuotes.setState(({ chats }) => ({ chats: { ...chats, [chat]: (chats[chat] ?? NONE).filter((one) => one.id !== id) } }));
 }
 
+/** A quote taken out brought back as it was (its chip deleted in the composer, then undone). */
+export function restoreQuote(chat: string, quote: ChatQuote): void {
+  useChatQuotes.setState(({ chats }) => {
+    const had = chats[chat] ?? NONE;
+    return had.some((one) => one.id === quote.id) ? { chats } : { chats: { ...chats, [chat]: [...had, quote] } };
+  });
+}
+
 /** The chat's quotes, cleared: they go with the message being sent. */
 export function takeQuotes(chat: string): ChatQuote[] {
   const quotes = useChatQuotes.getState().chats[chat] ?? NONE;

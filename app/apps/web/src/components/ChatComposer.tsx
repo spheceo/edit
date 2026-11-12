@@ -12,10 +12,10 @@
 
 import { AnimatePresence, motion } from "motion/react";
 import { AlertCircle, ArrowUp, Check, FileText, Film, Image as ImageIcon, Music, Plus, Square, X } from "lucide-react";
-import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type ReactNode } from "react";
 import { create } from "zustand";
 
-import { inlineQuote, parseQuoted, quoteLabel, quotedMessage, removeQuote, takeQuotes, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
+import { inlineQuote, parseQuoted, quoteLabel, quotedMessage, removeQuote, restoreQuote, takeQuotes, useQuotesOf, type ChatQuote } from "../lib/chatQuotes";
 import { CHIP, MARK } from "./Quotes";
 import { attachFiles, detachFile, takeFiles, uploading, useFilesOf, type Accept, type ChatFile, type FileKind, type Uploader } from "../lib/chatFiles";
 import { useSettled } from "../lib/settled";
@@ -49,11 +49,16 @@ const AFTER_SEND_MS = 5000;
 let queuedId = 0;
 const NO_QUEUE: Queued[] = [];
 
-/** The chat's composer: a message and its files, the model it runs on, Send, Queue or Stop. */
 /**
- * The box's words as typed, each chip as its quote (`full`: as Claude reads
- * it, in place; else a mark of it, for telling the words changed): text and
- * line breaks in order, a block the browser made for a new line its break.
+ * A chip's mark in the words as an earlier build saved them (Nov 12's dev
+ * builds): read back, it showed as a stray number.
+ */
+const OLD_MARK = /\u2063\d+\u2063/gu;
+
+/**
+ * The box's words as typed (`full`: each chip as its quote, as Claude reads
+ * it, in place; else the words alone, as a draft keeps them): text and line
+ * breaks in order, a block the browser made for a new line its break.
  */
 function read(box: HTMLElement, quotes: readonly ChatQuote[], full = false): string {
   let out = "";
@@ -61,7 +66,7 @@ function read(box: HTMLElement, quotes: readonly ChatQuote[], full = false): str
     for (const child of node.childNodes) {
       if (child instanceof HTMLElement && child.dataset.quoteId !== undefined) {
         const quote = quotes.find((one) => one.id === Number(child.dataset.quoteId));
-        if (quote !== undefined) out += full ? inlineQuote(quote) : `\u2063${quote.id}\u2063`;
+        if (quote !== undefined && full) out += inlineQuote(quote);
       } else if (child.nodeType === Node.TEXT_NODE) {
         out += (child.textContent ?? "").replace(/\u00a0/gu, " ");
       } else if (child.nodeName === "BR") {
@@ -73,7 +78,18 @@ function read(box: HTMLElement, quotes: readonly ChatQuote[], full = false): str
     }
   };
   walk(box);
-  return full ? out : out.replace(/\u2063\d+\u2063/gu, "").trim() === "" ? "" : out;
+  return full || out.trim() !== "" ? out : "";
+}
+
+/** What a copy or cut of the box takes: the words, each chip its quote's words in quotation marks. */
+function copied(range: Range, quotes: readonly ChatQuote[]): string {
+  const part = document.createElement("div");
+  part.append(range.cloneContents());
+  for (const chip of part.querySelectorAll<HTMLElement>("[data-quote-id]")) {
+    const quote = quotes.find((one) => one.id === Number(chip.dataset.quoteId));
+    chip.replaceWith(quote === undefined ? "" : `\u201c${quote.text}\u201d`);
+  }
+  return read(part, []);
 }
 
 /** A quote's chip in the editable box: built as DOM (React doesn't own what's typed there), the look of QuoteChip's. */
@@ -100,6 +116,7 @@ function chipOf(quote: ChatQuote, onRemove: () => void): HTMLElement {
   return chip;
 }
 
+/** The chat's composer: a message and its files, the model it runs on, Send, Queue or Stop. */
 export function ChatComposer({
   running,
   disabled,
@@ -162,8 +179,10 @@ export function ChatComposer({
   // Stop takes a click only once the turn has run a moment: never the send's own second click.
   const stoppable = useSettled(running);
   const input = useRef<HTMLDivElement>(null);
-  // The box's words as last read from it (chips as their quotes), so a change from outside (`value`) is told apart from typing.
+  // The box's words as last read from it, so a change from outside (`value`) is told apart from typing.
   const shown = useRef("");
+  // Quotes whose chip was deleted in the box, for an undo that brings the chip back.
+  const dropped = useRef(new Map<number, ChatQuote>());
   const [empty, setEmpty] = useState(text === "");
   const picker = useRef<HTMLInputElement>(null);
   const armed = useFileDrag(files !== undefined);
@@ -172,7 +191,7 @@ export function ChatComposer({
   useEffect(() => {
     if (draft === undefined) return;
     // The words alone: a chip's quote lives in the chat's quotes, not the draft.
-    const words = text.replace(/\u2063\d+\u2063/gu, "");
+    const words = text.replace(OLD_MARK, "");
     if (words.trim()) localStorage.setItem(draft, words);
     else localStorage.removeItem(draft);
   }, [draft, text]);
@@ -181,7 +200,8 @@ export function ChatComposer({
     const box = input.current;
     if (box === null || text === shown.current) return;
     for (const node of [...box.childNodes]) if (!(node instanceof HTMLElement && node.dataset.quoteId !== undefined)) node.remove();
-    if (text !== "") box.append(document.createTextNode(text));
+    const words = text.replace(OLD_MARK, "");
+    if (words !== "") box.append(document.createTextNode(words));
     shown.current = read(box, quotes);
     setEmpty(shown.current === "");
   }, [text]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -202,7 +222,11 @@ export function ChatComposer({
         range.collapse(false);
       }
       for (const quote of fresh) {
-        const chip = chipOf(quote, () => removeQuote(chat, quote.id));
+        // Taken out by its ×, it's gone for good: an undo doesn't bring it back.
+        const chip = chipOf(quote, () => {
+          dropped.current.delete(quote.id);
+          removeQuote(chat, quote.id);
+        });
         const space = document.createTextNode("\u00a0");
         range.insertNode(space);
         range.insertNode(chip);
@@ -264,6 +288,7 @@ export function ChatComposer({
     const words = placed || (ready && said.length === 0 ? "Here are the files I've attached." : "");
     const sent = quotedMessage(loose, words);
     shown.current = "";
+    dropped.current.clear();
     if (box !== null) box.replaceChildren();
     setEmpty(true);
     setText("");
@@ -272,6 +297,14 @@ export function ChatComposer({
       return;
     }
     onSend(sent, given, said);
+  };
+  const copyOut = (event: ClipboardEvent<HTMLDivElement>, cut: boolean) => {
+    const selection = window.getSelection();
+    if (selection === null || selection.rangeCount === 0 || selection.isCollapsed) return;
+    event.preventDefault();
+    event.clipboardData.setData("text/plain", copied(selection.getRangeAt(0), quotes));
+    // Deleted as typing deletes, so it's undone as typing is (and the box is read again).
+    if (cut) document.execCommand("delete");
   };
   const hasFiles = (event: DragEvent) => files !== undefined && event.dataTransfer.types.includes("Files");
   const showStop = running && !canSend;
@@ -331,11 +364,28 @@ export function ChatComposer({
             onInput={() => {
               const box = input.current;
               if (box === null) return;
-              // A chip deleted by Backspace takes its quote with it.
-              const left = new Set([...box.querySelectorAll<HTMLElement>("[data-quote-id]")].map((chip) => Number(chip.dataset.quoteId)));
-              for (const one of quotes) if (!left.has(one.id)) removeQuote(chat, one.id);
-              shown.current = read(box, quotes);
-              setEmpty(shown.current === "" && left.size === 0);
+              // A chip deleted (Backspace) takes its quote with it, and one an undo brings back brings it back; a chip
+              // with no quote to bring back leaves, so what's shown is what's sent.
+              const chips = [...box.querySelectorAll<HTMLElement>("[data-quote-id]")];
+              const left = new Set(chips.map((chip) => Number(chip.dataset.quoteId)));
+              for (const one of quotes) {
+                if (left.has(one.id)) continue;
+                dropped.current.set(one.id, one);
+                removeQuote(chat, one.id);
+              }
+              const live = quotes.filter((one) => left.has(one.id));
+              for (const chip of chips) {
+                const id = Number(chip.dataset.quoteId);
+                if (live.some((one) => one.id === id)) continue;
+                const back = dropped.current.get(id);
+                if (back === undefined) chip.remove();
+                else {
+                  restoreQuote(chat, back);
+                  live.push(back);
+                }
+              }
+              shown.current = read(box, live);
+              setEmpty(shown.current === "" && live.length === 0);
               setText(shown.current);
             }}
             // A pasted screenshot is attached. Stopped here, so a page's own
@@ -347,9 +397,14 @@ export function ChatComposer({
               event.stopPropagation();
               attach(pasted);
             }}
+            // A chip copies as its quote's words in quotation marks, not as its look (“…×).
+            onCopy={(event) => copyOut(event, false)}
+            onCut={(event) => copyOut(event, true)}
             onKeyDown={(event) => {
               event.stopPropagation();
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              // An Enter that picks an input method's word (Japanese, Chinese, Korean) isn't a send: WebKit has ended
+              // the composition by then (`isComposing` false) but still marks the key 229.
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && (event.nativeEvent as { keyCode?: number }).keyCode !== 229) {
                 event.preventDefault();
                 send();
               }

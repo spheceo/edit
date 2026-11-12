@@ -713,11 +713,11 @@ function CompactLine({ entry }: { entry: AgentEntry }) {
 }
 
 /** A line across the chat with a word in it: a compaction, a turn stopped. */
-function ChatDivider({ icon: Icon, label, running = false, title }: { icon: LucideIcon; label: string; running?: boolean; title?: string }) {
+function ChatDivider({ icon: Icon, label, running = false, title }: { icon?: LucideIcon; label: string; running?: boolean; title?: string }) {
   return (
     <div className="my-1 flex items-center gap-2.5 px-1.5 text-[12px] text-muted" title={title}>
       <span className="h-px flex-1 bg-line" />
-      <Icon size={12} className={cx("shrink-0 text-faint", running && "animate-pulse")} />
+      {Icon !== undefined && <Icon size={12} className={cx("shrink-0 text-faint", running && "animate-pulse")} />}
       <span className={cx("shrink-0 tabular", running && "shimmer")}>{label}</span>
       <span className="h-px flex-1 bg-line" />
     </div>
@@ -793,7 +793,7 @@ function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean
   if (entry.kind === "subagent") return <SubAgentCard entry={entry} />;
   if (entry.kind === "compact") return <CompactLine entry={entry} />;
   // Stopped by the person: a line across the chat where it ended, as a compaction's (Sphe, Nov 12), not a problem card. Steered, there's none.
-  if (entry.kind === "error" && entry.text.trim() === "Stopped.") return <ChatDivider icon={Square} label="Stopped" />;
+  if (entry.kind === "error" && entry.text.trim() === "Stopped.") return <ChatDivider label="Stopped" />;
   if (entry.kind === "error") {
     const resolved = entry.status === "done";
     return (

@@ -83,12 +83,11 @@ export function Viewer() {
   const [native, setNative] = useState(preview.native);
   const fullscreen = useFullscreen();
   // A frame the footage's decoder couldn't read (most often the network's) is tried again by itself: waited on like any
-  // frame, never a message over the picture (Sphe, Nov 12: "kinda don't think it's important for me to see it at all").
-  // What stops the preview itself (no WebGPU, the engine gone) is still said, and so is a failure that hasn't gone
-  // away after a few tries (`lasting`), the tries going on under it.
-  const [lasting, setLasting] = useState<string | null>(null);
-  const retrying = lasting === null && error?.startsWith("Preview decoding failed") === true;
-  const shownError = lasting ?? (retrying ? null : error);
+  // frame, never a message over the picture, even when it keeps failing (Sphe, Nov 12: "kinda don't think it's important
+  // for me to see it at all", and again: "remove this weird banner"). It's in the log for a report. A preview that
+  // didn't start is said only while there's no picture at all; what stops it for good (no WebGPU, the engine gone) is said.
+  const retrying = error?.startsWith("Preview decoding failed") === true;
+  const shownError = retrying || (framed && error?.startsWith("Preview failed to start") === true) ? null : error;
   // Bodycam HQ (Edit V2) watches like a video: its controls float over the picture, as a video site's do.
   const hq = useEditor((state) => state.project?.hq === true);
   const playing = usePlaying();
@@ -106,7 +105,7 @@ export function Viewer() {
 
   useEffect(() => {
     const canvas = canvasRef.current!;
-    const off = preview.onStatus(() => { setError(preview.error); setLasting(preview.lastingError); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); setSmoothShown(preview.smoothShown); setNative(preview.native); });
+    const off = preview.onStatus(() => { setError(preview.error); setBuffering(preview.buffering); setStuck(preview.stuck); setFramed(preview.framed); setSmoothShown(preview.smoothShown); setNative(preview.native); });
     void preview.attach(canvas);
     preview.attachVideo(videoRef.current);
     return () => {

@@ -108,6 +108,19 @@ export class SmoothStream {
     return true;
   }
 
+  /** Whether the render has frames `frame` to `frame + ahead` made (here or on the server): worth waiting for, not drawing live. */
+  made(frame: number, ahead = 0): boolean {
+    const segments = this.info?.segments ?? [];
+    let at = Math.floor(frame);
+    const until = Math.min(this.frames - 1, at + ahead);
+    while (at <= until) {
+      const holding = segments.find((one) => one.start <= at && at < one.end);
+      if (holding === undefined || !holding.ready) return false;
+      at = holding.end;
+    }
+    return true;
+  }
+
   /** The stretches (frames) that play without waiting: appended, or kept on disk. */
   loaded(): [number, number][] {
     const out: [number, number][] = [];

@@ -78,6 +78,14 @@ const AUDIO_AHEAD = 0.8;
 const START_LEAD = 0.05;
 /** After the playhead rests this long, its sound is decoded so Play starts at once. */
 const SETTLE_MS = 300;
+/**
+ * How long a play waits for the render's chunk where it's made (read from
+ * disk or the server) before drawing live instead. Live after a far jump
+ * reads and decodes the footage itself, seconds on a 34-minute edit, and
+ * played a moment and froze (Sphe, Nov 12: "no exceptions things should be
+ * smooth"); a made chunk lands in a fraction of a second.
+ */
+const SMOOTH_WAIT_MS = 6000;
 /** Seeks closer together than this are one drag. */
 const DRAG_GAP_MS = 150;
 /** Source seconds a decoded picture may be from the wanted one and still stand in mid-drag. */
@@ -255,6 +263,14 @@ class Preview {
     const media = key === undefined ? undefined : [...this.sources, ...this.sounds].find(([, url]) => url === key)?.[0];
     const name = media === undefined ? undefined : this.media.get(media)?.name ?? media;
     const message = `Preview decoding failed${name === undefined ? "" : ` in ${name}`}: ${error}`;
+    // The render is what's on screen: the live picture's decoder failing behind it neither stops it nor covers it
+    // (Nov 12: a jump played half a second of the render and paused, the footage read for the live frame at rest
+    // having failed). Tried again when it's next needed.
+    // Nor where the render has this stretch made and its chunk is on the way (a play waiting for it, awaitSmooth).
+    if (this.smoothShown || (this.smooth !== null && this.stream?.made(playhead.frame) === true)) {
+      note("warn", "preview", `${message} (behind the smooth render, which plays on)`);
+      return;
+    }
     this.error = message; note("error", "preview", this.error);
     this.pause();
     this.setBuffering(false);
@@ -445,6 +461,8 @@ class Preview {
     if (!this.smoothShown) {
       this.smoothShown = true;
       this.stopSounds();
+      // The render's picture takes over: the live picture's failure isn't what's on screen any more.
+      if (this.decodingError()) this.error = null;
       this.notify();
     }
     // Already on its frame (no seek, so no "seeked" to say so): shown now. Opened at frame 0 with the
@@ -1251,6 +1269,11 @@ class Preview {
     this.notify();
   }
 
+  /** Whether the error is the footage's decoder failing (tried again by itself), not the preview itself broken. */
+  private decodingError(): boolean {
+    return this.error?.startsWith("Preview decoding failed") === true;
+  }
+
   /** Where playing stops: the range's end, else the project's out point. */
   private stopFrame(): number | null {
     return this.range?.end ?? this.project?.mark_out ?? null;
@@ -1258,16 +1281,67 @@ class Preview {
   toggle() { if (playhead.playing) this.pause(); else this.play(); }
 
   play() {
-    if (!this.project || playhead.playing || this.duration <= 0 || this.error) return;
+    if (!this.project || playhead.playing || this.duration <= 0) return;
     // Stopped at a range's end: Space carries on with the rest, the range gone.
     if (this.range !== null && playhead.frame >= this.range.end) this.clearRange();
     if (playhead.frame >= this.duration - 1) playhead.frame = 0;
-    if (this.smooth && this.video && this.smoothAt(playhead.frame, Math.round(rate(this.project.settings)))) {
+    const second = Math.round(rate(this.project.settings));
+    // A failure stops a play only where it's what would play: the footage's decoder failing (often the network's)
+    // doesn't stop the render from playing what it has (Nov 12: every jump refused to play after one such failure).
+    const rendered = this.smooth !== null && this.video !== null && (this.smoothAt(playhead.frame, second) || this.stream?.made(playhead.frame, second) === true);
+    if (this.error !== null && !(rendered && this.decodingError())) return;
+    if (this.smooth && this.video && this.smoothAt(playhead.frame, second)) {
       recordTiming("preview: play (smooth)", 0);
       this.playSmooth(this.video);
       return;
     }
+    // The render has it, just not loaded here yet: waited for, a moment, rather than drawn live.
+    if (this.smooth && this.video && this.stream?.made(playhead.frame, second) === true) {
+      this.awaitSmooth(this.video);
+      return;
+    }
     if (this.native) { this.playNative(); return; }
+    this.playLive();
+  }
+
+  /**
+   * Playing, held at the playhead until the render's chunk there is in (its
+   * fetch asked for first), then played from it; past `SMOOTH_WAIT_MS`, live.
+   */
+  private awaitSmooth(video: HTMLVideoElement) {
+    const second = Math.round(rate(this.project!.settings));
+    playhead.playing = true;
+    this.playedFrom = playhead.frame;
+    this.setBuffering(true);
+    this.stream?.poke();
+    playhead.emit();
+    const began = performance.now();
+    cancelAnimationFrame(this.loop);
+    const wait = () => {
+      this.loop = 0;
+      if (!playhead.playing || this.smooth === null) return;
+      if (this.smoothAt(playhead.frame, second)) {
+        recordTiming("preview: waited for the render", performance.now() - began);
+        playhead.playing = false;
+        this.setBuffering(false);
+        this.playSmooth(video);
+        return;
+      }
+      if (performance.now() - began > SMOOTH_WAIT_MS) {
+        recordTiming("preview: render didn't come, live", performance.now() - began);
+        playhead.playing = false;
+        if (this.native) this.playNative();
+        else this.playLive();
+        return;
+      }
+      this.loop = requestAnimationFrame(wait);
+    };
+    this.loop = requestAnimationFrame(wait);
+  }
+
+  /** Plays by drawing the edit here, frame by frame, its sound scheduled to the audio clock. */
+  private playLive() {
+    if (!this.project) return;
     recordTiming("preview: play (live)", 0);
     // Live from here: the render (hidden since a scrub past its chunks) is silent first.
     this.stopSmooth();
@@ -1328,7 +1402,16 @@ class Preview {
       if (video.ended || frame >= this.duration - 1) { playhead.frame = Math.max(0, this.duration - 1); this.pause(); return; }
       playhead.frame = Math.max(0, frame);
       if (this.stream !== null) {
-        // Half a second from a chunk not in yet: carried on live from here.
+        // Half a second from a chunk not in yet: held there while a made one comes (no live picture freezing on
+        // footage it has to read first), carried on live only where the render has none.
+        if (!this.stream.covers(frame, Math.round(fps / 2)) && this.stream.made(frame, Math.round(fps / 2))) {
+          video.pause();
+          this.stream.follow(video.currentTime, false);
+          playhead.frame = Math.max(0, frame);
+          playhead.playing = false;
+          this.awaitSmooth(video);
+          return;
+        }
         if (!this.stream.covers(frame, Math.round(fps / 2))) {
           video.pause();
           this.stream.follow(video.currentTime, false);
@@ -1376,6 +1459,8 @@ class Preview {
       this.stream.follow(this.video?.currentTime ?? 0, false);
     }
     if (!playing) return;
+    // A wait for the render (awaitSmooth) ends with the pause: what's drawn at rest says whether it still waits.
+    this.setBuffering(false);
     playhead.frame = Math.round(playhead.frame);
     playhead.emit();
     this.invalidate();

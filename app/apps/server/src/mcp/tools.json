@@ -787,7 +787,7 @@
     "name": "still_frame"
   },
   {
-    "description": "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. Each frame is labelled with its number and its time in the file, a ruler over each row. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each.",
+    "description": "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. Each frame is labelled with its number and its time in the file, a ruler over each row. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each. To study a reference frame by frame (a graphic or move the person wants you to learn from): every_frame shows each of the file's frames between start and end, count to a sheet, sheet after sheet (at most 120 frames a look: carry on from where it says); times shows the moments you name; detail \"full\" shows each frame as a picture of its own, as the file has it, to read every small element (at most 8 a look). Take the time it takes: all of the moments the person points to, every frame, and full size where small text or detail matters.",
     "inputSchema": {
       "properties": {
         "columns": {
@@ -795,7 +795,7 @@
           "type": "integer"
         },
         "count": {
-          "description": "Frames, max 24 (default 12).",
+          "description": "Frames, max 24 (default 12). With every_frame: frames a sheet.",
           "type": "integer"
         },
         "end": {
@@ -812,10 +812,11 @@
           "type": "number"
         },
         "detail": {
-          "description": "\"fine\" for small text, plates or faces: twice the pixels and tokens. Default \"normal\".",
+          "description": "\"fine\" for small text, plates or faces: twice the pixels and tokens. \"full\": each frame a picture of its own at the file's size (at most 8 a look). Default \"normal\".",
           "enum": [
             "normal",
-            "fine"
+            "fine",
+            "full"
           ],
           "type": "string"
         },
@@ -826,12 +827,21 @@
             "auto"
           ],
           "type": "string"
+        },
+        "every_frame": {
+          "description": "Every frame between start and end, at the file's own rate, none skipped (at most 120 a look).",
+          "type": "boolean"
+        },
+        "times": {
+          "description": "Instead of a stretch: these moments (seconds of the file), at most 24 (8 with detail \"full\").",
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
         }
       },
       "required": [
-        "media_id",
-        "start",
-        "end"
+        "media_id"
       ],
       "type": "object"
     },

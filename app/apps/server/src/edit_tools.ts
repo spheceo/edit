@@ -1184,6 +1184,7 @@ async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[
   }
   const end = long > 0 ? Math.min(num(args.end) ?? long, long) : num(args.end) ?? media.duration;
   const count = clamp(uint(args.count) ?? 12, 1, 24);
+  if (args.every_frame === true || str(args.detail) === "full" || Array.isArray(args.times)) return await studyMedia(media, args, start, end, count);
   const { budget, columns } = sheetSpec(args, [], count);
   // pick "auto": a frame each time the picture settles into a new state, at most count (frame_picks.ts).
   const auto = str(args.pick) === "auto" && media.kind === "video";
@@ -1205,6 +1206,77 @@ async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[
     return imageContent(sheet, `${mediaId}: ${picked.length} frame${picked.length === 1 ? "" : "s"}, one per picture the footage settles into (left-to-right then down), at ${said.join(", ")}; each stands for ${states}.${still}`);
   }
   return imageContent(sheet, `${mediaId}: ${said.length} frames, left-to-right then down, at ${said.join(", ")}`);
+}
+
+/** Every frame a look shows at most (4 s of 30 fps footage); the rest is the next look's, from where it stopped. */
+export const EVERY_FRAME_MOST = 120;
+/** Frames a look shows at full size, each a picture of its own. */
+export const FULL_MOST = 8;
+/** A full-size frame's tokens: the most a picture is read at (sheet.rs `MAX_TOKENS`), 1,988 px wide (`SHEET_EDGE`). */
+const FULL_BUDGET = 4784;
+
+/**
+ * look_at_media studying a reference, frame by frame (Sphe, Nov 12: "it may
+ * take time but we need to ensure it can see every tiny element, whether that
+ * is having as many frames at once all in a glance or that is literally one
+ * frame at a time"): `every_frame`, each of the file's frames between start
+ * and end, `count` to a sheet, sheet after sheet; `times`, the moments asked
+ * for; `detail: "full"`, each frame a picture of its own as the file has it
+ * (decoded from the original, not the light preview).
+ */
+async function studyMedia(media: Media, args: Args, start: number, end: number, count: number): Promise<Content[]> {
+  const full = str(args.detail) === "full";
+  const most = full ? FULL_MOST : args.every_frame === true ? EVERY_FRAME_MOST : 24;
+  const fps = media.fps > 0 ? media.fps : 30;
+  let times: number[];
+  let rest = "";
+  if (args.every_frame === true) {
+    if (media.kind !== "video") throw new Error(`${media.id} is a still: every_frame is for moving footage`);
+    const first = Math.floor(start * fps + 1e-6);
+    const last = Math.max(first, Math.floor(end * fps - 1e-6));
+    const shown = Math.min(last - first + 1, most);
+    // A quarter into each frame, so a seek never lands on the one before it.
+    times = Array.from({ length: shown }, (_, index) => (first + index + 0.25) / fps);
+    if (first + shown <= last) rest = ` Frames ${first + shown}–${last} are left: look again with start ${fixed((first + shown) / fps, 3)}.`;
+  } else if (Array.isArray(args.times)) {
+    times = (args.times as unknown[]).filter((one): one is number => typeof one === "number" && Number.isFinite(one) && one >= 0 && (media.duration <= 0 || one < media.duration));
+    if (times.length === 0) throw new Error(`times: moments (seconds of the file) inside its ${fixed(media.duration, 2)} s`);
+    if (times.length > most) throw new Error(`times: at most ${most} moments a look${full ? " at full size" : ""}`);
+  } else {
+    // detail "full" over a stretch: `count` evenly spaced, each at full size.
+    const shown = Math.min(count, most);
+    times = Array.from({ length: shown }, (_, index) => (shown === 1 ? start : start + ((end - start) * index) / (shown - 1)));
+  }
+  const frameOf = (time: number) => Math.floor(time * fps);
+  const said = (time: number) => `frame ${frameOf(time)} (${fixed(time, 2)} s)`;
+  const out: Content[] = [];
+  if (full) {
+    for (const time of times) {
+      const { image: picture } = await native().mediaFrames({ media: structuredClone(media), start: time, end: time, count: 1, times: [time], budget: FULL_BUDGET, encode: "agent" });
+      out.push(...imageContent(picture, `${media.id}: ${said(time)}, at full size`));
+    }
+  } else {
+    const { budget, columns } = sheetSpec(args, [], Math.min(count, times.length));
+    const steady = args.every_frame === true;
+    for (let at = 0; at < times.length; at += count) {
+      const part = times.slice(at, at + count);
+      const { image: sheet } = await native().mediaFrames({
+        media: structuredClone(media),
+        // Every frame of a stretch is a run of evenly spaced ones: read in one pass.
+        start: part[0]!,
+        end: part[part.length - 1]!,
+        count: part.length,
+        ...(steady ? {} : { times: part }),
+        ...(budget === undefined ? {} : { budget }),
+        ...(columns === undefined ? {} : { columns }),
+        encode: "agent",
+      });
+      const what = steady ? `every frame, ${frameOf(part[0]!)}–${frameOf(part[part.length - 1]!)} (${fixed(part[0]!, 2)}–${fixed(part[part.length - 1]!, 2)} s, ${fixed(fps, 2)} a second)` : part.map((time) => said(time)).join(", ");
+      out.push(...imageContent(sheet, `${media.id}: ${what}, left-to-right then down`));
+    }
+  }
+  if (rest !== "") out.push(...text(rest.trim()));
+  return out;
 }
 
 /** The export dialog's options as `serde_json::from_value::<ExportOptions>` reads them (every field defaults). */

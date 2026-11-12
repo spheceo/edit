@@ -10,7 +10,7 @@ import { dispatch } from "../src/mcp/index.ts";
 import { unregistered } from "../src/mcp/registry.ts";
 import type { Project } from "../src/model.ts";
 import type { Transcript } from "../src/transcribe.ts";
-import { native, useNative } from "../src/native/index.ts";
+import { findAddon, native, useNative, wrap, type Native } from "../src/native/index.ts";
 import { clipOf, newProject } from "../src/project.ts";
 import * as progress from "../src/progress.ts";
 import { fixtureHome, write, type Fixture } from "./helpers/home.ts";
@@ -910,4 +910,38 @@ test("a look past a file's end says how long the file is, not that it couldn't d
   const said = await refused(app, "look_at_media", { media_id: "m10", start: 55, end: 160 });
   expect(said).toContain("m10 is 53.05 s long");
   expect(said).toContain("an imported range starts at 0");
+});
+
+test("a reference is studied frame by frame: every frame of a stretch, sheet after sheet, and frames at full size", async () => {
+  // Sphe, Nov 12: "we need to ensure it can see every tiny element".
+  const addon = findAddon();
+  if (addon === null) return;
+  const { app, id, fixture } = setUp("study-frames");
+  const before = useNative(wrap(require(addon) as Native));
+  try {
+    const clip = `${fixture.home}/reference.mp4`;
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30:duration=5", "-c:v", "libx264", "-pix_fmt", "yuv420p", clip]).exitCode).toBe(0);
+    await app.store.update(id, "test", (project) => {
+      project.media.push(media({ id: "ref", name: "reference.mp4", path: clip, kind: "video", duration: 5, width: 1280, height: 720, fps: 30 }));
+    });
+    const images = (result: Awaited<ReturnType<typeof tool>>) => result.content.filter((one) => one.type === "image").length;
+    const words = (result: Awaited<ReturnType<typeof tool>>) => result.content.filter((one) => one.type === "text").map((one) => one.text).join("\n");
+    // Half a second, every frame: 30–45, twelve to a sheet.
+    const half = await tool(app, "look_at_media", { media_id: "ref", start: 1, end: 1.52, every_frame: true });
+    expect(half.isError, words(half)).toBe(false);
+    expect(images(half)).toBe(2);
+    expect(words(half)).toContain("every frame, 30–41");
+    expect(words(half)).toContain("every frame, 42–45");
+    // The whole clip is more than a look shows: where to carry on is said.
+    const whole = await tool(app, "look_at_media", { media_id: "ref", start: 0, end: 5, every_frame: true, count: 24 });
+    expect(images(whole)).toBe(5);
+    expect(words(whole)).toContain("Frames 120–149 are left: look again with start 4.000");
+    // One frame at a time, as the file has it.
+    const full = await tool(app, "look_at_media", { media_id: "ref", times: [1, 2.5], detail: "full" });
+    expect(images(full)).toBe(2);
+    expect(words(full)).toContain("frame 75 (2.50 s), at full size");
+    expect((await refused(app, "look_at_media", { media_id: "ref", times: [0, 1, 2, 3, 4, 4.1, 4.2, 4.3, 4.4], detail: "full" }))).toContain("at most 8 moments a look at full size");
+  } finally {
+    useNative(before);
+  }
 });

@@ -1,35 +1,5 @@
 import { explain } from "@edit/types/problems";
-import {
-  ArrowLeft,
-  AudioLines,
-  Check,
-  ChevronRight,
-  CircleSlash,
-  Eye,
-  FileInput,
-  Image,
-  FileText,
-  FolderOpen,
-  LayoutGrid,
-  ListChecks,
-  MousePointerClick,
-  Music,
-  RotateCcw,
-  ScrollText,
-  Scissors,
-  Share,
-  SlidersHorizontal,
-  Spline,
-  Square,
-  SquarePlus,
-  Star,
-  Trash2,
-  Type,
-  Wrench,
-  ScanEye,
-  Pencil,
-  type LucideIcon,
-} from "lucide-react";
+import { ArrowLeft, AudioLines, Check, ChevronRight, CircleSlash, Eye, FileInput, Image, FileText, FolderOpen, LayoutGrid, ListChecks, MousePointerClick, Music, RotateCcw, ScrollText, Scissors, Share, SlidersHorizontal, Spline, Square, SquarePlus, Star, Trash2, Type, Wrench, ScanEye, Pencil, type LucideIcon, Copy, Quote } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -59,7 +29,9 @@ import { playhead, preview } from "../lib/playback";
 import { projectUploader } from "../lib/upload";
 import { useEditor } from "../lib/store";
 import { rate } from "../lib/types";
-import { parseQuoted } from "../lib/chatQuotes";
+import { addQuote, parseQuoted } from "../lib/chatQuotes";
+import { QuoteSelection } from "./QuoteSelection";
+import { openMenu } from "./ContextMenu";
 import { ChatComposer, QueueIsland, SentFiles } from "./ChatComposer";
 import { UserWords } from "./Quotes";
 import { NoteQueue } from "./NoteQueue";
@@ -232,6 +204,8 @@ function MainAgentPanel() {
           <>
             {blocked && <NotReadyNote />}
             <Composer disabled={!status?.ready} projectId={projectId} />
+            {/* Words selected in the chat: "Add to chat" over them, as on the idea page. */}
+            {projectId !== undefined && <QuoteSelection chat={`project:${projectId}`} />}
           </>
         ) : undefined
       }
@@ -310,6 +284,8 @@ const TurnView = memo(function TurnView({ turn, known, thinking: said }: { turn:
         <motion.div
           {...appear(fresh(turn.user.id) && !turn.user.id.startsWith("user-"))}
           className="mb-1 ml-8 max-w-[calc(100%-2rem)] self-end rounded-2xl bg-raised px-3 py-2 text-[13px] whitespace-pre-wrap text-fg ring-1 ring-line [overflow-wrap:anywhere]"
+          data-quote="my earlier message"
+          onContextMenu={(event) => quoteMenu(event, "my earlier message", parseQuoted(turn.user!.text).words)}
         >
           <UserWords text={turn.user.text} />
         </motion.div>
@@ -614,6 +590,30 @@ export function Empty({ title, detail, children }: { title: string; detail: stri
   );
 }
 
+/**
+ * Right-click on a message (Sphe, Nov 12: "select text almost like it's a web
+ * page and have the context menu to copy it or quote it"): what's selected in
+ * it, or the whole message, copied, or quoted into the next one.
+ */
+function quoteMenu(event: React.MouseEvent<HTMLElement>, from: string, whole: string) {
+  const selection = window.getSelection();
+  const inside = selection !== null && !selection.isCollapsed && selection.rangeCount > 0 && event.currentTarget.contains(selection.getRangeAt(0).commonAncestorContainer);
+  const text = (inside ? selection.toString() : whole).trim();
+  const projectId = useEditor.getState().project?.id;
+  if (text === "" || projectId === undefined) return;
+  openMenu(event, [
+    { label: inside ? "Copy" : "Copy message", icon: <Copy size={14} />, onSelect: () => void navigator.clipboard.writeText(text).catch(() => {}) },
+    {
+      label: inside ? "Quote" : "Quote message",
+      icon: <Quote size={14} />,
+      onSelect: () => {
+        addQuote(`project:${projectId}`, { from, text });
+        window.getSelection()?.removeAllRanges();
+      },
+    },
+  ]);
+}
+
 function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean; fresh?: boolean }) {
   if (entry.kind === "subagent") return <SubAgentCard entry={entry} />;
   if (entry.kind === "error") {
@@ -638,6 +638,8 @@ function EntryView({ entry, muted, fresh }: { entry: AgentEntry; muted?: boolean
       animate={{ opacity: 1 }}
       transition={{ duration: 0.18 }}
       className={cx("px-1.5 leading-relaxed", muted ? "text-[12px] text-muted" : "text-[13px] text-fg/90")}
+      data-quote="your earlier reply"
+      onContextMenu={(event) => quoteMenu(event, "your earlier reply", entry.text)}
     >
       <Markdown text={entry.text} />
     </motion.div>

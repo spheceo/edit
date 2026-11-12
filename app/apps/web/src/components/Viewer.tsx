@@ -23,6 +23,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { hqActivity } from "../lib/agentTurns";
 import { useEffects } from "../lib/effects";
 import { useNow } from "../lib/now";
+import { useSeekFlash } from "../lib/seekFlash";
 import { EffectLayer } from "./EffectLayer";
 import { NoteBoxLayer, NoteDraft } from "./NoteDraft";
 import { VideoComments } from "./VideoComments";
@@ -228,6 +229,7 @@ export function Viewer() {
           <video ref={videoRef} playsInline preload="auto" className={cx("pointer-events-none absolute inset-0 size-full object-contain", !smoothShown && "invisible")} />
           {/* Coded effects (Edit V2) play here, each its own page over the picture. */}
           <EffectLayer wrap={wrap} />
+          <SeekFlash />
           {/* A note being left here: its box over the picture, and the bubble it's written in at the bottom left. */}
           {/* Bodycam HQ: the team's comments pinned on the picture (the thumbnail page's), left while paused. */}
           {!fullscreen && hq && <VideoComments wrap={wrap} />}
@@ -309,6 +311,33 @@ export function Viewer() {
         {/* On the viewer's own frame, over everything in it: its corners and edge are the ring's. */}
         {hq && !fullscreen && <HqWorking />}
       </section>
+    </div>
+  );
+}
+
+/**
+ * A jump by the keys, shown (lib/seekFlash.ts): one angled stroke on the side
+ * it went, pushing that way and fading, with how far ("+5", "−10").
+ */
+function SeekFlash() {
+  const flash = useSeekFlash((state) => state.flash);
+  if (flash === null) return null;
+  const ahead = flash.seconds > 0;
+  const way = ahead ? 1 : -1;
+  return (
+    <div className={cx("pointer-events-none absolute inset-y-0 flex w-1/3 items-center justify-center", ahead ? "right-0" : "left-0")}>
+      <motion.div
+        key={flash.id}
+        initial={{ opacity: 0, x: 0 }}
+        animate={{ opacity: [0, 1, 1, 0], x: [0, way * 8, way * 18, way * 30] }}
+        transition={{ duration: 0.65, times: [0, 0.15, 0.55, 1], ease: "easeOut" }}
+        className={cx("flex items-center gap-2 text-white [filter:drop-shadow(0_1px_6px_#000a)]", !ahead && "flex-row-reverse")}
+      >
+        <svg width="18" height="34" viewBox="0 0 18 34" aria-hidden className={ahead ? undefined : "-scale-x-100"}>
+          <path d="M3 3 L15 17 L3 31" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span className="text-[17px] font-semibold tabular">{ahead ? "+" : "−"}{Math.abs(flash.seconds)}</span>
+      </motion.div>
     </div>
   );
 }

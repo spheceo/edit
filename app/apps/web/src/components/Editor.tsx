@@ -1,3 +1,4 @@
+import { flashSeek } from "../lib/seekFlash";
 import { useEffect, useRef, useState } from "react";
 
 import { useAgent } from "../lib/agent";
@@ -245,12 +246,15 @@ window.addEventListener("blur", stopStepping);
 
 /**
  * Bodycam HQ's keys, a video player's (Sphe, Nov 12): Space or K plays and
- * pauses, ← → jump 10 s, J L 5 s, , . a frame (held, frame after frame), and
+ * pauses, ← → jump 5 s, J L 10 s (a video site's), , . a frame (held, frame after frame), and
  * Shift+. / Shift+, (> <) play at 2× and back to 1×. True when it was one.
  */
 function videoKey(event: KeyboardEvent, fps: number): boolean {
   const key = event.key;
-  const jump = (seconds: number) => preview.seek(Math.max(0, playhead.frame + seconds * fps));
+  const jump = (seconds: number) => {
+    preview.seek(Math.max(0, playhead.frame + seconds * fps));
+    flashSeek(seconds);
+  };
   if (key === " " || key === "k" || key === "K") {
     event.preventDefault();
     if (event.repeat) return true;
@@ -259,10 +263,10 @@ function videoKey(event: KeyboardEvent, fps: number): boolean {
     preview.toggle();
   } else if (key === "ArrowRight" || key === "ArrowLeft") {
     event.preventDefault();
-    jump(key === "ArrowRight" ? 10 : -10);
+    jump(key === "ArrowRight" ? 5 : -5);
   } else if (key === "l" || key === "j") {
     event.preventDefault();
-    jump(key === "l" ? 5 : -5);
+    jump(key === "l" ? 10 : -10);
   } else if (key === "." || key === ",") {
     event.preventDefault();
     // Held, the steps are its own and steady: the keyboard's own repeat starts late and runs at its own pace.

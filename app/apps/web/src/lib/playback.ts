@@ -278,6 +278,21 @@ class Preview {
     return Math.floor(video.currentTime * rate(this.project.settings));
   }
 
+  /**
+   * What's loaded to play on without waiting, as stretches of timeline frames:
+   * the smooth render's buffered parts (Sphe, Nov 12: "almost like a YouTube
+   * video, where we try to display which areas have been buffered with a light
+   * gray color"). Nothing while the canvas draws live.
+   */
+  bufferedFrames(): [number, number][] {
+    const video = this.video;
+    if (!video || !this.project || this.smooth === null) return [];
+    const fps = rate(this.project.settings);
+    const out: [number, number][] = [];
+    for (let index = 0; index < video.buffered.length; index++) out.push([video.buffered.start(index) * fps, video.buffered.end(index) * fps]);
+    return out;
+  }
+
   get diagnostics() {
     return { ...this.decoder.stats, ...this.playbackStats, renderedFrame: this.shownFrame(), nativeFrames: this.nativeReport(),
       videoCacheBytes: this.decoder.pictures.bytes, videoCacheFrames: this.decoder.pictures.size,

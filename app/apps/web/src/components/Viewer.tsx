@@ -567,6 +567,7 @@ function VideoControls({ fullscreen }: { fullscreen: boolean }) {
 function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number; duration: number; thin?: boolean; marks?: { id: string; n: number; frame: number; text: string }[] }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const fraction = duration > 0 ? Math.min(1, Math.max(0, frame / duration)) : 0;
+  const loaded = useBuffered();
   // The frame under the pointer, shown over the bar as it moves (lib/storyboard.ts).
   const [hover, setHover] = useState<{ x: number; width: number; frame: number } | null>(null);
   const hoverAt = (clientX: number) => {
@@ -608,6 +609,11 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
       }}
     >
       <div ref={trackRef} className={cx("relative w-full rounded-full bg-white/20 transition-[height]", thin ? "h-[3px] group-hover:h-[5px]" : "h-1.5 group-hover:h-2")}>
+        {/* What's loaded to play on without waiting, light grey under the played part, as on YouTube. */}
+        {duration > 0 &&
+          loaded.map(([from, to]) => (
+            <div key={from} className="absolute inset-y-0 rounded-full bg-white/45" style={{ left: `${Math.min(1, from / duration) * 100}%`, width: `${Math.max(0, Math.min(1, to / duration) - Math.min(1, from / duration)) * 100}%` }} />
+          ))}
         <div className="absolute inset-y-0 left-0 rounded-full bg-playhead" style={{ width: `${fraction * 100}%` }} />
         <div className={cx("absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100", thin ? "size-3" : "size-3.5")} style={{ left: `${fraction * 100}%` }} />
         {hover !== null && <ScrubPreview at={hover} duration={duration} />}
@@ -634,6 +640,21 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
       </div>
     </div>
   );
+}
+
+/** The player's loaded stretches (frames), looked at twice a second: a stream's chunks land and go as it plays. */
+function useBuffered(): [number, number][] {
+  const [loaded, setLoaded] = useState<[number, number][]>(() => preview.bufferedFrames());
+  useEffect(() => {
+    const look = () => setLoaded((before) => {
+      const now = preview.bufferedFrames();
+      return now.length === before.length && now.every(([from, to], index) => from === before[index]![0] && to === before[index]![1]) ? before : now;
+    });
+    look();
+    const timer = setInterval(look, 500);
+    return () => clearInterval(timer);
+  }, []);
+  return loaded;
 }
 
 /** The frame under the pointer over the progress bar: the nearest of the board at once, the exact one when the pointer rests. */

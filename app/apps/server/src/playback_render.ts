@@ -126,7 +126,7 @@ export function file(app: App, id: string): string {
 
 /** The render before this one, kept playable until the viewer moves on (playback_stream.ts `keepPrevious`), and what it shows. */
 function previousFile(app: App, id: string): string {
-  return file(app, id).replace(/\.mp4$/u, ".previous.mp4");
+  return playbackStream.previousOf(file(app, id));
 }
 
 function previousRecord(app: App, id: string): Made | undefined {
@@ -502,7 +502,7 @@ function keepRecent(app: App): void {
     try { return { name, at: fs.statSync(join(dir, name)).mtimeMs }; } catch { return { name, at: 0 }; }
   }).sort((a, b) => b.at - a.at);
   for (const { name } of dated.slice(KEEP)) {
-    for (const gone of [name, name.replace(/\.mp4$/u, ".json"), name.replace(/\.mp4$/u, ".previous.mp4"), name.replace(/\.mp4$/u, ".previous.json")]) fs.rmSync(join(dir, gone), { force: true });
+    for (const gone of [name, name.replace(/\.mp4$/u, ".json"), name.replace(/\.mp4$/u, ".previous.mp4"), name.replace(/\.mp4$/u, ".previous.json"), name.replace(/\.mp4$/u, ".previous.manifest.json")]) fs.rmSync(join(dir, gone), { force: true });
     for (const [id] of made) if (file(app, id).endsWith(`/${name}`)) made.delete(id);
   }
 }

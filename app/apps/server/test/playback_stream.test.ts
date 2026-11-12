@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs";
 
-import { chunkDir, keepPrevious, segment, stream } from "../src/playback_stream.ts";
+import { chunkDir, keepPrevious, previousOf, segment, soundPath, stream } from "../src/playback_stream.ts";
 import * as tools from "../src/tools.ts";
 import { fixtureHome } from "./helpers/home.ts";
 
@@ -62,7 +62,7 @@ test("a chunk goes to the viewer as a fragmented MP4 of its own frames, from its
     await chunk(output, 4);
     fs.writeFileSync(`${dir}/manifest-v1.json`, JSON.stringify({ version: 1, output, size: fs.statSync(output).size, modified_ns: 0, fps: 30, chunks: [{ key: "one", at: 0, frames: 60 }, { key: "two", at: 60, frames: 60 }], sound: null }));
     for (const key of ["one", "two"]) {
-      const bytes = new Uint8Array(await segment(app, id, key, 30).arrayBuffer());
+      const bytes = new Uint8Array(await segment(app, id, key, 30, output).arrayBuffer());
       const file = `${dir}/${key}.fragment.mp4`;
       fs.writeFileSync(file, bytes);
       // Fragmented (a moof), and its own 60 frames.
@@ -70,8 +70,8 @@ test("a chunk goes to the viewer as a fragmented MP4 of its own frames, from its
       const frames = new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", file])).trim();
       expect(Number(frames)).toBe(60);
     }
-    expect(() => segment(app, id, "three", 30)).toThrow();
-    expect(() => segment(app, id, "../x", 30)).toThrow();
+    expect(() => segment(app, id, "three", 30, output)).toThrow();
+    expect(() => segment(app, id, "../x", 30, output)).toThrow();
   } finally {
     cleanup();
   }
@@ -86,25 +86,37 @@ test("the render before a new one stays playable for a viewer still on it: its c
     fs.mkdirSync(dir, { recursive: true });
     fs.mkdirSync(`${store.cacheDir()}/playback`, { recursive: true });
     const output = `${store.cacheDir()}/playback/${id}.mp4`;
-    const previous = `${store.cacheDir()}/playback/${id}.previous.mp4`;
+    const previous = previousOf(output);
+    expect(previous).toBe(`${store.cacheDir()}/playback/${id}.previous.mp4`);
     await chunk(output, 4);
     fs.writeFileSync(`${dir}/manifest-v1.json`, JSON.stringify({ version: 1, output, size: fs.statSync(output).size, modified_ns: 0, fps: 30, chunks: [{ key: "old1", at: 0, frames: 60 }, { key: "same", at: 60, frames: 60 }], sound: "aac" }));
     expect(keepPrevious(app, id, output, previous)).toBe(true);
     const before = await stream(app, id, previous, true, null, true);
+    expect(before.soundUrl).not.toBeNull();
     // The new render: a changed first chunk, the same second one, its own joined file renamed over the old.
     fs.writeFileSync(`${dir}/plan-v1.json`, JSON.stringify({ version: 1, extension: "mp4", chunks: [{ start: 0, end: 60, key: "new1" }, { start: 60, end: 120, key: "same" }] }));
     const next = `${output}.partial.mp4`;
     await chunk(next, 6);
     fs.renameSync(next, output);
     fs.writeFileSync(`${dir}/manifest-v1.json`, JSON.stringify({ version: 1, output, size: fs.statSync(output).size, modified_ns: 0, fps: 30, chunks: [{ key: "new1", at: 0, frames: 60 }, { key: "same", at: 60, frames: 60 }], sound: "aac" }));
+    // The engine's tidy after the join: nothing in the chunk folder but its manifest and plan.
+    for (const name of fs.readdirSync(dir)) if (name !== "manifest-v1.json" && name !== "plan-v1.json") fs.rmSync(`${dir}/${name}`);
     // The previous render's stream is still its own, and its chunk that the new render dropped is still served.
     const still = await stream(app, id, previous, true, null, true);
     expect(still.segments.map((one) => [one.key, one.ready])).toEqual([["old1", true], ["same", true]]);
     expect(still.soundUrl).toBe(before.soundUrl);
-    expect((await segment(app, id, "old1", 30)).status).toBe(200);
-    // The old sound address keeps the old sound; the new one's is a new address.
+    // Cut from the kept file: fragmented, its own 60 frames.
+    const file = `${store.cacheDir()}/old1.fragment.mp4`;
+    fs.writeFileSync(file, new Uint8Array(await segment(app, id, "old1", 30, output).arrayBuffer()));
+    expect(Buffer.from(fs.readFileSync(file)).includes(Buffer.from("moof"))).toBe(true);
+    expect(Number(new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-count_packets", "-select_streams", "v:0", "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", file])).trim())).toBe(60);
+    // The old sound address keeps the old sound; the new one's is a new address, and its sound.
     const now = await stream(app, id, output, true, null);
     expect(now.soundUrl).not.toBe(before.soundUrl);
+    const version = (url: string | null) => new URL(url ?? "", "http://x").searchParams.get("v");
+    expect(soundPath(app, id, output, version(before.soundUrl))).toBe(previous);
+    expect(soundPath(app, id, output, version(now.soundUrl))).toBe(output);
+    expect(soundPath(app, id, output, null)).toBe(output);
     expect(fs.statSync(previous).size).toBeLessThan(fs.statSync(output).size);
   } finally {
     cleanup();

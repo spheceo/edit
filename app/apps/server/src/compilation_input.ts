@@ -181,10 +181,13 @@ export interface CompilationReaders {
  */
 export function pastedScript(text: string): Parsed | null {
   // A Doc's comment markers ("[a]", linked to the comment) aren't the script's words.
-  const lines = text
+  const marked = text
     .split(/\r?\n/u)
-    .map((line) => line.replace(/\[\[[a-z]{1,3}\]\]\(#cmnt\d+\)/gu, "").replace(/\\([\\[\]()*_!#+\-.`>~|{}])/gu, "$1").trim())
+    .map((line) => line.replace(/\[\[[a-z]{1,3}\]\]\(#cmnt\d+\)/gu, "").trim())
     .filter((line) => line !== "");
+  // The Doc's escapes (`\*\*` is two stars it shows) undone only after its own bold is read.
+  const unescape = (line: string) => line.replace(/\\([\\[\]()*_!#+\-.`>~|{}])/gu, "$1").trim();
+  const lines = marked.map(unescape);
   const linked = /\[[^\]]+\]\(https?:\/\/[^)\s]+\)/u;
   // A footage link left bare by a plain-text paste (a horror script's reel after "Take a look at this:", its "Voice-over: <Drive link>").
   const bare = /(?<![(\[])\bhttps?:\/\/[^\s)\]]+/gu;
@@ -205,10 +208,11 @@ export function pastedScript(text: string): Parsed | null {
     }
     return out + escape(text.slice(at));
   };
-  const html = `<html><body>${lines
+  const html = `<html><body>${marked
     .map((whole) => {
-      const bold = /^\*\*(.+)\*\*$/u.exec(whole);
-      const line = bold?.[1] ?? whole;
+      // All bold only when one pair wraps the whole line: `**NARRATOR:** he said **stop**` is narration.
+      const bold = /^\*\*((?:(?!\*\*).)+)\*\*$/u.exec(whole);
+      const line = unescape(bold?.[1] ?? whole);
       let out = "";
       let at = 0;
       for (const match of line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu)) {

@@ -39,6 +39,11 @@ export interface Board {
 
 /** Renders whose sheets are being cut now. */
 const making = new Set<string>();
+/** Renders whose sheets couldn't be cut, path → its stamp: answered as such, not cut again every time the bar asks (a new render tries afresh). */
+const failed = new Map<string, string>();
+
+/** How long FFprobe and FFmpeg each may take over a render (a long edit's whole file). */
+const TOOL_MS = 15 * 60_000;
 
 function folder(path: string, stamp: string): string {
   return `${path.replace(/\.mp4$/u, "")}.storyboard-${stamp}`;
@@ -48,11 +53,18 @@ function folder(path: string, stamp: string): string {
 async function make(id: string, path: string, stamp: string, width: number, height: number): Promise<void> {
   const into = folder(path, stamp);
   fs.mkdirSync(into, { recursive: true });
-  const listed = new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-select_streams", "v", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", path]));
-  const times = listed.split("\n").filter((line) => line.split(",")[1]?.startsWith("K")).map((line) => Number(line.split(",")[0])).filter(Number.isFinite).sort((a, b) => a - b);
-  await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-skip_frame", "nokey", "-i", path, "-an", "-vf", `scale=${width}:${height},tile=${COLUMNS}x${ROWS}`, "-fps_mode", "passthrough", "-q:v", "5", join(into, "sheet-%03d.jpg")], { timeoutMs: 15 * 60_000 });
-  const board: Board = { stamp, columns: COLUMNS, rows: ROWS, width, height, times };
-  writeAtomic(join(into, "board.json"), JSON.stringify(board));
+  let times: number[];
+  try {
+    const listed = new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-select_streams", "v", "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", path], { timeoutMs: TOOL_MS }));
+    times = listed.split("\n").filter((line) => line.split(",")[1]?.startsWith("K")).map((line) => Number(line.split(",")[0])).filter(Number.isFinite).sort((a, b) => a - b);
+    await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-skip_frame", "nokey", "-i", path, "-an", "-vf", `scale=${width}:${height},tile=${COLUMNS}x${ROWS}`, "-fps_mode", "passthrough", "-q:v", "5", join(into, "sheet-%03d.jpg")], { timeoutMs: TOOL_MS });
+    const board: Board = { stamp, columns: COLUMNS, rows: ROWS, width, height, times };
+    writeAtomic(join(into, "board.json"), JSON.stringify(board));
+  } catch (error) {
+    // Half-cut sheets aren't kept.
+    fs.rmSync(into, { recursive: true, force: true });
+    throw error;
+  }
   // The renders before this one: their sheets go.
   const home = parent(path) ?? ".";
   const prefix = `${fileName(path)?.replace(/\.mp4$/u, "")}.storyboard-`;
@@ -60,19 +72,23 @@ async function make(id: string, path: string, stamp: string, width: number, heig
   diag.info("playback", `${id}: the progress bar's ${times.length} frames cut from the smooth render`);
 }
 
-/** The board for `id`'s render `stamp`: ready, being cut (started now if it wasn't), or none (no such render here). */
-export function board(app: App, id: string, stamp: string): Board | "making" | null {
+/** The board for `id`'s render `stamp`: ready, being cut (started now if it wasn't), failed, or none (no such render here). */
+export function board(app: App, id: string, stamp: string): Board | "making" | "failed" | null {
   const ready = playback.readyFile(app, id);
   if (ready === null || ready.stamp !== stamp) return null;
   const saved = readState(join(folder(ready.path, stamp), "board.json")) as Board | null | undefined;
   if (saved !== null && saved !== undefined && Array.isArray(saved.times)) return saved;
+  if (failed.get(ready.path) === stamp) return "failed";
   if (!making.has(ready.path)) {
     making.add(ready.path);
     const project = app.store.get(id)?.project;
     const width = WIDTH;
     const height = project === undefined ? 108 : Math.max(2, Math.round((WIDTH * project.settings.height) / project.settings.width / 2) * 2);
     make(id, ready.path, stamp, width, height)
-      .catch((error: unknown) => diag.warn("playback", `${id}: the progress bar's frames weren't cut: ${diag.messageOf(error)}`))
+      .catch((error: unknown) => {
+        failed.set(ready.path, stamp);
+        diag.warn("playback", `${id}: the progress bar's frames weren't cut: ${diag.messageOf(error)}`);
+      })
       .finally(() => making.delete(ready.path));
   }
   return "making";
@@ -83,6 +99,8 @@ export function routes(router: Router<App>): void {
     .get("/api/projects/{id}/storyboard", ({ app, params, url }) => {
       const found = board(app, params.id ?? "", url.searchParams.get("v") ?? "");
       if (found === null) throw notFound("no smooth render to cut frames from");
+      // An error, not "making": the bar asks again only a few times, further apart (web lib/storyboard.ts), each answered from here.
+      if (found === "failed") throw notFound("the frames couldn't be cut from this render");
       return json(found === "making" ? { state: "making" } : { state: "ready", ...found });
     })
     .get("/api/projects/{id}/storyboard/{n}", ({ app, params, request, url }) => {

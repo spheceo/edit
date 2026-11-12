@@ -49,9 +49,11 @@ test("a run that didn't quit is said at the next start, with its crash; one that
     lastRun.begin(home, reports);
     expect(said().length).toBe(before);
     // Another process's mark left behind, and macOS's report of its crash (an older report of the same pid isn't it).
-    fs.writeFileSync(mark, JSON.stringify({ pid: 4242, started: Date.now() - 60_000, build: "nightly-58" }));
-    fs.writeFileSync(join(reports, "edit-2026-11-06-030721.ips"), report(4242));
-    fs.writeFileSync(join(reports, "edit-2026-11-01-000000.ips"), report(4242));
+    // Never this run's own pid, which begin takes as itself (CI's Mac once ran it as 4343).
+    const other = process.pid + 1;
+    fs.writeFileSync(mark, JSON.stringify({ pid: other, started: Date.now() - 60_000, build: "nightly-58" }));
+    fs.writeFileSync(join(reports, "edit-2026-11-06-030721.ips"), report(other));
+    fs.writeFileSync(join(reports, "edit-2026-11-01-000000.ips"), report(other));
     fs.utimesSync(join(reports, "edit-2026-11-01-000000.ips"), new Date(Date.now() - 86_400_000), new Date(Date.now() - 86_400_000));
     lastRun.begin(home, reports);
     const lines = said().slice(before);
@@ -59,7 +61,7 @@ test("a run that didn't quit is said at the next start, with its crash; one that
     expect(lines[0]).toContain("the last run (nightly-58, started");
     expect(lines[0]).toContain("EXC_CRASH SIGABRT; abort() called; at edit_engine::mix::render_kept in edit-native.node < +0x1000 in edit (edit-2026-11-06-030721.ips)");
     // No report: said as such.
-    fs.writeFileSync(mark, JSON.stringify({ pid: 4343, started: Date.now(), build: "nightly-58" }));
+    fs.writeFileSync(mark, JSON.stringify({ pid: process.pid + 2, started: Date.now(), build: "nightly-58" }));
     lastRun.begin(home, reports);
     expect(said().at(-1)).toContain("macOS kept no crash report for it");
   } finally {

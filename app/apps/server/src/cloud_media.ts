@@ -2249,7 +2249,7 @@ export async function copySound(input: string, out: string): Promise<void> {
       () => true,
       () => false,
     );
-    if (!copied || !(await soundReadable(partial))) await write("pcm_s16le");
+    if (!copied || (await soundReadable(partial)) !== "yes") await write("pcm_s16le");
     fs.renameSync(partial, out);
   } catch (error) {
     fs.rmSync(partial, { force: true });
@@ -2257,13 +2257,32 @@ export async function copySound(input: string, out: string): Promise<void> {
   }
 }
 
-/** Whether a sound copy's codec is one FFmpeg knows (a codec copied where MOV has no name for it reads as "unknown"). */
-async function soundReadable(path: string): Promise<boolean> {
+/** Sound copies found readable, by path, as `<size>-<mtime>`: each is probed once a run, not on every export. */
+const readable = new Map<string, string>();
+
+/**
+ * Whether a sound copy's codec is one FFmpeg knows (a codec copied where MOV
+ * has no name for it reads as "unknown"): "no" only when FFprobe said so, or
+ * said it can't read the file; "unsure" when it didn't run to an answer.
+ */
+async function soundReadable(path: string): Promise<"yes" | "no" | "unsure"> {
+  let stamp: string;
   try {
-    const codec = new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", path])).trim();
-    return codec !== "" && codec !== "unknown";
+    const stat = fs.statSync(path);
+    stamp = `${stat.size}-${stat.mtimeMs}`;
   } catch {
-    return false;
+    return "no";
+  }
+  if (readable.get(path) === stamp) return "yes";
+  try {
+    const codec = new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", path], { timeoutMs: 30_000 })).trim();
+    if (codec === "" || codec === "unknown") return "no";
+    readable.set(path, stamp);
+    return "yes";
+  } catch (error) {
+    // FFprobe's own "can't read this" is exit 1; not started, timed out or killed says nothing of the file.
+    const failed = error as { _tag?: unknown; exitCode?: unknown } | null;
+    return failed?._tag === "ProcessFailed" && failed.exitCode === 1 ? "no" : "unsure";
   }
 }
 
@@ -2291,11 +2310,11 @@ export async function soundCopy(cache: string, key: string, url: string): Promis
   const copy = soundKey(key);
   const local = localPath(cache, copy);
   // One kept or shared before copySound made PCM of what MOV can't carry is made again (and shared over it).
-  if (isFile(local) && (await soundReadable(local))) return local;
+  if (isFile(local) && (await soundReadable(local)) !== "no") return local;
   try {
     if ((await cloud.head(copy)) !== null) {
       await fetchKey(copy, local);
-      if (await soundReadable(local)) return local;
+      if ((await soundReadable(local)) !== "no") return local;
     }
   } catch (error) {
     diag.warn("export", `fetching a sound copy: ${diag.messageOf(error)}`);
@@ -2338,7 +2357,8 @@ export async function playbackSounds(project: Project, start: number, end: numbe
       try {
         if (cancelled()) return;
         const original = localPath(cache, soundKey(where.original));
-        if (isFile(original)) {
+        // A copy made before copySound made PCM of what MOV can't carry isn't mixed (the proxy's is, below).
+        if (isFile(original) && (await soundReadable(original)) !== "no") {
           sounds[mediaId] = original;
           return;
         }
@@ -2348,8 +2368,10 @@ export async function playbackSounds(project: Project, start: number, end: numbe
         });
         if (up !== null) {
           await fetchKey(soundKey(where.original), original);
-          sounds[mediaId] = original;
-          return;
+          if ((await soundReadable(original)) !== "no") {
+            sounds[mediaId] = original;
+            return;
+          }
         }
         if (where.proxy === undefined) return;
         const proxy = await soundCopy(cache, where.proxy, await getUrl(where.proxy, HOUR));

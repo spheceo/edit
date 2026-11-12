@@ -40,6 +40,21 @@ test("a Doc's Markdown keeps its chapter titles off the voice-over and loses its
   expect(narration).toContain("keep going!");
 });
 
+test("a line bold only in part, or with stars the Doc escaped, is voiced, not taken as a chapter title", () => {
+  const pasted = [
+    "**ACT 1**",
+    "\\[[2:52-4:31](https://drive.google.com/file/d/1gv3wq3IRO26Ani4h1OYibV7PrEqzzjoI/view)\\]",
+    "**NARRATOR:** he said **stop**",
+    "\\*\\*Hands where I can see them\\*\\*",
+    "On the afternoon of December 10th, 2024, a 911 dispatcher received an alarming call from East Moler Street.",
+  ].join("\n");
+  const narration = pastedScript(pasted)!.blocks.flatMap((block) => (block.kind === "narration" ? [block.text] : [])).join("\n");
+  expect(narration).not.toContain("ACT 1");
+  expect(narration).toContain("he said");
+  expect(narration).toContain("stop");
+  expect(narration).toContain("Hands where I can see them");
+});
+
 test("a list of video links, or a title, is not a pasted script", () => {
   expect(pastedScript("https://youtu.be/4NiDAhqfVZc\nhttps://youtu.be/gmwUoZuYdxo\nhttps://youtu.be/5uB7ysH2BtY")).toBeNull();
   expect(pastedScript("Case 1: [the video](https://youtu.be/4NiDAhqfVZc)")).toBeNull();

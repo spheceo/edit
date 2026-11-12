@@ -728,6 +728,29 @@ test("a sound MOV can't carry as it is is copied as PCM, so the export can mix i
   }
 });
 
+test("smooth playback never mixes a broken sound copy kept from before: the proxy's is made instead", async () => {
+  const fixture = home("playback-broken-sound");
+  const { dir, store, cleanup } = fixture;
+  try {
+    const cache = store.cacheDir();
+    const footage = `${dir}/footage.mp4`;
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:size=64x36:rate=30:duration=2", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-c:v", "libx264", "-c:a", "aac", footage]).exitCode).toBe(0);
+    mock.cloud.put("edit/proxies/sha256/dd.mp4", fs.readFileSync(footage));
+    // The original's copy made before copySound made PCM: G.726 copied into a MOV, its codec unknown.
+    const call = `${dir}/call.wav`;
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=8000", "-c:a", "g726", call]).exitCode).toBe(0);
+    const kept = cloudMedia.localPath(cache, cloudMedia.soundKey("edit/originals/sha256/dd/one.wav"));
+    fs.mkdirSync(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-i", call, "-c:a", "copy", "-f", "mov", kept]).exitCode).toBe(0);
+    const project = projectWith([{ ...media("m1", `${dir}/p1.mp4`), has_audio: true, cloud: { source: "sha256:dd", original: "edit/originals/sha256/dd/one.wav", proxy: "edit/proxies/sha256/dd.mp4", size: 5 } }]);
+    project.clips.push({ id: "c1", track: "v1", start: 0, duration: 30, type: "video", media: "m1", source_in: 0, speed: 1 } as Project["clips"][number]);
+    const sounds = await cloudMedia.playbackSounds(project, 0, 30, cache);
+    expect(sounds.m1).toBe(cloudMedia.localPath(cache, cloudMedia.soundKey("edit/proxies/sha256/dd.mp4")));
+  } finally {
+    cleanup();
+  }
+});
+
 test("a Drive file is copied in the cloud when the relay can, with its progress; a failed job falls back to this Mac", async () => {
   const fixture = home("cloud-drive-job");
   const { store, cleanup } = fixture;

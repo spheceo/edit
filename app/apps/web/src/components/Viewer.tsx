@@ -543,7 +543,7 @@ function VideoControls({ fullscreen }: { fullscreen: boolean }) {
             </IconButton>
           )}
           <IconButton
-            label={speed === 1 ? "Play at 2× speed (L while playing)" : "Play at normal speed (L while playing)"}
+            label={speed === 1 ? "Play at 2× speed (Shift+.)" : "Play at normal speed (Shift+,)"}
             aria-pressed={speed !== 1}
             onClick={() => preview.setSpeed(speed === 1 ? 2 : 1)}
             className={cx("w-auto px-1.5 text-[12.5px] font-medium tabular", speed !== 1 ? "text-white" : light)}
@@ -661,22 +661,46 @@ function useBuffered(): [number, number][] {
 function ScrubPreview({ at, duration }: { at: { x: number; width: number; frame: number }; duration: number }) {
   const project = useEditor((state) => state.project);
   const rev = useEditor((state) => state.rev) ?? 0;
-  useSyncExternalStore(storyboard.subscribe, () => (project ? storyboard.pictureAt(project.id, rev, duration, at.frame) : null));
+  // The smooth render of what's on screen, when it's made: its sheets give a frame every 2 s (lib/storyboard.ts).
+  const stamp = useEditor((state) => {
+    const playback = state.playback;
+    if (playback?.state !== "ready" || playback.rev !== state.rev || state.dirty || !playback.url) return null;
+    return new URL(playback.url, location.href).searchParams.get("v");
+  });
+  const fps = project ? rate(project.settings) : 30;
+  const look = () => {
+    if (!project) return null;
+    const exact = storyboard.exactAt(project.id, rev, at.frame);
+    if (exact !== null) return exact;
+    const cell = stamp === null ? null : storyboard.cellAt(project.id, stamp, at.frame / fps);
+    return cell ?? (stamp === null ? storyboard.pictureAt(project.id, rev, duration, at.frame) : null);
+  };
+  // A string, so the snapshot is the same value until the picture changes (a sheet's cell is a new object each look).
+  useSyncExternalStore(storyboard.subscribe, () => { const one = look(); return one === null || typeof one === "string" ? one : `${one.sheet}#${one.x},${one.y}`; });
   useEffect(() => {
     if (!project) return;
-    const timer = setTimeout(() => void storyboard.fetchExact(project.id, rev, duration, at.frame), 90);
+    const timer = setTimeout(() => void storyboard.fetchExact(project.id, rev, duration, at.frame, stamp === null), 90);
     return () => clearTimeout(timer);
-  }, [project, rev, duration, at.frame]);
+  }, [project, rev, duration, at.frame, stamp]);
   if (!project) return null;
-  const url = storyboard.pictureAt(project.id, rev, duration, at.frame);
-  const fps = rate(project.settings);
+  const shown = look();
   const width = 176;
   const height = Math.round((width * project.settings.height) / project.settings.width);
   const left = Math.min(at.width - width / 2, Math.max(width / 2, at.x));
   return (
     <div className="pointer-events-none absolute bottom-full mb-3 -translate-x-1/2" style={{ left }}>
       <div className="overflow-hidden rounded-lg bg-black shadow-[0_8px_28px_#000c] ring-1 ring-white/25" style={{ width, height }}>
-        {url !== null && <img src={url} alt="" className="size-full object-cover" draggable={false} />}
+        {typeof shown === "string" && <img src={shown} alt="" className="size-full object-cover" draggable={false} />}
+        {shown !== null && typeof shown === "object" && (
+          <div
+            className="size-full"
+            style={{
+              backgroundImage: `url(${shown.sheet})`,
+              backgroundSize: `${(shown.columns * shown.width * width) / shown.width}px ${(shown.rows * shown.height * height) / shown.height}px`,
+              backgroundPosition: `-${(shown.x * width) / shown.width}px -${(shown.y * height) / shown.height}px`,
+            }}
+          />
+        )}
       </div>
       <div className="mt-1.5 text-center text-[12px] font-medium text-white tabular [text-shadow:0_1px_3px_#000]">{clock(at.frame, fps)}</div>
     </div>

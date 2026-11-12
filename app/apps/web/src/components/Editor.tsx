@@ -229,6 +229,65 @@ function isTyping(event: KeyboardEvent) {
   return !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable);
 }
 
+/** A held , or . steps a frame at once, then on after this long (ms)… */
+const STEP_HOLD_MS = 300;
+/** …a frame this often (ms), until it's let go. */
+const STEP_EVERY_MS = 40;
+let stepping: { key: string; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function stopStepping() {
+  if (stepping === null) return;
+  clearTimeout(stepping.timer);
+  stepping = null;
+}
+window.addEventListener("keyup", (event) => { if (event.key === stepping?.key) stopStepping(); });
+window.addEventListener("blur", stopStepping);
+
+/**
+ * Bodycam HQ's keys, a video player's (Sphe, Nov 12): Space or K plays and
+ * pauses, ← → jump 10 s, J L 5 s, , . a frame (held, frame after frame), and
+ * Shift+. / Shift+, (> <) play at 2× and back to 1×. True when it was one.
+ */
+function videoKey(event: KeyboardEvent, fps: number): boolean {
+  const key = event.key;
+  const jump = (seconds: number) => preview.seek(Math.max(0, playhead.frame + seconds * fps));
+  if (key === " " || key === "k" || key === "K") {
+    event.preventDefault();
+    if (event.repeat) return true;
+    // A button the mouse last pressed (play, 2×) would also take Space as its click: played and paused at once.
+    if (document.activeElement instanceof HTMLButtonElement) document.activeElement.blur();
+    preview.toggle();
+  } else if (key === "ArrowRight" || key === "ArrowLeft") {
+    event.preventDefault();
+    jump(key === "ArrowRight" ? 10 : -10);
+  } else if (key === "l" || key === "j") {
+    event.preventDefault();
+    jump(key === "l" ? 5 : -5);
+  } else if (key === "." || key === ",") {
+    event.preventDefault();
+    // Held, the steps are its own and steady: the keyboard's own repeat starts late and runs at its own pace.
+    if (event.repeat) return true;
+    stopStepping();
+    const by = key === "." ? 1 : -1;
+    const step = () => {
+      preview.pause();
+      preview.seek(Math.max(0, Math.round(playhead.frame) + by));
+    };
+    step();
+    const again = () => {
+      step();
+      stepping = { key, timer: setTimeout(again, STEP_EVERY_MS) };
+    };
+    stepping = { key, timer: setTimeout(again, STEP_HOLD_MS) };
+  } else if (key === ">" || key === "<") {
+    event.preventDefault();
+    preview.setSpeed(key === ">" ? 2 : 1);
+  } else {
+    return false;
+  }
+  return true;
+}
+
 function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: () => void }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -242,6 +301,8 @@ function useShortcuts({ onImport, onExport }: { onImport: () => void; onExport: 
       const handled = () => event.preventDefault();
       // A video made the new way shows no timeline: the keys that select, cut and place on one do nothing there (a stray S would split a clip nobody can see).
       if (project.hq === true && (mod ? ["a", "d", "k"].includes(key) : ["s", "backspace", "delete", "v", "c", "m", "n", "g", "t"].includes(key))) return;
+      // And it watches like a video: a video player's keys.
+      if (project.hq === true && !mod && !event.altKey && videoKey(event, fps)) return;
 
       if (mod && key === "z") {
         handled();

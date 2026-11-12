@@ -172,6 +172,14 @@ function localCopy(app: App, id: string, key: string): string | null {
   return isFile(local) ? local : null;
 }
 
+/** The finished render's file here and its stamp, when there is one to read (storyboard.ts). */
+export function readyFile(app: App, id: string): { path: string; stamp: string } | null {
+  const done = record(app, id);
+  if (!present(app, id, done)) return null;
+  const path = done.key !== undefined ? localCopy(app, id, done.key) : file(app, id);
+  return path === null || !isFile(path) ? null : { path, stamp: done.stamp };
+}
+
 /** Whether an export renders here (a registry without turns: the render waits for it). */
 function exporting(app: App): boolean {
   return app.exports.localRunning?.() ?? app.exports.running();

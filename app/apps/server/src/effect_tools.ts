@@ -9,6 +9,7 @@ import fs from "node:fs";
 import { join } from "node:path";
 import * as effectInputs from "./effect_inputs.ts";
 import * as effects from "./effects.ts";
+import * as frameCompare from "./frame_compare.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import { fixed } from "./rust.ts";
 import * as tools from "./tools.ts";
@@ -77,8 +78,75 @@ async function lookAtStretch(app: ToolCall["app"], projectId: string, name: stri
   return out;
 }
 
+/** Pairs a look at its frames beside a reference shows at most; 8 to a sheet. */
+export const BESIDE_MOST = 24;
+
+/**
+ * look_at_effect `beside` a reference and/or `zoom`ed: each of its frames (a
+ * stretch, or the moments asked) drawn at full size, cropped to the region,
+ * and set beside the reference's frame at the matching moment (`beside.start`
+ * lines up with the first; the rest follow at the project's pace), labelled.
+ */
+async function lookCompared(app: ToolCall["app"], projectId: string, name: string, args: Record<string, unknown>): Promise<Content[]> {
+  const project = app.store.get(projectId)!.project;
+  const { width, height, fps } = project.settings;
+  const zoom = frameCompare.regionOf(args.zoom, width, height);
+  const beside = args.beside as { media_id?: unknown; start?: unknown } | undefined | null;
+  const reference = beside === undefined || beside === null ? null : project.media.find((one) => one.id === beside.media_id);
+  if (beside !== undefined && beside !== null && (reference === undefined || reference === null)) throw new Error(`beside.media_id: no media ${String(beside.media_id)} (the reference's, from look_at_media)`);
+  const refStart = typeof beside?.start === "number" && Number.isFinite(beside.start) ? beside.start : 0;
+  const most = reference ? BESIDE_MOST : EFFECT_FRAMES_MOST;
+  let times: number[];
+  if (args.every_frame === true) {
+    const start = typeof args.start === "number" && Number.isFinite(args.start) && args.start >= 0 ? args.start : 0;
+    const end = typeof args.end === "number" && Number.isFinite(args.end) && args.end > start ? args.end : start + 1;
+    const first = Math.round(start * fps);
+    times = Array.from({ length: Math.min(Math.max(1, Math.round(end * fps) - first), most) }, (_, index) => (first + index) / fps);
+  } else {
+    const given = Array.isArray(args.times) ? (args.times as unknown[]).filter((one): one is number => typeof one === "number" && Number.isFinite(one) && one >= 0) : [];
+    if (given.length === 0) throw new Error("times (moments, seconds into the effect) or every_frame with start and end");
+    if (given.length > 8) throw new Error("times: at most 8 moments a look (every_frame for a stretch)");
+    times = given;
+  }
+  const look = await effects.look(app, projectId, name, times, 0);
+  const dir = fs.mkdtempSync(join(app.store.cacheDir(), "effect-compare-"));
+  try {
+    const ours = look.stills.map((still, index) => {
+      const file = join(dir, `ours${String(index).padStart(3, "0")}.png`);
+      fs.writeFileSync(file, still.picture);
+      return file;
+    });
+    let refs: string[] = [];
+    if (reference) {
+      if (args.every_frame === true) refs = await frameCompare.framesOf(reference.path, refStart, times.length, fps, width, height, dir, "ref");
+      else for (const [index, time] of times.entries()) refs.push(...(await frameCompare.framesOf(reference.path, refStart + time - times[0]!, 1, fps, width, height, dir, `ref${index}-`)));
+    }
+    const cells = ours.map((file, index) => {
+      const frame = Math.round(times[index]! * fps);
+      const said = `yours ${fixed(times[index]!, 2)}s f${frame}`;
+      const ref = refs[index];
+      return ref === undefined ? { files: [file], labels: [said] } : { files: [ref, file], labels: [`reference ${fixed(refStart + times[index]! - times[0]!, 2)}s`, said] };
+    });
+    const few = cells.length <= 2;
+    const size = few ? 960 : 480;
+    const across = reference ? (few ? 1 : 2) : few ? 2 : 4;
+    const pictures = await frameCompare.sheets(cells, zoom, size, across, reference ? 4 : 4, dir);
+    const what = `${reference ? `beside ${reference.id} (reference left, yours right)` : "each frame"}${zoom === null ? "" : `, zoomed to ${zoom.width}×${zoom.height} at ${zoom.x},${zoom.y}`}`;
+    const out: Content[] = [];
+    pictures.forEach((picture, index) => out.push(...image(picture, `${name} ${what}: sheet ${index + 1} of ${pictures.length}, left-to-right then down`, "image/jpeg")));
+    const lines: string[] = [];
+    if (look.errors.length > 0) lines.push(`ERRORS its page threw (fix these first):\n${look.errors.map((error) => `- ${error}`).join("\n")}`);
+    if (look.problems.length > 0) lines.push(`BREAKS THE EFFECT CONTRACT:\n${look.problems.map((problem) => `- ${problem}`).join("\n")}`);
+    if (lines.length > 0) out.push(...text(lines.join("\n")));
+    return out;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 async function lookAtEffect({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const name = named(app, projectId, args);
+  if ((args.beside !== undefined && args.beside !== null) || (args.zoom !== undefined && args.zoom !== null)) return await lookCompared(app, projectId, name, args);
   if (args.every_frame === true) return await lookAtStretch(app, projectId, name, args);
   let times: number[] | null = null;
   if (args.times !== undefined && args.times !== null) {

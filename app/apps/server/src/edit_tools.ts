@@ -74,6 +74,7 @@ import { compareKeys, stableStringify } from "./stable.ts";
 import { agentView, isSubtitled, revisionConflict, UpdateError, type Live, type Store } from "./store.ts";
 import * as patches from "./patch.ts";
 import * as framePicks from "./frame_picks.ts";
+import * as frameCompare from "./frame_compare.ts";
 import * as progress from "./progress.ts";
 import * as styles from "./styles.ts";
 import { asKept } from "./kept_hearing.ts";
@@ -1184,6 +1185,7 @@ async function lookAtMedia({ app, args, projectId }: ToolCall): Promise<Content[
   }
   const end = long > 0 ? Math.min(num(args.end) ?? long, long) : num(args.end) ?? media.duration;
   const count = clamp(uint(args.count) ?? 12, 1, 24);
+  if (args.zoom !== undefined && args.zoom !== null) return await zoomMedia(app, media, args, start, end);
   if (args.every_frame === true || str(args.detail) === "full" || Array.isArray(args.times)) return await studyMedia(media, args, start, end, count);
   const { budget, columns } = sheetSpec(args, [], count);
   // pick "auto": a frame each time the picture settles into a new state, at most count (frame_picks.ts).
@@ -1277,6 +1279,36 @@ async function studyMedia(media: Media, args: Args, start: number, end: number, 
   }
   if (rest !== "") out.push(...text(rest.trim()));
   return out;
+}
+
+/** A close-up of one region of a media's frames (`zoom`), at its own pixels: the moments asked, or every frame of a stretch (at most 24). */
+async function zoomMedia(app: App, media: Media, args: Args, start: number, end: number): Promise<Content[]> {
+  if (media.kind === "audio") throw new Error(`${media.id} is a sound: nothing to zoom into`);
+  const width = media.width > 0 ? media.width : 1920;
+  const height = media.height > 0 ? media.height : 1080;
+  const zoom = frameCompare.regionOf(args.zoom, width, height)!;
+  const fps = media.fps > 0 ? media.fps : 30;
+  const dir = fs.mkdtempSync(join(app.store.cacheDir(), "media-zoom-"));
+  try {
+    let files: string[] = [];
+    let times: number[] = [];
+    if (args.every_frame === true) {
+      const count = Math.min(Math.max(1, Math.round((end - start) * fps)), 24);
+      files = await frameCompare.framesOf(media.path, start, count, fps, width, height, dir, "z");
+      times = files.map((_, index) => start + index / fps);
+    } else {
+      times = (Array.isArray(args.times) ? (args.times as unknown[]) : [start]).filter((one): one is number => typeof one === "number" && Number.isFinite(one) && one >= 0).slice(0, 8);
+      for (const [index, time] of times.entries()) files.push(...(await frameCompare.framesOf(media.path, time, 1, fps, width, height, dir, `z${index}-`)));
+    }
+    const few = files.length <= 2;
+    const cells = files.map((file, index) => ({ files: [file], labels: [`${fixed(times[index] ?? start, 2)}s`] }));
+    const pictures = await frameCompare.sheets(cells, zoom, few ? 960 : 480, few ? 2 : 4, 4, dir);
+    const out: Content[] = [];
+    pictures.forEach((picture, index) => out.push(...image(picture, `${media.id} zoomed to ${zoom.width}×${zoom.height} at ${zoom.x},${zoom.y}: sheet ${index + 1} of ${pictures.length}, left-to-right then down`, "image/jpeg")));
+    return out;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** The export dialog's options as `serde_json::from_value::<ExportOptions>` reads them (every field defaults). */

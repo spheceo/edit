@@ -30,14 +30,14 @@ Sphe's aim: "give it a link, give it a range to look at, and it can come back wi
   - **Redrawn every frame:** the board drifts, and each frame the labels land a little differently, so they shimmer. In the reference the letters are identical across 24 frames in a row; only the board moves, smoothly.
   - **Outline added:** an outline 3.5 px wide on top of the letters turns a thin pen into a fat marker.
   - **Too big:** the labels are about four times the reference's size against their photos (1.5 photo widths, where the reference's are a third).
-- **Focus effect (reference 51:05):** the reference cuts the man out along his outline, keeps him in colour with a faint white spill at his edge, and greys and darkens everything else. The agent drew a loose shape round his head with a yellow glowing ring. Edit has no way to cut a person out of footage, so the agent filled the gap with a look of its own instead of saying so.
+- **Focus effect (reference 51:05):** the reference is a feathered oval mask over the man (Sphe's read, Nov 12): colour inside, low saturation (not none) and darker outside; its text jitters slightly, its box doesn't. My first brief to the agent said "cut him out along his outline", which was wrong, and it hand-traced his outline. Its own first try had added a glowing ring the reference doesn't have.
 - **Why the agent didn't notice:** it studied the references frame by frame at full size. But it checked its own graphics only as separate stills at chosen moments, at most 8 per look. Nothing that moves between frames shows there, and nothing set its frames beside the reference's.
 
 **Fixed (Nov 12):**
 
 - **look_at_effect `every_frame`:** shows each frame of a stretch of the agent's own graphic, numbered, 16 to a sheet and up to 48 a look, to set beside the reference's (look_at_media `every_frame`). `detail: "full"` draws its stills at full size.
+- **look_at_effect `beside` and `zoom`, look_at_media `zoom`:** its frames beside the reference's at the same moments, labelled, and a close-up of one region at full resolution on either side.
+- **Every agent's instructions (agent/instructions.md):** one line, look closely before judging (zoomed, frames in a row, beside what it should match).
 - **Bodycam HQ's instructions (agent/hq/notes.md):**
   - **Draw once:** draw what doesn't change once, at twice the size, and move it with the camera; never redraw it every frame.
   - **The reference is the brief:** copy it element by element (sizes against each other, strokes and weights, colours, timing). Add nothing it doesn't have, leave nothing out, and compare every frame before calling it done. Where the tools can't do what it does, say so first instead of covering the gap.
-
-**Open:** a subject cut-out for effects. A tool that gives an effect a matte of a person (or whatever is in focus) for every frame, the way `effect_beneath` gives it the picture beneath, from a matting model run here as the face and text models are. Without it, the focus look stays approximate.

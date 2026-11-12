@@ -787,7 +787,7 @@
     "name": "still_frame"
   },
   {
-    "description": "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. Each frame is labelled with its number and its time in the file, a ruler over each row. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each. To study a reference frame by frame (a graphic or move the person wants you to learn from): every_frame shows each of the file's frames between start and end, count to a sheet, sheet after sheet (at most 120 frames a look: carry on from where it says); times shows the moments you name; detail \"full\" shows each frame as a picture of its own, as the file has it, to read every small element (at most 8 a look). Take the time it takes: all of the moments the person points to, every frame, and full size where small text or detail matters.",
+    "description": "Look through a media file (the whole source, not just what's on the timeline): evenly spaced frames between start and end (seconds of the file) in one grid image. Each frame is labelled with its number and its time in the file, a ruler over each row. For finding B-roll moments that show what a cut-in says. Single moments in several files: one batch of them, not a call each. To study a reference frame by frame (a graphic or move the person wants you to learn from): every_frame shows each of the file's frames between start and end, count to a sheet, sheet after sheet (at most 120 frames a look: carry on from where it says); times shows the moments you name; detail \"full\" shows each frame as a picture of its own, as the file has it, to read every small element (at most 8 a look). Take the time it takes: all of the moments the person points to, every frame, and full size where small text or detail matters. zoom crops the frames to one region at the file's own pixels (the moments in times, or every_frame from start to end, at most 24).",
     "inputSchema": {
       "properties": {
         "columns": {
@@ -837,6 +837,24 @@
           "type": "array",
           "items": {
             "type": "number"
+          }
+        },
+        "zoom": {
+          "description": "A close-up: this region of the frame, {x, y, width, height} in the frame's pixels, at full resolution (small text, an edge, a jitter, a glow).",
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            }
           }
         }
       },
@@ -3587,7 +3605,7 @@
     "name": "add_cut_in"
   },
   {
-    "description": "Look at a coded effect (a Bodycam HQ project): stills of it at the seconds you give, drawn by the same page the viewer plays, with its length, what a frame costs to play from each of them on this computer (so you know it plays live), and everything its page gets wrong (an error it threw, a rule of the effect contract it breaks). Look after every change, at the moments the change touches: you can't see the effect any other way. The pictures come in the order of `times`. What only moves between frames (text shimmering as the camera drifts, a jitter, a flicker, how a move eases) shows in none of them: every_frame shows each frame of a stretch (start to end, seconds into the effect, at most 48 a look, 16 to a numbered sheet), to set beside the reference's own frames (look_at_media every_frame) before you call it done; detail \"full\" draws the stills at the frame's size, for small text and fine edges.",
+    "description": "Look at a coded effect (a Bodycam HQ project): stills of it at the seconds you give, drawn by the same page the viewer plays, with its length, what a frame costs to play from each of them on this computer (so you know it plays live), and everything its page gets wrong (an error it threw, a rule of the effect contract it breaks). Look after every change, at the moments the change touches: you can't see the effect any other way. The pictures come in the order of `times`. What only moves between frames (text shimmering as the camera drifts, a jitter, a flicker, how a move eases) shows in none of them: every_frame shows each frame of a stretch (start to end, seconds into the effect, at most 48 a look, 16 to a numbered sheet), to set beside the reference's own frames (look_at_media every_frame) before you call it done; detail \"full\" draws the stills at the frame's size, for small text and fine edges. beside {media_id, start} sets each frame beside the reference's at the same moment (start: the reference's second matching your first frame; at most 24 pairs), so a recreation is judged against what it copies, and zoom crops both to one region at full resolution.",
     "inputSchema": {
       "properties": {
         "name": {
@@ -3624,6 +3642,36 @@
             "full"
           ],
           "type": "string"
+        },
+        "beside": {
+          "description": "The reference to compare with: {media_id, start}, start the reference's second that matches your first frame.",
+          "type": "object",
+          "properties": {
+            "media_id": {
+              "type": "string"
+            },
+            "start": {
+              "type": "number"
+            }
+          }
+        },
+        "zoom": {
+          "description": "A close-up: this region of the frame, {x, y, width, height} in the frame's pixels, at full resolution (small text, an edge, a jitter, a glow).",
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "width": {
+              "type": "number"
+            },
+            "height": {
+              "type": "number"
+            }
+          }
         }
       },
       "required": [

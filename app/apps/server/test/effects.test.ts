@@ -279,6 +279,27 @@ test.skipIf(chrome === null)("look draws the page in Chrome: its length, the sti
     const full = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "counter", times: [1], detail: "full" } } }, id)) as { result: { content: { type: string; text?: string; mimeType?: string }[] } }).result;
     expect(full.content.find((part) => part.type === "image")!.mimeType).toBe("image/png");
     expect(full.content.find((part) => part.text?.includes("at full size"))).toBeDefined();
+    // Beside a reference, zoomed: each of its frames paired with the reference's at the same moment, cropped to one region (Sphe, Nov 12).
+    const reference = join(app.store.cacheDir(), "reference.mp4");
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=1920x1080:rate=30:duration=3:decimals=2", "-c:v", "libx264", "-pix_fmt", "yuv420p", reference]).exitCode).toBe(0);
+    await app.store.update(id, "test", (project) => {
+      project.media.push({ id: "ref", name: "reference.mp4", path: reference, kind: "video", duration: 3, width: 1920, height: 1080, fps: 30, has_audio: false });
+    });
+    const paired = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "counter", every_frame: true, start: 0.5, end: 0.8, beside: { media_id: "ref", start: 1 }, zoom: { x: 100, y: 200, width: 960, height: 540 } } } }, id)) as { result: { content: { type: string; text?: string; data?: string }[]; isError: boolean } }).result;
+    expect(paired.isError, paired.content.map((part) => part.text).join(" ")).toBe(false);
+    const sheetsOut = paired.content.filter((part) => part.type === "image");
+    expect(sheetsOut.length).toBe(2);
+    expect(paired.content.find((part) => part.text?.includes("beside ref"))!.text).toContain("zoomed to 960×540 at 100,200");
+    if (process.env.EDIT_KEEP_SHEET) fs.writeFileSync(process.env.EDIT_KEEP_SHEET, Buffer.from(sheetsOut[0]!.data!, "base64"));
+    const one = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "counter", times: [1], zoom: { x: 0, y: 0, width: 800, height: 450 } } } }, id)) as { result: { content: { type: string }[]; isError: boolean } }).result;
+    expect(one.isError).toBe(false);
+    expect(one.content.filter((part) => part.type === "image").length).toBe(1);
+    const nowhere = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "counter", times: [1], beside: { media_id: "nope", start: 0 } } } }, id)) as { result: { content: { text?: string }[]; isError: boolean } }).result;
+    expect(nowhere.isError).toBe(true);
+    // And footage zoomed: a region of the media's own frames.
+    const zoomed = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_media", arguments: { media_id: "ref", times: [0.5, 2], zoom: { x: 900, y: 400, width: 640, height: 360 } } } }, id)) as { result: { content: { type: string; text?: string }[]; isError: boolean } }).result;
+    expect(zoomed.isError, zoomed.content.map((part) => part.text).join(" ")).toBe(false);
+    expect(zoomed.content.filter((part) => part.type === "image").length).toBe(1);
     await expect(effects.add(app, id, "wrong")).rejects.toThrow("isn't ready for the timeline");
     await expect(effects.look(app, id, "nowhere", [0])).rejects.toThrow('no effect "nowhere"');
   } finally {

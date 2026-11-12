@@ -28,7 +28,6 @@ import { VideoComments } from "./VideoComments";
 import { ProblemView } from "./ProblemView";
 import { WaitingFiles } from "./ScriptPanel";
 import { cx, IconButton, Pulse } from "./ui";
-import { Loader } from "./Logo";
 import { rate } from "../lib/types";
 
 const useFrame = () => useSyncExternalStore(playhead.subscribe, () => Math.floor(playhead.frame));
@@ -238,16 +237,16 @@ export function Viewer() {
               <ProblemView error={error} doing="show the preview" className="max-w-[380px]" />
             </div>
           )}
-          {/* Its first frame on the way: said in the middle, not a corner badge on a black screen (the user, Oct 30: "we need a better loading view"). */}
+          {/* Its first frame on the way: a video player's ring in the middle, no words (Sphe, Nov 12: not the logo's loader). */}
           {!error && !framed && !empty && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <Loader size={32} label="Loading the preview…" />
+            <div role="status" aria-label="Loading the preview" className="appear-late pointer-events-none absolute inset-0 flex items-center justify-center">
+              <Spinner />
             </div>
           )}
           {/* Bodycam HQ: a spinner in the middle of the picture, as a video player's, the way to report it under it only once it's stuck (Sphe, Nov 11: the corner pill sat behind the controls). */}
           {hq && !error && framed && buffering && (
             <div role="status" aria-label="Loading the frame" className="appear-late pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3">
-              <span className="size-9 animate-spin rounded-full border-[3px] border-white/20 border-t-white/90 shadow-[0_0_24px_#0008]" />
+              <Spinner />
               {stuck && (
                 <button
                   className="pointer-events-auto rounded-md bg-black/60 px-2.5 py-1 text-[11px] text-white/70 transition-colors hover:text-white"
@@ -311,6 +310,11 @@ export function Viewer() {
       </section>
     </div>
   );
+}
+
+/** The viewer's waiting ring, a video player's. */
+function Spinner() {
+  return <span className="size-9 animate-spin rounded-full border-[3px] border-white/20 border-t-white/90 shadow-[0_0_24px_#0008]" />;
 }
 
 /** Drag the selected clip’s position directly on the canvas. */

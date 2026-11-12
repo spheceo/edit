@@ -297,11 +297,13 @@ class Preview {
     this.video?.removeEventListener("waiting", this.onVideoWaiting);
     this.video?.removeEventListener("playing", this.onVideoPlaying);
     this.video?.removeEventListener("seeked", this.onVideoPlaying);
+    this.video?.removeEventListener("loadeddata", this.onVideoPlaying);
     this.video = video;
     if (video) video.playbackRate = this.speed;
     video?.addEventListener("waiting", this.onVideoWaiting);
     video?.addEventListener("playing", this.onVideoPlaying);
     video?.addEventListener("seeked", this.onVideoPlaying);
+    video?.addEventListener("loadeddata", this.onVideoPlaying);
     if (video && this.smooth) this.useSmooth(this.smooth);
   }
 
@@ -421,6 +423,10 @@ class Preview {
       this.stopSounds();
       this.notify();
     }
+    // Already on its frame (no seek, so no "seeked" to say so): shown now. Opened at frame 0 with the
+    // render in, nothing seeked or played, and the viewer said "Loading the preview…" over the picture
+    // until play was pressed (Sphe, Nov 12, the bodycam HQ test).
+    if (!video.seeking && video.readyState >= 2) this.onVideoPlaying();
   }
 
   async attach(canvas: HTMLCanvasElement) {

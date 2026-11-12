@@ -570,6 +570,8 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
   const fraction = duration > 0 ? Math.min(1, Math.max(0, frame / duration)) : 0;
   const loaded = useBuffered();
   const chapters = useChapters(duration);
+  // A range clicked in the chat: where playing stops (playback.ts `playRange`).
+  const range = useSyncExternalStore(preview.onStatus, () => preview.range);
   // A slit at each chapter's start, as a video site's progress bar has.
   const slits = chapters.slice(1).map((chapter) => (chapter.start / duration) * 100);
   const mask = slits.length === 0 ? undefined : `linear-gradient(to right, ${slits.map((at) => `#000 calc(${at}% - 1px), transparent calc(${at}% - 1px), transparent calc(${at}% + 1px), #000 calc(${at}% + 1px)`).join(", ")})`;
@@ -627,8 +629,17 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
             loaded.map(([from, to]) => (
               <div key={from} className="absolute inset-y-0 bg-white/35" style={{ left: `${Math.min(1, from / duration) * 100}%`, width: `${Math.max(0, Math.min(1, to / duration) - Math.min(1, from / duration)) * 100}%` }} />
             ))}
+          {range !== null && duration > 0 && (
+            <div className="absolute inset-y-0 bg-white/70" style={{ left: `${(range.start / duration) * 100}%`, width: `${((range.end - range.start) / duration) * 100}%` }} />
+          )}
           <div className="absolute inset-y-0 left-0 bg-playhead" style={{ width: `${fraction * 100}%` }} />
         </div>
+        {/* The range's ends, standing out of the bar as in and out marks. */}
+        {range !== null &&
+          duration > 0 &&
+          [range.start, range.end].map((at) => (
+            <div key={at} className="pointer-events-none absolute -top-1 -bottom-1 w-[2px] -translate-x-1/2 rounded-full bg-white" style={{ left: `${(at / duration) * 100}%` }} />
+          ))}
         <div className={cx("absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100", thin ? "size-3" : "size-3.5")} style={{ left: `${fraction * 100}%` }} />
         {hover !== null && <ScrubPreview at={hover} duration={duration} chapter={chapters.findLast((chapter) => chapter.start <= hover.frame)?.label ?? null} />}
         {/* The open comments: a dot each over the bar; hovered, its words; clicked, its moment and its card. */}

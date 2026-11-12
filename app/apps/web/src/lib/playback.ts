@@ -198,6 +198,13 @@ class Preview {
   private renderedScrub = -1;
   private direction = 1;
   private playedFrom = 0;
+  /**
+   * A stretch to play and stop at the end of, from a range the agent gave in
+   * the chat (lib/chatTimes.ts): the player's own, never the project's in and
+   * out points. Played past its end (play again once it stopped there) or a
+   * seek away from it, and it's gone.
+   */
+  range: { start: number; end: number } | null = null;
   private audio: AudioContext | null = null;
   private peaks = new Map<string, Uint8Array | Promise<void>>();
   private scheduled = new Map<string, ScheduledSound>();
@@ -822,6 +829,12 @@ class Preview {
       this.pause();
       return;
     }
+    // The window plays on by itself: a range's end is kept here.
+    if (this.range !== null && this.playedFrom < this.range.end && at.frame >= this.range.end) {
+      playhead.frame = this.range.end;
+      this.pause();
+      return;
+    }
     playhead.frame = Math.max(0, at.frame);
     if (!this.framed) { this.framed = true; this.notify(); }
     this.setBuffering(false);
@@ -1201,6 +1214,7 @@ class Preview {
     this.direction = frame < playhead.frame ? -1 : 1;
     this.seekSerial++;
     playhead.frame = Math.max(0, Math.round(frame));
+    if (this.range !== null && (playhead.frame < this.range.start || playhead.frame > this.range.end)) this.clearRange();
     clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => this.remember(), 200);
     this.settled = false;
@@ -1214,10 +1228,33 @@ class Preview {
   }
 
   seekEnd() { this.seek(this.project ? projectDuration(this.project) : 0); }
+
+  /** Plays frames `start` to `end` and stops there (a range clicked in the chat); clicked again, from its start again. */
+  playRange(start: number, end: number) {
+    const last = Math.max(0, this.duration - 1);
+    this.range = { start: Math.min(Math.max(0, Math.round(start)), last), end: Math.min(Math.round(end), last) };
+    this.notify();
+    if (playhead.playing) this.pause();
+    this.seek(this.range.start);
+    this.play();
+  }
+
+  private clearRange() {
+    if (this.range === null) return;
+    this.range = null;
+    this.notify();
+  }
+
+  /** Where playing stops: the range's end, else the project's out point. */
+  private stopFrame(): number | null {
+    return this.range?.end ?? this.project?.mark_out ?? null;
+  }
   toggle() { if (playhead.playing) this.pause(); else this.play(); }
 
   play() {
     if (!this.project || playhead.playing || this.duration <= 0 || this.error) return;
+    // Stopped at a range's end: Space carries on with the rest, the range gone.
+    if (this.range !== null && playhead.frame >= this.range.end) this.clearRange();
     if (playhead.frame >= this.duration - 1) playhead.frame = 0;
     if (this.smooth && this.video && this.smoothAt(playhead.frame, Math.round(rate(this.project.settings)))) {
       recordTiming("preview: play (smooth)", 0);
@@ -1280,7 +1317,7 @@ class Preview {
       this.loop = 0;
       if (!playhead.playing || !this.smoothShown) return;
       const frame = video.currentTime * fps - 0.25;
-      const out = project.mark_out ?? null;
+      const out = this.stopFrame();
       if (out !== null && this.playedFrom < out && frame >= out && out < this.duration) { playhead.frame = out; this.pause(); return; }
       if (video.ended || frame >= this.duration - 1) { playhead.frame = Math.max(0, this.duration - 1); this.pause(); return; }
       playhead.frame = Math.max(0, frame);
@@ -1353,7 +1390,7 @@ class Preview {
     let frame = this.runningClock
       ? this.frameAtStart + Math.max(0, this.audio.currentTime - this.clockStart) * fps * this.speed
       : playhead.frame;
-    const out = this.project.mark_out ?? null;
+    const out = this.stopFrame();
     if (out !== null && this.playedFrom < out && frame >= out && out < this.duration) {
       playhead.frame = out; this.pause(); return;
     }

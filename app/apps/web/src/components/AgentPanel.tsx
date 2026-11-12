@@ -33,6 +33,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import { remarkTimes, timeOf } from "../lib/chatTimes";
 import remarkGfm from "remark-gfm";
 
 import {
@@ -54,9 +55,10 @@ import { useSentNow } from "../lib/sentNow";
 import { useNow } from "../lib/now";
 import { api, mediaUrl } from "../lib/api";
 import { queued, useNotes } from "../lib/notes";
-import { playhead } from "../lib/playback";
+import { playhead, preview } from "../lib/playback";
 import { projectUploader } from "../lib/upload";
 import { useEditor } from "../lib/store";
+import { rate } from "../lib/types";
 import { parseQuoted } from "../lib/chatQuotes";
 import { ChatComposer, QueueIsland, SentFiles } from "./ChatComposer";
 import { UserWords } from "./Quotes";
@@ -683,11 +685,27 @@ const MARKDOWN: Components = {
   img: ({ src, alt }) => <ChatPicture src={typeof src === "string" ? src : undefined} alt={alt} />,
   strong: ({ children }) => <strong className="font-semibold text-fg">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
-  a: ({ children, href }) => (
-    <a href={href} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-2 hover:decoration-white">
-      {children}
-    </a>
-  ),
+  a: ({ children, href }) => {
+    // A time or a range the agent gave: to the player (lib/chatTimes.ts).
+    const time = timeOf(href);
+    if (time !== null) {
+      return (
+        <button
+          type="button"
+          title={time.end === null ? "Go there" : "Play this stretch"}
+          onClick={() => goToTime(time.start, time.end)}
+          className="rounded-[4px] bg-playhead/15 px-1 font-medium text-playhead tabular transition-colors hover:bg-playhead/25"
+        >
+          {children}
+        </button>
+      );
+    }
+    return (
+      <a href={href} target="_blank" rel="noreferrer" className="text-fg underline decoration-white/30 underline-offset-2 hover:decoration-white">
+        {children}
+      </a>
+    );
+  },
   h1: ({ children }) => <h3 className="mt-3 mb-1 text-[14px] font-semibold text-fg first:mt-0">{children}</h3>,
   h2: ({ children }) => <h3 className="mt-3 mb-1 text-[13.5px] font-semibold text-fg first:mt-0">{children}</h3>,
   h3: ({ children }) => <h4 className="mt-2.5 mb-1 text-[13px] font-semibold text-fg first:mt-0">{children}</h4>,
@@ -784,9 +802,18 @@ function ResetCard({ projectId }: { projectId: string }) {
   );
 }
 
+/** A time clicked in the chat: the player there; a range, played from its start to its end. */
+function goToTime(start: number, end: number | null) {
+  const project = useEditor.getState().project;
+  if (!project) return;
+  const fps = rate(project.settings);
+  if (end === null) preview.seek(start * fps);
+  else preview.playRange(start * fps, end * fps);
+}
+
 function Markdown({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN} skipHtml>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkTimes]} components={MARKDOWN} skipHtml>
       {text}
     </ReactMarkdown>
   );

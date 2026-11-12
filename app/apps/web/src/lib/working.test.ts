@@ -58,6 +58,17 @@ test("Bodycam HQ's steps say what they did, a group by its kinds", () => {
   expect(groupSummary([step("read_skill", {}), step("look_at_media", {}), step("look_at_media", {}), step("wait", {}), step("Edit", { file_path: "/a" }), step("Edit", { file_path: "/a" }), step("Edit", { file_path: "/a" })])).toBe("Studied the reference 2 times, edited a file and 2 more steps");
 });
 
+test("while Claude Code compacts, the viewer's indicator says so", () => {
+  const now = 10_000;
+  const entries = [
+    { id: "u", kind: "user", text: "go", at: 0 },
+    { id: "t", kind: "tool", tool: "look_at_effect", text: "", status: "done", at: 1000 },
+    { id: "c", kind: "compact", text: "", status: "running", at: 2000 },
+  ] as const;
+  expect(hqActivity([...entries], now)).toBe("Compacting context");
+  expect(hqActivity([...entries.slice(0, 2), { ...entries[2], status: "done" }], now)).not.toBe("Compacting context");
+});
+
 test("working reads to the second", () => {
   expect(formatWorking(8400)).toBe("Working for 8s");
   expect(formatWorking(72_000)).toBe("Working for 1m 12s");

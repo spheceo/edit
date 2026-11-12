@@ -234,6 +234,7 @@ export function hqActivity(entries: readonly AgentEntry[], now = Date.now()): st
   const live = [...entries].reverse().find((entry) => entry.status === "running");
   if (live?.kind === "tool" && live.tool !== undefined) return HQ_STAGES[live.tool] ?? "Working";
   if (live?.kind === "assistant") return "Writing to you";
+  if (live?.kind === "compact") return "Compacting context";
   const asked = [...entries].reverse().find((entry) => entry.kind === "user");
   const since = asked?.at ?? now;
   return thinkingWord(since, now - since);

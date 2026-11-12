@@ -396,12 +396,14 @@ function LiveStatus({ parts, startedAt, said }: { parts: TurnPart[]; startedAt: 
   const usedTools = parts.some((part) => part.kind === "group");
   const toolRunning = parts.some((part) => part.kind === "group" && part.calls.some((call) => call.status === "running"));
   const thinkingNow = parts.some((part) => part.kind === "thinking" && part.active);
+  // A compaction's line already says what's happening (Sphe, Nov 12: not "Pondering" under it too).
+  const compacting = parts.some((part) => part.kind === "entry" && part.entry.kind === "compact" && part.entry.status === "running");
   // Into real work (a tool called, or a few seconds in): "Working for 1m 12s", ticking, shown while tools run too.
   const now = useNow(true);
   const elapsed = startedAt > 0 ? now - startedAt : 0;
   const working = said === undefined && isWorking(elapsed, usedTools);
   // A live reasoning row already says Thinking. A running tool says so on its own row.
-  const thinking = !thinkingNow && (working || ((said !== undefined || quiet) && !toolRunning));
+  const thinking = !thinkingNow && !compacting && (working || ((said !== undefined || quiet) && !toolRunning));
   return (
     <AnimatePresence>
         {thinking && (

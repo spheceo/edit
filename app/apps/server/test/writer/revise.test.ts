@@ -33,6 +33,19 @@ test("applies edits in order and names new items", () => {
   expect(proposals).toEqual([]);
 });
 
+test("an edge goes at a time the producer gives, where nobody speaks, and a clip of silent footage goes in by its times", () => {
+  // Sphe, Nov 12: "start it at 00:29 and go until 00:58" was refused: "a clip can only start just before a spoken word".
+  const [clips] = apply(script(), [
+    { op: "trim", id: "i3", edge: "in", at: "0:05.2" },
+    { op: "trim", id: "i3", edge: "out", at: "0:09.8" },
+    { op: "insert_words", from: "0:00.6", to: "0:00.9", afterId: "start" },
+  ], [], false);
+  expect([clips[3]!.startMs, clips[3]!.endMs]).toEqual([5_200, 9_800]);
+  expect([clips[0]!.startMs, clips[0]!.endMs]).toEqual([600, 900]);
+  expect(() => apply(script(), [{ op: "trim", id: "i1", edge: "in", at: "0:30" }], [], false)).toThrow(/past the end of the footage/);
+  expect(() => apply(script(), [{ op: "trim", id: "i1", edge: "in", at: "soon" }], [], false)).toThrow(/isn't a footage time/);
+});
+
 test("a review fix writes saved narration straight in", () => {
   const [clips, , proposals] = apply(script(), [{ op: "write", id: "i2", narration: "He swore he was home." }], [], true);
   expect(clips[1]!.narration).toBe("He swore he was home.");

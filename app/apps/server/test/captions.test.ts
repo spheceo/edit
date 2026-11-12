@@ -12,6 +12,9 @@ import {
   captionStyle,
   cap,
   carried,
+  followedGlimpses,
+  followedThrough,
+  followSpeaker,
   joinStrays,
   layOut,
   linesOf,
@@ -36,6 +39,7 @@ import { dispatch } from "../src/mcp/index.ts";
 import type { Clip, Media, Project, Rgba, TextClip, TextStyle, Transform } from "../src/model.ts";
 import { addTrack, newProject } from "../src/project.ts";
 import { f32 } from "../src/rust.ts";
+import { findAddon, wrap, type Native } from "../src/native/index.ts";
 import * as seams from "../src/seams.ts";
 import type { Face, Found } from "../src/seams.ts";
 import { serialize, type Transcript, type Word } from "../src/transcribe.ts";
@@ -420,7 +424,8 @@ test("caption_speakers asks Claude who speaks and lays the intro's captions out 
     expect(asked[0]!.response_format).toBeDefined();
     const prompt = (asked[0]!.messages[1]!.content as { text?: string }[])[0]!.text!;
     expect(prompt).toContain("Who's who: speaker_0 (Officer); speaker_1 (Jane (Mother)).");
-    expect(prompt).toContain("0 [1.0s, speaker_0 (Officer)] Stop moving now. (still 0 is at 1.5s)\n1 [3.0s, speaker_1 (Jane (Mother))] Okay. (still 1 is at 3.1s)");
+    // A still per short line, numbered, its moment said (Nov 12: a line of 1.5 s or more gets three, from its start, middle and end).
+    expect(prompt).toContain("line 0 [1.0s, speaker_0 (Officer)] Stop moving now. (still 0 at 1.5s)\nline 1 [3.0s, speaker_1 (Jane (Mother))] Okay. (still 1 at 3.1s)");
     const captions = store.get(id)!.project.clips.filter((clip): clip is TextClip => clip.type === "text" && (clip.name ?? "").startsWith("Caption"));
     expect(captions.map((clip) => [clip.name, clip.text, clip.start, clip.duration, clip.transform.y, clip.animation.preset])).toEqual([
       ["Caption · Officer", "Stop moving now.", 30, 41, f32(388.8), "words"],
@@ -516,3 +521,32 @@ test("subtitles spell the case's names as the case does", () => {
   expect(spelledAsTheCase("Officer Sinclair", [])).toBe("Officer Sinclair");
 });
 
+
+test("a speaker's face is followed frame by frame by the tracker between where they were seen, never jumping between sightings", async () => {
+  // Sphe, Nov 12: "do we not have a model go frame by frame and try detect where each person who is speaking is and track it to them?"
+  const addon = findAddon();
+  if (addon === null) return;
+  const { app, store, cleanup } = fixtureHome("captions-follow");
+  try {
+    (app as unknown as { native: Native }).native = wrap(require(addon) as Native);
+    // A "face" (a textured square) moving right at 200 px a second over a textured still background.
+    const clip = `${store.cacheDir()}/moving.mp4`;
+    const made = Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "nullsrc=size=640x360:rate=30:duration=3,geq=lum='mod(X*7+Y*13,255)':cb=128:cr=128",
+      "-f", "lavfi", "-i", "testsrc=size=60x60:rate=30:duration=3", "-filter_complex", "[0][1]overlay=x='100+200*t':y=150", "-c:v", "libx264", "-pix_fmt", "yuv420p", clip]);
+    expect(made.exitCode).toBe(0);
+    const media = { id: "m", name: "moving.mp4", path: clip, kind: "video", duration: 3, width: 640, height: 360, fps: 30, has_audio: false } as unknown as Media;
+    const boxAt = (t: number): [number, number, number, number] => [(100 + 200 * t) / 640, 150 / 360, (160 + 200 * t) / 640, 210 / 360];
+    const followed = await followSpeaker(app, media, 0.2, 2.8, [{ at: 0.5, face: boxAt(0.5) }, { at: 2.5, face: boxAt(2.5) }]);
+    expect(followed.length).toBeGreaterThan(60);
+    // Where the square really was at every frame followed, to within a few pixels (the sightings were 2 s apart).
+    const off = followed.map(([time, face]) => Math.abs(((face[0] + face[2]) / 2) * 640 - (130 + 200 * time)));
+    expect(Math.max(...off)).toBeLessThan(12);
+    expect(followedThrough(followed, 0.2, 2.8, 30)).toBe(true);
+    // Its glimpses, ten a second, carry the speaker's box for the caption's keyframes.
+    const seen = followedGlimpses(null, followed, [640, 360], { x: 0, y: 0, scale: 1, rotation: 0 }, [1920, 1080], (seconds) => seconds * 30, 90, 30);
+    expect(seen.length).toBeGreaterThan(20);
+    expect(seen.every((one) => one.speaker !== null)).toBe(true);
+  } finally {
+    cleanup();
+  }
+}, 60_000);

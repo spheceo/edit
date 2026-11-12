@@ -35,6 +35,7 @@ export type * from "./Preset";
 export type * from "./Probe";
 export type * from "./Project";
 export type * from "./Quality";
+export type * from "./Range";
 export type * from "./Rgba";
 export type * from "./Rippled";
 export type * from "./Script";

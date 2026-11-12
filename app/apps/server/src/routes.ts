@@ -48,6 +48,7 @@ import * as firstPrompt from "./first_prompt.ts";
 import * as uploads from "./uploads.ts";
 import * as playbackRender from "./playback_render.ts";
 import * as scrub from "./scrub.ts";
+import * as ranges from "./ranges.ts";
 import * as storyboard from "./storyboard.ts";
 import * as reviews from "./reviews.ts";
 import * as tools from "./tools.ts";
@@ -100,6 +101,7 @@ export function buildRouter(): Router<App> {
   localFiles.routes(router);
   playbackRender.routes(router);
   scrub.routes(router);
+  ranges.routes(router);
   storyboard.routes(router);
   firstPrompt.routes(router);
   reset.routes(router);

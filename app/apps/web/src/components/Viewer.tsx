@@ -699,6 +699,8 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
   const chapters = useChapters(duration);
   // A range clicked in the chat: where playing stops (playback.ts `playRange`).
   const range = useSyncExternalStore(preview.onStatus, () => preview.range);
+  // The stretches the agent marked to export (set_ranges), a line over the bar each.
+  const marked = useViewedProject()?.ranges ?? [];
   // A slit at each chapter's start, as a video site's progress bar has.
   const slits = chapters.slice(1).map((chapter) => (chapter.start / duration) * 100);
   const mask = slits.length === 0 ? undefined : `linear-gradient(to right, ${slits.map((at) => `#000 calc(${at}% - 1px), transparent calc(${at}% - 1px), transparent calc(${at}% + 1px), #000 calc(${at}% + 1px)`).join(", ")})`;
@@ -761,6 +763,15 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
           )}
           <div className="absolute inset-y-0 left-0 bg-playhead" style={{ width: `${fraction * 100}%` }} />
         </div>
+        {duration > 0 &&
+          marked.map((one) => (
+            <div
+              key={one.start}
+              title={one.name}
+              className="pointer-events-none absolute bottom-full mb-[3px] h-[2px] rounded-full bg-amber-300/90"
+              style={{ left: `${Math.min(1, one.start / duration) * 100}%`, width: `max(2px, ${Math.max(0, Math.min(1, one.end / duration) - Math.min(1, one.start / duration)) * 100}%)` }}
+            />
+          ))}
         {/* The range's ends, standing out of the bar as in and out marks. */}
         {range !== null &&
           duration > 0 &&

@@ -59,6 +59,7 @@ import * as researchModule from "./research.ts";
 import * as scriptModule from "./script_tools.ts";
 import "./commentary_sources.ts";
 import "./links.ts";
+import "./ranges.ts";
 import "./evidence_highlight.ts";
 import "./reframe.ts";
 import "./shorts.ts";

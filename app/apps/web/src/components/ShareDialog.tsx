@@ -1,13 +1,14 @@
 import { Check, Copy, Download, ExternalLink, FolderSearch, HardDriveDownload, Link2, MessageSquareText, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { api, type Review } from "../lib/api";
+import { api, type RangesBatch, type RangesMode, type Review } from "../lib/api";
 import { projectDuration } from "../lib/edit";
 import { shareStatus, shownPath } from "../lib/export-face";
 import { chaptersInSpan, DEFAULTS, scriptChapters, type ExportOptions } from "../lib/exporting";
 import { onThisMac, showInFinder } from "../lib/files";
 import { FILE_MANAGER, THIS_MACHINE } from "../lib/platform";
 import { preview } from "../lib/playback";
+import { readSetting, writeSetting } from "../lib/storage";
 import { flushSave, useEditor } from "../lib/store";
 import { rate } from "../lib/types";
 import { useGrants } from "../writer/can";
@@ -32,7 +33,22 @@ import { Button, cx, Modal, Select } from "./ui";
  * The dialog is Export, and its two ways are side by side, each saying where
  * the video goes (Sphe, Nov 10: "the distinction between share and export
  * needs to be made more clear"): saved on this Mac, or sent for feedback.
+ *
+ * They're options with one Export button, the last one picked kept (Sphe,
+ * Nov 12: "these two things should more be options and not buttons"). When
+ * the agent has marked stretches (set_ranges, "set all the in and out points
+ * for me"), saving here offers a video of each or one of them joined, beside
+ * the whole edit ("i should be able to pick between those two options").
  */
+type Where = "here" | "feedback";
+type What = "whole" | RangesMode;
+const WHERE = "edit.export.where";
+const WHAT = "edit.export.what";
+const keptWhere = (): Where => (readSetting(WHERE) === "here" ? "here" : "feedback");
+const keptWhat = (): What => {
+  const kept = readSetting(WHAT);
+  return kept === "each" || kept === "joined" ? kept : "whole";
+};
 const HOUSE: Omit<ExportOptions, "range" | "chapters"> = { ...DEFAULTS, size: null, fps: null, preset: "youtube" };
 
 export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -61,6 +77,11 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const [only, setOnly] = useState(false);
   // The exports folder as shown ("~/Movies/Edit") and this computer's home, so where an Export went reads as `~/…`.
   const [folder, setFolder] = useState<{ shown: string; home: string } | null>(null);
+  const [where, setWhere] = useState<Where>(keptWhere);
+  const [what, setWhat] = useState<What>(keptWhat);
+  // The marked stretches' export, and whether it's what the dialog says (begun here, or running as it opened).
+  const [batch, setBatch] = useState<RangesBatch | null>(null);
+  const [batchShown, setBatchShown] = useState(false);
   useEffect(() => {
     if (!open) return;
     setMarkTouched(false);
@@ -77,6 +98,26 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       (error: Error) => setChannelsFailed(error.message),
     );
   }, [open]);
+  const batchRunning = batch !== null && !batch.finished;
+  useEffect(() => {
+    if (!open || !project?.id) return;
+    let live = true;
+    const look = () =>
+      void api.rangesExport(project.id).then(
+        (given) => {
+          if (!live) return;
+          setBatch(given);
+          if (given !== null && !given.finished) setBatchShown(true);
+        },
+        () => {},
+      );
+    look();
+    const timer = setInterval(look, batchRunning ? 1000 : 10_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [open, project?.id, batchRunning]);
   const sections = preview.sections;
   const chapters = useMemo(() => (project ? scriptChapters(project, sections) : []), [project, sections]);
   const id = project?.id ?? "";
@@ -143,11 +184,17 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const exporting = exportState?.state === "queued" || exportState?.state === "running";
   const link = review?.review ?? null;
   // One at a time: either way makes the same file.
-  const unable = busy || exporting || retrying || projectDuration(project) <= 0;
+  const unable = busy || exporting || retrying || batchRunning || projectDuration(project) <= 0;
+  const ranges = project.ranges ?? [];
+  // Stretches are saved here, not sent for feedback (the link is the edit's versions).
+  const choosing = where === "here" && ranges.length > 0;
+  // One stretch has nothing to join to: it's that stretch's video.
+  const picked: What = what === "joined" && ranges.length === 1 ? "each" : what;
+  const chosen: What = choosing ? picked : "whole";
 
   // Share and Export make the same file: the edit as saved, whole, the house export.
   const start = async (go: (options: ExportOptions, watermark: string | null) => Promise<void>) => {
-    if (busy || exporting) return;
+    if (busy || exporting || batchRunning) return;
     setStarting(true);
     setStopped(false);
     setProblem(null);
@@ -169,6 +216,7 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   const share = () =>
     start(async (options, watermark) => {
       setOnly(false);
+      setBatchShown(false);
       await api.shareProject(project.id, options, false, true, watermark);
       setReview(await api.review(project.id));
     });
@@ -176,7 +224,19 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     start(async (options, watermark) => {
       await api.exportHere(project.id, options, watermark);
       setOnly(true);
+      setBatchShown(false);
     });
+  const exportStretches = (mode: RangesMode) =>
+    start(async (options, watermark) => {
+      setBatch(await api.exportRanges(project.id, mode, options, watermark));
+      setBatchShown(true);
+    });
+  const go = () => {
+    writeSetting(WHERE, where);
+    if (choosing) writeSetting(WHAT, what);
+    if (where === "feedback") return void share();
+    return void (chosen === "whole" ? exportHere() : exportStretches(chosen));
+  };
 
   // Approving deletes the other versions' files: two clicks.
   const approve = async () => {
@@ -213,7 +273,9 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   // The server's answer: a reviewer's comment on the latest version makes the next share a new version, else it replaces it.
   const next = review?.next ?? null;
   const status = shareStatus({ exportState, sharing, share: lastShare, linked: link !== null, stopped, only });
-  const ended = !busy && !exporting && (status.kind === "share-failed" || status.kind === "export-failed" || status.kind === "cancelled");
+  // The stretches' export says how it went in place of its parts' exports.
+  const showBatch = batchShown && batch !== null;
+  const ended = !showBatch && !busy && !exporting && (status.kind === "share-failed" || status.kind === "export-failed" || status.kind === "cancelled");
   const retry = async () => {
     if (busy || retrying) return;
     setRetrying(true);
@@ -239,7 +301,10 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     setProblem(null);
     try {
       if (sharing !== null) await api.cancelShare(project.id);
-      if (exporting) await api.cancelExport(project.id);
+      if (batchRunning) {
+        await api.cancelRanges(project.id);
+        setBatch(await api.rangesExport(project.id));
+      } else if (exporting) await api.cancelExport(project.id);
       setStopped(true);
       setReview(await api.review(project.id));
     } catch (error) {
@@ -254,24 +319,52 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
       <div className="p-6">
         <h2 className="text-[18px] font-semibold tracking-[-0.3px]">Export</h2>
 
-        <div className="mt-4 grid grid-cols-2 gap-3">
+        <div className="mt-4 grid grid-cols-2 gap-3" role="radiogroup" aria-label="Where it goes">
           <Choice
             icon={<HardDriveDownload size={16} />}
             title={`Save to ${THIS_MACHINE}`}
             detail={`The video file, in ${folder?.shown ?? "your exports folder"}. Nothing is uploaded.`}
-            disabled={unable}
-            onClick={() => void exportHere()}
+            selected={where === "here"}
+            onClick={() => setWhere("here")}
           />
           <Choice
             icon={<MessageSquareText size={16} />}
             title="Send for feedback"
             detail="Uploads it to the review link, where the team watches it and leaves notes for the agent."
             note={link && next !== null ? (next.replace ? `Replaces v${next.version}: no one has commented on it` : `Adds v${next.version} to the link`) : link ? null : "Makes the link"}
-            primary
-            disabled={unable}
-            onClick={() => void share()}
+            selected={where === "feedback"}
+            onClick={() => setWhere("feedback")}
           />
         </div>
+
+        {choosing && (
+          <div className="mt-3 grid grid-cols-3 gap-1 rounded-[10px] border border-line bg-panel p-1" role="radiogroup" aria-label="What it exports">
+            {(
+              [
+                ["whole", "Whole edit"],
+                ["each", ranges.length === 1 ? "The marked stretch" : `${ranges.length} videos, one a stretch`],
+                ["joined", `${ranges.length} stretches joined`],
+              ] as const
+            )
+              .filter(([value]) => ranges.length > 1 || value !== "joined")
+              .map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={picked === value}
+                  onClick={() => setWhat(value)}
+                  title={value === "whole" ? undefined : ranges.map((one) => one.name).join(", ")}
+                  className={cx(
+                    "min-w-0 truncate rounded-[7px] px-2 py-1.5 text-[12px] font-medium transition-colors",
+                    picked === value ? "bg-bg text-fg shadow-sm ring-1 ring-line-strong" : "text-muted hover:text-fg",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+          </div>
+        )}
 
         {link && (
           <div className="mt-4 flex flex-col rounded-[10px] border border-line bg-panel">
@@ -357,7 +450,27 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
         </div>
 
         {/* An Export's file, where it is (JJ, Nov 10: "save it locally and display where it is saved"). */}
-        {!problem && status.kind === "saved" && (
+        {showBatch && batch.finished && !batch.error && !batch.cancelled && batch.outputs.length > 0 && (
+          <div className="mt-4 flex items-center gap-2.5 rounded-[10px] border border-line bg-panel px-3 py-2.5 text-[13px]">
+            <Check size={14} className="shrink-0 text-success" />
+            <span className="min-w-0 flex-1 truncate text-fg" title={batch.outputs.join("\n")}>
+              {batch.outputs.length === 1 ? `Saved to ${shownPath(batch.outputs[0]!, folder?.home ?? null)}` : `${batch.outputs.length} videos saved to ${folder?.shown ?? "your exports folder"}`}
+            </span>
+            {onThisMac() ? (
+              <Button size="sm" variant="subtle" className="shrink-0" onClick={() => showInFinder(batch.outputs[0]!)}>
+                <FolderSearch size={13} /> Show in {FILE_MANAGER}
+              </Button>
+            ) : (
+              batch.outputs.length === 1 && (
+                <a className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-line-strong px-2.5 text-[12px] font-medium text-fg transition-colors hover:bg-hover" href={`/api/exports/file?path=${encodeURIComponent(batch.outputs[0]!)}`} download>
+                  <Download size={13} /> Download
+                </a>
+              )
+            )}
+          </div>
+        )}
+
+        {!showBatch && !problem && status.kind === "saved" && (
           <div className="mt-4 flex items-center gap-2.5 rounded-[10px] border border-line bg-panel px-3 py-2.5 text-[13px]">
             <Check size={14} className="shrink-0 text-success" />
             <span className="min-w-0 flex-1 truncate text-fg" title={status.path}>
@@ -377,6 +490,18 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
 
         <div className="mt-5 flex min-h-[34px] items-center gap-3">
           <div className="min-w-0 flex-1 text-[12px]">
+            {showBatch && !problem && (
+              <>
+                {!batch.finished && (
+                  <span className="text-muted tabular">
+                    {batch.current === "joining them" ? "Joining them…" : `Exporting ${batch.current ?? "…"} · ${Math.min(batch.done + 1, batch.total)} of ${batch.total}`}
+                  </span>
+                )}
+                {batch.finished && batch.cancelled && <span className="text-muted">Cancelled</span>}
+                {batch.finished && !batch.cancelled && batch.error && <ProblemView error={batch.error} doing="export the marked stretches" />}
+              </>
+            )}
+            {showBatch ? null : <>
             {status.kind === "progress" && <span className="text-muted tabular">{status.text}</span>}
             {status.kind !== "progress" && problem && <ProblemView error={problem} doing="share it" />}
             {!problem && status.kind === "share-failed" && <ProblemView error={status.error} doing="share it" />}
@@ -388,8 +513,10 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
                 <Check size={13} /> Up on the link
               </span>
             )}
+            </>}
+            {showBatch && problem && <ProblemView error={problem} doing="export it" />}
           </div>
-          {(exporting || sharing !== null) && (
+          {(exporting || sharing !== null || batchRunning) && (
             <Button variant="ghost" disabled={stopping || sharing === "cancelling"} onClick={() => void stop()}>
               {stopping || sharing === "cancelling" ? "Stopping…" : "Cancel"}
             </Button>
@@ -402,26 +529,30 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
+          <Button variant="primary" disabled={unable} onClick={go}>
+            Export
+          </Button>
         </div>
       </div>
     </Modal>
   );
 }
 
-/** One way out of the dialog: where the video goes, said on the button itself. */
-function Choice({ icon, title, detail, note, primary = false, disabled, onClick }: { icon: React.ReactNode; title: string; detail: string; note?: string | null; primary?: boolean; disabled: boolean; onClick: () => void }) {
+/** Where the video goes: one of two options, said on the option itself. */
+function Choice({ icon, title, detail, note, selected, onClick }: { icon: React.ReactNode; title: string; detail: string; note?: string | null; selected: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
-      disabled={disabled}
+      role="radio"
+      aria-checked={selected}
       onClick={onClick}
       className={cx(
-        "flex min-w-0 flex-col items-start gap-1.5 rounded-[10px] border p-3.5 text-left transition-colors disabled:cursor-default disabled:opacity-50",
-        primary ? "border-primary/60 bg-primary/10 enabled:hover:bg-primary/15" : "border-line bg-panel enabled:hover:bg-hover",
+        "flex min-w-0 flex-col items-start gap-1.5 rounded-[10px] border p-3.5 text-left transition-colors",
+        selected ? "border-primary/60 bg-primary/10" : "border-line bg-panel hover:bg-hover",
       )}
     >
       <span className="flex items-center gap-2 text-[14px] font-semibold text-fg">
-        <span className={primary ? "text-primary" : "text-muted"}>{icon}</span>
+        <span className={selected ? "text-primary" : "text-muted"}>{icon}</span>
         {title}
       </span>
       <span className="text-[12px] leading-snug text-muted">{detail}</span>

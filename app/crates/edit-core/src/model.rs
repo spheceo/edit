@@ -53,6 +53,9 @@ pub struct Project {
     /// every clip that shows it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<TimelineMarker>,
+    /// Stretches marked to export (`Range`), in order, never overlapping.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<Range>,
     /// Who speaks in it: each person's words on screen (subtitles, their
     /// label, intro captions, quotes) are text clips naming them by
     /// `Clip::person`, all in the person's one colour (`validate` holds every
@@ -161,6 +164,18 @@ pub fn whitish(color: [u8; 3]) -> bool {
     let z = f((r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883);
     let (l, a, bb) = (116.0 * y - 16.0, 500.0 * (x - y), 200.0 * (y - z));
     l > 85.0 && (a * a + bb * bb).sqrt() < 15.0
+}
+
+/// A stretch of the edit marked to export on its own, or with the others
+/// joined (Sphe, Nov 12: "go to all of the cut-ins and set all the in and out
+/// points for me"): frames `[start, end)`, and what it is ("Cut-in 12").
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct Range {
+    pub start: i64,
+    pub end: i64,
+    #[serde(default)]
+    pub name: String,
 }
 
 /// A marked moment on the timeline.
@@ -1904,6 +1919,7 @@ impl Project {
             segments: Vec::new(),
             drive: None,
             markers: Vec::new(),
+            ranges: Vec::new(),
             people: Vec::new(),
             created_by: None,
             origin: None,
@@ -2086,6 +2102,15 @@ impl Project {
         }
         if self.markers.iter().any(|marker| marker.frame < 0) {
             return Err("timeline markers must be frames from 0".to_owned());
+        }
+        if self.ranges.iter().any(|range| range.start < 0 || range.end <= range.start)
+            || self
+                .ranges
+                .iter()
+                .zip(self.ranges.iter().skip(1))
+                .any(|(before, after)| after.start < before.end)
+        {
+            return Err("ranges must be in order, from frame 0, non-empty and never overlap".to_owned());
         }
         if self.mark_in.is_some_and(|frame| frame < 0)
             || self.mark_out.is_some_and(|frame| frame < 0)

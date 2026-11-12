@@ -61,6 +61,20 @@ export async function fetchRetrying(url: string, init?: RequestInit, patienceMs 
 }
 
 /** The server's report of a script Doc pulled again (script_pull.ts). */
+export type RangesMode = "each" | "joined";
+
+/** The server's batch of marked stretches being exported (ranges.ts `Batch`). */
+export interface RangesBatch {
+  mode: RangesMode;
+  total: number;
+  done: number;
+  current: string | null;
+  outputs: string[];
+  error: string | null;
+  cancelled: boolean;
+  finished: boolean;
+}
+
 export interface ScriptChanges {
   doc: string;
   ranges: { clip: string | null; was: string; now: string; words: [string, string] | null; beyond?: string }[];
@@ -283,6 +297,12 @@ export const api = {
   transcribe: (id: string, media: string) => request<{ status: MediaStatus }>("POST", `/api/projects/${id}/media/${media}/transcribe`),
   transcript: (id: string, media: string) => request<Transcript>("GET", `/api/projects/${id}/media/${media}/transcript`),
   cancelExport: (id: string) => request<{ cancelled: boolean }>("POST", `/api/projects/${id}/export/cancel`),
+  /** Exports the edit's marked stretches (the agent's set_ranges) to this computer: a video each, or one of them joined (ranges.ts). */
+  exportRanges: (id: string, mode: RangesMode, options: ExportOptions, watermark: string | null) =>
+    request<RangesBatch>("POST", `/api/projects/${id}/export-ranges`, { mode, options, watermark }),
+  /** How the marked stretches' export is going, or null when none has run since the server started. */
+  rangesExport: (id: string) => request<RangesBatch | null>("GET", `/api/projects/${id}/export-ranges`),
+  cancelRanges: (id: string) => request<{ cancelled: boolean }>("DELETE", `/api/projects/${id}/export-ranges`),
   /** Runs a failed or cancelled export again, the way it was started. A share's export is shared again. */
   retryExport: (id: string) => request<{ path?: string; started?: boolean }>("POST", `/api/projects/${id}/export/retry`),
   /** Stops a share, and this project's export when one is running. */

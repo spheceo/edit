@@ -4,6 +4,7 @@ import type { Creator } from "./Creator";
 import type { DriveFile } from "./DriveFile";
 import type { Media } from "./Media";
 import type { Person } from "./Person";
+import type { Range } from "./Range";
 import type { Script } from "./Script";
 import type { Segment } from "./Segment";
 import type { Settings } from "./Settings";
@@ -54,6 +55,10 @@ drive?: DriveFile,
  * every clip that shows it.
  */
 markers?: Array<TimelineMarker>, 
+/**
+ * Stretches marked to export (`Range`), in order, never overlapping.
+ */
+ranges?: Array<Range>, 
 /**
  * Who speaks in it: each person's words on screen (subtitles, their
  * label, intro captions, quotes) are text clips naming them by

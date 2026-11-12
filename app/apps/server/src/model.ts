@@ -41,6 +41,7 @@ export type {
   ScriptComment,
   Section,
   Sections,
+  Range,
   Segment,
   Settings,
   Shake,

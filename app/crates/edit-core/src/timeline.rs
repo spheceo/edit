@@ -276,6 +276,12 @@ fn ripple(project: &mut Project, warp: Warp, hold: &HashSet<String>) -> Rippled 
     for marker in &mut project.markers {
         marker.frame = warp.frame(marker.frame);
     }
+    // Marked stretches too, one wholly in a removed span gone.
+    for range in &mut project.ranges {
+        range.start = warp.frame(range.start);
+        range.end = warp.frame(range.end);
+    }
+    project.ranges.retain(|range| range.end > range.start);
     // A script block's link to a clip that's gone is kept: it says the block
     // was placed and removed on purpose. Dropped, it read as never placed, and
     // opening the project laid the script out again on top of the edit (Mom
@@ -586,5 +592,20 @@ mod tests {
         p.validate().unwrap();
         let spans: Vec<(i64, i64)> = p.segments.iter().map(|s| (s.start, s.end)).collect();
         assert_eq!(spans, vec![(0, 100), (100, 240)]);
+    }
+
+    #[test]
+    fn marked_ranges_follow_a_ripple_and_one_removed_goes() {
+        // Sphe, Nov 12: the cut-ins marked to export stay on their cut-ins when time is taken out before them.
+        let range = |start: i64, end: i64, name: &str| crate::model::Range { start, end, name: name.into() };
+        let mut p = project();
+        p.ranges = vec![range(20, 60, "Cut-in 1"), range(110, 150, "Cut-in 2"), range(200, 260, "Cut-in 3")];
+        remove_time(&mut p, 100, 160);
+        p.validate().unwrap();
+        let spans: Vec<(i64, i64, &str)> = p.ranges.iter().map(|r| (r.start, r.end, r.name.as_str())).collect();
+        assert_eq!(spans, vec![(20, 60, "Cut-in 1"), (140, 200, "Cut-in 3")]);
+        // Overlapping, or out of order: refused.
+        p.ranges = vec![range(20, 60, "a"), range(50, 90, "b")];
+        assert!(p.validate().is_err());
     }
 }

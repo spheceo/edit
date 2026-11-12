@@ -560,6 +560,46 @@
     "name": "set_in_out"
   },
   {
+    "name": "set_ranges",
+    "description": "Mark stretches to export. Each becomes a video, or they are joined: the person picks in Export. cut_ins true: every cut-in, named as its clips (\"Cut-in 36\"); or ranges [{start, end, name}] in seconds. Replaces what's marked; [] clears.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cut_ins": {
+          "description": "Mark every cut-in (the script's B-roll sections).",
+          "type": "boolean"
+        },
+        "ranges": {
+          "description": "The stretches: {start, end (seconds), name}.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          }
+        },
+        "project_id": {
+          "description": "Defaults to the project open in the UI.",
+          "type": "string"
+        }
+      },
+      "required": []
+    }
+  },
+  {
     "description": "Delete clips by id.",
     "inputSchema": {
       "properties": {
@@ -2490,7 +2530,7 @@
     "name": "redo_speakers"
   },
   {
-    "description": "The watcher: Claude Opus looks at the footage (a few minutes at a time, as frames every 2 seconds, with the transcript and the voices transcription heard) and says who speaks each subtitle line, correcting the speakers in the transcript (a voice the transcriber merged with another becomes its own, named when the footage says the name; a second conversation going on behind the one followed goes to a hidden \"Background talk\" voice), and, for a subtitled video, marks its segments (footage to subtitle, already subtitled e.g. a cold open with burned-in subtitles, narration, other). Answers are cached per window, so a re-run costs nothing unless force. Then the people of every window are joined into one cast by how they look (one name, role and colour per person, whatever voices the transcriber gave them; cast_failed when that couldn't be had: run it again), and a turn two windows give to two people is watched again across their edge to decide (second_looks). Returns the windows watched, the cost (USD), the lines re-assigned (count and examples), the people seen per window and the segments. Run repack_subtitles (a subtitled video) or add_subtitles (an edit) after it.",
+    "description": "The watcher: Claude Opus looks at the footage (frames every 2 seconds, with the transcript and the voices heard) and says who speaks each subtitle line, correcting the speakers in the transcript (a voice the transcriber merged with another becomes its own, named when the footage says the name; a second conversation going on behind the one followed goes to a hidden \"Background talk\" voice), and, for a subtitled video, marks its segments (footage to subtitle, already subtitled e.g. a cold open with burned-in subtitles, narration, other). Answers are cached per window, so a re-run costs nothing unless force. Then the people of every window are joined into one cast by how they look (one name, role and colour per person, whatever voices the transcriber gave them; cast_failed when that couldn't be had: run it again), and a turn two windows give to two people is watched again across their edge to decide (second_looks). Returns the windows watched, the cost (USD), the lines re-assigned (count and examples), the people seen per window and the segments. Run repack_subtitles (a subtitled video) or add_subtitles (an edit) after it.",
     "inputSchema": {
       "properties": {
         "force": {
@@ -3605,7 +3645,7 @@
     "name": "add_cut_in"
   },
   {
-    "description": "Look at a coded effect (a Bodycam HQ project): stills of it at the seconds you give, drawn by the same page the viewer plays, with its length, what a frame costs to play from each of them on this computer (so you know it plays live), and everything its page gets wrong (an error it threw, a rule of the effect contract it breaks). Look after every change, at the moments the change touches: you can't see the effect any other way. The pictures come in the order of `times`. What only moves between frames (text shimmering as the camera drifts, a jitter, a flicker, how a move eases) shows in none of them: every_frame shows each frame of a stretch (start to end, seconds into the effect, at most 48 a look, 16 to a numbered sheet), to set beside the reference's own frames (look_at_media every_frame) before you call it done; detail \"full\" draws the stills at the frame's size, for small text and fine edges. beside {media_id, start} sets each frame beside the reference's at the same moment (start: the reference's second matching your first frame; at most 24 pairs), so a recreation is judged against what it copies, and zoom crops both to one region at full resolution.",
+    "description": "Look at a coded effect (a Bodycam HQ project): stills of it at the seconds you give, drawn by the same page the viewer plays, with its length, what a frame costs to play from each of them on this computer (so you know it plays live), and everything its page gets wrong (an error it threw, a rule of the effect contract it breaks). Look after every change, at the moments the change touches: you can't see the effect any other way. The pictures come in the order of `times`. every_frame: each frame of a stretch (start–end, at most 48), for what moves between frames (a shimmer, a jitter, an ease); beside {media_id, start}: each frame next to the reference's at the same moment (at most 24); zoom: a region at full size; detail \"full\": stills at the frame's size.",
     "inputSchema": {
       "properties": {
         "name": {
@@ -3683,7 +3723,7 @@
   },
   {
     "name": "fetch_font",
-    "description": "Bring a Google Fonts family into this project (Bodycam HQ), for any of its effects to use by name at once: when a reference's lettering (a handwriting, a typewriter, a brand's type) is closer to a font Edit doesn't have. Find candidates first (search_web; fonts.google.com lists every family by style), fetch two or three, and set each beside the reference (look_at_effect beside, zoomed on the letters) before settling. Every Google Fonts family is open-licensed, free to use in videos. Kept for every agent with save_to_library kind font, when the person says to.",
+    "description": "Bring a Google Fonts family into this project (Bodycam HQ), for its effects by name at once: when a reference's lettering is closer to a font Edit lacks. Fetch two or three candidates (search_web), set each beside the reference (look_at_effect beside, zoomed) before settling. All are open-licensed for video. save_to_library kind font keeps one for every agent.",
     "inputSchema": {
       "type": "object",
       "properties": {

@@ -46,6 +46,22 @@ test("an edge goes at a time the producer gives, where nobody speaks, and a clip
   expect(() => apply(script(), [{ op: "trim", id: "i1", edge: "in", at: "soon" }], [], false)).toThrow(/isn't a footage time/);
 });
 
+test("a blank time beside a word is no time: the word stands", () => {
+  const byWord = apply(script(), [{ op: "trim", id: "i3", edge: "in", wordId: "w7" }], [], false)[0];
+  const blank = apply(script(), [{ op: "trim", id: "i3", edge: "in", wordId: "w7", at: " " }], [], false)[0];
+  expect(byWord[2]!.startMs).toBeGreaterThan(3_850);
+  expect([blank[2]!.startMs, blank[2]!.endMs]).toEqual([byWord[2]!.startMs, byWord[2]!.endMs]);
+});
+
+test("an out-point at a recording's very end stays in that recording", () => {
+  const two = { ...script(), parts: [{ startMs: 0, durationMs: 6_000 }, { startMs: 6_000, durationMs: 6_000 }] } as ReturnType<typeof script>;
+  const clip = two.clips.find((one) => one.narration === undefined && one.endMs <= 6_000 && one.endMs - one.startMs >= 400)!;
+  const index = two.clips.indexOf(clip);
+  const [clips] = apply(two, [{ op: "trim", id: `i${index + 1}`, edge: "out", at: "0:06" }], [], false);
+  expect(clips[index]!.endMs).toBe(6_000);
+  expect(() => apply(two, [{ op: "trim", id: `i${index + 1}`, edge: "out", at: "0:06.5" }], [], false)).toThrow(/another recording/);
+});
+
 test("a review fix writes saved narration straight in", () => {
   const [clips, , proposals] = apply(script(), [{ op: "write", id: "i2", narration: "He swore he was home." }], [], true);
   expect(clips[1]!.narration).toBe("He swore he was home.");

@@ -71,14 +71,6 @@ const BUFFERING_BADGE_MS = 600;
 const STUCK_MS = 10_000;
 /** After a decoding failure, the preview tries again this soon. */
 const DECODE_RETRY_MS = 4_000;
-/** The same decoding failure this many tries in a row (the first and three retries, ~12 s) is what stops the preview: said. */
-const LASTING_FAILURES = 4;
-export interface FailureStreak { message: string; count: number; at: number }
-/** The run of one decoding failure with another at `now`: the same one again within two retries' time carries it on. */
-export function failedAgain(streak: FailureStreak | null, message: string, now: number): FailureStreak {
-  const on = streak !== null && streak.message === message && now - streak.at <= DECODE_RETRY_MS * 2;
-  return { message, count: on ? streak.count + 1 : 1, at: now };
-}
 /** Where a seek to `frame` lands: a whole frame, and with a `duration` given, just after the last clip at most (where "Go to end" puts it). */
 export function seekTarget(frame: number, duration: number): number {
   const at = Math.max(0, Math.round(frame));
@@ -86,10 +78,6 @@ export function seekTarget(frame: number, duration: number): number {
 }
 /** The playhead is on the edit's last frame, where a play starts it over. */
 export const atEnd = (frame: number, duration: number) => frame >= duration - 1;
-/** The failure to say over the picture: only one that hasn't gone away by itself. */
-export function lastingFailure(streak: FailureStreak | null): string | null {
-  return streak !== null && streak.count >= LASTING_FAILURES ? streak.message : null;
-}
 const LOOK_AHEAD = 1;
 /** How far (s) a scrub-tier frame already decoded stands in for the dragged playhead's. */
 const SCRUB_STAND_IN = 0.25;
@@ -290,8 +278,6 @@ class Preview {
       note("warn", "preview", `${message} (behind the smooth render, which plays on)`);
       return;
     }
-    if (this.error !== message) this.failures = failedAgain(this.failures, message, performance.now());
-    clearTimeout(this.recoveredTimer);
     this.error = message; note("error", "preview", this.error);
     this.pause();
     this.setBuffering(false);
@@ -304,15 +290,9 @@ class Preview {
       this.error = null;
       this.notify();
       this.invalidate();
-      // Not failed again by the next retry's time: it read, and what was said of it goes.
-      this.recoveredTimer = setTimeout(() => { if (this.failures !== null) { this.failures = null; this.notify(); } }, DECODE_RETRY_MS);
     }, DECODE_RETRY_MS);
   });
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
-  private recoveredTimer: ReturnType<typeof setTimeout> | undefined;
-  /** The decoding failure tried again in a row; once it's lasted (`lastingFailure`) the viewer says it, retries going on under it. */
-  private failures: FailureStreak | null = null;
-  get lastingError(): string | null { return lastingFailure(this.failures); }
 
   /**
    * The frame on screen: the canvas's, or the rendered video's own while that
@@ -1104,7 +1084,6 @@ class Preview {
       this.pause();
       this.setSmooth(null);
       this.decoder.dispose();
-      this.failures = null;
       this.sources.clear();
       this.sounds.clear();
       this.copied.clear();

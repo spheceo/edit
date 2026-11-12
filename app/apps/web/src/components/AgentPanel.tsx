@@ -703,6 +703,8 @@ function StepDetail({ call }: { call: AgentEntry }) {
  * chat as it happens, "Compacting context", then how much it took off.
  */
 function CompactLine({ entry }: { entry: AgentEntry }) {
+  // Cut off part-way (the turn stopped, Edit restarted): nothing was compacted, so nothing's said.
+  if (entry.status === "stopped") return null;
   const running = entry.status === "running";
   let label: ReactNode = "Context compacted";
   if (entry.status === "failed") label = "The context couldn’t be compacted";

@@ -86,18 +86,6 @@ describe("preview seeks and lifetime", () => {
   });
   afterEach(() => { preview.detach(); vi.unstubAllGlobals(); });
 
-  it("says a decoding failure once it's the same through the first try and three retries in a row, and starts over after a gap", async () => {
-    const { failedAgain, lastingFailure } = await import("./playback");
-    let streak = null as ReturnType<typeof failedAgain> | null;
-    for (const at of [0, 4_100, 8_200]) streak = failedAgain(streak, "Preview decoding failed in A: 404", at);
-    expect(lastingFailure(streak)).toBeNull();
-    streak = failedAgain(streak, "Preview decoding failed in A: 404", 12_300);
-    expect(lastingFailure(streak)).toBe("Preview decoding failed in A: 404");
-    // Another failure, or the same after it read for a while: a new run, not said.
-    expect(lastingFailure(failedAgain(streak, "Preview decoding failed in B: 404", 12_400))).toBeNull();
-    expect(failedAgain(streak, "Preview decoding failed in A: 404", 60_000).count).toBe(1);
-  });
-
   it("shows a project whose people's colours the page's own rule doubts (the server and engine police them)", () => {
     // Judge EXPLODES: the page's copy of the rule lacked the courtroom's white subtitles and showed nothing.
     const white = { ...fixture(), people: [{ id: "x1", name: "Mother", label: "Mother:", role: "suspect", color: "#ffffff", names: [] }] } as unknown as Project;

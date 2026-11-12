@@ -307,6 +307,8 @@ class Work {
 
   apply(edit: Edit): void {
     const text = (key: string) => (typeof edit[key] === "string" ? (edit[key] as string) : undefined);
+    // A footage time given; a blank one (a model filling every field) is none, and the words beside it stand.
+    const time = (key: string) => (text(key)?.trim() === "" ? undefined : text(key));
     const words = this.script.words;
     const ids = () => (Array.isArray(edit.ids) ? edit.ids.filter((id): id is string => typeof id === "string") : []);
     switch (text("op") ?? "") {
@@ -319,11 +321,13 @@ class Work {
         // At a moment, words or not (Sphe, Nov 12: "start it at 00:29" on a walk-up nobody speaks over, refused as "a clip can only start just before a spoken word").
         let start: number;
         let end: number;
-        if (text("at") !== undefined) {
-          const ms = this.moment(text("at")!);
+        const at = time("at");
+        if (at !== undefined) {
+          const ms = this.moment(at);
           const kept = edge === "in" ? clip.endMs - 1 : clip.startMs;
           const parts = this.script.parts ?? [];
-          if (parts.length > 1 && tidy.partAt(parts, ms) !== tidy.partAt(parts, kept)) throw new Error(`${text("at")} is in another recording than the clip: a clip stays inside one recording.`);
+          // An out-point at a recording's very end is still in that recording.
+          if (parts.length > 1 && tidy.partAt(parts, edge === "out" ? Math.max(ms - 1, 0) : ms) !== tidy.partAt(parts, kept)) throw new Error(`${at} is in another recording than the clip: a clip stays inside one recording.`);
           [start, end] = [ms, ms];
         } else {
           const word = words[this.word(edit.wordId)]!;
@@ -345,10 +349,11 @@ class Work {
         return;
       }
       case "insert_words": {
-        if (text("from") !== undefined || text("to") !== undefined) {
+        const [from, to] = [time("from"), time("to")];
+        if (from !== undefined || to !== undefined) {
           // Footage where nobody speaks, by its times.
-          const startMs = this.moment(text("from") ?? "");
-          const endMs = this.moment(text("to") ?? "");
+          const startMs = this.moment(from ?? "");
+          const endMs = this.moment(to ?? "");
           if (endMs < startMs + 200) throw new Error("Give from before to, at least a fifth of a second apart.");
           const parts = this.script.parts ?? [];
           if (parts.length > 1 && tidy.partAt(parts, startMs) !== tidy.partAt(parts, endMs - 1)) throw new Error("A clip cannot cross recording boundaries.");

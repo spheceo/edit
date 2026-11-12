@@ -1198,8 +1198,9 @@ export class Agents implements seams.AgentPanel {
           if (turn.compaction?.open !== true) turn.compaction = { id: `claude-compact-${turn.started}-${++turn.compactions}`, pre: null, post: null, open: true };
           this.upsert(project, entry({ id: turn.compaction.id, kind: "compact", status: "running" }));
         } else if (message.subtype === "status" && turn.compaction?.open === true && message.compact_result === "failed") {
-          turn.compaction.open = false;
           this.upsert(project, entry({ id: turn.compaction.id, kind: "compact", status: "failed", text: typeof message.compact_error === "string" ? takeChars(message.compact_error, 300) : "" }));
+          // Over, and not one that went through: the next call's size isn't its "after" (message_start).
+          turn.compaction = null;
         } else if (message.subtype === "compact_boundary") {
           const meta = (message.compact_metadata ?? {}) as { pre_tokens?: unknown; post_tokens?: unknown };
           const pre = typeof meta.pre_tokens === "number" ? meta.pre_tokens : null;

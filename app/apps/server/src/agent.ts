@@ -1045,6 +1045,10 @@ export class Agents implements seams.AgentPanel {
       // driven by review notes, which nobody's watching, gets a tighter one (the audit, Oct 23).
       ...(reviewGuard.inReviewTurn(project) ? { maxTurns: REVIEW_MAX_TURNS, maxBudgetUsd: REVIEW_MAX_USD } : { maxTurns: MAX_TURNS }),
     };
+    // Bodycam HQ compacts near the model's whole window (1M), not near 180k (Sphe, Nov 12: picture-heavy work, "it compares a
+    // bunch of things at the same time", and compaction drops what it just studied; on trial: the turn log says its time and tokens).
+    // Claude Code clamps it to the model's own window.
+    if (code !== null) options.env = { ...options.env, CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(claude.HQ_COMPACT_WINDOW) };
     // Bodycam HQ thinks at its own pick (Fable 5.2's high until picked), the other chats at theirs; a caller naming a level gets it.
     const level = live.project.hq === true ? (chat.effort ?? modelChoice.current().hq_effort) : (chat.effort ?? claude.effort() ?? "medium");
     if (claude.EFFORTS.includes(level)) options.effort = level as claude.Options["effort"];

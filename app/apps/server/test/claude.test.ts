@@ -125,6 +125,8 @@ test("a Bodycam HQ project's turn runs in its effects folder with the file tools
     expect(options.allowedTools).toEqual(["mcp__edit", `Read(/${folder}/**)`, `Edit(/${folder}/**)`, `Write(/${folder}/**)`]);
     // Still nothing asked and nothing run: a tool that isn't allowed is refused.
     expect(options.permissionMode).toBe("dontAsk");
+    // It compacts near the model's whole window, not the other chats' 180k (Sphe, Nov 12).
+    expect(options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("1000000");
     expect(String(options.systemPrompt)).toContain("THIS IS A BODYCAM HQ VIDEO");
     // Fable 5.2 thinking high until the person picks, whatever the menu says elsewhere (Sphe, Nov 11).
     expect(options.model).toBe("claude-fable-5-2");
@@ -341,6 +343,7 @@ test("claude is the default provider and a turn streams text and edit tools onto
     expect(options.pathToClaudeCodeExecutable).toBe("/test/claude");
     expect(options.mcpServers).toEqual({ edit: { type: "http", url: `http://127.0.0.1:7700/mcp?project=${project}` } });
     expect(options.resume).toBeUndefined();
+    expect(options.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("180000");
     expect(String(options.systemPrompt)).toContain("call them directly");
     expect(String(options.systemPrompt)).not.toContain("yield_time_ms");
 

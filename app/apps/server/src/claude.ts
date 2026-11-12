@@ -148,6 +148,9 @@ export function planName(subscription: string): string {
  * The options every query shares: the user's own `claude`, and nothing of
  * their setup (settings, CLAUDE.md, hooks, MCP servers, claude.ai connectors).
  */
+/** Where Bodycam HQ's agent compacts: the model's whole window (agent.ts). */
+export const HQ_COMPACT_WINDOW = 1_000_000;
+
 export function baseOptions(binary: string, workspace: string): Options {
   return {
     pathToClaudeCodeExecutable: binary,

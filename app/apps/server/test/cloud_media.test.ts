@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, spyOn, test } from "bun:test";
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 
 import * as cloud from "../src/cloud.ts";
 import * as cloudBlocks from "../src/cloud_blocks.ts";
@@ -697,6 +698,33 @@ test("smooth playback mixes from sound copies: the original's where the cloud ha
     expect(mock.calls("/r2/edit/originals/").length).toBe(0);
   } finally {
     cleanup();
+  }
+});
+
+// Nov 12, the bodycam HQ test: a 911 call's GSM 6.10 WAV copied into a MOV nothing could decode, and
+// every export of the edit failed on it. G.726 copies the same way, and FFmpeg can write it here.
+test("a sound MOV can't carry as it is is copied as PCM, so the export can mix it", async () => {
+  const dir = fs.mkdtempSync(`${os.tmpdir()}/sound-copy-`);
+  try {
+    const call = `${dir}/call.wav`;
+    const made = Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2:sample_rate=8000", "-c:a", "g726", call]);
+    expect(made.exitCode).toBe(0);
+    const copy = `${dir}/call.wav.mov`;
+    await cloudMedia.copySound(call, copy);
+    const codec = Bun.spawnSync(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", copy]);
+    expect(codec.stdout.toString().trim()).toBe("pcm_s16le");
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-i", copy, "-f", "null", "-"]).exitCode).toBe(0);
+    // A broken copy kept from before is made again.
+    const cache = `${dir}/cache`;
+    const key = "edit/originals/sha256/cc/call.wav";
+    const kept = cloudMedia.localPath(cache, cloudMedia.soundKey(key));
+    fs.mkdirSync(kept.slice(0, kept.lastIndexOf("/")), { recursive: true });
+    expect(Bun.spawnSync(["ffmpeg", "-v", "error", "-y", "-i", call, "-c:a", "copy", "-f", "mov", kept]).exitCode).toBe(0);
+    expect(await cloudMedia.soundCopy(cache, key, call)).toBe(kept);
+    const remade = Bun.spawnSync(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", kept]);
+    expect(remade.stdout.toString().trim()).toBe("pcm_s16le");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 

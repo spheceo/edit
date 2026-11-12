@@ -2213,12 +2213,18 @@ export function soundKey(original: string): string {
   return `edit/sound/${original.startsWith("edit/") ? original.slice("edit/".length) : original}.mov`;
 }
 
-/** Copies the first sound of `input` (a file or URL) into `out` as it is (MOV: AVFoundation reads it). */
+/**
+ * Copies the first sound of `input` (a file or URL) into `out` as it is (MOV:
+ * AVFoundation reads it). A sound MOV can't carry as it is becomes PCM: a 911
+ * call's GSM 6.10 WAV copied into a MOV nothing could decode, and every export
+ * of the edit it was in failed on it (Nov 12, the bodycam HQ test); ADPCM won't
+ * go into a MOV at all.
+ */
 export async function copySound(input: string, out: string): Promise<void> {
   fs.mkdirSync(parent(out) ?? ".", { recursive: true });
   const partial = `${out}.partial.mov`;
-  try {
-    await tools.run([
+  const write = (codec: string) =>
+    tools.run([
       tools.ffmpeg(),
       "-hide_banner",
       "-loglevel",
@@ -2233,15 +2239,31 @@ export async function copySound(input: string, out: string): Promise<void> {
       "-map",
       "0:a:0",
       "-c:a",
-      "copy",
+      codec,
       "-f",
       "mov",
       partial,
     ]);
+  try {
+    const copied = await write("copy").then(
+      () => true,
+      () => false,
+    );
+    if (!copied || !(await soundReadable(partial))) await write("pcm_s16le");
     fs.renameSync(partial, out);
   } catch (error) {
     fs.rmSync(partial, { force: true });
     throw new Error(scrub(diag.messageOf(error)));
+  }
+}
+
+/** Whether a sound copy's codec is one FFmpeg knows (a codec copied where MOV has no name for it reads as "unknown"). */
+async function soundReadable(path: string): Promise<boolean> {
+  try {
+    const codec = new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name", "-of", "csv=p=0", path])).trim();
+    return codec !== "" && codec !== "unknown";
+  } catch {
+    return false;
   }
 }
 
@@ -2268,11 +2290,12 @@ function shareSound(cache: string, path: string, original: string): void {
 export async function soundCopy(cache: string, key: string, url: string): Promise<string | null> {
   const copy = soundKey(key);
   const local = localPath(cache, copy);
-  if (isFile(local)) return local;
+  // One kept or shared before copySound made PCM of what MOV can't carry is made again (and shared over it).
+  if (isFile(local) && (await soundReadable(local))) return local;
   try {
     if ((await cloud.head(copy)) !== null) {
       await fetchKey(copy, local);
-      return local;
+      if (await soundReadable(local)) return local;
     }
   } catch (error) {
     diag.warn("export", `fetching a sound copy: ${diag.messageOf(error)}`);

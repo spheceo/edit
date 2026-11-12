@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { exportsDir } from "./export_folder.ts";
+import { listMade, unlist } from "./exports.ts";
 import { bad, json } from "./http/errors.ts";
 import { readJson, type RouteContext, type Router } from "./http/router.ts";
 import { registerTool, text } from "./mcp/registry.ts";
@@ -135,6 +136,7 @@ export function exportRanges(app: App, project: Project, options: ExportOptions,
   batches.set(project.id, batch);
   const dir = exportsDir(app.store.home);
   const parts = join(app.store.cacheDir(), "range-exports", safe(project.id));
+  const began = Date.now();
   void (async () => {
     const made: string[] = [];
     try {
@@ -163,6 +165,20 @@ export function exportRanges(app: App, project: Project, options: ExportOptions,
         fs.writeFileSync(list, made.map((file) => `file '${file.replace(/'/gu, "'\\''")}'`).join("\n"));
         const output = join(dir, `${safe(project.name)} - ${ranges.length} marked.mp4`);
         await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-movflags", "+faststart", output], { timeoutMs: 30 * 60_000 });
+        // Listed as the export it is (downloaded from the dialog, shown with the project's exports), its parts not:
+        // the download hands out listed exports alone (Sphe, Nov 12: "I clicked download. I got file.json twice").
+        unlist(app.store.home, project.id, made);
+        listMade(app.store.home, project.id, {
+          path: output,
+          name: `${safe(project.name)} - ${ranges.length} marked.mp4`,
+          finished_ms: Date.now(),
+          seconds: (Date.now() - began) / 1000,
+          bytes: fs.statSync(output).size,
+          frames: ranges.reduce((sum, range) => sum + range.end - range.start, 0),
+          whole: false,
+          start: ranges[0]!.start,
+          format: options.format,
+        });
         batch.outputs.push(output);
       }
       diag.info("export", `${project.name}: ${ranges.length} marked stretch${ranges.length === 1 ? "" : "es"} exported (${mode})`);

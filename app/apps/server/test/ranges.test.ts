@@ -2,6 +2,9 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 
 import { dispatch } from "../src/mcp/index.ts";
+import { saveExportFolder } from "../src/export_folder.ts";
+import { listExports } from "../src/exports.ts";
+import { join } from "../src/paths.ts";
 import { exportRanges, tidy, timing } from "../src/ranges.ts";
 import * as tools from "../src/tools.ts";
 import { fixtureHome, type Fixture } from "./helpers/home.ts";
@@ -48,6 +51,10 @@ test("set_ranges marks stretches by time and clears them", async () => {
 test("marked stretches export one after another, and joined they're one video of them end to end", async () => {
   fixture = fixtureHome("ranges-export");
   const { app, store } = fixture;
+  // Its own exports folder, not the computer's.
+  const folder = join(fixture.home, "made");
+  fs.mkdirSync(folder, { recursive: true });
+  saveExportFolder(fixture.home, folder);
   const project = { ...store.create("Joined", { width: 1920, height: 1080, fps: 30 }).project, ranges: [{ start: 0, end: 30, name: "One" }, { start: 60, end: 90, name: "Two" }] };
   // An export line that writes a second of test picture and sound for each stretch asked of it.
   const asked: [number, number][] = [];
@@ -72,4 +79,7 @@ test("marked stretches export one after another, and joined they're one video of
   const length = Number(new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", batch.outputs[0]!])).trim());
   expect(length).toBeGreaterThan(1.9);
   expect(fs.existsSync(batch.outputs[0]!)).toBe(true);
+  expect(batch.outputs[0]!.startsWith(folder)).toBe(true);
+  // Listed, so its Download hands it out; its parts, gone, aren't.
+  expect(listExports(fixture.home, project.id).map((one) => one.path)).toEqual(batch.outputs);
 });

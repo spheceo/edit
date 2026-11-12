@@ -1,5 +1,5 @@
 import { Check, Copy, Download, ExternalLink, FolderSearch, HardDriveDownload, Link2, MessageSquareText, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api, type RangesBatch, type RangesMode, type Review } from "../lib/api";
 import { projectDuration } from "../lib/edit";
@@ -99,6 +99,11 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
     );
   }, [open]);
   const batchRunning = batch !== null && !batch.finished;
+  // The dialog opened (after a reload too): the last stretches' export shows, finished or not, with its Download (Sphe, Nov 12: "I refreshed ... it was just gone").
+  const openedRef = useRef(false);
+  useEffect(() => {
+    if (!open) openedRef.current = false;
+  }, [open]);
   useEffect(() => {
     if (!open || !project?.id) return;
     let live = true;
@@ -107,7 +112,8 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
         (given) => {
           if (!live) return;
           setBatch(given);
-          if (given !== null && !given.finished) setBatchShown(true);
+          if (given !== null && (!given.finished || !openedRef.current)) setBatchShown(true);
+          openedRef.current = true;
         },
         () => {},
       );

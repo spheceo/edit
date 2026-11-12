@@ -562,6 +562,20 @@ function remember(home: string, id: string, record: ExportRecord): void {
   writeRecords(home, records);
 }
 
+/** Lists a file made of exports (marked stretches joined, ranges.ts), so it's downloaded and shown as one. */
+export function listMade(home: string, id: string, record: ExportRecord): void {
+  remember(home, id, record);
+}
+
+/** Takes files off project `id`'s list (the parts of one joined), leaving the files as they are. */
+export function unlist(home: string, id: string, paths: string[]): void {
+  const records = readRecords(home);
+  const own = records[id];
+  if (own === undefined) return;
+  records[id] = own.filter((one) => !paths.includes(one.path));
+  writeRecords(home, records);
+}
+
 /**
  * An export's exact file is in the cloud already as a review's full-quality
  * download (`key`, `size` bytes): its own archive would be a second copy of

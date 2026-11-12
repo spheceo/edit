@@ -8,6 +8,14 @@
 // `AHEAD` seconds): a 40-minute edit's whole render is past what a browser
 // lets a page buffer. Where nothing is appended, `covers` says so and the
 // viewer draws live, as it did without a render.
+//
+// The rest of the render is kept on disk instead (Sphe, Nov 12, the progress
+// bar's grey "keeps stopping at a certain buffer"): once what's near the
+// playhead is in, every ready chunk is fetched in the background, one at a
+// time, into the browser's Cache Storage, where a seek or a play reads it
+// without the network. A chunk is named by its content, so one the edit
+// didn't change is fetched once; this project's chunks the render no longer
+// has are let go. What's stored is what the progress bar shows as loaded.
 
 import { mediaHost, request } from "./api";
 
@@ -17,6 +25,8 @@ export interface StreamInfo { segments: StreamSegment[]; codec: string | null; s
 /** Seconds behind and ahead of the playhead kept appended. */
 const BEHIND = 20;
 const AHEAD = 120;
+/** The browser's store for the render's chunks (Cache Storage, on disk). */
+const STORE = "edit-smooth-chunks";
 /** How often the render is asked what's ready while chunks are still to come (ms). */
 const POLL_MS = 1500;
 /** The sound is put back in step past this much (s). */
@@ -65,6 +75,9 @@ export class SmoothStream {
   private soundSource: string | null = null;
   /** `leadOf` for this render's chunks, measured at the first append (null until then): each is appended that much early. */
   private lead: number | null = null;
+  /** The chunks kept on disk (their keys), and whether the background fetch runs. */
+  private stored = new Set<string>();
+  private stocking = false;
 
   constructor(
     private project: string,
@@ -93,6 +106,18 @@ export class SmoothStream {
       at = holding.end;
     }
     return true;
+  }
+
+  /** The stretches (frames) that play without waiting: appended, or kept on disk. */
+  loaded(): [number, number][] {
+    const out: [number, number][] = [];
+    for (const one of this.info?.segments ?? []) {
+      if (this.appended.get(one.start) !== one.key && !this.stored.has(one.key)) continue;
+      const last = out.at(-1);
+      if (last !== undefined && last[1] === one.start) last[1] = one.end;
+      else out.push([one.start, one.end]);
+    }
+    return out;
   }
 
   /** Keeps the sound with the picture at `time` (s), playing (at `speed`, the picture's) or not. */
@@ -145,9 +170,8 @@ export class SmoothStream {
       if (buffer !== null) {
         // The chunk at the playhead first; what's far from it is let go after (letting go first held a seek up by seconds).
         for (let next = this.next(); next !== null && !this.closed; next = this.next()) {
-          const answer = await fetch(mediaHost(`/api/projects/${encodeURIComponent(this.project)}/playback/segment/${next.key}`));
-          if (!answer.ok) break;
-          const bytes = await answer.arrayBuffer();
+          const bytes = await this.chunk(next.key);
+          if (bytes === null) break;
           if (this.closed) return;
           const at = next.start / this.fps;
           const append = async () => {
@@ -189,8 +213,72 @@ export class SmoothStream {
     } finally {
       this.working = false;
     }
+    if (!this.closed && this.next() === null) void this.stock();
     const pending = this.info === null || this.info.segments.some((one) => !one.ready) || this.info.sound === "pending" || this.next() !== null;
     if (!this.closed) this.timer = setTimeout(() => void this.pump(), pending ? POLL_MS : POLL_MS * 4);
+  }
+
+  private chunkUrl(key: string): string {
+    return mediaHost(`/api/projects/${encodeURIComponent(this.project)}/playback/segment/${key}`);
+  }
+
+  /** A chunk's bytes: from disk when it's kept there, else fetched (and kept). Null when the server hasn't it. */
+  private async chunk(key: string): Promise<ArrayBuffer | null> {
+    const url = this.chunkUrl(key);
+    const store = await openStore();
+    const kept = await store?.match(url).catch(() => undefined);
+    if (kept !== undefined) return await kept.arrayBuffer();
+    const answer = await fetch(url);
+    if (!answer.ok) return null;
+    if (store !== null) {
+      await store.put(url, answer.clone()).then(() => this.stored.add(key), () => {});
+    }
+    return await answer.arrayBuffer();
+  }
+
+  /**
+   * Fetches every ready chunk not yet on disk, from the playhead on and then
+   * the start, one at a time while nothing nearer is wanted; then lets go of
+   * this project's chunks the render no longer has.
+   */
+  private async stock() {
+    if (this.stocking) return;
+    const store = await openStore();
+    if (store === null) return;
+    this.stocking = true;
+    try {
+      const prefix = this.chunkUrl("");
+      const keys = (await store.keys()).map((one) => one.url).filter((url) => url.startsWith(prefix));
+      for (const url of keys) this.stored.add(url.slice(prefix.length));
+      this.changed();
+      for (;;) {
+        if (this.closed || this.next() !== null) return;
+        const here = this.at();
+        const segments = this.info?.segments ?? [];
+        const missing = segments.filter((one) => one.ready && !this.stored.has(one.key)).sort((a, b) => (a.end > here ? 0 : 1) - (b.end > here ? 0 : 1) || a.start - b.start);
+        const want = missing[0];
+        if (want === undefined) break;
+        const answer = await fetch(this.chunkUrl(want.key)).catch(() => null);
+        if (answer === null || !answer.ok) return;
+        await store.put(this.chunkUrl(want.key), answer);
+        this.stored.add(want.key);
+        this.changed();
+      }
+      // This project's chunks the render no longer has: gone from disk.
+      const current = new Set((this.info?.segments ?? []).map((one) => one.key));
+      if (this.info?.segments.every((one) => one.ready) === true) {
+        for (const url of keys) {
+          const key = url.slice(prefix.length);
+          if (current.has(key)) continue;
+          await store.delete(url);
+          this.stored.delete(key);
+        }
+      }
+    } catch {
+      // Out of room or the network went: what's kept is still used; the next look carries on.
+    } finally {
+      this.stocking = false;
+    }
   }
 
   /** The ready chunk to append next: the one at the playhead and on, then those before, within what's kept. */
@@ -241,4 +329,10 @@ export class SmoothStream {
       }
     });
   }
+}
+
+/** The chunks' store on disk, or null where the browser has none (a page not served securely). */
+function openStore(): Promise<Cache | null> {
+  if (typeof caches === "undefined") return Promise.resolve(null);
+  return caches.open(STORE).catch(() => null);
 }

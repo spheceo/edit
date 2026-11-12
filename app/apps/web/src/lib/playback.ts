@@ -287,6 +287,8 @@ class Preview {
   bufferedFrames(): [number, number][] {
     const video = this.video;
     if (!video || !this.project || this.smooth === null) return [];
+    // A streamed render: its chunks appended or kept on disk (smoothStream.ts).
+    if (this.stream !== null) return this.stream.loaded();
     const fps = rate(this.project.settings);
     const out: [number, number][] = [];
     for (let index = 0; index < video.buffered.length; index++) out.push([video.buffered.start(index) * fps, video.buffered.end(index) * fps]);

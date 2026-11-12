@@ -259,6 +259,26 @@ test.skipIf(chrome === null)("look draws the page in Chrome: its length, the sti
     expect(tool.isError).toBe(false);
     expect(tool.content.filter((part) => part.type === "image").length).toBe(1);
     expect(tool.content.at(-1)!.text).toContain("BREAKS THE EFFECT CONTRACT");
+    // Every frame of a stretch, tiled into numbered sheets: what only moves between frames shows there (Sphe, Nov 12: a board's
+    // handwriting shimmered as it drifted, in no single still). At most 48 a look, and where to carry on is said.
+    write(app, id, "counter", {
+      "scene.html": `<!doctype html><body style="margin:0;background:#222"><canvas id="c" width="1920" height="1080"></canvas><script>
+        const c = document.getElementById("c").getContext("2d");
+        window.duration = 3; window.ready = Promise.resolve();
+        window.seek = (t) => { c.fillStyle = "#222"; c.fillRect(0, 0, 1920, 1080); c.fillStyle = "#fff"; c.font = "300px monospace"; c.fillText(String(Math.round(t * 30)), 200, 600); };
+      </script></body>`,
+    });
+    const every = async (args: Record<string, unknown>) => ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "counter", every_frame: true, ...args } } }, id)) as { result: { content: { type: string; text?: string }[]; isError: boolean } }).result;
+    const half = await every({ start: 0, end: 0.5 });
+    expect(half.isError, half.content.map((part) => part.text).join(" ")).toBe(false);
+    expect(half.content.filter((part) => part.type === "image").length).toBe(1);
+    expect(half.content.find((part) => part.text?.includes("every frame"))!.text).toContain("every frame, 0–14");
+    const long = await every({ start: 0, end: 2 });
+    expect(long.content.filter((part) => part.type === "image").length).toBe(3);
+    expect(long.content.at(-1)!.text).toContain("Frames 48–59 are left: look again with start 1.600");
+    const full = ((await dispatch(app, { id: 1, method: "tools/call", params: { name: "look_at_effect", arguments: { name: "counter", times: [1], detail: "full" } } }, id)) as { result: { content: { type: string; text?: string; mimeType?: string }[] } }).result;
+    expect(full.content.find((part) => part.type === "image")!.mimeType).toBe("image/png");
+    expect(full.content.find((part) => part.text?.includes("at full size"))).toBeDefined();
     await expect(effects.add(app, id, "wrong")).rejects.toThrow("isn't ready for the timeline");
     await expect(effects.look(app, id, "nowhere", [0])).rejects.toThrow('no effect "nowhere"');
   } finally {

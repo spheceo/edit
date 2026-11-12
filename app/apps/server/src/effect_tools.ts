@@ -11,6 +11,7 @@ import * as effectInputs from "./effect_inputs.ts";
 import * as effects from "./effects.ts";
 import { handlerFor, image, registerTool, text, type Content, type ToolCall } from "./mcp/registry.ts";
 import { fixed } from "./rust.ts";
+import * as tools from "./tools.ts";
 import * as v2cloud from "./v2_cloud.ts";
 
 /** An effect's name from a call, in a project made the new way. */
@@ -30,8 +31,55 @@ function costLine(look: effects.Look, fps: number): string {
   return `IT WON'T PLAY LIVE at ${slow.map((still) => `${fixed(still.time, 2)} s (${fixed(still.cost, 0)} ms a frame, about ${fixed(1000 / still.cost, 0)} a second)`).join(", ")} on this computer: the video's frames are ${fixed(frame, 0)} ms apart. Make those moments lighter (whole-frame blurs and filters, big blurred shadows and thousands of things redrawn each frame are what cost).`;
 }
 
+/** Frames a look at a stretch shows, each one, at most (1.6 s at 30 fps); 16 to a sheet, 4 across. */
+export const EFFECT_FRAMES_MOST = 48;
+const PER_SHEET = 16;
+/** A frame's width on a sheet (px): four across stay under the 2,000 px a picture is read at whole. */
+const SHEET_FRAME = 480;
+
+/**
+ * look_at_effect over a stretch, every frame of it (Sphe, Nov 12): stills at
+ * moments can't show what only moves between frames, a handwriting that
+ * shimmers as the board drifts under it, so a board read right in each still
+ * jittered on screen. Each frame drawn by the page, tiled into numbered
+ * sheets with FFmpeg, to set beside the reference's (look_at_media every_frame).
+ */
+async function lookAtStretch(app: ToolCall["app"], projectId: string, name: string, args: Record<string, unknown>): Promise<Content[]> {
+  const fps = app.store.get(projectId)!.project.settings.fps;
+  const start = typeof args.start === "number" && Number.isFinite(args.start) && args.start >= 0 ? args.start : 0;
+  const end = typeof args.end === "number" && Number.isFinite(args.end) && args.end > start ? args.end : start + 1;
+  const first = Math.round(start * fps);
+  const last = Math.max(first, Math.round(end * fps) - 1);
+  const count = Math.min(last - first + 1, EFFECT_FRAMES_MOST);
+  const times = Array.from({ length: count }, (_, index) => (first + index) / fps);
+  const look = await effects.look(app, projectId, name, times, SHEET_FRAME);
+  const out: Content[] = [];
+  const dir = fs.mkdtempSync(join(app.store.cacheDir(), "effect-frames-"));
+  try {
+    for (let at = 0; at < look.stills.length; at += PER_SHEET) {
+      const part = look.stills.slice(at, at + PER_SHEET);
+      part.forEach((still, index) => fs.writeFileSync(join(dir, `f${String(index).padStart(3, "0")}.jpg`), still.picture));
+      const sheet = join(dir, `sheet-${at}.jpg`);
+      const label = `drawtext=text='%{eif\\:n+${first + at}\\:d}':x=8:y=8:fontsize=22:fontcolor=yellow:box=1:boxcolor=black@0.7`;
+      await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-framerate", "1", "-i", join(dir, "f%03d.jpg"), "-frames:v", "1", "-vf", `${label},tile=4x${Math.ceil(part.length / 4)}:padding=4`, "-q:v", "3", sheet]);
+      const from = first + at;
+      out.push(...image(new Uint8Array(fs.readFileSync(sheet)), `${name}: every frame, ${from}–${from + part.length - 1} (${fixed(from / fps, 2)}–${fixed((from + part.length - 1) / fps, 2)} s), left-to-right then down, numbered by frame`, "image/jpeg"));
+      for (const file of fs.readdirSync(dir)) fs.rmSync(join(dir, file), { force: true });
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  const lines: string[] = [];
+  if (first + count <= last) lines.push(`Frames ${first + count}–${last} are left: look again with start ${fixed((first + count) / fps, 3)}.`);
+  if (look.errors.length > 0) lines.push(`ERRORS its page threw (fix these first):\n${look.errors.map((error) => `- ${error}`).join("\n")}`);
+  if (look.problems.length > 0) lines.push(`BREAKS THE EFFECT CONTRACT:\n${look.problems.map((problem) => `- ${problem}`).join("\n")}`);
+  if (lines.length > 0) out.push(...text(lines.join("\n")));
+  return out;
+}
+
 async function lookAtEffect({ app, args, projectId }: ToolCall): Promise<Content[]> {
   const name = named(app, projectId, args);
+  if (args.every_frame === true) return await lookAtStretch(app, projectId, name, args);
   let times: number[] | null = null;
   if (args.times !== undefined && args.times !== null) {
     if (!Array.isArray(args.times) || args.times.some((time) => typeof time !== "number" || !Number.isFinite(time) || time < 0)) throw new Error("times is a list of seconds into the effect, each 0 or more");
@@ -39,9 +87,11 @@ async function lookAtEffect({ app, args, projectId }: ToolCall): Promise<Content
     times = args.times as number[];
   }
   const fps = app.store.get(projectId)!.project.settings.fps;
-  const look = await effects.look(app, projectId, name, times);
+  // detail "full": each still at the frame's own size, for small text and fine edges.
+  const full = args.detail === "full";
+  const look = await effects.look(app, projectId, name, times, full ? 0 : 960);
   const out: Content[] = [];
-  for (const still of look.stills) out.push(...image(still.picture, `${name} at ${fixed(still.time, 2)} s`, still.mime));
+  for (const still of look.stills) out.push(...image(still.picture, `${name} at ${fixed(still.time, 2)} s${full ? ", at full size" : ""}`, still.mime));
   const lines = [`${name}: ${look.duration > 0 ? `${fixed(look.duration, 2)} s long` : "no length (window.duration)"}.`];
   // What it leaves unpainted plays over what's beneath it: said, so a background left out by mistake is seen as one.
   if (look.stills.some((still) => still.seeThrough)) lines.push("See-through where the checkerboard shows: there it plays over whatever is beneath it on the timeline. Paint a background if it should fill the frame.");

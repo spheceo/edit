@@ -3587,7 +3587,7 @@
     "name": "add_cut_in"
   },
   {
-    "description": "Look at a coded effect (a Bodycam HQ project): stills of it at the seconds you give, drawn by the same page the viewer plays, with its length, what a frame costs to play from each of them on this computer (so you know it plays live), and everything its page gets wrong (an error it threw, a rule of the effect contract it breaks). Look after every change, at the moments the change touches: you can't see the effect any other way. The pictures come in the order of `times`.",
+    "description": "Look at a coded effect (a Bodycam HQ project): stills of it at the seconds you give, drawn by the same page the viewer plays, with its length, what a frame costs to play from each of them on this computer (so you know it plays live), and everything its page gets wrong (an error it threw, a rule of the effect contract it breaks). Look after every change, at the moments the change touches: you can't see the effect any other way. The pictures come in the order of `times`. What only moves between frames (text shimmering as the camera drifts, a jitter, a flicker, how a move eases) shows in none of them: every_frame shows each frame of a stretch (start to end, seconds into the effect, at most 48 a look, 16 to a numbered sheet), to set beside the reference's own frames (look_at_media every_frame) before you call it done; detail \"full\" draws the stills at the frame's size, for small text and fine edges.",
     "inputSchema": {
       "properties": {
         "name": {
@@ -3604,6 +3604,26 @@
             "type": "number"
           },
           "type": "array"
+        },
+        "every_frame": {
+          "description": "Each frame from start to end (seconds into the effect), not stills at moments: at most 48 a look.",
+          "type": "boolean"
+        },
+        "start": {
+          "description": "With every_frame: the stretch's start (seconds into the effect).",
+          "type": "number"
+        },
+        "end": {
+          "description": "With every_frame: the stretch's end.",
+          "type": "number"
+        },
+        "detail": {
+          "description": "\"full\": the stills at the frame's own size (for small text and fine edges). Default: 960 px wide.",
+          "enum": [
+            "normal",
+            "full"
+          ],
+          "type": "string"
         }
       },
       "required": [

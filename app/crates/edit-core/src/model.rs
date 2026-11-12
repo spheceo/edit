@@ -2103,14 +2103,19 @@ impl Project {
         if self.markers.iter().any(|marker| marker.frame < 0) {
             return Err("timeline markers must be frames from 0".to_owned());
         }
-        if self.ranges.iter().any(|range| range.start < 0 || range.end <= range.start)
+        if self
+            .ranges
+            .iter()
+            .any(|range| range.start < 0 || range.end <= range.start)
             || self
                 .ranges
                 .iter()
                 .zip(self.ranges.iter().skip(1))
                 .any(|(before, after)| after.start < before.end)
         {
-            return Err("ranges must be in order, from frame 0, non-empty and never overlap".to_owned());
+            return Err(
+                "ranges must be in order, from frame 0, non-empty and never overlap".to_owned(),
+            );
         }
         if self.mark_in.is_some_and(|frame| frame < 0)
             || self.mark_out.is_some_and(|frame| frame < 0)

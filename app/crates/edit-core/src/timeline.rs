@@ -597,12 +597,24 @@ mod tests {
     #[test]
     fn marked_ranges_follow_a_ripple_and_one_removed_goes() {
         // Sphe, Nov 12: the cut-ins marked to export stay on their cut-ins when time is taken out before them.
-        let range = |start: i64, end: i64, name: &str| crate::model::Range { start, end, name: name.into() };
+        let range = |start: i64, end: i64, name: &str| crate::model::Range {
+            start,
+            end,
+            name: name.into(),
+        };
         let mut p = project();
-        p.ranges = vec![range(20, 60, "Cut-in 1"), range(110, 150, "Cut-in 2"), range(200, 260, "Cut-in 3")];
+        p.ranges = vec![
+            range(20, 60, "Cut-in 1"),
+            range(110, 150, "Cut-in 2"),
+            range(200, 260, "Cut-in 3"),
+        ];
         remove_time(&mut p, 100, 160);
         p.validate().unwrap();
-        let spans: Vec<(i64, i64, &str)> = p.ranges.iter().map(|r| (r.start, r.end, r.name.as_str())).collect();
+        let spans: Vec<(i64, i64, &str)> = p
+            .ranges
+            .iter()
+            .map(|r| (r.start, r.end, r.name.as_str()))
+            .collect();
         assert_eq!(spans, vec![(20, 60, "Cut-in 1"), (140, 200, "Cut-in 3")]);
         // Overlapping, or out of order: refused.
         p.ranges = vec![range(20, 60, "a"), range(50, 90, "b")];

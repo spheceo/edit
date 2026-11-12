@@ -42,6 +42,9 @@ const BOX_WIDTH: f64 = 40.0;
 const REACH: i32 = 12;
 /// Below this match the box is lost: it rides with the camera until found again.
 const LOST: f32 = 0.35;
+/// A box whose pixels spread less than this (grey levels, weighted standard
+/// deviation) is a flat block: followed by its brightness and edges.
+const FLAT_SPREAD: f32 = 3.0;
 /// A match at least this good is trusted outright.
 const GOOD: f32 = 0.6;
 /// Found again, after being lost, when the box as first given matches this well…
@@ -1280,9 +1283,15 @@ impl Template {
         self.half.scale_weights(&half);
     }
 
-    /// Nothing to match but brightness (a solid block).
+    /// Nothing to match but brightness (a solid block): no variation in the
+    /// box beyond a few grey levels. A box tight on a flat object (a white
+    /// square) holds only the encoder's noise, and correlating that scored
+    /// either side of LOST by how the footage happened to be encoded (the
+    /// effect test's square, Nov 11: 0.29–0.34 on x264's 6-thread encode,
+    /// lost at once; 0.42–0.45 on its 4-thread one).
     fn flat(&self) -> bool {
         self.full.norm < 1e-3
+            || self.full.norm / self.full.weight_sum.max(1e-6).sqrt() < FLAT_SPREAD
     }
 }
 
@@ -1646,6 +1655,22 @@ mod tests {
             );
             assert!((y - 40.0).abs() <= 1.0, "frame {index}: {y}");
         }
+    }
+
+    /// A box of nothing but an encoder's noise (a white square, boxed tight) is
+    /// a flat block, matched by its brightness and edges; one with texture isn't.
+    #[test]
+    fn a_box_of_noise_is_flat_and_one_of_texture_is_not() {
+        let template = |value: &dyn Fn(usize) -> f32| {
+            let mut template = Template::new(40, 40);
+            template.raw = (0..40 * 40).map(value).collect();
+            template.prepare();
+            template
+        };
+        // ±1 grey level around white, as the effect test's square decodes.
+        assert!(template(&|i| 254.0 + ((i * 7) % 3) as f32).flat());
+        // A face's or a sign's texture: ±20 levels.
+        assert!(!template(&|i| 128.0 + 20.0 * ((i % 40) as f32 / 3.0).sin()).flat());
     }
 
     /// A solid black block (a redaction box) moving over bright noise.

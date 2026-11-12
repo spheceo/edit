@@ -43,6 +43,12 @@ export interface StartExtra {
   watermark?: string;
   /** A share's export: its file goes over the review's latest version rather than adding one (reviews.share's `replace`), kept so a restart shares it the same way. */
   replace?: boolean;
+  /**
+   * One of a batch of marked stretches (ranges.ts), which follows it: kept out of jobs.json (never resumed or tried
+   * again after an update as a lone export, never in place of the project's own failed export), and the export made
+   * ahead of the whole edit isn't spent by it.
+   */
+  stretch?: boolean;
 }
 
 /**
@@ -105,6 +111,8 @@ interface Running {
   ahead?: boolean;
   /** Settled once it has ended, however it ended. */
   ended?: Promise<void>;
+  /** A batch's stretch (`StartExtra.stretch`). */
+  stretch?: boolean;
 }
 
 /** Export jobs across projects, including the recent outcomes. Local jobs
@@ -491,8 +499,10 @@ export function mapFile(home: string, timeline: string): string {
   return join(home, "export-maps", `${timeline}.json`);
 }
 
-/** How many exports a project keeps listed (the oldest drop off the list; their files stay). */
+/** How many exports of the whole edit a project keeps listed (the oldest drop off the list; their files stay). */
 const KEEP_LISTED = 30;
+/** And of parts of it (an in/out span, a marked stretch, stretches joined), apart: a batch of 36 cut-ins pushed every whole export off the list, and its own first six. */
+const KEEP_PARTS = 200;
 
 /**
  * The project as an export running for it was asked for, kept while it runs
@@ -558,7 +568,11 @@ function remember(home: string, id: string, record: ExportRecord): void {
   const records = readRecords(home);
   const own = (records[id] ?? []).filter((one) => one.path !== record.path);
   own.push(record);
-  records[id] = own.slice(Math.max(own.length - KEEP_LISTED, 0));
+  // A record from before `whole` was kept counts as whole.
+  const whole = own.filter((one) => one.whole !== false);
+  const parts = own.filter((one) => one.whole === false);
+  const kept = new Set([...whole.slice(Math.max(whole.length - KEEP_LISTED, 0)), ...parts.slice(Math.max(parts.length - KEEP_PARTS, 0))]);
+  records[id] = own.filter((one) => kept.has(one));
   writeRecords(home, records);
 }
 
@@ -1011,12 +1025,13 @@ export class ExportRegistry implements seams.Exports {
       ...(extra.note === undefined ? {} : { note: extra.note }), ...(extra.watermark === undefined ? {} : { watermark: extra.watermark }),
       ...(extra.replace === true ? { replace: true } : {}),
     };
-    const key = jobs.begin(this.home, "export", project.id, args);
+    // A stretch's key is never written, so settling or ending it changes nothing in jobs.json.
+    const key = extra.stretch === true ? jobs.keyOf("export", project.id, "stretch") : jobs.begin(this.home, "export", project.id, args);
     // Own the snapshot in memory too: a caller changing its draft or options
     // after enqueueing must never change the export that was accepted.
     project = structuredClone(project);
     options = structuredClone(options);
-    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, timeline: timelineHash(edit), options: withWatermarkKey(optionsKey(options), extra.watermark), clips: clipMap(edit), keepLocal: extra.keepLocal === true, queued: true, ...(extra.share === true ? { share: true } : {}), ...(extra.note === undefined ? {} : { note: extra.note }) };
+    const running: Running = { output: path, key, cancelled: false, job: null, snapshot, timeline: timelineHash(edit), options: withWatermarkKey(optionsKey(options), extra.watermark), clips: clipMap(edit), keepLocal: extra.keepLocal === true, queued: true, ...(extra.share === true ? { share: true } : {}), ...(extra.note === undefined ? {} : { note: extra.note }), ...(extra.stretch === true ? { stretch: true } : {}) };
     this.jobs.set(project.id, running);
     let upload = false;
     try {
@@ -1046,6 +1061,7 @@ export class ExportRegistry implements seams.Exports {
         ...(extra.note === undefined ? {} : { note: extra.note }),
         ...(extra.watermark === undefined ? {} : { watermark: extra.watermark }),
         ...(extra.replace === true ? { replace: true } : {}),
+        ...(extra.stretch === true ? { stretch: true } : {}),
       },
     });
     this.localQueue.push({ running, start: () => {
@@ -1227,7 +1243,7 @@ export class ExportRegistry implements seams.Exports {
       return;
     }
     // Asked for and made: one made ahead of this project's is spent (this export's manifest is the one now).
-    if (result.ok) aheadSpent(store.cacheDir(), id, output);
+    if (result.ok && running.stretch !== true) aheadSpent(store.cacheDir(), id, output);
     if (result.ok) {
       diag.info(
         "export",

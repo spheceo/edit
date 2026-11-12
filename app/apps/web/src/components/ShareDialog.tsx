@@ -279,8 +279,10 @@ export function ShareDialog({ open, onClose }: { open: boolean; onClose: () => v
   // The server's answer: a reviewer's comment on the latest version makes the next share a new version, else it replaces it.
   const next = review?.next ?? null;
   const status = shareStatus({ exportState, sharing, share: lastShare, linked: link !== null, stopped, only });
-  // The stretches' export says how it went in place of its parts' exports.
-  const showBatch = batchShown && batch !== null;
+  // The stretches' export says how it went in place of its parts' exports; finished, only while it's the last thing that
+  // happened (the server leaves out one an export came after; a share's is said here): yesterday's stood in for today's share.
+  const batchLast = batch !== null && (!batch.finished || (sharing === null && review !== null && (lastShare === null || lastShare.at <= (batch.finished_ms ?? 0))));
+  const showBatch = batchShown && batch !== null && batchLast;
   const ended = !showBatch && !busy && !exporting && (status.kind === "share-failed" || status.kind === "export-failed" || status.kind === "cancelled");
   const retry = async () => {
     if (busy || retrying) return;

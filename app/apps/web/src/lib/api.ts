@@ -73,6 +73,8 @@ export interface RangesBatch {
   error: string | null;
   cancelled: boolean;
   finished: boolean;
+  /** When it ended. */
+  finished_ms: number | null;
 }
 
 export interface ScriptChanges {
@@ -300,7 +302,7 @@ export const api = {
   /** Exports the edit's marked stretches (the agent's set_ranges) to this computer: a video each, or one of them joined (ranges.ts). */
   exportRanges: (id: string, mode: RangesMode, options: ExportOptions, watermark: string | null) =>
     request<RangesBatch>("POST", `/api/projects/${id}/export-ranges`, { mode, options, watermark }),
-  /** How the marked stretches' export is going, or null when none has run since the server started. */
+  /** How the marked stretches' export is going; a finished one only while no export of the edit has come after it, else null. */
   rangesExport: (id: string) => request<RangesBatch | null>("GET", `/api/projects/${id}/export-ranges`),
   cancelRanges: (id: string) => request<{ cancelled: boolean }>("DELETE", `/api/projects/${id}/export-ranges`),
   /** Runs a failed or cancelled export again, the way it was started. A share's export is shared again. */

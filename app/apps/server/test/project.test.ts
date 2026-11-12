@@ -225,6 +225,7 @@ test("insert_time lengthens a cut that clips a word and moves the rest on", () =
     solid("flash", "v3", 97, 6),
   );
   p.markers = [{ frame: 120, name: "hit" }];
+  p.ranges = [{ start: 10, end: 60, name: "before" }, { start: 90, end: 110, name: "across" }, { start: 120, end: 140, name: "after" }];
   // "sir." runs 6 frames past the cut at 100.
   expect(insertTime(p, 100, 6, new Set(["pa", "sa"]), new Set())).toEqual({ moved: 4, lengthened: 4 });
   const at = (id: string) => [clipOf(p, id)!.start, clipOf(p, id)!.duration];
@@ -234,6 +235,8 @@ test("insert_time lengthens a cut that clips a word and moves the rest on", () =
   expect(clipOf(p, "bed")!.keyframes!.volume_db!.map((key) => key.frame)).toEqual([50, 126]);
   expect([at("sub"), at("next"), at("flash")]).toEqual([[80, 26], [106, 20], [103, 6]]);
   expect(p.markers[0]!.frame).toBe(126);
+  // Marked stretches stay on what they mark: one across the cut takes the new frames in.
+  expect(p.ranges!.map((one) => [one.start, one.end])).toEqual([[10, 60], [90, 116], [126, 146]]);
   // An in point that cut into a word starts sooner in its source; the cut stays.
   insertTime(p, 106, 3, new Set(), new Set(["pb", "sb"]));
   expect([at("pb"), at("sb"), at("next")]).toEqual([[106, 53], [106, 53], [106, 23]]);

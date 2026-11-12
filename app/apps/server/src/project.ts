@@ -713,6 +713,11 @@ export function insertTime(project: Project, at: number, frames: number, lengthe
     if (segment.end > at) segment.end += frames;
   }
   for (const marker of project.markers ?? []) if (marker.frame >= at) marker.frame += frames;
+  // Marked stretches as segments: one across the insertion takes it in (the engine's ripple warps them the same way).
+  for (const range of project.ranges ?? []) {
+    if (range.start >= at) range.start += frames;
+    if (range.end > at) range.end += frames;
+  }
   return done;
 }
 

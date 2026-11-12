@@ -3,11 +3,13 @@ import * as fs from "node:fs";
 
 import { dispatch } from "../src/mcp/index.ts";
 import { saveExportFolder } from "../src/export_folder.ts";
-import { listExports } from "../src/exports.ts";
-import { join } from "../src/paths.ts";
-import { batchOf, exportRanges, forgetBatches, tidy, timing } from "../src/ranges.ts";
+import type { App } from "../src/app.ts";
+import { chunkFolder, listExports, listMade } from "../src/exports.ts";
+import type { Project, Range } from "../src/model.ts";
+import { fileName, join } from "../src/paths.ts";
+import { batchOf, exportRanges, forgetBatches, latestBatch, tidy, timing, type Batch } from "../src/ranges.ts";
 import * as tools from "../src/tools.ts";
-import { fixtureHome, type Fixture } from "./helpers/home.ts";
+import { fixtureHome, write, type Fixture } from "./helpers/home.ts";
 
 let fixture: Fixture | null = null;
 afterEach(() => {
@@ -48,41 +50,114 @@ test("set_ranges marks stretches by time and clears them", async () => {
   expect(store.get(id)!.project.ranges).toEqual([{ start: 90, end: 180, name: "Cut-in 4" }, { start: 400, end: 430, name: "Cut-in 9" }]);
 });
 
-test("marked stretches export one after another, and joined they're one video of them end to end", async () => {
-  fixture = fixtureHome("ranges-export");
+/** A home with its own exports folder and a project of 30 s of picture with `ranges` marked. */
+function exportsHome(name: string, ranges: Range[]) {
+  fixture = fixtureHome(name);
   const { app, store } = fixture;
   // Its own exports folder, not the computer's.
   const folder = join(fixture.home, "made");
   fs.mkdirSync(folder, { recursive: true });
   saveExportFolder(fixture.home, folder);
-  const project = { ...store.create("Joined", { width: 1920, height: 1080, fps: 30 }).project, ranges: [{ start: 0, end: 30, name: "One" }, { start: 60, end: 90, name: "Two" }] };
-  // An export line that writes a second of test picture and sound for each stretch asked of it.
+  const made = store.create("Joined", { width: 1920, height: 1080, fps: 30 }).project;
+  const project: Project = { ...made, clips: [{ id: "s", track: made.tracks[0]!.id, start: 0, duration: 900, color: "blue", fade_in: 0, fade_out: 0, type: "solid", fill: [0, 0, 0, 1] } as never], ranges };
+  return { app, home: fixture.home, folder, project };
+}
+
+/**
+ * An export line as the registry is to a batch: each stretch asked of it
+ * writes a second of test picture (and sound, unless `silent` says not), lists
+ * it as the registry does, and writes the project's chunk manifest naming it;
+ * one `fails` says leaves its file as it was.
+ */
+function fakeExports(app: App, home: string, project: Project, how: { silent?: (index: number) => boolean; fails?: (index: number) => boolean } = {}) {
   const asked: [number, number][] = [];
   let running = false;
   (app as unknown as { exports: unknown }).exports = {
     runningFor: () => (running ? { output: "", timeline: "", options: "" } : null),
     cancel: () => true,
     start: async (_store: unknown, _library: unknown, _project: unknown, options: { range: [number, number] }, output: string) => {
+      const index = asked.length;
       asked.push(options.range);
       running = true;
-      await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=1", "-f", "lavfi", "-i", "sine=duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", output]);
+      if (how.fails?.(index) !== true) {
+        const sound = how.silent?.(index) === true ? [] : ["-f", "lavfi", "-i", "sine=duration=1", "-c:a", "aac", "-shortest"];
+        await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30:duration=1", ...sound, "-c:v", "libx264", "-pix_fmt", "yuv420p", output]);
+        listMade(home, project.id, { path: output, name: output, finished_ms: Date.now(), seconds: 1, bytes: 1, frames: 30, whole: false, format: "h264" });
+        write(join(chunkFolder(app.store.cacheDir(), project.id), "manifest-v1.json"), JSON.stringify({ output }));
+      }
       running = false;
       return output;
     },
   };
   timing.poll = 20;
-  const batch = exportRanges(app, project, { range: null } as never, "joined", null);
+  return asked;
+}
+
+async function ended(batch: Batch): Promise<void> {
   for (let tries = 0; tries < 300 && !batch.finished; tries++) await Bun.sleep(50);
+}
+
+const probe = async (path: string, entries: string, streams: string[] = []) => new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", ...streams, "-show_entries", entries, "-of", "csv=p=0", path])).trim();
+
+test("marked stretches export one after another, and joined they're one video of them end to end", async () => {
+  // The last one runs past the end of the edit, shortened since it was marked: what's left of the others is exported.
+  const { app, home, folder, project } = exportsHome("ranges-export", [{ start: 0, end: 30, name: "One" }, { start: 60, end: 90, name: "Two" }, { start: 1000, end: 1100, name: "Gone" }]);
+  // The first stretch has nothing heard (the engine exports it picture alone): the joined video has sound all the same.
+  const asked = fakeExports(app, home, project, { silent: (index) => index === 0 });
+  const manifest = join(chunkFolder(app.store.cacheDir(), project.id), "manifest-v1.json");
+  write(manifest, "the last whole export's");
+  const batch = exportRanges(app, project, { range: null, format: "h264" } as never, "joined", null);
+  expect(batch.total).toBe(2);
+  await ended(batch);
   expect(batch.error).toBeNull();
   expect(asked).toEqual([[0, 30], [60, 90]]);
   expect(batch.outputs).toHaveLength(1);
-  const length = Number(new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", batch.outputs[0]!])).trim());
-  expect(length).toBeGreaterThan(1.9);
-  expect(fs.existsSync(batch.outputs[0]!)).toBe(true);
+  expect(Number(await probe(batch.outputs[0]!, "format=duration"))).toBeGreaterThan(1.9);
+  expect(await probe(batch.outputs[0]!, "stream=codec_type", ["-select_streams", "a"])).toBe("audio");
   expect(batch.outputs[0]!.startsWith(folder)).toBe(true);
+  expect(fs.readdirSync(folder)).toEqual([fileName(batch.outputs[0]!)!]);
   // Listed, so its Download hands it out; its parts, gone, aren't.
-  expect(listExports(fixture.home, project.id).map((one) => one.path)).toEqual(batch.outputs);
-  // A restart keeps it, for its Download.
+  expect(listExports(home, project.id).map((one) => one.path)).toEqual(batch.outputs);
+  // The edit's next export reuses its last one's chunks, not a stretch's.
+  expect(fs.readFileSync(manifest, "utf8")).toBe("the last whole export's");
+  // A restart keeps it, for its Download, while it's the last thing to happen to the edit's exports.
   forgetBatches();
   expect(batchOf(app, project.id)?.outputs).toEqual(batch.outputs);
+  expect(latestBatch(app, project.id)?.outputs).toEqual(batch.outputs);
+  listMade(home, project.id, { path: join(folder, "Joined.mp4"), name: "Joined.mp4", finished_ms: batch.finished_ms! + 1, seconds: 1, bytes: 1, frames: 900, whole: true, format: "h264" });
+  expect(latestBatch(app, project.id)).toBeNull();
+});
+
+test("a joined batch that stops leaves none of its parts listed, nor a manifest of them", async () => {
+  const { app, home, project } = exportsHome("ranges-stop", [{ start: 0, end: 30, name: "One" }, { start: 60, end: 90, name: "Two" }]);
+  fakeExports(app, home, project, { fails: (index) => index === 1 });
+  const batch = exportRanges(app, project, { range: null, format: "h264" } as never, "joined", null);
+  await ended(batch);
+  expect(batch.error).toBe("Two didn't export");
+  expect(listExports(home, project.id)).toEqual([]);
+  expect(fs.existsSync(join(chunkFolder(app.store.cacheDir(), project.id), "manifest-v1.json"))).toBe(false);
+});
+
+test("a stretch whose export fails isn't taken for done by the file a run before left", async () => {
+  const { app, home, folder, project } = exportsHome("ranges-stale", [{ start: 0, end: 30, name: "One" }, { start: 60, end: 90, name: "Two" }]);
+  write(join(folder, "Joined - Two.mp4"), "yesterday's");
+  fakeExports(app, home, project, { fails: (index) => index === 1 });
+  const batch = exportRanges(app, project, { range: null, format: "h264" } as never, "each", null);
+  await ended(batch);
+  expect(batch.error).toBe("Two didn't export");
+  expect(batch.outputs).toEqual([join(folder, "Joined - One.mp4")]);
+});
+
+test("a project's exports of parts are listed apart from its whole exports", () => {
+  fixture = fixtureHome("ranges-listed");
+  const record = (path: string, whole: boolean, at: number) => ({ path, name: path, finished_ms: at, seconds: 1, bytes: 1, frames: 1, whole, format: "h264" });
+  for (let n = 0; n < 31; n++) listMade(fixture.home, "p", record(`/w${n}.mp4`, true, n));
+  // A batch of 40 cut-ins, after them.
+  for (let n = 0; n < 40; n++) listMade(fixture.home, "p", record(`/c${n}.mp4`, false, 100 + n));
+  const listed = listExports(fixture.home, "p");
+  expect(listed.filter((one) => one.whole)).toHaveLength(30);
+  expect(listed.filter((one) => !one.whole)).toHaveLength(40);
+  // Newest first, still: the oldest whole export alone went.
+  expect(listed[0]!.path).toBe("/c39.mp4");
+  expect(listed.at(-1)!.path).toBe("/w1.mp4");
 });

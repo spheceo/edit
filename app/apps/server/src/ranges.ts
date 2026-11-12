@@ -12,7 +12,8 @@ import * as fs from "node:fs";
 import type { App } from "./app.ts";
 import * as diag from "./diag.ts";
 import { exportsDir } from "./export_folder.ts";
-import { listMade, unlist } from "./exports.ts";
+import { chunkFolder, listExports, listMade, unlist } from "./exports.ts";
+import { writeAtomic } from "./files.ts";
 import { bad, json } from "./http/errors.ts";
 import { readJson, type RouteContext, type Router } from "./http/router.ts";
 import { registerTool, text } from "./mcp/registry.ts";
@@ -107,6 +108,8 @@ export interface Batch {
   error: string | null;
   cancelled: boolean;
   finished: boolean;
+  /** When it ended (one kept before this was noted reads its file's time). */
+  finished_ms: number | null;
 }
 
 const batches = new Map<string, Batch>();
@@ -120,10 +123,24 @@ export function batchOf(app: App, id: string): Batch | null {
   if (known !== undefined) return known;
   try {
     const kept = JSON.parse(fs.readFileSync(keptAt(app, id), "utf8")) as Batch;
-    return kept.finished ? kept : null;
+    return kept.finished ? { ...kept, finished_ms: kept.finished_ms ?? fs.statSync(keptAt(app, id)).mtimeMs } : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * The batch as the Export dialog shows it: one running, or one finished that
+ * is still the last thing to happen to the project's exports. Kept for good,
+ * yesterday's "Saved to … 36 marked.mp4" stood in for today's share.
+ */
+export function latestBatch(app: App, id: string): Batch | null {
+  const batch = batchOf(app, id);
+  if (batch === null || !batch.finished) return batch;
+  const at = batch.finished_ms ?? 0;
+  if ((app.exports.runningFor?.(id) ?? null) !== null) return null;
+  if ((app.exports.activity?.() ?? []).some((one) => one.id === id && one.updated_ms > at)) return null;
+  return listExports(app.store.home, id).some((one) => one.finished_ms > at) ? null : batch;
 }
 
 /** Seams for tests: what's held in memory goes, as after a restart. */
@@ -137,26 +154,77 @@ const safe = (name: string) => {
   return kept === "" ? "Edit" : kept;
 };
 
-/** Waits for `id`'s export to end; whether its file is there. */
-async function finished(app: App, id: string, output: string): Promise<boolean> {
+/** A file's time, or null when it isn't there. */
+const timeOf = (path: string): bigint | null => {
+  try {
+    return fs.statSync(path, { bigint: true }).mtimeNs;
+  } catch {
+    return null;
+  }
+};
+
+/** Waits for `id`'s export to end; whether it wrote `output` anew (`before`: its time then): the engine renames over it only on success, so a failure leaves the last run's file. */
+async function finished(app: App, id: string, output: string, before: bigint | null): Promise<boolean> {
   while ((app.exports.runningFor?.(id) ?? null) !== null) await timing.sleep(timing.poll);
-  return fs.existsSync(output);
+  const now = timeOf(output);
+  return now !== null && now !== before;
+}
+
+/** A file's first sound: its codec, rate and channel layout; null when it has none (a stretch where nothing is heard is exported picture alone). */
+async function soundOf(path: string): Promise<{ codec: string; rate: string; layout: string } | null> {
+  const said = JSON.parse(new TextDecoder().decode(await tools.run([tools.ffprobe(), "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name,sample_rate,channel_layout,channels", "-of", "json", path], { timeoutMs: 60_000 }))) as {
+    streams?: { codec_name?: string; sample_rate?: string; channel_layout?: string; channels?: number }[];
+  };
+  const stream = said.streams?.[0];
+  if (stream?.codec_name === undefined) return null;
+  return { codec: stream.codec_name, rate: stream.sample_rate ?? "48000", layout: stream.channel_layout ?? (stream.channels === 1 ? "mono" : "stereo") };
+}
+
+/**
+ * `parts` ready to join: a silent one gets a silent track like the others'
+ * when some have sound (the join takes its streams from the first file, so a
+ * silent first stretch left the whole video without sound).
+ */
+async function withSound(parts: string[]): Promise<string[]> {
+  const sounds = await Promise.all(parts.map(soundOf));
+  const like = sounds.find((one) => one !== null);
+  if (like === undefined) return parts;
+  return Promise.all(
+    parts.map(async (part, index) => {
+      if (sounds[index] !== null) return part;
+      const out = part.replace(/(\.[^./]+)$/u, ".sound$1");
+      await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-i", part, "-f", "lavfi", "-i", `anullsrc=r=${like.rate}:cl=${like.layout}`, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", like.codec, "-shortest", out], { timeoutMs: 10 * 60_000 });
+      return out;
+    }),
+  );
 }
 
 /** Exports `project`'s marked stretches with `options` (the house's), each its own file or one of them joined, in the background. */
 export function exportRanges(app: App, project: Project, options: ExportOptions, mode: Mode, watermark: string | null): Batch {
   const running = batches.get(project.id);
   if (running !== undefined && !running.finished) throw new Error("its marked stretches are already being exported");
-  const ranges = project.ranges ?? [];
+  // What's left of them in the edit as it is now: one past an end shortened since it was marked was refused, and stopped the batch.
+  const ranges = tidy(project.ranges ?? [], durationOf(project));
   if (ranges.length === 0) throw new Error("no stretches are marked: ask the agent to mark them (set_ranges)");
   if ((app.exports.runningFor?.(project.id) ?? null) !== null) throw new Error("an export of this edit is running: wait for it, or cancel it");
-  const batch: Batch = { mode, total: ranges.length, done: 0, current: null, outputs: [], error: null, cancelled: false, finished: false };
+  const batch: Batch = { mode, total: ranges.length, done: 0, current: null, outputs: [], error: null, cancelled: false, finished: false, finished_ms: null };
   batches.set(project.id, batch);
   const dir = exportsDir(app.store.home);
   const parts = join(app.store.cacheDir(), "range-exports", safe(project.id));
+  // The project's chunk manifest, put back after: each stretch's export writes its own, and the next export of the
+  // edit then reused nothing of the last one (minutes of rendering again).
+  const manifest = join(chunkFolder(app.store.cacheDir(), project.id), "manifest-v1.json");
+  let manifestBefore: string | null = null;
+  try {
+    manifestBefore = fs.readFileSync(manifest, "utf8");
+  } catch {
+    // None yet.
+  }
   const began = Date.now();
   void (async () => {
     const made: string[] = [];
+    // Every part asked for (joined): its export lists it, and it comes off the list however the batch ends.
+    const asked: string[] = [];
     try {
       fs.mkdirSync(dir, { recursive: true });
       if (mode === "joined") fs.mkdirSync(parts, { recursive: true });
@@ -164,12 +232,16 @@ export function exportRanges(app: App, project: Project, options: ExportOptions,
         if (batch.cancelled) return;
         batch.current = range.name;
         const output = mode === "each" ? join(dir, `${safe(project.name)} - ${safe(range.name)}.mp4`) : join(parts, `part-${String(index).padStart(3, "0")}.mp4`);
+        // Its file as it was (the export writes `output` with its format's extension).
+        const before = timeOf(native().withExtension(output, options.format));
         const path = await app.exports.start(app.store, app.library, project, { ...options, range: [range.start, range.end], chapters: [] }, output, {
           // On this computer only: no cloud copy, no Drive (a part of the edit, not the edit).
           keepLocal: true,
+          stretch: true,
           ...(watermark === null ? {} : { watermark }),
         });
-        if (!(await finished(app, project.id, path))) {
+        asked.push(path);
+        if (!(await finished(app, project.id, path, before))) {
           if (!batch.cancelled) batch.error = `${range.name} didn't export`;
           return;
         }
@@ -178,17 +250,26 @@ export function exportRanges(app: App, project: Project, options: ExportOptions,
         if (mode === "each") batch.outputs.push(path);
       }
       if (mode === "joined") {
+        if (batch.cancelled) return;
         batch.current = "joining them";
         const list = join(parts, "list.txt");
-        fs.writeFileSync(list, made.map((file) => `file '${file.replace(/'/gu, "'\\''")}'`).join("\n"));
-        const output = join(dir, `${safe(project.name)} - ${ranges.length} marked.mp4`);
-        await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-movflags", "+faststart", output], { timeoutMs: 30 * 60_000 });
-        // Listed as the export it is (downloaded from the dialog, shown with the project's exports), its parts not:
-        // the download hands out listed exports alone (Sphe, Nov 12: "I clicked download. I got file.json twice").
-        unlist(app.store.home, project.id, made);
+        fs.writeFileSync(list, (await withSound(made)).map((file) => `file '${file.replace(/'/gu, "'\\''")}'`).join("\n"));
+        const name = `${safe(project.name)} - ${ranges.length} marked.mp4`;
+        const output = join(dir, name);
+        // Beside it until whole: the last run's file under this name is listed for Download, and a join that failed
+        // or was stopped wrote over it.
+        const partial = join(dir, `${name.slice(0, -".mp4".length)}.partial.mp4`);
+        try {
+          await tools.run([tools.ffmpeg(), "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", list, "-c", "copy", "-movflags", "+faststart", partial], { timeoutMs: 30 * 60_000 });
+          fs.renameSync(partial, output);
+        } finally {
+          fs.rmSync(partial, { force: true });
+        }
+        // Listed as the export it is (downloaded from the dialog, shown with the project's exports), its parts not
+        // (below): the download hands out listed exports alone (Sphe, Nov 12: "I clicked download. I got file.json twice").
         listMade(app.store.home, project.id, {
           path: output,
-          name: `${safe(project.name)} - ${ranges.length} marked.mp4`,
+          name,
           finished_ms: Date.now(),
           seconds: (Date.now() - began) / 1000,
           bytes: fs.statSync(output).size,
@@ -206,13 +287,23 @@ export function exportRanges(app: App, project: Project, options: ExportOptions,
     } finally {
       batch.current = null;
       batch.finished = true;
+      batch.finished_ms = Date.now();
       try {
         fs.mkdirSync(join(app.store.cacheDir(), "range-exports"), { recursive: true });
         fs.writeFileSync(keptAt(app, project.id), JSON.stringify(batch));
       } catch (error) {
         diag.warn("export", `${project.name}: its marked stretches' export wasn't kept: ${diag.messageOf(error)}`);
       }
-      if (mode === "joined") fs.rmSync(parts, { recursive: true, force: true });
+      try {
+        if (manifestBefore === null) fs.rmSync(manifest, { force: true });
+        else writeAtomic(manifest, manifestBefore);
+      } catch (error) {
+        diag.warn("export", `${project.name}: putting its last export's chunk list back: ${diag.messageOf(error)}`);
+      }
+      if (mode === "joined") {
+        unlist(app.store.home, project.id, asked);
+        fs.rmSync(parts, { recursive: true, force: true });
+      }
     }
   })();
   return batch;
@@ -229,7 +320,7 @@ export function cancel(app: App, id: string): boolean {
 
 export function routes(router: Router<App>): void {
   router
-    .get("/api/projects/{id}/export-ranges", ({ app, params }) => json(batchOf(app, params.id ?? "")))
+    .get("/api/projects/{id}/export-ranges", ({ app, params }) => json(latestBatch(app, params.id ?? "")))
     .post("/api/projects/{id}/export-ranges", async (context: RouteContext<App>) => {
       const { app, params } = context;
       const live = app.store.get(params.id ?? "");

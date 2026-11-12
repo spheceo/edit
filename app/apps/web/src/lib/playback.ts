@@ -1169,8 +1169,11 @@ class Preview {
   }
 
   private readSections() {
+    const before = JSON.stringify(this.sections);
     try { this.sections = JSON.parse(this.use((engine) => engine.sections()) ?? "null"); }
     catch { this.sections = null; }
+    // Told when they change: the progress bar splits at them.
+    if (JSON.stringify(this.sections) !== before) this.notify();
   }
 
   remember() {

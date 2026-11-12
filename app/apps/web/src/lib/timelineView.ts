@@ -16,7 +16,7 @@ const BAND = 18;
 export const RULER = BAND + 28;
 
 /** Each kind of section's colour. */
-const SECTION_COLORS: Record<Section["kind"], string> = {
+export const SECTION_COLORS: Record<Section["kind"], string> = {
   intro: "56, 189, 248",
   broll: "251, 191, 36",
   story: "163, 163, 163",

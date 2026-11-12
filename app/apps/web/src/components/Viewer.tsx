@@ -12,7 +12,8 @@ import { playhead, preview } from "../lib/playback";
 import { nativePreview } from "../lib/nativePreview";
 import { mediaVersions } from "../lib/mediaVersions";
 import { wantsLight } from "../lib/previewQuality";
-import { goToEnd, goToStart } from "../lib/timelineView";
+import { goToEnd, goToStart, SECTION_COLORS } from "../lib/timelineView";
+import type { Section } from "../lib/types";
 import { openMenu } from "./ContextMenu";
 import { importProgress } from "../lib/import_progress";
 import { numbers, openComment, openComments, setScrubbing, toggleNote, useNotes } from "../lib/notes";
@@ -568,6 +569,10 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
   const trackRef = useRef<HTMLDivElement>(null);
   const fraction = duration > 0 ? Math.min(1, Math.max(0, frame / duration)) : 0;
   const loaded = useBuffered();
+  const chapters = useChapters(duration);
+  // A slit at each chapter's start, as a video site's progress bar has.
+  const slits = chapters.slice(1).map((chapter) => (chapter.start / duration) * 100);
+  const mask = slits.length === 0 ? undefined : `linear-gradient(to right, ${slits.map((at) => `#000 calc(${at}% - 1px), transparent calc(${at}% - 1px), transparent calc(${at}% + 1px), #000 calc(${at}% + 1px)`).join(", ")})`;
   // The frame under the pointer, shown over the bar as it moves (lib/storyboard.ts).
   const [hover, setHover] = useState<{ x: number; width: number; frame: number } | null>(null);
   const hoverAt = (clientX: number) => {
@@ -608,15 +613,24 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
         window.addEventListener("pointercancel", up);
       }}
     >
-      <div ref={trackRef} className={cx("relative w-full rounded-full bg-white/20 transition-[height]", thin ? "h-[3px] group-hover:h-[5px]" : "h-1.5 group-hover:h-2")}>
-        {/* What's loaded to play on without waiting, light grey under the played part, as on YouTube. */}
-        {duration > 0 &&
-          loaded.map(([from, to]) => (
-            <div key={from} className="absolute inset-y-0 rounded-full bg-white/45" style={{ left: `${Math.min(1, from / duration) * 100}%`, width: `${Math.max(0, Math.min(1, to / duration) - Math.min(1, from / duration)) * 100}%` }} />
-          ))}
-        <div className="absolute inset-y-0 left-0 rounded-full bg-playhead" style={{ width: `${fraction * 100}%` }} />
+      <div ref={trackRef} className={cx("relative w-full transition-[height]", thin ? "h-[3px] group-hover:h-[5px]" : "h-1.5 group-hover:h-2")}>
+        <div className="absolute inset-0 overflow-hidden rounded-full bg-white/20" style={mask === undefined ? undefined : { maskImage: mask, WebkitMaskImage: mask }}>
+          {/* The edit's parts (the timeline's sections band): intro, cut-ins and outro in their colour, so they're found without hovering. */}
+          {duration > 0 &&
+            chapters.map((chapter) =>
+              chapter.kind === "story" || chapter.kind === "other" ? null : (
+                <div key={chapter.start} className="absolute inset-y-0" style={{ left: `${(chapter.start / duration) * 100}%`, width: `${((chapter.end - chapter.start) / duration) * 100}%`, background: `rgba(${SECTION_COLORS[chapter.kind]}, 0.45)` }} />
+              ),
+            )}
+          {/* What's loaded to play on without waiting, light grey under the played part, as on YouTube. */}
+          {duration > 0 &&
+            loaded.map(([from, to]) => (
+              <div key={from} className="absolute inset-y-0 bg-white/35" style={{ left: `${Math.min(1, from / duration) * 100}%`, width: `${Math.max(0, Math.min(1, to / duration) - Math.min(1, from / duration)) * 100}%` }} />
+            ))}
+          <div className="absolute inset-y-0 left-0 bg-playhead" style={{ width: `${fraction * 100}%` }} />
+        </div>
         <div className={cx("absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-playhead opacity-0 transition-opacity group-hover:opacity-100", thin ? "size-3" : "size-3.5")} style={{ left: `${fraction * 100}%` }} />
-        {hover !== null && <ScrubPreview at={hover} duration={duration} />}
+        {hover !== null && <ScrubPreview at={hover} duration={duration} chapter={chapters.findLast((chapter) => chapter.start <= hover.frame)?.label ?? null} />}
         {/* The open comments: a dot each over the bar; hovered, its words; clicked, its moment and its card. */}
         {duration > 0 &&
           marks.map((mark) => (
@@ -642,6 +656,31 @@ function ScrubBar({ frame, duration, thin = false, marks = [] }: { frame: number
   );
 }
 
+/** A part of the edit on the progress bar: the timeline's sections, a part under a second folded into the one before it. */
+interface Chapter {
+  kind: Section["kind"];
+  label: string;
+  start: number;
+  end: number;
+}
+
+const selectFps = (state: ReturnType<typeof useEditor.getState>) => (state.project ? rate(state.project.settings) : 30);
+
+/** The edit's parts (intro, cut-ins, story, outro) to split the progress bar at, as a video site's chapters. */
+function useChapters(duration: number): Chapter[] {
+  const sections = useSyncExternalStore(preview.onStatus, () => preview.sections);
+  const fps = useEditor(selectFps);
+  const parts = sections?.parts ?? [];
+  const chapters: Chapter[] = [];
+  for (const part of parts) {
+    const last = chapters.at(-1);
+    // A sliver (a voice clip cut down to a few frames) isn't a part to skip to.
+    if (last !== undefined && (part.end - part.start < fps || last.kind === part.kind)) last.end = part.end;
+    else chapters.push({ kind: part.kind, label: part.label, start: part.start, end: part.end });
+  }
+  return duration > 0 && chapters.length > 1 ? chapters : [];
+}
+
 /** The player's loaded stretches (frames), looked at twice a second: a stream's chunks land and go as it plays. */
 function useBuffered(): [number, number][] {
   const [loaded, setLoaded] = useState<[number, number][]>(() => preview.bufferedFrames());
@@ -658,7 +697,7 @@ function useBuffered(): [number, number][] {
 }
 
 /** The frame under the pointer over the progress bar: the nearest of the board at once, the exact one when the pointer rests. */
-function ScrubPreview({ at, duration }: { at: { x: number; width: number; frame: number }; duration: number }) {
+function ScrubPreview({ at, duration, chapter }: { at: { x: number; width: number; frame: number }; duration: number; chapter: string | null }) {
   const project = useEditor((state) => state.project);
   const rev = useEditor((state) => state.rev) ?? 0;
   // The smooth render of what's on screen, when it's made: its sheets give a frame every 2 s (lib/storyboard.ts).
@@ -702,7 +741,8 @@ function ScrubPreview({ at, duration }: { at: { x: number; width: number; frame:
           />
         )}
       </div>
-      <div className="mt-1.5 text-center text-[12px] font-medium text-white tabular [text-shadow:0_1px_3px_#000]">{clock(at.frame, fps)}</div>
+      {chapter !== null && <div className="mt-1.5 text-center text-[12px] font-semibold text-white [text-shadow:0_1px_3px_#000]">{chapter}</div>}
+      <div className={cx("text-center text-[12px] font-medium text-white tabular [text-shadow:0_1px_3px_#000]", chapter === null ? "mt-1.5" : "text-white/75")}>{clock(at.frame, fps)}</div>
     </div>
   );
 }

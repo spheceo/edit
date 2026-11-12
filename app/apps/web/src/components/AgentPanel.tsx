@@ -1,5 +1,5 @@
 import { explain } from "@edit/types/problems";
-import { ArrowLeft, AudioLines, Check, ChevronRight, CircleSlash, Eye, FileInput, Image, FileText, FolderOpen, LayoutGrid, ListChecks, MousePointerClick, Music, RotateCcw, ScrollText, Scissors, Share, SlidersHorizontal, Spline, Square, SquarePlus, Star, Trash2, Type, Wrench, ScanEye, Pencil, type LucideIcon, Copy, Quote, SquareTerminal, FilePen, Search, Globe, BookOpen, ImagePlus, Hourglass, Shrink, Clapperboard } from "lucide-react";
+import { ArrowLeft, AudioLines, Check, ChevronRight, CircleSlash, Eye, FileInput, Image, FileText, FolderOpen, LayoutGrid, ListChecks, MousePointerClick, Music, RotateCcw, ScrollText, Scissors, Share, SlidersHorizontal, Spline, Square, SquarePlus, Star, Trash2, Type, Wrench, ScanEye, Pencil, type LucideIcon, Copy, Quote, SquareTerminal, FilePen, Search, Globe, BookOpen, ImagePlus, Hourglass, Minimize2, ArrowRight, Clapperboard } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { createContext, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -702,18 +702,23 @@ function StepDetail({ call }: { call: AgentEntry }) {
  */
 function CompactLine({ entry }: { entry: AgentEntry }) {
   const running = entry.status === "running";
-  let label = "Context compacted";
+  let label: ReactNode = "Context compacted";
   if (entry.status === "failed") label = "The context couldn’t be compacted";
   else if (!running) {
     const sizes = argsOf(entry) as { pre?: unknown; post?: unknown };
-    if (typeof sizes.pre === "number" && typeof sizes.post === "number") label = `Context compacted ${shortTokens(sizes.pre)} → ${shortTokens(sizes.post)} tokens`;
+    if (typeof sizes.pre === "number" && typeof sizes.post === "number") label = (
+        // The font's own → sits low and small: an icon instead.
+        <span className="inline-flex items-center gap-1">
+          Context compacted {shortTokens(sizes.pre)} <ArrowRight size={11} className="text-faint" /> {shortTokens(sizes.post)} tokens
+        </span>
+      );
     else if (typeof sizes.pre === "number") label = `Context compacted from ${shortTokens(sizes.pre)} tokens`;
   }
-  return <ChatDivider icon={Shrink} label={running ? "Compacting context" : label} running={running} title={entry.status === "failed" ? entry.text : undefined} />;
+  return <ChatDivider icon={Minimize2} label={running ? "Compacting context" : label} running={running} title={entry.status === "failed" ? entry.text : undefined} />;
 }
 
 /** A line across the chat with a word in it: a compaction, a turn stopped. */
-function ChatDivider({ icon: Icon, label, running = false, title }: { icon?: LucideIcon; label: string; running?: boolean; title?: string }) {
+function ChatDivider({ icon: Icon, label, running = false, title }: { icon?: LucideIcon; label: ReactNode; running?: boolean; title?: string }) {
   return (
     <div className="my-1 flex items-center gap-2.5 px-1.5 text-[12px] text-muted" title={title}>
       <span className="h-px flex-1 bg-line" />

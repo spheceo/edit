@@ -64,7 +64,7 @@ export function playheadContext(project: Project, frame: number, heard: Map<stri
   const lines = [
     "",
     "",
-    `(Edit, automatically) The playhead is at ${clock(at / fps)} (frame ${at})${section}. Unless my message is about another moment or the whole video, the change is HERE: make it at this spot, check this spot, and answer in a line or two (no whole-edit review).`,
+    `(Edit, automatically) The playhead is at ${clock(at / fps)} (frame ${at})${section}. Unless my message is about another moment or the whole video, or leaves where to you (\"wherever you see best\", \"once or twice in the video\": then choose by the story, and the playhead says nothing), the change is HERE: make it at this spot, check this spot, and answer in a line or two (no whole-edit review).`,
     `Under the playhead: ${under.length === 0 ? "nothing" : ""}`,
     ...under.slice(0, 12).map((clip) => `- ${line(project, clip, fps)}`),
   ];
